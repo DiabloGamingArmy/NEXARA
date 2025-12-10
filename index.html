@@ -10,7 +10,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    
+
+    <!-- MOD: Sanitizer (use in script.js to safely render user content) -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
+
     <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
 </head>
@@ -33,10 +36,11 @@
             <button onclick="window.handleAnon()" style="margin-top:15px; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size: 0.85rem;">Continue as Guest</button>
         </div>
     </div>
-    
+
     <!-- Media Modal (Lightbox) -->
     <div id="media-modal" class="modal-overlay" onclick="window.closeFullscreenMedia()">
-        <div id="media-modal-content" style="max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;">
+        <!-- MOD: stop click inside content from closing modal -->
+        <div id="media-modal-content" onclick="event.stopPropagation()" style="max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;">
             <!-- Media injected here -->
         </div>
         <button onclick="window.closeFullscreenMedia()" style="position:absolute; top:20px; right:20px; background:none; border:none; color:white; font-size:2rem; cursor:pointer;">&times;</button>
@@ -72,7 +76,7 @@
 
                     <input type="text" id="postTitle" class="x-input-title" placeholder="Title (Optional)">
                     <textarea id="postContent" class="x-input-content" placeholder="What is happening?!" rows="3"></textarea>
-                    
+
                     <div id="img-preview-container" class="attachment-preview">
                         <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
                         <img id="img-preview-tag" src="">
@@ -327,7 +331,6 @@
             </div>
 
             <div id="review-remove-section" style="display:none; text-align:center; padding-top:10px; border-top:1px solid var(--border);">
-                 <!-- Added container to show what they rated -->
                 <div id="review-user-status" style="margin-bottom:10px; font-weight:bold; color:var(--text-main);"></div>
                 <button onclick="window.removeReview()" class="create-btn-sidebar" style="background:#ff3d3d; border:none; color:white; width:auto; padding: 10px 20px;">Remove My Review</button>
             </div>
@@ -413,7 +416,7 @@
                 <div style="padding: 1rem 1rem 0 1rem;">
                     <h2 style="font-weight:800; font-size:1.5rem; margin-bottom:1rem;">Saved Posts</h2>
                     <input type="text" class="form-input" placeholder="Search your saved posts..." oninput="window.handleSavedSearch(event)">
-                    
+
                     <div style="display:flex; gap:10px; margin-bottom:1rem; overflow-x:auto; padding-bottom:5px;">
                         <button class="saved-pill active" onclick="window.setSavedFilter('All Saved')">All Saved</button>
                         <button class="saved-pill" onclick="window.setSavedFilter('Recent')">Recently Saved</button>
@@ -433,7 +436,7 @@
                     <h2 style="font-weight: 800; font-size: 1.2rem;">Thread</h2>
                 </div>
                 <div id="thread-main-post"></div>
-                
+
                 <div id="thread-input-default-slot" style="padding: 1rem; border-bottom: 1px solid var(--border);">
                     <div id="thread-input-area" style="display: flex; gap: 10px;">
                          <div id="thread-input-pfp" style="width: 40px; height: 40px; border-radius: 12px; background: #333;"></div>
@@ -564,7 +567,7 @@
                 <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
                 <div class="trend-item"><span>#AI</span><span style="color:var(--text-muted);">8k</span></div>
             </div>
-            
+
             <div class="trend-box">
                 <div class="trend-title"><i class="ph-fill ph-hourglass"></i> Time Capsule</div>
                 <div class="otd-widget">
@@ -572,7 +575,7 @@
                     <div class="otd-event" id="otd-event-display">Loading history...</div>
                 </div>
             </div>
-            
+
             <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexera Network</div>
         </aside>
     </div>
