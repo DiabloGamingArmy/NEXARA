@@ -1413,6 +1413,7 @@ function getPostHTML(post) {
         const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
         const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
         const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
+        const isSelfPost = currentUser && post.userId === currentUser.uid;
         const isFollowingUser = followedUsers.has(post.userId);
         const isFollowingTopic = followedCategories.has(post.category);
         const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
@@ -2205,6 +2206,7 @@ function renderThreadMainPost(postId) {
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
     const isFollowingUser = followedUsers.has(post.userId);
     const isFollowingTopic = followedCategories.has(post.category);
+    const isSelfPost = currentUser && post.userId === currentUser.uid;
     const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
@@ -2979,7 +2981,26 @@ window.renderLive = function() {
 
 // Helper Utils
 function getColorForUser(name) { return ['#FF6B6B', '#4ECDC4', '#45B7D1'][name.length % 3]; }
-function escapeHtml(text) { return text ? text.replace(/&/g, "&amp;").replace(/</g, "&lt;") : ""; }
+function escapeHtml(text) {
+  if (text === null || text === undefined) return '';
+
+  // If you accidentally pass a structured payload (like post.content),
+  // prefer its `.text` field.
+  if (typeof text === 'object') {
+    if (typeof text.text === 'string') text = text.text;
+    else text = JSON.stringify(text);
+  } else if (typeof text !== 'string') {
+    text = String(text);
+  }
+
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function cleanText(text) { if(typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
 function renderSaved() { currentCategory = 'Saved'; renderFeed('saved-content'); }
 
