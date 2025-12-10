@@ -776,10 +776,15 @@ function syncPostButtonState() {
     }
 }
 
+// --- Destination Picker (DEDUPED / single source of truth) ---
 function computeDestinationTabs() {
     const tabs = [];
-    if (activeDestinationConfig.enableCommunityTab !== false) tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
-    if (activeDestinationConfig.enableOfficialTab !== false) tabs.push({ type: 'official', label: activeDestinationConfig.officialTabLabel || 'Official (Verified)' });
+    if (activeDestinationConfig.enableCommunityTab !== false) {
+        tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
+    }
+    if (activeDestinationConfig.enableOfficialTab !== false) {
+        tabs.push({ type: 'official', label: activeDestinationConfig.officialTabLabel || 'Official (Verified)' });
+    }
     return tabs;
 }
 
@@ -805,6 +810,7 @@ function handleDestinationSelected(destination) {
 function renderDestinationCreateArea() {
     const area = document.getElementById('destination-create-area');
     if (!area) return;
+
     if (destinationPickerTab !== 'community' || activeDestinationConfig.enableCreateCommunity === false) {
         area.innerHTML = '';
         return;
@@ -825,9 +831,16 @@ function renderDestinationCreateArea() {
         </div>`;
 
     const toggle = document.getElementById('destination-create-toggle');
-    if (toggle) toggle.onclick = function () { destinationCreateExpanded = !destinationCreateExpanded; renderDestinationPicker(); };
+    if (toggle) toggle.onclick = function () {
+        destinationCreateExpanded = !destinationCreateExpanded;
+        renderDestinationPicker();
+    };
+
     const submit = document.getElementById('destination-create-submit');
-    if (submit) submit.onclick = function (e) { e.preventDefault(); window.handleCreateCategoryForm(); };
+    if (submit) submit.onclick = function (e) {
+        e.preventDefault();
+        window.handleCreateCategoryForm();
+    };
 }
 
 function retryDestinationLoad() {
@@ -841,12 +854,14 @@ function retryDestinationLoad() {
 function renderDestinationResults() {
     const resultsEl = document.getElementById('destination-results');
     if (!resultsEl) return;
+
     if (destinationPickerError) {
         resultsEl.innerHTML = `<div class="destination-error">${destinationPickerError}<div style="margin-top:8px;"><button class="icon-pill" id="destination-retry-btn">Retry</button></div></div>`;
         const retryBtn = document.getElementById('destination-retry-btn');
         if (retryBtn) retryBtn.onclick = function () { retryDestinationLoad(); };
         return;
     }
+
     if (destinationPickerLoading) {
         resultsEl.innerHTML = '<div class="destination-loading"><div class="inline-spinner" style="display:block; margin: 0 auto 8px;"></div>Loading destinations...</div>';
         return;
@@ -854,11 +869,15 @@ function renderDestinationResults() {
 
     const filtered = categories
         .filter(function (c) { return destinationPickerTab === 'official' ? c.type === 'official' : c.type === 'community'; })
-        .filter(function (c) { return !destinationPickerSearch || (c.name || '').toLowerCase().includes(destinationPickerSearch.toLowerCase()); })
+        .filter(function (c) {
+            return !destinationPickerSearch || (c.name || '').toLowerCase().includes(destinationPickerSearch.toLowerCase());
+        })
         .sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
 
     if (!filtered.length) {
-        const message = destinationPickerTab === 'official' ? 'No official destinations found.' : 'No communities found. Create one?';
+        const message = destinationPickerTab === 'official'
+            ? 'No official destinations found.'
+            : 'No communities found. Create one?';
         resultsEl.innerHTML = `<div class="destination-empty">${message}</div>`;
         return;
     }
@@ -867,7 +886,9 @@ function renderDestinationResults() {
     filtered.forEach(function (cat) {
         const destination = getDestinationFromCategory(cat);
         const isSelected = destination.id === selectedCategoryId;
-        const selectable = destination.type === 'official' ? activeDestinationConfig.officialSelectable !== false : true;
+        const selectable = destination.type === 'official'
+            ? activeDestinationConfig.officialSelectable !== false
+            : true;
 
         const row = document.createElement('div');
         row.className = 'destination-row' + (isSelected ? ' selected' : '');
@@ -886,6 +907,7 @@ function renderDestinationResults() {
 
         const textWrap = document.createElement('div');
         textWrap.className = 'destination-row-text';
+
         const title = document.createElement('div');
         title.className = 'destination-row-title';
         title.textContent = destination.name || 'Unnamed';
@@ -895,10 +917,12 @@ function renderDestinationResults() {
             badge.textContent = '✔';
             title.appendChild(badge);
         }
+
         const desc = document.createElement('div');
         desc.className = 'destination-row-desc';
         const memberCount = destination.meta && destination.meta.memberCount ? `${destination.meta.memberCount} members` : '';
         desc.textContent = destination.meta?.description || memberCount || '';
+
         textWrap.appendChild(title);
         textWrap.appendChild(desc);
 
@@ -907,223 +931,15 @@ function renderDestinationResults() {
 
         const actions = document.createElement('div');
         actions.className = 'destination-row-actions';
+
         const selectBtn = document.createElement('button');
         selectBtn.className = 'icon-pill';
         selectBtn.disabled = !selectable;
         selectBtn.innerHTML = isSelected ? '<i class="ph ph-check"></i> Selected' : 'Select';
-        selectBtn.onclick = function (e) { e.stopPropagation(); if (selectable) handleDestinationSelected(destination); };
-        actions.appendChild(selectBtn);
-
-        if (selectable) {
-            row.onclick = function () { handleDestinationSelected(destination); };
-            main.onclick = function () { handleDestinationSelected(destination); };
-        }
-
-        row.appendChild(main);
-        row.appendChild(actions);
-        resultsEl.appendChild(row);
-    });
-}
-
-function renderDestinationPicker() {
-    const modal = document.getElementById('destination-picker-modal');
-    if (!modal) return;
-    modal.style.display = destinationPickerOpen ? 'flex' : 'none';
-
-    const tabsContainer = document.getElementById('destination-picker-tabs');
-    const availableTabs = getAvailableDestinationTabs();
-    if (!availableTabs.some(function (t) { return t.type === destinationPickerTab; }) && availableTabs.length) {
-        destinationPickerTab = availableTabs.find(function (t) { return t.type === 'community'; })?.type || availableTabs[0].type;
-    }
-    if (tabsContainer) {
-        tabsContainer.innerHTML = '';
-        availableTabs.forEach(function (tab) {
-            const btn = document.createElement('button');
-            btn.className = 'destination-tab' + (tab.type === destinationPickerTab ? ' active' : '');
-            btn.textContent = tab.label;
-            btn.onclick = function () { setDestinationTab(tab.type); };
-            tabsContainer.appendChild(btn);
-        });
-    }
-
-    const searchInput = document.getElementById('destination-search-input');
-    if (searchInput) {
-        searchInput.placeholder = destinationPickerTab === 'official' ? 'Search official destinations' : 'Search communities';
-        searchInput.value = destinationPickerSearch;
-        searchInput.oninput = function (e) {
-            const value = e.target.value;
-            clearTimeout(destinationSearchTimeout);
-            destinationSearchTimeout = setTimeout(function () {
-                destinationPickerSearch = value.trim();
-                renderDestinationPicker();
-            }, 250);
+        selectBtn.onclick = function (e) {
+            e.stopPropagation();
+            if (selectable) handleDestinationSelected(destination);
         };
-    }
-
-    renderDestinationCreateArea();
-    renderDestinationResults();
-}
-
-function openDestinationPicker(config = {}) {
-    activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG, ...config };
-    destinationPickerOpen = true;
-    const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
-    const tabs = getAvailableDestinationTabs();
-    if (currentCategoryDoc && tabs.some(function (t) { return t.type === currentCategoryDoc.type; })) {
-        destinationPickerTab = currentCategoryDoc.type;
-    } else {
-        destinationPickerTab = tabs.find(function (t) { return t.type === 'community'; })?.type || (tabs[0]?.type || 'community');
-    }
-    destinationPickerSearch = '';
-    destinationCreateExpanded = false;
-    renderDestinationPicker();
-    setTimeout(function () {
-        const input = document.getElementById('destination-search-input');
-        if (input) input.focus();
-    }, 50);
-}
-
-function closeDestinationPicker() {
-    destinationPickerOpen = false;
-    renderDestinationPicker();
-}
-
-function getAvailableDestinationTabs() {
-    const tabs = [];
-    if (activeDestinationConfig.enableCommunityTab !== false) tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
-    if (activeDestinationConfig.enableOfficialTab !== false) tabs.push({ type: 'official', label: activeDestinationConfig.officialTabLabel || 'Official (Verified)' });
-    return tabs;
-}
-
-function setDestinationTab(tab) {
-    destinationPickerTab = tab;
-    destinationPickerSearch = '';
-    destinationCreateExpanded = false;
-    renderDestinationPicker();
-    setTimeout(function () {
-        const input = document.getElementById('destination-search-input');
-        if (input) input.focus();
-    }, 50);
-}
-
-function handleDestinationSelected(destination) {
-    selectedCategoryId = destination ? destination.id : null;
-    renderDestinationField();
-    renderDestinationPicker();
-    syncPostButtonState();
-    closeDestinationPicker();
-}
-
-function renderDestinationCreateArea() {
-    const area = document.getElementById('destination-create-area');
-    if (!area) return;
-    if (destinationPickerTab !== 'community' || activeDestinationConfig.enableCreateCommunity === false) {
-        area.innerHTML = '';
-        return;
-    }
-
-    area.innerHTML = `
-        <div class="destination-create">
-            <button class="icon-pill" id="destination-create-toggle"><i class="ph ph-plus"></i> ${destinationCreateExpanded ? 'Hide Create Community' : 'Create Community'}</button>
-            ${destinationCreateExpanded ? `
-                <div class="destination-create-form">
-                    <input type="text" id="new-category-name" class="form-input" placeholder="Community name" aria-label="Community name">
-                    <textarea id="new-category-description" class="form-input" placeholder="Description" aria-label="Community description"></textarea>
-                    <textarea id="new-category-rules" class="form-input" placeholder="Additional rules (one per line)" aria-label="Community rules"></textarea>
-                    <label class="checkbox-row"><input type="checkbox" id="new-category-public" checked> Publicly discoverable</label>
-                    <button class="create-btn-sidebar" id="destination-create-submit" style="width:100%;">Create</button>
-                </div>
-            ` : ''}
-        </div>`;
-
-    const toggle = document.getElementById('destination-create-toggle');
-    if (toggle) toggle.onclick = function () { destinationCreateExpanded = !destinationCreateExpanded; renderDestinationPicker(); };
-    const submit = document.getElementById('destination-create-submit');
-    if (submit) submit.onclick = function (e) { e.preventDefault(); window.handleCreateCategoryForm(); };
-}
-
-function retryDestinationLoad() {
-    if (!currentUser) return;
-    destinationPickerError = '';
-    destinationPickerLoading = true;
-    renderDestinationPicker();
-    startCategoryStreams(currentUser.uid);
-}
-
-function renderDestinationResults() {
-    const resultsEl = document.getElementById('destination-results');
-    if (!resultsEl) return;
-    if (destinationPickerError) {
-        resultsEl.innerHTML = `<div class="destination-error">${destinationPickerError}<div style="margin-top:8px;"><button class="icon-pill" id="destination-retry-btn">Retry</button></div></div>`;
-        const retryBtn = document.getElementById('destination-retry-btn');
-        if (retryBtn) retryBtn.onclick = function () { retryDestinationLoad(); };
-        return;
-    }
-    if (destinationPickerLoading) {
-        resultsEl.innerHTML = '<div class="destination-loading"><div class="inline-spinner" style="display:block; margin: 0 auto 8px;"></div>Loading destinations...</div>';
-        return;
-    }
-
-    const filtered = categories
-        .filter(function (c) { return destinationPickerTab === 'official' ? c.type === 'official' : c.type === 'community'; })
-        .filter(function (c) { return !destinationPickerSearch || (c.name || '').toLowerCase().includes(destinationPickerSearch.toLowerCase()); })
-        .sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
-
-    if (!filtered.length) {
-        const message = destinationPickerTab === 'official' ? 'No official destinations found.' : 'No communities found. Create one?';
-        resultsEl.innerHTML = `<div class="destination-empty">${message}</div>`;
-        return;
-    }
-
-    resultsEl.innerHTML = '';
-    filtered.forEach(function (cat) {
-        const destination = getDestinationFromCategory(cat);
-        const isSelected = destination.id === selectedCategoryId;
-        const selectable = destination.type === 'official' ? activeDestinationConfig.officialSelectable !== false : true;
-
-        const row = document.createElement('div');
-        row.className = 'destination-row' + (isSelected ? ' selected' : '');
-
-        const main = document.createElement('div');
-        main.className = 'destination-row-main';
-
-        const avatar = document.createElement('div');
-        avatar.className = 'destination-avatar';
-        avatar.textContent = (destination.name || 'U')[0];
-        if (destination.avatarUrl) {
-            avatar.style.backgroundImage = `url('${destination.avatarUrl}')`;
-            avatar.style.backgroundSize = 'cover';
-            avatar.textContent = '';
-        }
-
-        const textWrap = document.createElement('div');
-        textWrap.className = 'destination-row-text';
-        const title = document.createElement('div');
-        title.className = 'destination-row-title';
-        title.textContent = destination.name || 'Unnamed';
-        if (destination.verified) {
-            const badge = document.createElement('span');
-            badge.className = 'verified-badge';
-            badge.textContent = '✔';
-            title.appendChild(badge);
-        }
-        const desc = document.createElement('div');
-        desc.className = 'destination-row-desc';
-        const memberCount = destination.meta && destination.meta.memberCount ? `${destination.meta.memberCount} members` : '';
-        desc.textContent = destination.meta?.description || memberCount || '';
-        textWrap.appendChild(title);
-        textWrap.appendChild(desc);
-
-        main.appendChild(avatar);
-        main.appendChild(textWrap);
-
-        const actions = document.createElement('div');
-        actions.className = 'destination-row-actions';
-        const selectBtn = document.createElement('button');
-        selectBtn.className = 'icon-pill';
-        selectBtn.disabled = !selectable;
-        selectBtn.innerHTML = isSelected ? '<i class="ph ph-check"></i> Selected' : 'Select';
-        selectBtn.onclick = function (e) { e.stopPropagation(); if (selectable) handleDestinationSelected(destination); };
         actions.appendChild(selectBtn);
 
         if (selectable) {
@@ -1144,9 +960,11 @@ function renderDestinationPicker() {
 
     const tabsContainer = document.getElementById('destination-picker-tabs');
     const availableTabs = computeDestinationTabs();
+
     if (!availableTabs.some(function (t) { return t.type === destinationPickerTab; }) && availableTabs.length) {
-        destinationPickerTab = availableTabs.find(function (t) { return t.type === 'community'; })?.type || availableTabs[0].type;
+        destinationPickerTab = (availableTabs.find(function (t) { return t.type === 'community'; }) || availableTabs[0]).type;
     }
+
     if (tabsContainer) {
         tabsContainer.innerHTML = '';
         availableTabs.forEach(function (tab) {
@@ -1179,16 +997,21 @@ function renderDestinationPicker() {
 function openDestinationPicker(config = {}) {
     activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG, ...config };
     destinationPickerOpen = true;
+
     const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
     const tabs = computeDestinationTabs();
+
     if (currentCategoryDoc && tabs.some(function (t) { return t.type === currentCategoryDoc.type; })) {
         destinationPickerTab = currentCategoryDoc.type;
     } else {
-        destinationPickerTab = tabs.find(function (t) { return t.type === 'community'; })?.type || (tabs[0]?.type || 'community');
+        destinationPickerTab = (tabs.find(function (t) { return t.type === 'community'; }) || tabs[0] || { type: 'community' }).type;
     }
+
     destinationPickerSearch = '';
     destinationCreateExpanded = false;
+
     renderDestinationPicker();
+
     setTimeout(function () {
         const input = document.getElementById('destination-search-input');
         if (input) input.focus();
@@ -1202,6 +1025,7 @@ function closeDestinationPicker() {
 
 window.openDestinationPicker = openDestinationPicker;
 window.closeDestinationPicker = closeDestinationPicker;
+
 
 async function createCategory(payload) {
     if (!requireAuth()) return;
