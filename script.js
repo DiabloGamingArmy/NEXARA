@@ -776,7 +776,7 @@ function syncPostButtonState() {
     }
 }
 
-function getAvailableDestinationTabs() {
+function computeDestinationTabs() {
     const tabs = [];
     if (activeDestinationConfig.enableCommunityTab !== false) tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
     if (activeDestinationConfig.enableOfficialTab !== false) tabs.push({ type: 'official', label: activeDestinationConfig.officialTabLabel || 'Official (Verified)' });
@@ -1143,7 +1143,7 @@ function renderDestinationPicker() {
     modal.style.display = destinationPickerOpen ? 'flex' : 'none';
 
     const tabsContainer = document.getElementById('destination-picker-tabs');
-    const availableTabs = getAvailableDestinationTabs();
+    const availableTabs = computeDestinationTabs();
     if (!availableTabs.some(function (t) { return t.type === destinationPickerTab; }) && availableTabs.length) {
         destinationPickerTab = availableTabs.find(function (t) { return t.type === 'community'; })?.type || availableTabs[0].type;
     }
@@ -1180,7 +1180,7 @@ function openDestinationPicker(config = {}) {
     activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG, ...config };
     destinationPickerOpen = true;
     const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
-    const tabs = getAvailableDestinationTabs();
+    const tabs = computeDestinationTabs();
     if (currentCategoryDoc && tabs.some(function (t) { return t.type === currentCategoryDoc.type; })) {
         destinationPickerTab = currentCategoryDoc.type;
     } else {
