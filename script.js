@@ -343,7 +343,7 @@ if (typeof window.handleLogin !== 'function') {
     };
 }
 
-// --- Theme Helpers (renamed to avoid applyTheme shadowing) ---
+// --- Theme Helpers (avoid applyTheme shadowing) ---
 function getStoredThemePreference() {
     try { return localStorage.getItem('nexara-theme'); }
     catch (e) { return null; }
@@ -362,7 +362,6 @@ async function persistThemePreference(preference) {
     if (!preference) preference = 'system';
     userProfile.theme = preference;
     applyThemePreference(preference);
-
     if (currentUser) {
         try {
             await setDoc(doc(db, "users", currentUser.uid), { theme: preference }, { merge: true });
@@ -372,7 +371,38 @@ async function persistThemePreference(preference) {
     }
 }
 
+// Keep this function exactly once
+async function ensureUserDocument(user) {
+    const ref = doc(db, "users", user.uid);
+    const snap = await getDoc(ref);
+    const now = serverTimestamp();
+    if (!snap.exists()) {
+        await setDoc(ref, {
+            displayName: user.displayName || "Nexara User",
+            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0,6)}`,
+            photoURL: user.photoURL || "",
+            bio: "",
+            website: "",
+            region: "",
+            email: user.email || "",
+            role: user.role || "user",
+            createdAt: now,
+            updatedAt: now
+        }, { merge: true });
+        return await getDoc(ref);
+    }
+    await setDoc(ref, { updatedAt: now }, { merge: true });
+    return await getDoc(ref);
+}
+
+function shouldRerenderThread(newData, prevData) {
+    if (!prevData) prevData = {};
+    var fieldsToWatch = ['title', 'content', 'mediaUrl', 'type', 'category', 'trustScore'];
+    return fieldsToWatch.some(function (key) { return newData[key] !== prevData[key]; });
+}
+
 // --- Auth Functions ---
+// Define it once, no fallback wrapper needed since this is a direct global assignment.
 window.handleLogin = async function (e) {
     if (e && typeof e.preventDefault === "function") e.preventDefault();
 
@@ -380,7 +410,6 @@ window.handleLogin = async function (e) {
         var emailEl = document.getElementById('email');
         var passEl  = document.getElementById('password');
         var errEl   = document.getElementById('auth-error');
-
         if (errEl) errEl.textContent = '';
 
         var email = emailEl ? emailEl.value : '';
@@ -393,7 +422,6 @@ window.handleLogin = async function (e) {
 
         var cred = await signInWithEmailAndPassword(auth, email, pass);
 
-        // Ensure user doc exists (your helper is above in your file)
         if (typeof ensureUserDocument === 'function') {
             await ensureUserDocument(cred.user);
         }
@@ -403,6 +431,7 @@ window.handleLogin = async function (e) {
         console.error(err);
     }
 };
+
 
 window.handleSignup = async function(e) {
     e.preventDefault();
