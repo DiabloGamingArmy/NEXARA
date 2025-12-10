@@ -104,22 +104,6 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     pointer-events: none;
 }
 
-}
-
-.nav-item:hover { background: var(--bg-hover); color: var(--text-main); transform: translateY(-1px); box-shadow: 0 12px 30px rgba(0, 95, 130, 0.12); }
-
-/* Subtle shimmer sweep on hover */
-.nav-item::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(120deg, transparent 20%, rgba(0, 242, 234, 0.12) 40%, transparent 60%);
-    transform: translateX(-120%);
-    transition: opacity 0.3s;
-    opacity: 0;
-    pointer-events: none;
-}
-
 .nav-item:hover::after { opacity: 1; animation: shimmerMove 1.5s ease forwards; }
 
 /* Active Nav Item - Moving Gradient */
@@ -425,7 +409,6 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .remove-attachment { position: absolute; top: 5px; left: 5px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; }
 
 .extra-options-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: none; background: rgba(255,255,255,0.02); }
-
 /* Messaging, Videos, Staff */
 .messages-layout { display:grid; grid-template-columns: 320px 1fr; height: calc(100vh - 80px); }
 .messages-sidebar { border-right:1px solid var(--border); padding:1rem; overflow-y:auto; }
