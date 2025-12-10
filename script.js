@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 // --- Firebase Configuration ---
 const firebaseConfig = {
@@ -34,32 +34,84 @@ let isInitialLoad = true;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
-let followedUsers = new Set(); 
+let followedUsers = new Set();
+
+// Snapshot cache to diff changes for thread rendering
+let postSnapshotCache = {};
+
+const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
+
+function getReviewDisplay(reviewValue) {
+    if(reviewValue === 'verified') {
+        return { label: 'Verified', className: 'review-verified' };
+    }
+    if(reviewValue === 'citation') {
+        return { label: 'Needs Citations', className: 'review-citation' };
+    }
+    if(reviewValue === 'misleading') {
+        return { label: 'Misleading/False', className: 'review-misleading' };
+    }
+    return { label: 'Review', className: '' };
+}
+
+function applyReviewButtonState(buttonEl, reviewValue) {
+    if(!buttonEl) return;
+    const { label, className } = getReviewDisplay(reviewValue);
+    const iconSize = buttonEl.dataset.iconSize || '1.1rem';
+    buttonEl.classList.remove(...REVIEW_CLASSES);
+    if(className) buttonEl.classList.add(className);
+    buttonEl.innerHTML = `<i class="ph ph-scales" style="font-size:${iconSize};"></i> ${label}`;
+}
+
+function applyMyReviewStylesToDOM() {
+    const cache = window.myReviewCache || {};
+    document.querySelectorAll('.review-action').forEach(function(btn) {
+        const pid = btn.dataset.postId;
+        applyReviewButtonState(btn, pid ? cache[pid] : null);
+    });
+}
 
 let userProfile = {
-    name: "Nexara User", 
-    username: "nexara_explorer", 
-    bio: "Stream, Socialize, and Strive.", 
+    name: "Nexara User",
+    realName: "",
+    nickname: "",
+    username: "nexara_explorer",
+    bio: "Stream, Socialize, and Strive.",
     links: "mysite.com",
-    email: "", 
-    phone: "", 
-    gender: "Prefer not to say", 
-    photoURL: "", 
-    savedPosts: [], 
-    following: [], 
-    followersCount: 0 
+    email: "",
+    phone: "",
+    gender: "Prefer not to say",
+    region: "",
+    photoURL: "",
+    theme: "system",
+    savedPosts: [],
+    following: [],
+    followersCount: 0
 };
 
 // Thread & View State
 let activePostId = null;
 let activeReplyId = null; 
-let threadUnsubscribe = null; 
-let viewingUserId = null; 
+let threadUnsubscribe = null;
+let viewingUserId = null;
 let currentReviewId = null;
+let conversationsUnsubscribe = null;
+let messagesUnsubscribe = null;
+let activeConversationId = null;
+let conversationsCache = [];
+let activeMessageUpload = null;
+let videosUnsubscribe = null;
+let videosCache = [];
+let videoObserver = null;
+const viewedVideos = new Set();
+let liveSessionsUnsubscribe = null;
+let staffRequestsUnsub = null;
+let staffReportsUnsub = null;
+let staffLogsUnsub = null;
 
 // --- Navigation Stack ---
 let navStack = [];
-let currentViewId = 'feed'; 
+let currentViewId = 'feed';
 
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
@@ -121,9 +173,30 @@ const THEMES = {
     'Gaming': '#7000ff',     'News': '#ff3d3d',       'Music': '#00bfff'
 };
 
+// Shared state + render helpers
+window.getCurrentUser = function() { return currentUser; };
+window.getUserDoc = async function(uid) { return getDoc(doc(db, 'users', uid)); };
+window.requireAuth = function() {
+    if(!currentUser) {
+        document.getElementById('auth-screen').style.display = 'flex';
+        document.getElementById('app-layout').style.display = 'none';
+        return false;
+    }
+    return true;
+};
+window.setView = function(name) { return window.navigateTo(name); };
+window.toast = function(msg, type = 'info') {
+    console.log(`[${type}]`, msg);
+    const overlay = document.createElement('div');
+    overlay.textContent = msg;
+    overlay.className = 'toast-msg';
+    document.body.appendChild(overlay);
+    setTimeout(function() { overlay.remove(); }, 2500);
+};
+
 // --- Initialization & Auth Listener ---
 function initApp() {
-    onAuthStateChanged(auth, async (user) => {
+    onAuthStateChanged(auth, async function(user) {
         const loadingOverlay = document.getElementById('loading-overlay');
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
@@ -133,22 +206,33 @@ function initApp() {
             console.log("User logged in:", user.uid);
 
             try {
+                const ensuredSnap = await ensureUserDocument(user);
+                const docSnap = ensuredSnap;
                 // Fetch User Profile
-                const docRef = doc(db, "users", user.uid);
-                const docSnap = await getDoc(docRef);
-
                 if (docSnap.exists()) {
                     userProfile = { ...userProfile, ...docSnap.data() };
                     userCache[user.uid] = userProfile;
 
+                    // Apply stored theme preference
+                    const savedTheme = userProfile.theme || getStoredThemePreference() || 'system';
+                    userProfile.theme = savedTheme;
+                    applyTheme(savedTheme);
+
                     // Restore 'following' state locally
                     if (userProfile.following) {
-                        userProfile.following.forEach(uid => followedUsers.add(uid));
+                        userProfile.following.forEach(function(uid) { followedUsers.add(uid); });
                     }
+                    const staffNav = document.getElementById('nav-staff');
+                    if(staffNav) staffNav.style.display = (userProfile.role === 'staff' || userProfile.role === 'admin') ? 'flex' : 'none';
                 } else {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
                     userProfile.name = user.displayName || "Nexara User";
+                    const storedTheme = getStoredThemePreference() || userProfile.theme || 'system';
+                    userProfile.theme = storedTheme;
+                    applyTheme(storedTheme);
+                    const staffNav = document.getElementById('nav-staff');
+                    if(staffNav) staffNav.style.display = 'none';
                 }
             } catch (e) { 
                 console.error("Profile Load Error", e); 
@@ -187,8 +271,80 @@ function updateTimeCapsule() {
     if(eventEl) eventEl.textContent = eventText;
 }
 
+function getSystemTheme() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function getStoredThemePreference() {
+    try {
+        return localStorage.getItem('nexara-theme');
+    } catch(e) {
+        return null;
+    }
+}
+
+function applyTheme(preference = 'system') {
+    const resolved = preference === 'system' ? getSystemTheme() : preference;
+    document.body.classList.toggle('light-mode', resolved === 'light');
+    document.body.dataset.themePreference = preference;
+    try { localStorage.setItem('nexara-theme', preference); } catch(e) { console.warn('Theme storage blocked'); }
+}
+
+async function persistThemePreference(preference = 'system') {
+    userProfile.theme = preference;
+    applyTheme(preference);
+    if(currentUser) {
+        try {
+            await setDoc(doc(db, "users", currentUser.uid), { theme: preference }, { merge: true });
+        } catch(e) {
+            console.warn('Theme save failed', e.message);
+        }
+    }
+}
+
+async function ensureUserDocument(user) {
+    const ref = doc(db, "users", user.uid);
+    const snap = await getDoc(ref);
+    const now = serverTimestamp();
+    if(!snap.exists()) {
+        await setDoc(ref, {
+            displayName: user.displayName || "Nexara User",
+            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0,6)}`,
+            photoURL: user.photoURL || "",
+            bio: "",
+            website: "",
+            region: "",
+            email: user.email || "",
+            role: user.role || "user",
+            createdAt: now,
+            updatedAt: now
+        }, { merge: true });
+        return await getDoc(ref);
+    }
+    await setDoc(ref, { updatedAt: now }, { merge: true });
+    return await getDoc(ref);
+}
+
+function shouldRerenderThread(newData, prevData = {}) {
+    const fieldsToWatch = ['title', 'content', 'mediaUrl', 'type', 'category', 'trustScore'];
+    return fieldsToWatch.some(function(key) { return newData[key] !== prevData[key]; });
+}
+
+if (typeof window.handleLogin !== 'function') {
+    window.handleLogin = function(event) {
+        if (event && typeof event.preventDefault === 'function') { event.preventDefault(); }
+        try {
+            if (typeof handleLogin === 'function' && handleLogin !== window.handleLogin) { return handleLogin(event); }
+            if (typeof login === 'function') { return login(event); }
+        } catch (err) {
+            console.error(err);
+        }
+        console.error('handleLogin is not wired correctly.');
+    };
+}
+
 // --- Auth Functions ---
-window.handleLogin = async (e) => {
+window.handleLogin = async function(e) {
     e.preventDefault();
     try {
         await signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
@@ -197,26 +353,32 @@ window.handleLogin = async (e) => {
     }
 }
 
-window.handleSignup = async (e) => {
+window.handleSignup = async function(e) {
     e.preventDefault();
     try {
         const cred = await createUserWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
         // Create initial user document
         await setDoc(doc(db, "users", cred.user.uid), {
-            name: "New Explorer", 
-            username: cred.user.email.split('@')[0], 
-            email: cred.user.email, 
-            joined: serverTimestamp(), 
-            savedPosts: [], 
-            followersCount: 0, 
-            following: []
+            displayName: "New Explorer",
+            username: cred.user.email.split('@')[0],
+            email: cred.user.email,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            savedPosts: [],
+            followersCount: 0,
+            following: [],
+            photoURL: "",
+            bio: "",
+            website: "",
+            region: "",
+            role: "user"
         });
-    } catch (err) { 
-        document.getElementById('auth-error').textContent = err.message; 
+    } catch (err) {
+        document.getElementById('auth-error').textContent = err.message;
     }
 }
 
-window.handleAnon = async () => { 
+window.handleAnon = async function() { 
     try { 
         await signInAnonymously(auth); 
     } catch(e){ 
@@ -224,7 +386,7 @@ window.handleAnon = async () => {
     } 
 }
 
-window.handleLogout = () => { 
+window.handleLogout = function() { 
     signOut(auth); 
     location.reload(); 
 }
@@ -232,7 +394,7 @@ window.handleLogout = () => {
 // --- Data Fetching & Caching ---
 async function fetchMissingProfiles(posts) {
     const missingIds = new Set();
-    posts.forEach(post => { 
+    posts.forEach(function(post) {
         if (post.userId && !userCache[post.userId]) {
             missingIds.add(post.userId); 
         }
@@ -241,11 +403,11 @@ async function fetchMissingProfiles(posts) {
     if (missingIds.size === 0) return;
 
     // Fetch up to 10 at a time or simple Promise.all
-    const fetchPromises = Array.from(missingIds).map(uid => getDoc(doc(db, "users", uid)));
+    const fetchPromises = Array.from(missingIds).map(function(uid) { return getDoc(doc(db, "users", uid)); });
 
     try {
         const userDocs = await Promise.all(fetchPromises);
-        userDocs.forEach(docSnap => {
+        userDocs.forEach(function(docSnap) {
             if (docSnap.exists()) {
                 userCache[docSnap.id] = docSnap.data();
             } else {
@@ -262,17 +424,21 @@ async function fetchMissingProfiles(posts) {
 }
 
 function startDataListener() {
-    const postsRef = collection(db, 'posts'); 
-    const q = query(postsRef); 
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef);
 
-    onSnapshot(q, (snapshot) => {
+    onSnapshot(q, function(snapshot) {
+        const previousCache = { ...postSnapshotCache };
+        const nextCache = {};
         allPosts = [];
-        snapshot.forEach((doc) => { 
-            allPosts.push({ id: doc.id, ...doc.data() }); 
+        snapshot.forEach(function(doc) {
+            const data = doc.data();
+            allPosts.push({ id: doc.id, ...data });
+            nextCache[doc.id] = data;
         });
 
         // Sort posts by date (newest first)
-        allPosts.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+        allPosts.sort(function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
 
         // Fetch profiles for these posts
         fetchMissingProfiles(allPosts);
@@ -284,16 +450,21 @@ function startDataListener() {
         }
 
         // Live updates for specific interactions
-        snapshot.docChanges().forEach((change) => { 
+        snapshot.docChanges().forEach(function(change) {
             if (change.type === "modified") {
-                refreshSinglePostUI(change.doc.id); 
+                refreshSinglePostUI(change.doc.id);
+
+                if(activePostId === change.doc.id && document.getElementById('view-thread').style.display === 'block') {
+                    const prevData = previousCache[change.doc.id] || {};
+                    const newData = change.doc.data();
+                    if(shouldRerenderThread(newData, prevData)) {
+                        renderThreadMainPost(activePostId);
+                    }
+                }
             }
         });
 
-        // Update thread view if open
-        if(activePostId && document.getElementById('view-thread').style.display === 'block') {
-            renderThreadMainPost(activePostId);
-        }
+        postSnapshotCache = nextCache;
     });
 
     // Start Live Stream Listener (Mock)
@@ -303,9 +474,9 @@ function startDataListener() {
 // PATCH: New listener to fetch user's reviews across all posts
 function startUserReviewListener(uid) {
     const q = query(collectionGroup(db, 'reviews'), where('userId', '==', uid));
-    onSnapshot(q, (snapshot) => {
+    onSnapshot(q, function(snapshot) {
         window.myReviewCache = {};
-        snapshot.forEach((doc) => {
+        snapshot.forEach(function(doc) {
             // In a Collection Group query, we can access the parent Post ID
             const parentPostRef = doc.ref.parent.parent;
             if(parentPostRef) {
@@ -314,8 +485,9 @@ function startUserReviewListener(uid) {
         });
 
         // Refresh UI for all loaded posts to apply colors
-        allPosts.forEach(post => refreshSinglePostUI(post.id));
-    }, (error) => {
+        allPosts.forEach(function(post) { refreshSinglePostUI(post.id); });
+        applyMyReviewStylesToDOM();
+    }, function(error) {
         console.log("Review listener note:", error.message);
     });
 }
@@ -323,9 +495,13 @@ function startUserReviewListener(uid) {
 // --- Navigation Logic ---
 window.navigateTo = function(viewId, pushToStack = true) {
     // Cleanup previous listeners if leaving thread
-    if(viewId !== 'thread' && threadUnsubscribe) { 
-        threadUnsubscribe(); 
-        threadUnsubscribe = null; 
+    if(viewId !== 'thread' && threadUnsubscribe) {
+        threadUnsubscribe();
+        threadUnsubscribe = null;
+    }
+
+    if(viewId !== 'videos' && currentViewId === 'videos') {
+        pauseAllVideos();
     }
 
     // Stack Management
@@ -340,25 +516,29 @@ window.navigateTo = function(viewId, pushToStack = true) {
     }
 
     // Toggle Views
-    document.querySelectorAll('.view-section').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.view-section').forEach(function(el) { el.style.display = 'none'; });
     const targetView = document.getElementById('view-' + viewId);
     if (targetView) targetView.style.display = 'block';
 
     // Toggle Navbar Active State
     if(viewId !== 'thread' && viewId !== 'public-profile') {
-        document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(function(el) { el.classList.remove('active'); });
         const navEl = document.getElementById('nav-' + viewId);
         if(navEl) navEl.classList.add('active');
     }
 
     // View Specific Logic
-    if(viewId === 'feed' && pushToStack) { 
-        currentCategory = 'For You'; 
-        renderFeed(); 
+    if(viewId === 'feed' && pushToStack) {
+        currentCategory = 'For You';
+        renderFeed();
     }
     if(viewId === 'saved') { renderSaved(); }
     if(viewId === 'profile') renderProfile();
     if(viewId === 'discover') { renderDiscover(); }
+    if(viewId === 'messages') { initConversations(); }
+    if(viewId === 'videos') { initVideoFeed(); }
+    if(viewId === 'live') { renderLiveSessions(); }
+    if(viewId === 'staff') { renderStaffConsole(); }
 
     currentViewId = viewId;
     window.scrollTo(0,0);
@@ -398,7 +578,7 @@ window.toggleFollow = function(c, event) {
     const cleanTopic = c.replace(/[^a-zA-Z0-9]/g, ''); 
     const btns = document.querySelectorAll(`.js-follow-topic-${cleanTopic}`);
 
-    btns.forEach(btn => {
+    btns.forEach(function(btn) {
         if (isFollowing) { 
             btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
             btn.classList.remove('following');
@@ -418,7 +598,7 @@ window.toggleFollowUser = async function(uid, event) {
 
     // 1. Update Buttons immediately
     const btns = document.querySelectorAll(`.js-follow-user-${uid}`);
-    btns.forEach(btn => {
+    btns.forEach(function(btn) {
         if (isFollowing) { 
             // We were following, now we are NOT (Unfollow action completed)
             // State: Not Following -> BUTTON SHOULD BE FILLED (Option to follow)
@@ -546,10 +726,7 @@ function getPostHTML(post) {
 
         // Review Button Color Logic (Read from global cache)
         const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
-        let reviewColor = 'inherit';
-        if(myReview === 'verified') reviewColor = '#00ff00';
-        else if(myReview === 'citation') reviewColor = '#ffaa00';
-        else if(myReview === 'misleading') reviewColor = '#ff3d3d';
+        const reviewDisplay = getReviewDisplay(myReview);
 
         // UPDATED HTML STRUCTURE: Verified Badge moved to right side under buttons
         return `
@@ -579,7 +756,7 @@ function getPostHTML(post) {
                     <button class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
                     <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
                     <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
-                    <button class="action-btn" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="color: ${reviewColor}"><i class="ph ph-scales" style="font-size:1.1rem;"></i> Review</button>
+                    <button class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                 </div>
             </div>`;
     } catch(e) { 
@@ -597,17 +774,17 @@ function renderFeed(targetId = 'feed-content') {
 
     // Filter Logic
     if (currentCategory === 'Following') {
-        displayPosts = allPosts.filter(post => followedCategories.has(post.category));
+        displayPosts = allPosts.filter(function(post) { return followedCategories.has(post.category); });
     } else if (currentCategory === 'Saved') {
-         displayPosts = allPosts.filter(post => userProfile.savedPosts && userProfile.savedPosts.includes(post.id));
+         displayPosts = allPosts.filter(function(post) { return userProfile.savedPosts && userProfile.savedPosts.includes(post.id); });
          // Sub-filtering for Saved view
-         if (savedSearchTerm) displayPosts = displayPosts.filter(post => post.title.toLowerCase().includes(savedSearchTerm));
-         if (savedFilter === 'Recent') displayPosts.sort((a, b) => userProfile.savedPosts.indexOf(b.id) - userProfile.savedPosts.indexOf(a.id));
-         else if (savedFilter === 'Oldest') displayPosts.sort((a, b) => userProfile.savedPosts.indexOf(a.id) - userProfile.savedPosts.indexOf(b.id));
-         else if (savedFilter === 'Videos') displayPosts = displayPosts.filter(p => p.type === 'video'); 
-         else if (savedFilter === 'Images') displayPosts = displayPosts.filter(p => p.type === 'image');
+         if (savedSearchTerm) displayPosts = displayPosts.filter(function(post) { return post.title.toLowerCase().includes(savedSearchTerm); });
+         if (savedFilter === 'Recent') displayPosts.sort(function(a, b) { return userProfile.savedPosts.indexOf(b.id) - userProfile.savedPosts.indexOf(a.id); });
+         else if (savedFilter === 'Oldest') displayPosts.sort(function(a, b) { return userProfile.savedPosts.indexOf(a.id) - userProfile.savedPosts.indexOf(b.id); });
+         else if (savedFilter === 'Videos') displayPosts = displayPosts.filter(function(p) { return p.type === 'video'; });
+         else if (savedFilter === 'Images') displayPosts = displayPosts.filter(function(p) { return p.type === 'image'; });
     } else if (currentCategory !== 'For You') {
-        displayPosts = allPosts.filter(post => post.category === currentCategory);
+        displayPosts = allPosts.filter(function(post) { return post.category === currentCategory; });
     }
 
     if (displayPosts.length === 0) { 
@@ -616,24 +793,20 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     // Render loop
-    displayPosts.forEach(post => { 
-        container.innerHTML += getPostHTML(post); 
+    displayPosts.forEach(function(post) {
+        container.innerHTML += getPostHTML(post);
     });
 
-    // PATCH: Apply colors immediately after rendering
-    // This catches cases where review data loaded BEFORE the feed rendered
-    setTimeout(() => {
-        // window.applyReviewColors(); // Removed as it was undefined in provided code, relying on getPostHTML logic
-    }, 50);
+    applyMyReviewStylesToDOM();
 }
 
 function refreshSinglePostUI(postId) {
-    const post = allPosts.find(p => p.id === postId);
+    const post = allPosts.find(function(p) { return p.id === postId; });
     if (!post) return;
 
     const likeBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(1)`);
     const saveBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(3)`);
-    const reviewBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(4)`);
+    const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
     const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
@@ -649,26 +822,26 @@ function refreshSinglePostUI(postId) {
         saveBtn.style.color = isSaved ? '#00f2ea' : 'inherit'; 
     }
     if(reviewBtn) {
-        let color = 'inherit';
-        if(myReview === 'verified') color = '#00ff00';
-        else if(myReview === 'citation') color = '#ffaa00';
-        else if(myReview === 'misleading') color = '#ff3d3d';
-        reviewBtn.style.color = color;
+        applyReviewButtonState(reviewBtn, myReview);
     }
 
     // Update Thread View if active
     const threadLikeBtn = document.getElementById('thread-like-btn');
     const threadSaveBtn = document.getElementById('thread-save-btn');
     const threadTitle = document.getElementById('thread-view-title');
+    const threadReviewBtn = document.getElementById('thread-review-btn');
 
     if(threadTitle && threadTitle.dataset.postId === postId) {
         if(threadLikeBtn) { 
             threadLikeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span>`; 
             threadLikeBtn.style.color = isLiked ? '#00f2ea' : 'inherit'; 
         }
-        if(threadSaveBtn) { 
-            threadSaveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span>`; 
-            threadSaveBtn.style.color = isSaved ? '#00f2ea' : 'inherit'; 
+        if(threadSaveBtn) {
+            threadSaveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span>`;
+            threadSaveBtn.style.color = isSaved ? '#00f2ea' : 'inherit';
+        }
+        if(threadReviewBtn) {
+            applyReviewButtonState(threadReviewBtn, myReview);
         }
     }
 }
@@ -678,7 +851,7 @@ window.toggleLike = async function(postId, event) {
     if(event) event.stopPropagation();
     if(!currentUser) return alert("Please log in to like posts.");
 
-    const post = allPosts.find(p => p.id === postId);
+    const post = allPosts.find(function(p) { return p.id === postId; });
     if(!post) return;
 
     const wasLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
@@ -686,7 +859,7 @@ window.toggleLike = async function(postId, event) {
     // Optimistic Update
     if (wasLiked) { 
         post.likes = (post.likes || 0) - 1; 
-        post.likedBy = post.likedBy.filter(uid => uid !== currentUser.uid); 
+        post.likedBy = post.likedBy.filter(function(uid) { return uid !== currentUser.uid; });
     } else { 
         post.likes = (post.likes || 0) + 1; 
         if (!post.likedBy) post.likedBy = []; 
@@ -717,7 +890,7 @@ window.toggleSave = async function(postId, event) {
 
     // Optimistic Update
     if(isSaved) {
-        userProfile.savedPosts = userProfile.savedPosts.filter(id => id !== postId);
+        userProfile.savedPosts = userProfile.savedPosts.filter(function(id) { return id !== postId; });
     } else {
         userProfile.savedPosts.push(postId);
     }
@@ -800,11 +973,31 @@ window.createPost = async function() {
 }
 
 // --- Settings & Modals ---
-window.toggleCreateModal = (show) => { 
-    document.getElementById('create-modal').style.display = show ? 'flex' : 'none'; 
-    if(show && currentUser) { 
-        const avatarEl = document.getElementById('modal-user-avatar'); 
-        if(userProfile.photoURL) { 
+function updateSettingsAvatarPreview(src) {
+    const preview = document.getElementById('settings-avatar-preview');
+    if(!preview) return;
+
+    if(src) {
+        preview.style.backgroundImage = `url('${src}')`;
+        preview.style.backgroundSize = 'cover';
+        preview.textContent = '';
+    } else {
+        preview.style.backgroundImage = 'none';
+        preview.style.backgroundColor = getColorForUser(userProfile.name || 'U');
+        preview.textContent = (userProfile.name || 'U')[0];
+    }
+}
+
+function syncThemeRadios(themeValue) {
+    const selected = document.querySelector(`input[name="theme-choice"][value="${themeValue}"]`);
+    if(selected) selected.checked = true;
+}
+
+window.toggleCreateModal = function(show) {
+    document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
+    if(show && currentUser) {
+        const avatarEl = document.getElementById('modal-user-avatar');
+        if(userProfile.photoURL) {
             avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`; 
             avatarEl.textContent = ''; 
         } else { 
@@ -816,49 +1009,95 @@ window.toggleCreateModal = (show) => {
     } 
 }
 
-window.toggleSettingsModal = (show) => { 
-    document.getElementById('settings-modal').style.display = show ? 'flex' : 'none'; 
-    if(show){ 
-        document.getElementById('set-name').value = userProfile.name||""; 
-        document.getElementById('set-username').value = userProfile.username||""; 
-        document.getElementById('set-bio').value = userProfile.bio||""; 
-        document.getElementById('set-links').value = userProfile.links||""; 
-        document.getElementById('set-phone').value = userProfile.phone||""; 
-        document.getElementById('set-gender').value = userProfile.gender||"Prefer not to say"; 
-        document.getElementById('set-email').value = userProfile.email||""; 
-    } 
+window.toggleSettingsModal = function(show) {
+    document.getElementById('settings-modal').style.display = show ? 'flex' : 'none';
+    if(show){
+        document.getElementById('set-name').value = userProfile.name||"";
+        document.getElementById('set-real-name').value = userProfile.realName||"";
+        document.getElementById('set-username').value = userProfile.username||"";
+        document.getElementById('set-bio').value = userProfile.bio||"";
+        document.getElementById('set-website').value = userProfile.links||"";
+        document.getElementById('set-phone').value = userProfile.phone||"";
+        const genderInput = document.getElementById('set-gender');
+        if(genderInput) genderInput.value = userProfile.gender||"Prefer not to say";
+        document.getElementById('set-email').value = userProfile.email||"";
+        document.getElementById('set-nickname').value = userProfile.nickname||"";
+        document.getElementById('set-region').value = userProfile.region||"";
+        const photoUrlInput = document.getElementById('set-photo-url');
+        if(photoUrlInput) {
+            photoUrlInput.value = userProfile.photoURL || "";
+            photoUrlInput.oninput = function(e) { return updateSettingsAvatarPreview(e.target.value); };
+        }
+        syncThemeRadios(userProfile.theme || 'system');
+        updateSettingsAvatarPreview(userProfile.photoURL);
+
+        const uploadInput = document.getElementById('set-pic-file');
+        const cameraInput = document.getElementById('set-pic-camera');
+        if(uploadInput) uploadInput.onchange = function(e) { return handleSettingsFileChange(e.target); };
+        if(cameraInput) cameraInput.onchange = function(e) { return handleSettingsFileChange(e.target); };
+
+        document.querySelectorAll('input[name="theme-choice"]').forEach(function(r) {
+            r.onchange = function(e) { return persistThemePreference(e.target.value); };
+        });
+    }
 }
 
-window.saveSettings = async function() { 
+ window.saveSettings = async function() {
      const name = document.getElementById('set-name').value;
-     const username = document.getElementById('set-username').value;
+     const realName = document.getElementById('set-real-name').value;
+     const nickname = document.getElementById('set-nickname').value;
+     const username = document.getElementById('set-username').value.trim();
      const bio = document.getElementById('set-bio').value;
-     const links = document.getElementById('set-links').value;
+     const links = document.getElementById('set-website').value;
      const phone = document.getElementById('set-phone').value;
      const gender = document.getElementById('set-gender').value;
-     const email = document.getElementById('set-email').value; 
+     const email = document.getElementById('set-email').value;
+     const region = document.getElementById('set-region').value;
+     const photoUrlInput = document.getElementById('set-photo-url');
+     const manualPhoto = photoUrlInput ? photoUrlInput.value.trim() : '';
+     const themeChoice = document.querySelector('input[name="theme-choice"]:checked');
+     const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
      const fileInput = document.getElementById('set-pic-file');
+     const cameraInput = document.getElementById('set-pic-camera');
 
-     let photoURL = userProfile.photoURL;
-     if(fileInput.files[0]) { 
-         const path = `users/${currentUser.uid}/pfp_${Date.now()}`; 
-         photoURL = await uploadFileToStorage(fileInput.files[0], path); 
+     if(!username) {
+         return alert("Username is required.");
+     }
+     if(username && !/^[A-Za-z0-9._-]{3,20}$/.test(username)) {
+         return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
      }
 
-     const updates = { name, username, bio, links, phone, gender, email, photoURL };
+     let photoURL = userProfile.photoURL;
+     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
+     if(newPhoto) {
+         const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
+         photoURL = await uploadFileToStorage(newPhoto, path);
+     } else if(manualPhoto) {
+         photoURL = manualPhoto;
+     }
+
+     const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL };
      userProfile = { ...userProfile, ...updates };
      userCache[currentUser.uid] = userProfile;
 
-     try { 
-         await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true }); 
-         if(name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL }); 
-     } catch(e) { 
-         console.error("Save failed", e); 
+     try {
+         await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+         if(name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
+     } catch(e) {
+         console.error("Save failed", e);
      }
 
-     renderProfile(); 
-     renderFeed(); 
+     await persistThemePreference(theme);
+     renderProfile();
+     renderFeed();
      window.toggleSettingsModal(false);
+ }
+
+function handleSettingsFileChange(inputEl) {
+    if(!inputEl || !inputEl.files || !inputEl.files[0]) return;
+    const reader = new FileReader();
+    reader.onload = function(e) { return updateSettingsAvatarPreview(e.target.result); };
+    reader.readAsDataURL(inputEl.files[0]);
 }
 
 // --- Peer Review System ---
@@ -870,7 +1109,7 @@ window.openPeerReview = function(postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
     const q = query(reviewsRef); 
 
-    onSnapshot(q, (snapshot) => {
+    onSnapshot(q, function(snapshot) {
         const container = document.getElementById('review-list'); 
         container.innerHTML = "";
 
@@ -878,7 +1117,7 @@ window.openPeerReview = function(postId) {
         let userHasReview = false; 
         let myRatingData = null;
 
-        snapshot.forEach(doc => {
+        snapshot.forEach(function(doc) {
             const data = doc.data();
             if(data.userId === currentUser.uid) { 
                 userHasReview = true; 
@@ -888,6 +1127,7 @@ window.openPeerReview = function(postId) {
                 // Cache my review to update the feed button color
                 window.myReviewCache[activePostId] = data.rating;
                 refreshSinglePostUI(activePostId);
+                applyMyReviewStylesToDOM();
             }
             const rAuthor = userCache[data.userId] || { name: "Reviewer" };
             scores.total++; 
@@ -970,6 +1210,7 @@ window.submitReview = async function() {
 
         // 2. Update UI Immediately
         refreshSinglePostUI(activePostId);
+        applyMyReviewStylesToDOM();
         noteEl.value = "";
 
         // 3. Close Modal
@@ -1002,6 +1243,7 @@ window.removeReview = async function() {
 
     // Reset UI color
     refreshSinglePostUI(activePostId);
+    applyMyReviewStylesToDOM();
     window.closeReview(); // Close modal
 
     try { 
@@ -1013,73 +1255,88 @@ window.removeReview = async function() {
 
 // --- Thread & Comments ---
 window.openThread = function(postId) {
-    activePostId = postId; 
-    activeReplyId = null; 
-    window.resetInputBox(); 
-    window.navigateTo('thread'); 
+    activePostId = postId;
+    activeReplyId = null;
+    window.resetInputBox();
+    window.navigateTo('thread');
     renderThreadMainPost(postId);
+    attachThreadComments(postId);
+}
 
-    const commentsRef = collection(db, 'posts', postId, 'comments'); 
-    const q = query(commentsRef); 
+function attachThreadComments(postId) {
+    const container = document.getElementById('thread-stream');
+    if (!container) return;
+
+    const commentsRef = collection(db, 'posts', postId, 'comments');
+    const q = query(commentsRef, orderBy('timestamp', 'asc'));
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = onSnapshot(q, (snapshot) => {
-        const container = document.getElementById('thread-stream'); 
-        container.innerHTML = "";
-
-        const comments = []; 
-        snapshot.forEach(d => comments.push({id: d.id, ...d.data()}));
-        comments.sort((a,b) => (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0));
-
-        const missingCommentUsers = comments.filter(c => !userCache[c.userId]).map(c => ({userId: c.userId}));
+    threadUnsubscribe = onSnapshot(q, function(snapshot) {
+        const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
-
-        if (comments.length === 0) {
-            container.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--text-muted);">No comments yet. Be the first to reply!</div>`;
-        }
-
-        comments.forEach(c => {
-            const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
-            const isReply = c.parentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
-            const isLiked = c.likedBy && c.likedBy.includes(currentUser.uid);
-
-            let mediaHtml = c.mediaUrl 
-                ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>` 
-                : "";
-
-            container.innerHTML += `
-                <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${isReply}">
-                    <div style="display:flex; gap:10px; align-items:flex-start;">
-                        <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; background-image:url('${cAuthor.photoURL||''}'); background-size:cover; background-color:#333;">${cAuthor.photoURL ? '' : cAuthor.name[0]}</div>
-                        <div style="flex:1;">
-                            <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name)}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
-                            <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text)}</div>
-                            ${mediaHtml}
-                            <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
-                                <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name)}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
-                                <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}</button>
-                            </div>
-                            <div id="reply-slot-${c.id}"></div>
-                        </div>
-                    </div>
-                </div>`;
-        });
-
-        if (activeReplyId) { 
-            const slot = document.getElementById(`reply-slot-${activeReplyId}`); 
-            const inputArea = document.getElementById('thread-input-area'); 
-            if (slot && inputArea && !slot.contains(inputArea)) { 
-                slot.appendChild(inputArea); 
-                document.getElementById('thread-input').focus(); 
-            } 
-        }
+        renderThreadComments(comments);
+    }, function(error) {
+        console.error('Comments load error', error);
+        container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
     });
+}
+
+function renderThreadComments(comments = []) {
+    const container = document.getElementById('thread-stream');
+    if(!container) return;
+    container.innerHTML = "";
+
+    if (comments.length === 0) {
+        container.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--text-muted);">No comments yet. Be the first to reply!</div>`;
+        return;
+    }
+
+    comments.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+
+    comments.forEach(function(c) {
+        const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
+        const isReply = c.parentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
+        const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
+
+        const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
+        let mediaHtml = c.mediaUrl
+            ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>`
+            : "";
+
+        container.innerHTML += `
+            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${isReply}">
+                <div style="display:flex; gap:10px; align-items:flex-start;">
+                    <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>
+                    <div style="flex:1;">
+                        <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
+                        <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
+                        ${mediaHtml}
+                        <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
+                            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
+                            <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}</button>
+                        </div>
+                        <div id="reply-slot-${c.id}"></div>
+                    </div>
+                </div>
+            </div>`;
+    });
+
+    if (activeReplyId) {
+        const slot = document.getElementById(`reply-slot-${activeReplyId}`);
+        const inputArea = document.getElementById('thread-input-area');
+        if (slot && inputArea && !slot.contains(inputArea)) {
+            slot.appendChild(inputArea);
+            const input = document.getElementById('thread-input');
+            if(input) input.focus();
+        }
+    }
 }
 
 function renderThreadMainPost(postId) {
     const container = document.getElementById('thread-main-post');
-    const post = allPosts.find(p => p.id === postId);
+    const post = allPosts.find(function(p) { return p.id === postId; });
     if(!post) return;
 
     const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
@@ -1105,6 +1362,9 @@ function renderThreadMainPost(postId) {
     } else if(post.trustScore < -1) {
         trustBadge = `<div style="font-size:0.75rem; color:#ff3d3d; display:flex; align-items:center; gap:4px; font-weight:600;"><i class="ph-fill ph-warning-circle"></i> Disputed</div>`;
     }
+
+    const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
+    const reviewDisplay = getReviewDisplay(myReview);
 
     // Updated Layout for Thread Main Post to match Feed Header logic
     container.innerHTML = `
@@ -1133,7 +1393,7 @@ function renderThreadMainPost(postId) {
                 <button id="thread-like-btn" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}; font-size: 1.2rem;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span></button>
                 <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
                 <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
-                <button class="action-btn" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">Review</span></button>
+                <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
             </div>
         </div>`;
 
@@ -1141,10 +1401,14 @@ function renderThreadMainPost(postId) {
         ? `background-image: url('${userProfile.photoURL}'); background-size: cover; color: transparent;` 
         : `background: ${getColorForUser(userProfile.name)}`;
     const inputPfp = document.getElementById('thread-input-pfp');
-    if(inputPfp) { 
-        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`; 
-        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0]; 
+    if(inputPfp) {
+        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`;
+        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0];
     }
+
+    const threadReviewBtn = document.getElementById('thread-review-btn');
+    applyReviewButtonState(threadReviewBtn, myReview);
+    applyMyReviewStylesToDOM();
 }
 
 window.sendComment = async function() {
@@ -1210,24 +1474,58 @@ window.toggleCommentLike = async function(commentId, event) {
 
 // --- Discovery & Search ---
 window.renderDiscover = async function() {
-    const container = document.getElementById('discover-results'); 
+    const container = document.getElementById('discover-results');
     container.innerHTML = "";
 
-    const renderUsers = () => {
+    const renderVideosSection = async function(onlyVideos = false) {
+        if(!videosCache.length) {
+            const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
+            videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        }
+        let filteredVideos = videosCache;
+        if(discoverSearchTerm) {
+            filteredVideos = filteredVideos.filter(function(v) {
+                return (v.caption || '').toLowerCase().includes(discoverSearchTerm) ||
+                (v.hashtags || []).some(function(tag) { return (`#${tag}`).toLowerCase().includes(discoverSearchTerm); });
+            });
+        }
+        if(filteredVideos.length === 0) {
+            if(onlyVideos) container.innerHTML = `<div class="empty-state"><p>No videos found.</p></div>`;
+            return;
+        }
+
+        container.innerHTML += `<div class="discover-section-header">Videos</div>`;
+        filteredVideos.forEach(function(video) {
+            const tags = (video.hashtags || []).map(function(t) { return '#' + t; }).join(' ');
+            container.innerHTML += `
+                <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;" onclick="window.navigateTo('videos');">
+                    <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
+                        <i class="ph-fill ph-play-circle" style="font-size:2rem;"></i>
+                    </div>
+                    <div style="flex:1;">
+                        <div style="font-weight:800; margin-bottom:4px;">${escapeHtml(video.caption || 'Untitled video')}</div>
+                        <div style="color:var(--text-muted); font-size:0.9rem;">${tags}</div>
+                        <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">Views: ${video.stats?.views || 0}</div>
+                    </div>
+                </div>`;
+        });
+    };
+
+    const renderUsers = function() {
         let matches = [];
         if (discoverSearchTerm) {
-            matches = Object.values(userCache).filter(u => 
-                (u.name && u.name.toLowerCase().includes(discoverSearchTerm)) || 
-                (u.username && u.username.toLowerCase().includes(discoverSearchTerm))
-            );
+            matches = Object.values(userCache).filter(function(u) {
+                return (u.name && u.name.toLowerCase().includes(discoverSearchTerm)) ||
+                (u.username && u.username.toLowerCase().includes(discoverSearchTerm));
+            });
         } else if (discoverFilter === 'All Results') {
             matches = Object.values(userCache).slice(0, 5); 
         }
 
         if(matches.length > 0) {
             container.innerHTML += `<div class="discover-section-header">Users</div>`;
-            matches.forEach(user => {
-                const uid = Object.keys(userCache).find(key => userCache[key] === user); 
+            matches.forEach(function(user) {
+                const uid = Object.keys(userCache).find(function(key) { return userCache[key] === user; });
                 if(!uid) return;
                 const pfpStyle = user.photoURL 
                     ? `background-image: url('${user.photoURL}'); background-size: cover; color: transparent;` 
@@ -1248,10 +1546,10 @@ window.renderDiscover = async function() {
         }
     };
 
-    const renderLiveSection = () => {
+    const renderLiveSection = function() {
         if(MOCK_LIVESTREAMS.length > 0) {
             container.innerHTML += `<div class="discover-section-header">Livestreams</div>`;
-            MOCK_LIVESTREAMS.forEach(stream => { 
+            MOCK_LIVESTREAMS.forEach(function(stream) {
                 container.innerHTML += `
                     <div class="social-card" style="padding:1rem; display:flex; gap:10px; border-left: 4px solid ${stream.color};">
                         <div style="width:80px; height:50px; background:${stream.color}; border-radius:6px; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
@@ -1268,21 +1566,21 @@ window.renderDiscover = async function() {
         }
     };
 
-    const renderPostsSection = () => {
+    const renderPostsSection = function() {
         let filteredPosts = allPosts;
         if(discoverSearchTerm) {
-            filteredPosts = allPosts.filter(p => p.title.toLowerCase().includes(discoverSearchTerm) || p.content.toLowerCase().includes(discoverSearchTerm));
+            filteredPosts = allPosts.filter(function(p) { return p.title.toLowerCase().includes(discoverSearchTerm) || p.content.toLowerCase().includes(discoverSearchTerm); });
         }
 
         if(discoverFilter === 'Popular Posts') {
-            filteredPosts.sort((a,b) => (b.likes || 0) - (a.likes || 0)); 
+            filteredPosts.sort(function(a,b) { return (b.likes || 0) - (a.likes || 0); });
         } else {
-            filteredPosts.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+            filteredPosts.sort(function(a,b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
         }
 
         if(filteredPosts.length > 0) {
             container.innerHTML += `<div class="discover-section-header">Posts</div>`;
-            filteredPosts.forEach(post => {
+            filteredPosts.forEach(function(post) {
                 const author = userCache[post.userId] || {name: post.author};
                 container.innerHTML += `
                     <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'}; cursor:pointer;" onclick="window.openThread('${post.id}')">
@@ -1299,18 +1597,23 @@ window.renderDiscover = async function() {
         }
     };
 
-    if (discoverFilter === 'All Results') { 
-        renderLiveSection(); 
-        renderUsers(); 
-        renderPostsSection(); 
-        if(container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`; 
+    if (discoverFilter === 'All Results') {
+        renderLiveSection();
+        renderUsers();
+        renderPostsSection();
+        await renderVideosSection();
+        if(container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
     } else if (discoverFilter === 'Users') {
-        renderUsers(); 
+        renderUsers();
     } else if (discoverFilter === 'Livestreams') {
-        renderLiveSection(); 
+        renderLiveSection();
+    } else if (discoverFilter === 'Videos') {
+        await renderVideosSection(true);
     } else {
         renderPostsSection();
     }
+
+    applyMyReviewStylesToDOM();
 }
 
 // --- Profile Rendering ---
@@ -1347,8 +1650,8 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
         : `background: ${getColorForUser(profileData.name)}`; 
 
     const isFollowing = followedUsers.has(uid); 
-    const userPosts = allPosts.filter(p => p.userId === uid); 
-    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(p => p.category === currentProfileFilter); 
+    const userPosts = allPosts.filter(function(p) { return p.userId === uid; });
+    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     let linkHtml = ''; 
     if(profileData.links) { 
@@ -1373,7 +1676,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div id="profile-follower-count-${uid}">${followersCount}</div><div>Followers</div></div>
-                <div class="stat-item"><div>${userPosts.reduce((acc, p) => acc + (p.likes||0), 0)}</div><div>Likes</div></div>
+                <div class="stat-item"><div>${userPosts.reduce(function(acc, p) { return acc + (p.likes||0); }, 0)}</div><div>Likes</div></div>
                 <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
             </div>
             <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
@@ -1398,7 +1701,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
         feedContainer.innerHTML = `<div class="empty-state"><p>No posts found in ${currentProfileFilter}.</p></div>`; 
     } else { 
         feedContainer.innerHTML = ""; 
-        filteredPosts.forEach(post => { 
+        filteredPosts.forEach(function(post) { 
             const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now'; 
             const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid); 
             const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id); 
@@ -1428,9 +1731,11 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     } 
 }
 
-function renderProfile() { 
-    const userPosts = allPosts.filter(p => p.userId === currentUser.uid); 
-    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(p => p.category === currentProfileFilter); 
+function renderProfile() {
+    const userPosts = allPosts.filter(function(p) { return p.userId === currentUser.uid; });
+    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
+
+    const displayName = userProfile.name || userProfile.nickname || "Nexara User";
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -1440,17 +1745,21 @@ function renderProfile() {
     }
 
     const followersCount = userProfile.followersCount || 0;
+    const regionHtml = userProfile.region ? `<div class="real-name-subtext"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(userProfile.region)}</div>` : '';
+    const realNameHtml = userProfile.realName ? `<div class="real-name-subtext">${escapeHtml(userProfile.realName)}</div>` : '';
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
-            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':userProfile.name[0]}</div>
-            <h2 style="font-weight:800;">${escapeHtml(userProfile.name)}</h2>
+            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
+            <h2 style="font-weight:800;">${escapeHtml(displayName)}</h2>
+            ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
             <p style="margin-top:10px;">${escapeHtml(userProfile.bio)}</p>
+            ${regionHtml}
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div>${followersCount}</div><div>Followers</div></div>
-                <div class="stat-item"><div>${userPosts.reduce((acc, p) => acc + (p.likes||0), 0)}</div><div>Likes</div></div>
+                <div class="stat-item"><div>${userPosts.reduce(function(acc, p) { return acc + (p.likes||0); }, 0)}</div><div>Likes</div></div>
                 <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
             </div>
             <button onclick="window.toggleSettingsModal(true)" class="create-btn-sidebar" style="width:auto; margin-top:1rem; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-gear"></i> Edit Profile & Settings</button>
@@ -1465,7 +1774,7 @@ function renderProfile() {
         feedContainer.innerHTML = `<div class="empty-state"><p>No posts.</p></div>`; 
     } else { 
         feedContainer.innerHTML = ""; 
-        filteredPosts.forEach(post => { 
+        filteredPosts.forEach(function(post) { 
             const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now'; 
             feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
@@ -1483,7 +1792,7 @@ function renderProfile() {
 // --- Utils & Helpers ---
 window.setCategory = function(c) {
     currentCategory = c;
-    document.querySelectorAll('.category-pill').forEach(el => {
+    document.querySelectorAll('.category-pill').forEach(function(el) {
         if(el.textContent.includes(c) || (c === 'For You' && el.textContent === 'For You')) el.classList.add('active'); 
         else el.classList.remove('active');
     });
@@ -1505,7 +1814,7 @@ window.renderLive = function() {
     container.style.gridTemplateColumns = "repeat(auto-fill, minmax(280px, 1fr))"; 
     container.style.gap = "20px"; 
 
-    MOCK_LIVESTREAMS.forEach(stream => { 
+    MOCK_LIVESTREAMS.forEach(function(stream) { 
         container.innerHTML += `
             <div class="social-card" style="border-top: 4px solid ${stream.color}; cursor:pointer; transition:0.2s; overflow:hidden;">
                 <div style="height:150px; background:${stream.color}; opacity:0.8; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
@@ -1528,9 +1837,9 @@ function cleanText(text) { if(typeof text !== 'string') return ""; return text.r
 function renderSaved() { currentCategory = 'Saved'; renderFeed('saved-content'); }
 
 // Small Interaction Utils
-window.setDiscoverFilter = function(filter) { discoverFilter = filter; document.querySelectorAll('.discover-pill').forEach(el => { if(el.textContent.includes(filter)) el.classList.add('active'); else el.classList.remove('active'); }); renderDiscover(); }
+window.setDiscoverFilter = function(filter) { discoverFilter = filter; document.querySelectorAll('.discover-pill').forEach(function(el) { if(el.textContent.includes(filter)) el.classList.add('active'); else el.classList.remove('active'); }); renderDiscover(); }
 window.handleSearchInput = function(e) { discoverSearchTerm = e.target.value.toLowerCase(); renderDiscover(); }
-window.setSavedFilter = function(filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(el => { if(el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
+window.setSavedFilter = function(filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function(el) { if(el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
 window.handleSavedSearch = function(e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
 window.openFullscreenMedia = function(url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if(!modal || !content) return; modal.style.display = 'flex'; if(type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
 window.closeFullscreenMedia = function() { const modal = document.getElementById('media-modal'); if(modal) modal.style.display = 'none'; const content = document.getElementById('media-modal-content'); if(content) content.innerHTML = ''; }
@@ -1542,8 +1851,505 @@ window.triggerFileSelect = function() { document.getElementById('thread-file').c
 window.handleFileSelect = function(input) { const btn = document.getElementById('attach-btn-text'); if(input.files && input.files[0]) { btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "..."; btn.style.color = "var(--primary)"; } else { btn.innerHTML = `<i class="ph ph-paperclip"></i> Attach`; btn.style.color = "var(--text-muted)"; } }
 window.previewPostImage = function(input) { if(input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function(e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
 window.clearPostImage = function() { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
-window.togglePostOption = function(type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type); ['poll', 'gif', 'schedule', 'location'].forEach(t => { if(t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
-window.closeReview = () => document.getElementById('review-modal').style.display = 'none';
+window.togglePostOption = function(type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type); ['poll', 'gif', 'schedule', 'location'].forEach(function(t) { if(t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
+window.closeReview = function() { return document.getElementById('review-modal').style.display = 'none'; };
+
+// --- Messaging (DMs) ---
+window.toggleNewChatModal = function(show = true) {
+    const modal = document.getElementById('new-chat-modal');
+    if(modal) modal.style.display = show ? 'flex' : 'none';
+};
+window.openNewChatModal = function() { return window.toggleNewChatModal(true); };
+
+window.searchChatUsers = async function(term = '') {
+    const resultsEl = document.getElementById('chat-search-results');
+    if(!resultsEl) return;
+    resultsEl.innerHTML = '';
+    const cleaned = term.trim().toLowerCase();
+    if(cleaned.length < 2) return;
+    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
+    qSnap.forEach(function(docSnap) {
+        const data = docSnap.data();
+        const row = document.createElement('div');
+        row.className = 'conversation-item';
+        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexara User'}</div></div>`;
+        row.onclick = function() { return createConversationWithUser(docSnap.id, data); };
+        resultsEl.appendChild(row);
+    });
+};
+
+async function createConversationWithUser(targetUid, targetData = {}) {
+    if(!requireAuth()) return;
+    try {
+        const sortedMembers = [currentUser.uid, targetUid].sort();
+        const existing = conversationsCache.find(function(c) {
+            const members = c.members || [];
+            return members.length === 2 && sortedMembers.every(function(id) { return members.includes(id); });
+        });
+        if(existing) {
+            setActiveConversation(existing.id, existing);
+            toggleNewChatModal(false);
+            return;
+        }
+
+        const convoId = `${sortedMembers[0]}_${sortedMembers[1]}`;
+        const convoRef = doc(db, 'conversations', convoId);
+        const existingSnap = await getDoc(convoRef);
+        if(existingSnap.exists()) {
+            const data = existingSnap.data();
+            conversationsCache.push({ id: convoId, ...data });
+            toggleNewChatModal(false);
+            setActiveConversation(convoId, data);
+            return;
+        }
+
+        const payload = {
+            members: sortedMembers,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            lastMessageText: '',
+            lastMessageAt: serverTimestamp(),
+            requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
+        };
+
+        await setDoc(convoRef, payload, { merge: true });
+        conversationsCache.push({ id: convoId, ...payload });
+        toggleNewChatModal(false);
+        setActiveConversation(convoId, payload);
+    } catch(err) {
+        console.error('Conversation create error', err);
+        toast('Unable to start chat. Please try again.', 'error');
+    }
+}
+
+function initConversations() {
+    if(!requireAuth()) return;
+    if(conversationsUnsubscribe) conversationsUnsubscribe();
+    const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
+    conversationsUnsubscribe = onSnapshot(convRef, function(snap) {
+        conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        renderConversationList();
+    });
+}
+
+function renderConversationList() {
+    const listEl = document.getElementById('conversation-list');
+    if(!listEl) return;
+    listEl.innerHTML = '';
+    if(conversationsCache.length === 0) {
+        listEl.innerHTML = '<div class="empty-state">No conversations yet.</div>';
+        return;
+    }
+    conversationsCache.forEach(function(convo) {
+        const partnerId = convo.members.find(function(m) { return m !== currentUser.uid; }) || currentUser.uid;
+        const display = userCache[partnerId]?.username || 'user';
+        const item = document.createElement('div');
+        item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
+        item.innerHTML = `<div><strong>@${display}</strong><div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div></div><span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
+        item.onclick = function() { return setActiveConversation(convo.id, convo); };
+        listEl.appendChild(item);
+    });
+}
+
+function setActiveConversation(convoId, convoData = null) {
+    activeConversationId = convoId;
+    const header = document.getElementById('message-header');
+    const partnerId = (convoData || conversationsCache.find(function(c) { return c.id === convoId; }) || {}).members?.find(function(m) { return m !== currentUser.uid; });
+    if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
+    listenToMessages(convoId);
+}
+
+function listenToMessages(convoId) {
+    if(messagesUnsubscribe) messagesUnsubscribe();
+    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    messagesUnsubscribe = onSnapshot(msgRef, function(snap) {
+        const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        renderMessages(msgs);
+    });
+}
+
+function renderMessages(msgs = []) {
+    const body = document.getElementById('message-thread');
+    if(!body) return;
+    body.innerHTML = '';
+    msgs.forEach(function(msg) {
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble ' + (msg.senderId === currentUser.uid ? 'self' : 'other');
+        bubble.innerHTML = msg.type === 'image' ? `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">` : escapeHtml(msg.text || '');
+        body.appendChild(bubble);
+    });
+    body.scrollTop = body.scrollHeight;
+}
+
+window.sendMessage = async function() {
+    if(!activeConversationId || !requireAuth()) return;
+    const input = document.getElementById('message-input');
+    const fileInput = document.getElementById('message-media');
+    const text = (input?.value || '').trim();
+    if(!text && !fileInput?.files?.length) return;
+    const msgRef = collection(db, 'conversations', activeConversationId, 'messages');
+    let mediaURL = null;
+    if(fileInput && fileInput.files && fileInput.files[0]) {
+        const file = fileInput.files[0];
+        const storageRef = ref(storage, `dm_media/${activeConversationId}/${Date.now()}_${file.name}`);
+        await uploadBytes(storageRef, file);
+        mediaURL = await getDownloadURL(storageRef);
+    }
+    await addDoc(msgRef, {
+        senderId: currentUser.uid,
+        type: mediaURL ? 'image' : 'text',
+        text: mediaURL ? '' : text,
+        mediaURL: mediaURL || '',
+        createdAt: serverTimestamp()
+    });
+    await updateDoc(doc(db, 'conversations', activeConversationId), {
+        lastMessageText: mediaURL ? '📷 Photo' : text,
+        lastMessageAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        requestState: { [currentUser.uid]: 'inbox' }
+    }, { merge: true });
+    if(input) input.value = '';
+    if(fileInput) fileInput.value = '';
+};
+
+// --- Videos ---
+window.openVideoUploadModal = function() { return window.toggleVideoUploadModal(true); };
+window.toggleVideoUploadModal = function(show = true) {
+    const modal = document.getElementById('video-upload-modal');
+    if(modal) modal.style.display = show ? 'flex' : 'none';
+};
+
+function ensureVideoObserver() {
+    if(videoObserver) return videoObserver;
+    videoObserver = new IntersectionObserver(function(entries) {
+        entries.forEach(function(entry) {
+            const vid = entry.target;
+            if(entry.isIntersecting) {
+                vid.play().catch(function() {});
+                const vidId = vid.dataset.videoId;
+                if(vidId && !viewedVideos.has(vidId)) {
+                    viewedVideos.add(vidId);
+                    incrementVideoViews(vidId);
+                }
+            } else {
+                vid.pause();
+            }
+        });
+    }, { threshold: 0.6 });
+    return videoObserver;
+}
+
+function pauseAllVideos() {
+    document.querySelectorAll('#video-feed video').forEach(function(v) {
+        v.pause();
+        if(videoObserver) videoObserver.unobserve(v);
+    });
+}
+
+function initVideoFeed() {
+    if(videosUnsubscribe) return; // already live
+    const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
+    videosUnsubscribe = onSnapshot(refVideos, function(snap) {
+        videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        renderVideoFeed(videosCache);
+    });
+}
+
+function renderVideoFeed(videos = []) {
+    const feed = document.getElementById('video-feed');
+    if(!feed) return;
+    pauseAllVideos();
+    feed.innerHTML = '';
+    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+
+    const observer = ensureVideoObserver();
+
+
+    videos.forEach(function(video) {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        const tags = (video.hashtags || []).map(function(t) { return '#' + t; }).join(' ');
+
+        const videoEl = document.createElement('video');
+        videoEl.setAttribute('playsinline', '');
+        videoEl.setAttribute('loop', '');
+        videoEl.setAttribute('muted', '');
+        videoEl.setAttribute('preload', 'metadata');
+        videoEl.dataset.videoId = video.id;
+        videoEl.src = video.videoURL || '';
+
+        const meta = document.createElement('div');
+        meta.className = 'video-meta';
+
+        const topRow = document.createElement('div');
+        topRow.style.display = 'flex';
+        topRow.style.justifyContent = 'space-between';
+        topRow.style.alignItems = 'center';
+
+        const leftCol = document.createElement('div');
+        const captionEl = document.createElement('div');
+        captionEl.style.fontWeight = '800';
+        captionEl.textContent = escapeHtml(video.caption || '');
+        const tagsEl = document.createElement('div');
+        tagsEl.style.color = 'var(--text-muted)';
+        tagsEl.style.fontSize = '0.85rem';
+        tagsEl.textContent = tags;
+        leftCol.appendChild(captionEl);
+        leftCol.appendChild(tagsEl);
+
+        const actions = document.createElement('div');
+        actions.style.display = 'flex';
+        actions.style.gap = '8px';
+
+        const likeBtn = document.createElement('button');
+        likeBtn.className = 'icon-pill';
+        likeBtn.innerHTML = `<i class="ph ph-heart"></i>${video.stats?.likes || 0}`;
+        likeBtn.onclick = function() { return window.likeVideo(video.id); };
+
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'icon-pill';
+        saveBtn.innerHTML = '<i class="ph ph-bookmark"></i>';
+        saveBtn.onclick = function() { return window.saveVideo(video.id); };
+
+        actions.appendChild(likeBtn);
+        actions.appendChild(saveBtn);
+
+        topRow.appendChild(leftCol);
+        topRow.appendChild(actions);
+
+        meta.appendChild(topRow);
+
+        card.appendChild(videoEl);
+        card.appendChild(meta);
+        feed.appendChild(card);
+        observer.observe(videoEl);
+    });
+}
+
+window.uploadVideo = async function() {
+    if (!requireAuth()) return;
+
+    const fileInput = document.getElementById('video-file');
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+
+    const caption = document.getElementById('video-caption').value || '';
+    const hashtags = (document.getElementById('video-tags').value || '')
+        .split(',')
+        .map(function(tag) { return tag.replace('#', '').trim(); })
+        .filter(Boolean);
+    const visibility = document.getElementById('video-visibility').value || 'public';
+    const file = fileInput.files[0];
+    const videoId = `${Date.now()}`;
+    const storageRef = ref(storage, `videos/${currentUser.uid}/${videoId}/source.mp4`);
+
+    try {
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        await new Promise(function(resolve, reject) {
+            uploadTask.on('state_changed', function() {}, reject, resolve);
+        });
+
+        const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
+        const docData = {
+            ownerId: currentUser.uid,
+            caption,
+            hashtags,
+            createdAt: serverTimestamp(),
+            videoURL,
+            thumbURL: '',
+            visibility,
+            stats: { likes: 0, comments: 0, saves: 0, views: 0 }
+        };
+
+        await setDoc(doc(db, 'videos', videoId), docData);
+        videosCache = [{ id: videoId, ...docData }, ...videosCache];
+        renderVideoFeed(videosCache);
+        toggleVideoUploadModal(false);
+    } catch (err) {
+        console.error('Video upload failed', err);
+        toast('Video upload failed. Please try again.', 'error');
+    }
+};
+
+window.likeVideo = async function(videoId) {
+    if(!requireAuth()) return;
+    const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
+    await setDoc(likeRef, { createdAt: serverTimestamp() });
+    await updateDoc(doc(db, 'videos', videoId), { 'stats.likes': increment(1) });
+};
+
+window.saveVideo = async function(videoId) {
+    if(!requireAuth()) return;
+    await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
+    await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
+};
+
+async function incrementVideoViews(videoId) {
+    try {
+        await updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) });
+    } catch(e) { console.warn('view inc', e.message); }
+}
+
+// --- Live Sessions ---
+window.toggleGoLiveModal = function(show = true) { const modal = document.getElementById('go-live-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
+
+function renderLiveSessions() {
+    if(liveSessionsUnsubscribe) return;
+    const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
+    liveSessionsUnsubscribe = onSnapshot(liveRef, function(snap) {
+        const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        const container = document.getElementById('live-grid-container');
+        if(!container) return;
+        container.innerHTML = '';
+        if(sessions.length === 0) { container.innerHTML = '<div class="empty-state">No live sessions.</div>'; return; }
+        sessions.forEach(function(s) {
+            const card = document.createElement('div');
+            card.className = 'live-card';
+            card.innerHTML = `<div class="live-card-title">${escapeHtml(s.title || 'Live Session')}</div><div class="live-card-meta"><span>${escapeHtml(s.category || '')}</span><span>${(s.tags||[]).join(', ')}</span></div><div style="margin-top:10px;"><button class="icon-pill" onclick="window.openLiveSession('${s.id}')"><i class="ph ph-play"></i> Watch</button></div>`;
+            container.appendChild(card);
+        });
+    });
+}
+
+window.createLiveSession = async function() {
+    if(!requireAuth()) return;
+    const title = document.getElementById('live-title').value;
+    const category = document.getElementById('live-category').value;
+    const tags = (document.getElementById('live-tags').value || '').split(',').map(function(t) { return t.trim(); }).filter(Boolean);
+    const streamEmbedURL = document.getElementById('live-url').value;
+    await addDoc(collection(db, 'liveSessions'), {
+        hostId: currentUser.uid,
+        title,
+        category,
+        tags,
+        status: 'live',
+        streamEmbedURL,
+        createdAt: serverTimestamp()
+    });
+    toggleGoLiveModal(false);
+};
+
+window.openLiveSession = function(sessionId) {
+    const container = document.getElementById('live-grid-container');
+    if(!container) return;
+    const sessionCard = document.createElement('div');
+    sessionCard.className = 'social-card';
+    sessionCard.innerHTML = `<div style="padding:1rem;"><div id="live-player" style="margin-bottom:10px;"></div><div id="live-chat" style="max-height:200px; overflow:auto;"></div><div style="display:flex; gap:8px; margin-top:8px;"><input id="live-chat-input" class="form-input" placeholder="Chat"/><button class="create-btn-sidebar" style="width:auto;" onclick="window.sendLiveChat('${sessionId}')">Send</button></div></div>`;
+    container.prepend(sessionCard);
+    listenLiveChat(sessionId);
+};
+
+function listenLiveChat(sessionId) {
+    const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
+    onSnapshot(chatRef, function(snap) {
+        const chatEl = document.getElementById('live-chat');
+        if(!chatEl) return;
+        chatEl.innerHTML = '';
+        snap.docs.forEach(function(docSnap) {
+            const data = docSnap.data();
+            const row = document.createElement('div');
+            row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
+            chatEl.appendChild(row);
+        });
+    });
+}
+
+window.sendLiveChat = async function(sessionId) {
+    if(!requireAuth()) return;
+    const input = document.getElementById('live-chat-input');
+    if(!input || !input.value.trim()) return;
+    await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
+    input.value = '';
+};
+
+// --- Staff Console ---
+function renderStaffConsole() {
+    const warning = document.getElementById('staff-access-warning');
+    const panels = document.getElementById('staff-panels');
+    const isStaff = userProfile.role === 'staff' || userProfile.role === 'admin';
+    if(!isStaff) {
+        if(warning) warning.style.display = 'block';
+        if(panels) panels.style.display = 'none';
+        return;
+    }
+    if(warning) warning.style.display = 'none';
+    if(panels) panels.style.display = 'block';
+    listenVerificationRequests();
+    listenReports();
+    listenAdminLogs();
+}
+
+function listenVerificationRequests() {
+    if(staffRequestsUnsub) return;
+    staffRequestsUnsub = onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+        const container = document.getElementById('verification-requests');
+        if(!container) return;
+        container.innerHTML = '';
+        snap.docs.forEach(function(docSnap) {
+            const data = docSnap.data();
+            const card = document.createElement('div');
+            card.className = 'social-card';
+            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks||[]).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
+            container.appendChild(card);
+        });
+    });
+}
+
+window.approveVerification = async function(requestId, userId) {
+    await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'approved', reviewedAt: serverTimestamp() });
+    if(userId) await setDoc(doc(db, 'users', userId), { verified: true, updatedAt: serverTimestamp() }, { merge: true });
+    await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'approveVerification', targetRef: requestId, createdAt: serverTimestamp() });
+};
+
+window.denyVerification = async function(requestId) {
+    await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'denied', reviewedAt: serverTimestamp() });
+    await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'denyVerification', targetRef: requestId, createdAt: serverTimestamp() });
+};
+
+function listenReports() {
+    if(staffReportsUnsub) return;
+    staffReportsUnsub = onSnapshot(collection(db, 'reports'), function(snap) {
+        const container = document.getElementById('reports-queue');
+        if(!container) return;
+        container.innerHTML = '';
+        snap.docs.forEach(function(docSnap) {
+            const data = docSnap.data();
+            const card = document.createElement('div');
+            card.className = 'social-card';
+            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.type || 'report'}</div><div style="color:var(--text-muted); font-size:0.9rem;">${data.reason || ''}</div></div>`;
+            container.appendChild(card);
+        });
+    });
+}
+
+function listenAdminLogs() {
+    if(staffLogsUnsub) return;
+    staffLogsUnsub = onSnapshot(collection(db, 'adminLogs'), function(snap) {
+        const container = document.getElementById('admin-logs');
+        if(!container) return;
+        container.innerHTML = '';
+        snap.docs.forEach(function(docSnap) {
+            const data = docSnap.data();
+            const row = document.createElement('div');
+            row.textContent = `${data.actorId}: ${data.action}`;
+            container.appendChild(row);
+        });
+    });
+}
+
+// --- Verification Request ---
+window.openVerificationRequest = function() { toggleVerificationModal(true); };
+window.toggleVerificationModal = function(show = true) { const modal = document.getElementById('verification-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
+window.submitVerificationRequest = async function() {
+    if(!requireAuth()) return;
+    const category = document.getElementById('verify-category').value;
+    const links = (document.getElementById('verify-links').value || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    const notes = document.getElementById('verify-notes').value;
+    await addDoc(collection(db, 'verificationRequests'), { userId: currentUser.uid, category, evidenceLinks: links, notes, status: 'pending', createdAt: serverTimestamp() });
+    toggleVerificationModal(false);
+};
+
+// --- Security Rules Snippet (reference) ---
+// See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
 
 // Start App
 initApp();

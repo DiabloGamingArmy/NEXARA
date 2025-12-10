@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nexara: Stream, Socialize, Strive</title>
-    
+    <!-- codex connection successful. -->
+
     <!-- Tailwind for utilities -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Phosphor Icons -->
@@ -106,14 +107,164 @@
     <!-- Settings Modal -->
     <div id="settings-modal" class="modal-overlay">
         <div class="modal-content">
-            <h2 style="margin-bottom:1rem; font-weight:800;">Settings</h2>
-            <input type="text" id="set-name" class="form-input" placeholder="Display Name">
-            <input type="text" id="set-username" class="form-input" placeholder="Username">
-            <textarea id="set-bio" class="form-input" placeholder="Bio"></textarea>
-            <label style="color:var(--text-muted); font-size:0.8rem;">Profile Picture</label>
-            <input type="file" id="set-pic-file" class="form-input">
+            <h2 style="margin-bottom:1rem; font-weight:800;">Profile &amp; Settings</h2>
+
+            <div class="settings-section">
+                <div class="settings-section-header">Appearance</div>
+                <div style="margin: 0.5rem 0; padding: 1rem; border:1px solid var(--border); border-radius:12px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                        <div style="font-weight:700;">Theme</div>
+                        <div style="color:var(--text-muted); font-size:0.85rem;">Dark · Light · System</div>
+                    </div>
+                    <div class="theme-options">
+                        <label class="theme-option"><input type="radio" name="theme-choice" value="dark"> Dark</label>
+                        <label class="theme-option"><input type="radio" name="theme-choice" value="light"> Light</label>
+                        <label class="theme-option"><input type="radio" name="theme-choice" value="system"> System</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="settings-section-header">Public Profile</div>
+
+                <div class="settings-avatar-row">
+                    <div class="avatar-edit-wrapper">
+                        <div id="settings-avatar-preview" class="profile-pic" style="width:80px; height:80px; margin:0;">
+                            <span>U</span>
+                            <button type="button" class="avatar-edit-btn" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-pencil"></i></button>
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-upload-simple"></i> Upload Photo</button>
+                        <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-camera').click()"><i class="ph ph-camera"></i> Take Photo</button>
+                    </div>
+                </div>
+
+                <input type="file" id="set-pic-file" class="form-input" accept="image/*" style="display:none;">
+                <input type="file" id="set-pic-camera" class="form-input" accept="image/*" capture="environment" style="display:none;">
+
+                <label class="settings-label">Profile Picture (URL)</label>
+                <input type="url" id="set-photo-url" class="form-input" placeholder="https://...">
+
+                <div class="settings-grid">
+                    <div>
+                        <label class="settings-label">Real Name</label>
+                        <input type="text" id="set-real-name" class="form-input" placeholder="Your legal name">
+                    </div>
+                    <div>
+                        <label class="settings-label">Display Name</label>
+                        <input type="text" id="set-name" class="form-input" placeholder="Name shown on profile">
+                    </div>
+                </div>
+
+                <div class="settings-grid">
+                    <div>
+                        <label class="settings-label">Username</label>
+                        <input type="text" id="set-username" class="form-input" placeholder="@handle">
+                    </div>
+                    <div>
+                        <label class="settings-label">Nickname (Optional)</label>
+                        <input type="text" id="set-nickname" class="form-input" placeholder="Friends know you as...">
+                    </div>
+                </div>
+
+                <label class="settings-label">Bio</label>
+                <textarea id="set-bio" class="form-input" placeholder="Bio"></textarea>
+
+                <div class="settings-grid">
+                    <div>
+                        <label class="settings-label">Website / Link</label>
+                        <input type="text" id="set-website" class="form-input" placeholder="https://example.com">
+                    </div>
+                    <div>
+                        <label class="settings-label">Region / Location</label>
+                        <input type="text" id="set-region" class="form-input" placeholder="City, Country">
+                    </div>
+                </div>
+
+                <div class="settings-grid">
+                    <div>
+                        <label class="settings-label">Email</label>
+                        <input type="email" id="set-email" class="form-input" placeholder="you@example.com">
+                    </div>
+                    <div>
+                        <label class="settings-label">Phone</label>
+                        <input type="tel" id="set-phone" class="form-input" placeholder="(555) 123-4567">
+                    </div>
+                </div>
+
+                <label class="settings-label">Gender</label>
+                <select id="set-gender" class="form-input">
+                    <option value="">Select</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Non-binary">Non-binary</option>
+                    <option value="Prefer not to say">Prefer not to say</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+
             <button onclick="window.saveSettings()" class="create-btn-sidebar">Save Changes</button>
+            <button onclick="window.openVerificationRequest()" class="icon-pill" style="margin-top:10px; width:100%; justify-content:center;"><i class="ph ph-shield-check"></i> Apply for Verification</button>
             <button onclick="window.toggleSettingsModal(false)" style="margin-top:10px; width:100%; padding:10px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:30px; cursor:pointer;">Cancel</button>
+        </div>
+    </div>
+
+    <div id="new-chat-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; font-weight:800;">Start a chat</h3>
+                <button class="x-close-btn" onclick="window.toggleNewChatModal(false)">&times;</button>
+            </div>
+            <input id="chat-search" class="form-input" placeholder="Search by username" oninput="window.searchChatUsers(this.value)">
+            <div id="chat-search-results" style="max-height:200px; overflow:auto; margin-top:10px;"></div>
+        </div>
+    </div>
+
+    <div id="video-upload-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; font-weight:800;">Create Video</h3>
+                <button class="x-close-btn" onclick="window.toggleVideoUploadModal(false)">&times;</button>
+            </div>
+            <input type="file" id="video-file" accept="video/mp4" class="form-input">
+            <label class="settings-label">Caption</label>
+            <textarea id="video-caption" class="form-input" rows="2"></textarea>
+            <label class="settings-label">Hashtags (comma separated)</label>
+            <input id="video-tags" class="form-input" placeholder="#nexara,#coding">
+            <label class="settings-label">Visibility</label>
+            <select id="video-visibility" class="form-input"><option value="public">Public</option><option value="private">Private</option></select>
+            <button class="create-btn-sidebar" onclick="window.uploadVideo()">Publish</button>
+        </div>
+    </div>
+
+    <div id="go-live-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; font-weight:800;">Go Live</h3>
+                <button class="x-close-btn" onclick="window.toggleGoLiveModal(false)">&times;</button>
+            </div>
+            <input id="live-title" class="form-input" placeholder="Session title">
+            <input id="live-category" class="form-input" placeholder="Category">
+            <input id="live-tags" class="form-input" placeholder="Tags (comma separated)">
+            <input id="live-url" class="form-input" placeholder="Stream embed URL">
+            <button class="create-btn-sidebar" onclick="window.createLiveSession()">Start Live</button>
+        </div>
+    </div>
+
+    <div id="verification-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; font-weight:800;">Apply for Verification</h3>
+                <button class="x-close-btn" onclick="window.toggleVerificationModal(false)">&times;</button>
+            </div>
+            <label class="settings-label">Category</label>
+            <input id="verify-category" class="form-input" placeholder="creator / journalist / org">
+            <label class="settings-label">Evidence Links (one per line)</label>
+            <textarea id="verify-links" class="form-input" rows="3"></textarea>
+            <label class="settings-label">Notes</label>
+            <textarea id="verify-notes" class="form-input" rows="2"></textarea>
+            <button class="create-btn-sidebar" onclick="window.submitVerificationRequest()">Submit Request</button>
         </div>
     </div>
 
@@ -159,9 +310,12 @@
             </div>
             <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i class="ph-bold ph-house"></i> Home</a>
             <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i> Live</a>
+            <a onclick="window.navigateTo('videos')" id="nav-videos" class="nav-item"><i class="ph-bold ph-film-strip"></i> Videos</a>
+            <a onclick="window.navigateTo('messages')" id="nav-messages" class="nav-item"><i class="ph-bold ph-chats"></i> Messages</a>
             <a onclick="window.navigateTo('discover')" id="nav-discover" class="nav-item"><i class="ph-bold ph-compass"></i> Discover</a>
             <a onclick="window.navigateTo('saved')" id="nav-saved" class="nav-item"><i class="ph-bold ph-bookmark"></i> Saved</a>
             <a onclick="window.navigateTo('profile')" id="nav-profile" class="nav-item"><i class="ph-bold ph-user"></i> Profile</a>
+            <a onclick="window.navigateTo('staff')" id="nav-staff" class="nav-item" style="display:none;"><i class="ph-bold ph-shield-star"></i> Staff</a>
             <button onclick="window.toggleCreateModal(true)" class="create-btn-sidebar"><i class="ph-bold ph-plus"></i> Post</button>
         </nav>
 
@@ -235,6 +389,7 @@
                         <button class="discover-pill" onclick="window.setDiscoverFilter('Recent Posts')">Recent Posts</button>
                         <button class="discover-pill" onclick="window.setDiscoverFilter('Popular Posts')">Popular Posts</button>
                         <button class="discover-pill" onclick="window.setDiscoverFilter('Users')">Users</button>
+                        <button class="discover-pill" onclick="window.setDiscoverFilter('Videos')">Videos</button>
                         <button class="discover-pill" onclick="window.setDiscoverFilter('Livestreams')">Livestreams</button>
                     </div>
                 </div>
@@ -243,7 +398,67 @@
                 </div>
             </div>
 
-            <div id="view-live" class="view-section" style="padding:1rem; display:none;"><h2><i class="ph-fill ph-broadcast"></i> Live Network</h2><div id="live-grid-container" class="live-grid"></div></div>
+            <div id="view-live" class="view-section" style="padding:1rem; display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2><i class="ph-fill ph-broadcast"></i> Live Network</h2>
+                    <button class="icon-pill" onclick="window.toggleGoLiveModal(true)"><i class="ph ph-broadcast"></i> Go Live</button>
+                </div>
+                <div id="live-grid-container" class="live-grid"></div>
+            </div>
+            <div id="view-videos" class="view-section" style="display:none;">
+                <div style="padding: 1rem 1rem 0 1rem; display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="font-weight:800; font-size:1.5rem;">For You Videos</h2>
+                    <button class="create-btn-sidebar" style="width:auto;" onclick="window.openVideoUploadModal()"><i class="ph ph-upload-simple"></i> Create Video</button>
+                </div>
+                <div id="video-feed" class="video-feed"></div>
+            </div>
+
+            <div id="view-messages" class="view-section" style="display:none;">
+                <div class="messages-layout">
+                    <div class="messages-sidebar">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <h3 style="margin:0; font-weight:800;">Messages</h3>
+                            <button class="icon-pill" onclick="window.openNewChatModal()"><i class="ph ph-plus"></i> New</button>
+                        </div>
+                        <div id="conversation-list" class="conversation-list"></div>
+                    </div>
+                    <div class="messages-thread">
+                        <div id="message-header" class="message-thread-header">Select a conversation</div>
+                        <div id="message-thread" class="message-thread-body"></div>
+                        <div class="message-compose">
+                            <input type="file" id="message-media" accept="image/*" style="display:none;">
+                            <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i class="ph ph-image"></i></button>
+                            <input id="message-input" class="form-input" placeholder="Message" />
+                            <button class="create-btn-sidebar" style="width:auto;" onclick="window.sendMessage()">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="view-staff" class="view-section" style="display:none;">
+                <div style="padding:1rem;">
+                    <h2 style="font-weight:800; font-size:1.5rem; display:flex; align-items:center; gap:8px;">
+                        <i class="ph ph-shield-star"></i> Staff Console
+                    </h2>
+                    <div id="staff-access-warning" class="empty-state" style="display:none;">Access denied</div>
+                    <div id="staff-panels">
+                        <div class="staff-grid">
+                            <div class="glass-panel">
+                                <div class="panel-title">Verification Requests</div>
+                                <div id="verification-requests"></div>
+                            </div>
+                            <div class="glass-panel">
+                                <div class="panel-title">Reports Queue</div>
+                                <div id="reports-queue"></div>
+                            </div>
+                            <div class="glass-panel">
+                                <div class="panel-title">Admin Logs</div>
+                                <div id="admin-logs"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div id="view-profile" class="view-section" style="display:none;"></div>
         </main>
 
