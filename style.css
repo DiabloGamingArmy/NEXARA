@@ -132,6 +132,10 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .card-actions { padding: 0.8rem 1rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
 .action-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; display: flex; gap: 6px; font-weight: 600; align-items: center; padding: 5px 10px; border-radius: 6px; }
 .action-btn:hover { background: var(--bg-hover); color: var(--primary); }
+.review-action { transition: color 0.2s, background 0.2s, box-shadow 0.2s; }
+.review-verified { color: #2ecc71 !important; background: rgba(46, 204, 113, 0.08); box-shadow: 0 0 0 1px rgba(46, 204, 113, 0.25); }
+.review-citation { color: #f1c40f !important; background: rgba(241, 196, 15, 0.08); box-shadow: 0 0 0 1px rgba(241, 196, 15, 0.25); }
+.review-misleading { color: #e74c3c !important; background: rgba(231, 76, 60, 0.08); box-shadow: 0 0 0 1px rgba(231, 76, 60, 0.25); }
 
 /* New Button Styles */
 .follow-btn { background: rgba(255,255,255,0.1); border-radius: 10px; border-color: transparent; color: var(--text-main);}
@@ -181,6 +185,11 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .settings-label { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 4px; display: inline-block; }
 .icon-pill { background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
 .icon-pill:hover { border-color: var(--primary); color: var(--primary); }
+.settings-section { margin-bottom: 1.2rem; }
+.settings-section-header { font-weight: 800; margin-bottom: 0.35rem; color: var(--text-main); }
+.avatar-edit-wrapper { position: relative; display: inline-flex; }
+.avatar-edit-btn { position: absolute; bottom: -4px; right: -4px; background: var(--bg-body); border: 1px solid var(--border); border-radius: 50%; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-main); cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.35); }
+.avatar-edit-btn:hover { color: var(--primary); border-color: var(--primary); }
 .theme-options { display: flex; gap: 14px; flex-wrap: wrap; }
 .theme-option { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-body); }
 .theme-option input { accent-color: var(--primary); }

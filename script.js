@@ -39,6 +39,30 @@ let followedUsers = new Set();
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
 
+const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
+
+function getReviewDisplay(reviewValue) {
+    if(reviewValue === 'verified') {
+        return { label: 'Verified', className: 'review-verified' };
+    }
+    if(reviewValue === 'citation') {
+        return { label: 'Needs Citations', className: 'review-citation' };
+    }
+    if(reviewValue === 'misleading') {
+        return { label: 'Misleading/False', className: 'review-misleading' };
+    }
+    return { label: 'Review', className: '' };
+}
+
+function applyReviewButtonState(buttonEl, reviewValue) {
+    if(!buttonEl) return;
+    const { label, className } = getReviewDisplay(reviewValue);
+    const iconSize = buttonEl.dataset.iconSize || '1.1rem';
+    buttonEl.classList.remove(...REVIEW_CLASSES);
+    if(className) buttonEl.classList.add(className);
+    buttonEl.innerHTML = `<i class="ph ph-scales" style="font-size:${iconSize};"></i> ${label}`;
+}
+
 let userProfile = {
     name: "Nexara User",
     realName: "",
@@ -149,7 +173,9 @@ function initApp() {
                     userCache[user.uid] = userProfile;
 
                     // Apply stored theme preference
-                    applyTheme(userProfile.theme || 'system');
+                    const savedTheme = userProfile.theme || getStoredThemePreference() || 'system';
+                    userProfile.theme = savedTheme;
+                    applyTheme(savedTheme);
 
                     // Restore 'following' state locally
                     if (userProfile.following) {
@@ -159,7 +185,9 @@ function initApp() {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
                     userProfile.name = user.displayName || "Nexara User";
-                    applyTheme(userProfile.theme || 'system');
+                    const storedTheme = getStoredThemePreference() || userProfile.theme || 'system';
+                    userProfile.theme = storedTheme;
+                    applyTheme(storedTheme);
                 }
             } catch (e) { 
                 console.error("Profile Load Error", e); 
@@ -202,10 +230,31 @@ function getSystemTheme() {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
+function getStoredThemePreference() {
+    try {
+        return localStorage.getItem('nexara-theme');
+    } catch(e) {
+        return null;
+    }
+}
+
 function applyTheme(preference = 'system') {
     const resolved = preference === 'system' ? getSystemTheme() : preference;
     document.body.classList.toggle('light-mode', resolved === 'light');
     document.body.dataset.themePreference = preference;
+    try { localStorage.setItem('nexara-theme', preference); } catch(e) { console.warn('Theme storage blocked'); }
+}
+
+async function persistThemePreference(preference = 'system') {
+    userProfile.theme = preference;
+    applyTheme(preference);
+    if(currentUser) {
+        try {
+            await setDoc(doc(db, "users", currentUser.uid), { theme: preference }, { merge: true });
+        } catch(e) {
+            console.warn('Theme save failed', e.message);
+        }
+    }
 }
 
 function shouldRerenderThread(newData, prevData = {}) {
@@ -581,10 +630,7 @@ function getPostHTML(post) {
 
         // Review Button Color Logic (Read from global cache)
         const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
-        let reviewColor = 'inherit';
-        if(myReview === 'verified') reviewColor = '#00ff00';
-        else if(myReview === 'citation') reviewColor = '#ffaa00';
-        else if(myReview === 'misleading') reviewColor = '#ff3d3d';
+        const reviewDisplay = getReviewDisplay(myReview);
 
         // UPDATED HTML STRUCTURE: Verified Badge moved to right side under buttons
         return `
@@ -614,7 +660,7 @@ function getPostHTML(post) {
                     <button class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
                     <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
                     <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
-                    <button class="action-btn" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="color: ${reviewColor}"><i class="ph ph-scales" style="font-size:1.1rem;"></i> Review</button>
+                    <button class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                 </div>
             </div>`;
     } catch(e) { 
@@ -651,8 +697,15 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     // Render loop
-    displayPosts.forEach(post => { 
-        container.innerHTML += getPostHTML(post); 
+    displayPosts.forEach(post => {
+        container.innerHTML += getPostHTML(post);
+    });
+
+    // Apply review state to freshly rendered posts using cached data
+    displayPosts.forEach(post => {
+        const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+        const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
+        applyReviewButtonState(reviewBtn, reviewValue);
     });
 
     // PATCH: Apply colors immediately after rendering
@@ -668,7 +721,7 @@ function refreshSinglePostUI(postId) {
 
     const likeBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(1)`);
     const saveBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(3)`);
-    const reviewBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(4)`);
+    const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
     const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
@@ -684,26 +737,26 @@ function refreshSinglePostUI(postId) {
         saveBtn.style.color = isSaved ? '#00f2ea' : 'inherit'; 
     }
     if(reviewBtn) {
-        let color = 'inherit';
-        if(myReview === 'verified') color = '#00ff00';
-        else if(myReview === 'citation') color = '#ffaa00';
-        else if(myReview === 'misleading') color = '#ff3d3d';
-        reviewBtn.style.color = color;
+        applyReviewButtonState(reviewBtn, myReview);
     }
 
     // Update Thread View if active
     const threadLikeBtn = document.getElementById('thread-like-btn');
     const threadSaveBtn = document.getElementById('thread-save-btn');
     const threadTitle = document.getElementById('thread-view-title');
+    const threadReviewBtn = document.getElementById('thread-review-btn');
 
     if(threadTitle && threadTitle.dataset.postId === postId) {
         if(threadLikeBtn) { 
             threadLikeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span>`; 
             threadLikeBtn.style.color = isLiked ? '#00f2ea' : 'inherit'; 
         }
-        if(threadSaveBtn) { 
-            threadSaveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span>`; 
-            threadSaveBtn.style.color = isSaved ? '#00f2ea' : 'inherit'; 
+        if(threadSaveBtn) {
+            threadSaveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span>`;
+            threadSaveBtn.style.color = isSaved ? '#00f2ea' : 'inherit';
+        }
+        if(threadReviewBtn) {
+            applyReviewButtonState(threadReviewBtn, myReview);
         }
     }
 }
@@ -880,10 +933,16 @@ window.toggleSettingsModal = (show) => {
         document.getElementById('set-bio').value = userProfile.bio||"";
         document.getElementById('set-website').value = userProfile.links||"";
         document.getElementById('set-phone').value = userProfile.phone||"";
-        document.getElementById('set-gender').value = userProfile.gender||"Prefer not to say";
+        const genderInput = document.getElementById('set-gender');
+        if(genderInput) genderInput.value = userProfile.gender||"Prefer not to say";
         document.getElementById('set-email').value = userProfile.email||"";
         document.getElementById('set-nickname').value = userProfile.nickname||"";
         document.getElementById('set-region').value = userProfile.region||"";
+        const photoUrlInput = document.getElementById('set-photo-url');
+        if(photoUrlInput) {
+            photoUrlInput.value = userProfile.photoURL || "";
+            photoUrlInput.oninput = (e) => updateSettingsAvatarPreview(e.target.value);
+        }
         syncThemeRadios(userProfile.theme || 'system');
         updateSettingsAvatarPreview(userProfile.photoURL);
 
@@ -891,30 +950,45 @@ window.toggleSettingsModal = (show) => {
         const cameraInput = document.getElementById('set-pic-camera');
         if(uploadInput) uploadInput.onchange = (e) => handleSettingsFileChange(e.target);
         if(cameraInput) cameraInput.onchange = (e) => handleSettingsFileChange(e.target);
+
+        document.querySelectorAll('input[name="theme-choice"]').forEach(r => {
+            r.onchange = (e) => persistThemePreference(e.target.value);
+        });
     }
 }
 
-window.saveSettings = async function() {
+ window.saveSettings = async function() {
      const name = document.getElementById('set-name').value;
      const realName = document.getElementById('set-real-name').value;
      const nickname = document.getElementById('set-nickname').value;
-     const username = document.getElementById('set-username').value;
+     const username = document.getElementById('set-username').value.trim();
      const bio = document.getElementById('set-bio').value;
      const links = document.getElementById('set-website').value;
      const phone = document.getElementById('set-phone').value;
      const gender = document.getElementById('set-gender').value;
      const email = document.getElementById('set-email').value;
      const region = document.getElementById('set-region').value;
+     const photoUrlInput = document.getElementById('set-photo-url');
+     const manualPhoto = photoUrlInput ? photoUrlInput.value.trim() : '';
      const themeChoice = document.querySelector('input[name="theme-choice"]:checked');
-     const theme = themeChoice ? themeChoice.value : 'system';
+     const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
      const fileInput = document.getElementById('set-pic-file');
      const cameraInput = document.getElementById('set-pic-camera');
 
+     if(!username) {
+         return alert("Username is required.");
+     }
+     if(username && !/^[A-Za-z0-9._-]{3,20}$/.test(username)) {
+         return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
+     }
+
      let photoURL = userProfile.photoURL;
-     const newPhoto = fileInput.files[0] || cameraInput.files[0];
+     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
      if(newPhoto) {
          const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
          photoURL = await uploadFileToStorage(newPhoto, path);
+     } else if(manualPhoto) {
+         photoURL = manualPhoto;
      }
 
      const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL };
@@ -928,11 +1002,11 @@ window.saveSettings = async function() {
          console.error("Save failed", e);
      }
 
-     applyTheme(theme);
+     await persistThemePreference(theme);
      renderProfile();
      renderFeed();
      window.toggleSettingsModal(false);
-}
+ }
 
 function handleSettingsFileChange(inputEl) {
     if(!inputEl || !inputEl.files || !inputEl.files[0]) return;
@@ -1186,6 +1260,9 @@ function renderThreadMainPost(postId) {
         trustBadge = `<div style="font-size:0.75rem; color:#ff3d3d; display:flex; align-items:center; gap:4px; font-weight:600;"><i class="ph-fill ph-warning-circle"></i> Disputed</div>`;
     }
 
+    const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
+    const reviewDisplay = getReviewDisplay(myReview);
+
     // Updated Layout for Thread Main Post to match Feed Header logic
     container.innerHTML = `
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
@@ -1213,7 +1290,7 @@ function renderThreadMainPost(postId) {
                 <button id="thread-like-btn" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}; font-size: 1.2rem;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span></button>
                 <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
                 <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
-                <button class="action-btn" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">Review</span></button>
+                <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
             </div>
         </div>`;
 
@@ -1221,10 +1298,13 @@ function renderThreadMainPost(postId) {
         ? `background-image: url('${userProfile.photoURL}'); background-size: cover; color: transparent;` 
         : `background: ${getColorForUser(userProfile.name)}`;
     const inputPfp = document.getElementById('thread-input-pfp');
-    if(inputPfp) { 
-        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`; 
-        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0]; 
+    if(inputPfp) {
+        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`;
+        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0];
     }
+
+    const threadReviewBtn = document.getElementById('thread-review-btn');
+    applyReviewButtonState(threadReviewBtn, myReview);
 }
 
 window.sendComment = async function() {
