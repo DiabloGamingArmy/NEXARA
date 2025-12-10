@@ -341,6 +341,7 @@ if (typeof window.handleLogin !== "function") {
 
 
 
+
 window.handleSignup = async (e) => {
     e.preventDefault();
     try {
