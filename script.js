@@ -34,20 +34,27 @@ let isInitialLoad = true;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
-let followedUsers = new Set(); 
+let followedUsers = new Set();
+
+// Snapshot cache to diff changes for thread rendering
+let postSnapshotCache = {};
 
 let userProfile = {
-    name: "Nexara User", 
-    username: "nexara_explorer", 
-    bio: "Stream, Socialize, and Strive.", 
+    name: "Nexara User",
+    realName: "",
+    nickname: "",
+    username: "nexara_explorer",
+    bio: "Stream, Socialize, and Strive.",
     links: "mysite.com",
-    email: "", 
-    phone: "", 
-    gender: "Prefer not to say", 
-    photoURL: "", 
-    savedPosts: [], 
-    following: [], 
-    followersCount: 0 
+    email: "",
+    phone: "",
+    gender: "Prefer not to say",
+    region: "",
+    photoURL: "",
+    theme: "system",
+    savedPosts: [],
+    following: [],
+    followersCount: 0
 };
 
 // Thread & View State
@@ -59,7 +66,7 @@ let currentReviewId = null;
 
 // --- Navigation Stack ---
 let navStack = [];
-let currentViewId = 'feed'; 
+let currentViewId = 'feed';
 
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
@@ -141,6 +148,9 @@ function initApp() {
                     userProfile = { ...userProfile, ...docSnap.data() };
                     userCache[user.uid] = userProfile;
 
+                    // Apply stored theme preference
+                    applyTheme(userProfile.theme || 'system');
+
                     // Restore 'following' state locally
                     if (userProfile.following) {
                         userProfile.following.forEach(uid => followedUsers.add(uid));
@@ -149,6 +159,7 @@ function initApp() {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
                     userProfile.name = user.displayName || "Nexara User";
+                    applyTheme(userProfile.theme || 'system');
                 }
             } catch (e) { 
                 console.error("Profile Load Error", e); 
@@ -185,6 +196,21 @@ function updateTimeCapsule() {
 
     if(dateEl) dateEl.textContent = dateString;
     if(eventEl) eventEl.textContent = eventText;
+}
+
+function getSystemTheme() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function applyTheme(preference = 'system') {
+    const resolved = preference === 'system' ? getSystemTheme() : preference;
+    document.body.classList.toggle('light-mode', resolved === 'light');
+    document.body.dataset.themePreference = preference;
+}
+
+function shouldRerenderThread(newData, prevData = {}) {
+    const fieldsToWatch = ['title', 'content', 'mediaUrl', 'type', 'category', 'trustScore'];
+    return fieldsToWatch.some(key => newData[key] !== prevData[key]);
 }
 
 // --- Auth Functions ---
@@ -262,13 +288,17 @@ async function fetchMissingProfiles(posts) {
 }
 
 function startDataListener() {
-    const postsRef = collection(db, 'posts'); 
-    const q = query(postsRef); 
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef);
 
     onSnapshot(q, (snapshot) => {
+        const previousCache = { ...postSnapshotCache };
+        const nextCache = {};
         allPosts = [];
-        snapshot.forEach((doc) => { 
-            allPosts.push({ id: doc.id, ...doc.data() }); 
+        snapshot.forEach((doc) => {
+            const data = doc.data();
+            allPosts.push({ id: doc.id, ...data });
+            nextCache[doc.id] = data;
         });
 
         // Sort posts by date (newest first)
@@ -284,16 +314,21 @@ function startDataListener() {
         }
 
         // Live updates for specific interactions
-        snapshot.docChanges().forEach((change) => { 
+        snapshot.docChanges().forEach((change) => {
             if (change.type === "modified") {
-                refreshSinglePostUI(change.doc.id); 
+                refreshSinglePostUI(change.doc.id);
+
+                if(activePostId === change.doc.id && document.getElementById('view-thread').style.display === 'block') {
+                    const prevData = previousCache[change.doc.id] || {};
+                    const newData = change.doc.data();
+                    if(shouldRerenderThread(newData, prevData)) {
+                        renderThreadMainPost(activePostId);
+                    }
+                }
             }
         });
 
-        // Update thread view if open
-        if(activePostId && document.getElementById('view-thread').style.display === 'block') {
-            renderThreadMainPost(activePostId);
-        }
+        postSnapshotCache = nextCache;
     });
 
     // Start Live Stream Listener (Mock)
@@ -800,11 +835,31 @@ window.createPost = async function() {
 }
 
 // --- Settings & Modals ---
-window.toggleCreateModal = (show) => { 
-    document.getElementById('create-modal').style.display = show ? 'flex' : 'none'; 
-    if(show && currentUser) { 
-        const avatarEl = document.getElementById('modal-user-avatar'); 
-        if(userProfile.photoURL) { 
+function updateSettingsAvatarPreview(src) {
+    const preview = document.getElementById('settings-avatar-preview');
+    if(!preview) return;
+
+    if(src) {
+        preview.style.backgroundImage = `url('${src}')`;
+        preview.style.backgroundSize = 'cover';
+        preview.textContent = '';
+    } else {
+        preview.style.backgroundImage = 'none';
+        preview.style.backgroundColor = getColorForUser(userProfile.name || 'U');
+        preview.textContent = (userProfile.name || 'U')[0];
+    }
+}
+
+function syncThemeRadios(themeValue) {
+    const selected = document.querySelector(`input[name="theme-choice"][value="${themeValue}"]`);
+    if(selected) selected.checked = true;
+}
+
+window.toggleCreateModal = (show) => {
+    document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
+    if(show && currentUser) {
+        const avatarEl = document.getElementById('modal-user-avatar');
+        if(userProfile.photoURL) {
             avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`; 
             avatarEl.textContent = ''; 
         } else { 
@@ -816,49 +871,74 @@ window.toggleCreateModal = (show) => {
     } 
 }
 
-window.toggleSettingsModal = (show) => { 
-    document.getElementById('settings-modal').style.display = show ? 'flex' : 'none'; 
-    if(show){ 
-        document.getElementById('set-name').value = userProfile.name||""; 
-        document.getElementById('set-username').value = userProfile.username||""; 
-        document.getElementById('set-bio').value = userProfile.bio||""; 
-        document.getElementById('set-links').value = userProfile.links||""; 
-        document.getElementById('set-phone').value = userProfile.phone||""; 
-        document.getElementById('set-gender').value = userProfile.gender||"Prefer not to say"; 
-        document.getElementById('set-email').value = userProfile.email||""; 
-    } 
+window.toggleSettingsModal = (show) => {
+    document.getElementById('settings-modal').style.display = show ? 'flex' : 'none';
+    if(show){
+        document.getElementById('set-name').value = userProfile.name||"";
+        document.getElementById('set-real-name').value = userProfile.realName||"";
+        document.getElementById('set-username').value = userProfile.username||"";
+        document.getElementById('set-bio').value = userProfile.bio||"";
+        document.getElementById('set-website').value = userProfile.links||"";
+        document.getElementById('set-phone').value = userProfile.phone||"";
+        document.getElementById('set-gender').value = userProfile.gender||"Prefer not to say";
+        document.getElementById('set-email').value = userProfile.email||"";
+        document.getElementById('set-nickname').value = userProfile.nickname||"";
+        document.getElementById('set-region').value = userProfile.region||"";
+        syncThemeRadios(userProfile.theme || 'system');
+        updateSettingsAvatarPreview(userProfile.photoURL);
+
+        const uploadInput = document.getElementById('set-pic-file');
+        const cameraInput = document.getElementById('set-pic-camera');
+        if(uploadInput) uploadInput.onchange = (e) => handleSettingsFileChange(e.target);
+        if(cameraInput) cameraInput.onchange = (e) => handleSettingsFileChange(e.target);
+    }
 }
 
-window.saveSettings = async function() { 
+window.saveSettings = async function() {
      const name = document.getElementById('set-name').value;
+     const realName = document.getElementById('set-real-name').value;
+     const nickname = document.getElementById('set-nickname').value;
      const username = document.getElementById('set-username').value;
      const bio = document.getElementById('set-bio').value;
-     const links = document.getElementById('set-links').value;
+     const links = document.getElementById('set-website').value;
      const phone = document.getElementById('set-phone').value;
      const gender = document.getElementById('set-gender').value;
-     const email = document.getElementById('set-email').value; 
+     const email = document.getElementById('set-email').value;
+     const region = document.getElementById('set-region').value;
+     const themeChoice = document.querySelector('input[name="theme-choice"]:checked');
+     const theme = themeChoice ? themeChoice.value : 'system';
      const fileInput = document.getElementById('set-pic-file');
+     const cameraInput = document.getElementById('set-pic-camera');
 
      let photoURL = userProfile.photoURL;
-     if(fileInput.files[0]) { 
-         const path = `users/${currentUser.uid}/pfp_${Date.now()}`; 
-         photoURL = await uploadFileToStorage(fileInput.files[0], path); 
+     const newPhoto = fileInput.files[0] || cameraInput.files[0];
+     if(newPhoto) {
+         const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
+         photoURL = await uploadFileToStorage(newPhoto, path);
      }
 
-     const updates = { name, username, bio, links, phone, gender, email, photoURL };
+     const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL };
      userProfile = { ...userProfile, ...updates };
      userCache[currentUser.uid] = userProfile;
 
-     try { 
-         await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true }); 
-         if(name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL }); 
-     } catch(e) { 
-         console.error("Save failed", e); 
+     try {
+         await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+         if(name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
+     } catch(e) {
+         console.error("Save failed", e);
      }
 
-     renderProfile(); 
-     renderFeed(); 
+     applyTheme(theme);
+     renderProfile();
+     renderFeed();
      window.toggleSettingsModal(false);
+}
+
+function handleSettingsFileChange(inputEl) {
+    if(!inputEl || !inputEl.files || !inputEl.files[0]) return;
+    const reader = new FileReader();
+    reader.onload = (e) => updateSettingsAvatarPreview(e.target.result);
+    reader.readAsDataURL(inputEl.files[0]);
 }
 
 // --- Peer Review System ---
@@ -1428,9 +1508,11 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     } 
 }
 
-function renderProfile() { 
-    const userPosts = allPosts.filter(p => p.userId === currentUser.uid); 
-    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(p => p.category === currentProfileFilter); 
+function renderProfile() {
+    const userPosts = allPosts.filter(p => p.userId === currentUser.uid);
+    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(p => p.category === currentProfileFilter);
+
+    const displayName = userProfile.name || userProfile.nickname || "Nexara User";
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -1440,13 +1522,17 @@ function renderProfile() {
     }
 
     const followersCount = userProfile.followersCount || 0;
+    const regionHtml = userProfile.region ? `<div class="real-name-subtext"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(userProfile.region)}</div>` : '';
+    const realNameHtml = userProfile.realName ? `<div class="real-name-subtext">${escapeHtml(userProfile.realName)}</div>` : '';
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
-            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':userProfile.name[0]}</div>
-            <h2 style="font-weight:800;">${escapeHtml(userProfile.name)}</h2>
+            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
+            <h2 style="font-weight:800;">${escapeHtml(displayName)}</h2>
+            ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
             <p style="margin-top:10px;">${escapeHtml(userProfile.bio)}</p>
+            ${regionHtml}
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div>${followersCount}</div><div>Followers</div></div>

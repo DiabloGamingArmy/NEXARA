@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nexara: Stream, Socialize, Strive</title>
-    
+    <!-- codex connection successful. -->
+
     <!-- Tailwind for utilities -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Phosphor Icons -->
@@ -107,11 +108,82 @@
     <div id="settings-modal" class="modal-overlay">
         <div class="modal-content">
             <h2 style="margin-bottom:1rem; font-weight:800;">Settings</h2>
-            <input type="text" id="set-name" class="form-input" placeholder="Display Name">
-            <input type="text" id="set-username" class="form-input" placeholder="Username">
+
+            <div class="settings-avatar-row">
+                <div id="settings-avatar-preview" class="profile-pic" style="width:80px; height:80px; margin:0;">
+                    <span>U</span>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                    <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-pencil"></i> Upload Photo</button>
+                    <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-camera').click()"><i class="ph ph-camera"></i> Take Photo</button>
+                </div>
+            </div>
+
+            <input type="file" id="set-pic-file" class="form-input" accept="image/*" style="display:none;">
+            <input type="file" id="set-pic-camera" class="form-input" accept="image/*" capture="environment" style="display:none;">
+
+            <div class="settings-grid">
+                <div>
+                    <label class="settings-label">Real Name</label>
+                    <input type="text" id="set-real-name" class="form-input" placeholder="Your legal name">
+                </div>
+                <div>
+                    <label class="settings-label">Nickname / Display</label>
+                    <input type="text" id="set-name" class="form-input" placeholder="Name shown on profile">
+                </div>
+            </div>
+
+            <div class="settings-grid">
+                <div>
+                    <label class="settings-label">Username</label>
+                    <input type="text" id="set-username" class="form-input" placeholder="@handle">
+                </div>
+                <div>
+                    <label class="settings-label">Nickname (Optional)</label>
+                    <input type="text" id="set-nickname" class="form-input" placeholder="Friends know you as...">
+                </div>
+            </div>
+
+            <label class="settings-label">Bio</label>
             <textarea id="set-bio" class="form-input" placeholder="Bio"></textarea>
-            <label style="color:var(--text-muted); font-size:0.8rem;">Profile Picture</label>
-            <input type="file" id="set-pic-file" class="form-input">
+
+            <div class="settings-grid">
+                <div>
+                    <label class="settings-label">Website</label>
+                    <input type="text" id="set-website" class="form-input" placeholder="https://example.com">
+                </div>
+                <div>
+                    <label class="settings-label">Region / Location</label>
+                    <input type="text" id="set-region" class="form-input" placeholder="City, Country">
+                </div>
+            </div>
+
+            <div class="settings-grid">
+                <div>
+                    <label class="settings-label">Email</label>
+                    <input type="email" id="set-email" class="form-input" placeholder="you@example.com">
+                </div>
+                <div>
+                    <label class="settings-label">Phone</label>
+                    <input type="tel" id="set-phone" class="form-input" placeholder="(555) 123-4567">
+                </div>
+            </div>
+
+            <label class="settings-label">Gender</label>
+            <input type="text" id="set-gender" class="form-input" placeholder="Gender identity">
+
+            <div style="margin: 1rem 0; padding: 1rem; border:1px solid var(--border); border-radius:12px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                    <div style="font-weight:700;">Theme</div>
+                    <div style="color:var(--text-muted); font-size:0.85rem;">Dark · Light · System</div>
+                </div>
+                <div class="theme-options">
+                    <label class="theme-option"><input type="radio" name="theme-choice" value="dark"> Dark</label>
+                    <label class="theme-option"><input type="radio" name="theme-choice" value="light"> Light</label>
+                    <label class="theme-option"><input type="radio" name="theme-choice" value="system"> System</label>
+                </div>
+            </div>
+
             <button onclick="window.saveSettings()" class="create-btn-sidebar">Save Changes</button>
             <button onclick="window.toggleSettingsModal(false)" style="margin-top:10px; width:100%; padding:10px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:30px; cursor:pointer;">Cancel</button>
         </div>
