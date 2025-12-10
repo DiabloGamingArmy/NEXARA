@@ -44,7 +44,24 @@ let postSnapshotCache = {};
 let categories = [];
 let memberships = {};
 let selectedCategoryId = null;
-let categoryTab = 'official';
+let destinationPickerTab = 'community';
+let destinationPickerSearch = '';
+let destinationPickerOpen = false;
+let destinationPickerLoading = true;
+let destinationPickerError = '';
+let destinationSearchTimeout = null;
+let destinationCreateExpanded = false;
+let categoryUnsubscribe = null;
+let membershipUnsubscribe = null;
+const DEFAULT_DESTINATION_CONFIG = {
+    enableOfficialTab: true,
+    enableCommunityTab: true,
+    enableCreateCommunity: true,
+    officialTabLabel: 'Official (Verified)',
+    communityTabLabel: 'Community',
+    officialSelectable: true
+};
+let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
 
@@ -552,17 +569,34 @@ function startDataListener() {
 }
 
 function startCategoryStreams(uid) {
-    onSnapshot(collection(db, 'categories'), function (snapshot) {
+    if (categoryUnsubscribe) categoryUnsubscribe();
+    if (membershipUnsubscribe) membershipUnsubscribe();
+
+    destinationPickerLoading = true;
+    destinationPickerError = '';
+
+    const categoryRef = collection(db, 'categories');
+    categoryUnsubscribe = onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
         allPosts = allPosts.map(function (p) { return normalizePostData(p.id, p); });
-        renderCategoryCenter();
+        destinationPickerLoading = false;
+        destinationPickerError = '';
+        ensureDefaultDestination();
+        renderDestinationField();
+        renderDestinationPicker();
+        syncPostButtonState();
         renderFeed();
+    }, function () {
+        destinationPickerLoading = false;
+        destinationPickerError = 'Unable to load destinations.';
+        renderDestinationField();
+        renderDestinationPicker();
     });
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = docSnap.data();
@@ -570,8 +604,12 @@ function startCategoryStreams(uid) {
         allPosts = allPosts.map(function (post) {
             return { ...post, categoryStatus: memberships[post.categoryId]?.status || post.categoryStatus };
         });
-        renderCategoryCenter();
+        renderDestinationField();
+        renderDestinationPicker();
+        syncPostButtonState();
         renderFeed();
+    }, function () {
+        console.warn('Unable to load destination memberships');
     });
 }
 
@@ -619,75 +657,40 @@ function normalizePostData(id, data) {
     return normalized;
 }
 
-function renderCategoryCenter() {
-    const center = document.getElementById('category-center');
-    const listEl = document.getElementById('category-list');
-    const rulesEl = document.getElementById('category-rules');
-    const currentLabel = document.getElementById('category-current-label');
-    if (!center || !listEl) return;
+function getDestinationFromCategory(cat) {
+    return {
+        type: cat.type === 'official' ? 'official' : 'community',
+        id: cat.id,
+        name: cat.name || 'Unnamed',
+        avatarUrl: cat.avatarUrl || cat.iconUrl || null,
+        verified: !!cat.verified,
+        meta: { memberCount: cat.memberCount, description: cat.description }
+    };
+}
 
+function ensureDefaultDestination() {
     if (!selectedCategoryId && categories.length) {
-        const fallback = categories.find(function (c) { return c.type === 'official'; }) || categories[0];
+        const fallback = categories.find(function (c) { return c.type === 'community'; })
+            || categories.find(function (c) { return c.type === 'official'; })
+            || categories[0];
         selectedCategoryId = fallback ? fallback.id : null;
     }
+}
 
+function renderDestinationField() {
+    const labelEl = document.getElementById('destination-current-label');
+    const verifiedEl = document.getElementById('destination-current-verified');
+    const spinner = document.getElementById('destination-loading-spinner');
     const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
-    if (currentLabel) currentLabel.textContent = currentCategoryDoc ? currentCategoryDoc.name : 'No category selected';
 
-    const filtered = categories.filter(function (c) { return categoryTab === 'official' ? c.type === 'official' : c.type === 'community'; });
-    const sorted = filtered.sort(function (a, b) {
-        const aJoined = memberships[a.id]?.status === 'active';
-        const bJoined = memberships[b.id]?.status === 'active';
-        if (aJoined === bJoined) return (a.name || '').localeCompare(b.name || '');
-        return aJoined ? -1 : 1;
-    });
-
-    listEl.innerHTML = '';
-    sorted.forEach(function (cat) {
-        const membership = memberships[cat.id];
-        const isMember = membership && membership.status === 'active';
-        const isPending = membership && membership.status && membership.status !== 'active';
-        const btnLabel = isMember ? 'Leave' : 'Join';
-        const badge = cat.verified ? '<span class="verified-badge">✔</span>' : '';
-        const statusLabel = membership ? membership.status : 'none';
-        const redStatus = isPending && membership.status !== 'active';
-
-        const row = document.createElement('div');
-        row.className = 'category-row';
-        row.innerHTML = `
-            <div class="category-row-main" onclick="window.selectCategory('${cat.id}')">
-                <div>
-                    <div class="category-row-title">${cat.name} ${badge}</div>
-                    <div class="category-row-desc">${cat.description || ''}</div>
-                </div>
-                <div class="category-row-meta">${redStatus ? `<span class="category-status-badge">${statusLabel}</span>` : ''}</div>
-            </div>
-            <div class="category-row-actions">
-                <button class="icon-pill" data-cat="${cat.id}" onclick="event.stopPropagation(); window.${isMember ? 'leaveCategory' : 'joinCategory'}('${cat.id}')">${btnLabel}</button>
-            </div>`;
-        listEl.appendChild(row);
-    });
-
-    if (rulesEl) renderCategoryRules(currentCategoryDoc, rulesEl);
-    syncPostButtonState();
+    if (spinner) spinner.style.display = destinationPickerLoading ? 'block' : 'none';
+    if (labelEl) labelEl.textContent = currentCategoryDoc ? currentCategoryDoc.name : 'Select...';
+    if (verifiedEl) verifiedEl.style.display = currentCategoryDoc && currentCategoryDoc.verified ? 'inline' : 'none';
 }
-
-function renderCategoryRules(categoryDoc, rulesEl) {
-    if (!rulesEl) return;
-    if (!categoryDoc) {
-        rulesEl.innerHTML = '<div class="category-rule"><em>Select a category to see its rules.</em></div>';
-        return;
-    }
-    const rules = categoryDoc.rules && categoryDoc.rules.length ? categoryDoc.rules : DEFAULT_CATEGORY_RULES;
-    rulesEl.innerHTML = rules.map(function (r) { return `<div class="category-rule">${r}</div>`; }).join('');
-}
-
-window.setCategoryTab = function (tab) { categoryTab = tab; renderCategoryCenter(); };
-window.selectCategory = function (categoryId) { selectedCategoryId = categoryId; renderCategoryCenter(); };
 
 function syncPostButtonState() {
     const btn = document.getElementById('publishBtn');
-    const helper = document.getElementById('category-post-helper');
+    const helper = document.getElementById('destination-helper');
     if (!btn) return;
     let disabled = false;
     let message = '';
@@ -705,6 +708,221 @@ function syncPostButtonState() {
         helper.style.color = disabled ? '#ff3d3d' : 'var(--text-muted)';
     }
 }
+
+function getAvailableDestinationTabs() {
+    const tabs = [];
+    if (activeDestinationConfig.enableCommunityTab !== false) tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
+    if (activeDestinationConfig.enableOfficialTab !== false) tabs.push({ type: 'official', label: activeDestinationConfig.officialTabLabel || 'Official (Verified)' });
+    return tabs;
+}
+
+function setDestinationTab(tab) {
+    destinationPickerTab = tab;
+    destinationPickerSearch = '';
+    destinationCreateExpanded = false;
+    renderDestinationPicker();
+    setTimeout(function () {
+        const input = document.getElementById('destination-search-input');
+        if (input) input.focus();
+    }, 50);
+}
+
+function handleDestinationSelected(destination) {
+    selectedCategoryId = destination ? destination.id : null;
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
+    closeDestinationPicker();
+}
+
+function renderDestinationCreateArea() {
+    const area = document.getElementById('destination-create-area');
+    if (!area) return;
+    if (destinationPickerTab !== 'community' || activeDestinationConfig.enableCreateCommunity === false) {
+        area.innerHTML = '';
+        return;
+    }
+
+    area.innerHTML = `
+        <div class="destination-create">
+            <button class="icon-pill" id="destination-create-toggle"><i class="ph ph-plus"></i> ${destinationCreateExpanded ? 'Hide Create Community' : 'Create Community'}</button>
+            ${destinationCreateExpanded ? `
+                <div class="destination-create-form">
+                    <input type="text" id="new-category-name" class="form-input" placeholder="Community name" aria-label="Community name">
+                    <textarea id="new-category-description" class="form-input" placeholder="Description" aria-label="Community description"></textarea>
+                    <textarea id="new-category-rules" class="form-input" placeholder="Additional rules (one per line)" aria-label="Community rules"></textarea>
+                    <label class="checkbox-row"><input type="checkbox" id="new-category-public" checked> Publicly discoverable</label>
+                    <button class="create-btn-sidebar" id="destination-create-submit" style="width:100%;">Create</button>
+                </div>
+            ` : ''}
+        </div>`;
+
+    const toggle = document.getElementById('destination-create-toggle');
+    if (toggle) toggle.onclick = function () { destinationCreateExpanded = !destinationCreateExpanded; renderDestinationPicker(); };
+    const submit = document.getElementById('destination-create-submit');
+    if (submit) submit.onclick = function (e) { e.preventDefault(); window.handleCreateCategoryForm(); };
+}
+
+function retryDestinationLoad() {
+    if (!currentUser) return;
+    destinationPickerError = '';
+    destinationPickerLoading = true;
+    renderDestinationPicker();
+    startCategoryStreams(currentUser.uid);
+}
+
+function renderDestinationResults() {
+    const resultsEl = document.getElementById('destination-results');
+    if (!resultsEl) return;
+    if (destinationPickerError) {
+        resultsEl.innerHTML = `<div class="destination-error">${destinationPickerError}<div style="margin-top:8px;"><button class="icon-pill" id="destination-retry-btn">Retry</button></div></div>`;
+        const retryBtn = document.getElementById('destination-retry-btn');
+        if (retryBtn) retryBtn.onclick = function () { retryDestinationLoad(); };
+        return;
+    }
+    if (destinationPickerLoading) {
+        resultsEl.innerHTML = '<div class="destination-loading"><div class="inline-spinner" style="display:block; margin: 0 auto 8px;"></div>Loading destinations...</div>';
+        return;
+    }
+
+    const filtered = categories
+        .filter(function (c) { return destinationPickerTab === 'official' ? c.type === 'official' : c.type === 'community'; })
+        .filter(function (c) { return !destinationPickerSearch || (c.name || '').toLowerCase().includes(destinationPickerSearch.toLowerCase()); })
+        .sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
+
+    if (!filtered.length) {
+        const message = destinationPickerTab === 'official' ? 'No official destinations found.' : 'No communities found. Create one?';
+        resultsEl.innerHTML = `<div class="destination-empty">${message}</div>`;
+        return;
+    }
+
+    resultsEl.innerHTML = '';
+    filtered.forEach(function (cat) {
+        const destination = getDestinationFromCategory(cat);
+        const isSelected = destination.id === selectedCategoryId;
+        const selectable = destination.type === 'official' ? activeDestinationConfig.officialSelectable !== false : true;
+
+        const row = document.createElement('div');
+        row.className = 'destination-row' + (isSelected ? ' selected' : '');
+
+        const main = document.createElement('div');
+        main.className = 'destination-row-main';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'destination-avatar';
+        avatar.textContent = (destination.name || 'U')[0];
+        if (destination.avatarUrl) {
+            avatar.style.backgroundImage = `url('${destination.avatarUrl}')`;
+            avatar.style.backgroundSize = 'cover';
+            avatar.textContent = '';
+        }
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'destination-row-text';
+        const title = document.createElement('div');
+        title.className = 'destination-row-title';
+        title.textContent = destination.name || 'Unnamed';
+        if (destination.verified) {
+            const badge = document.createElement('span');
+            badge.className = 'verified-badge';
+            badge.textContent = '✔';
+            title.appendChild(badge);
+        }
+        const desc = document.createElement('div');
+        desc.className = 'destination-row-desc';
+        const memberCount = destination.meta && destination.meta.memberCount ? `${destination.meta.memberCount} members` : '';
+        desc.textContent = destination.meta?.description || memberCount || '';
+        textWrap.appendChild(title);
+        textWrap.appendChild(desc);
+
+        main.appendChild(avatar);
+        main.appendChild(textWrap);
+
+        const actions = document.createElement('div');
+        actions.className = 'destination-row-actions';
+        const selectBtn = document.createElement('button');
+        selectBtn.className = 'icon-pill';
+        selectBtn.disabled = !selectable;
+        selectBtn.innerHTML = isSelected ? '<i class="ph ph-check"></i> Selected' : 'Select';
+        selectBtn.onclick = function (e) { e.stopPropagation(); if (selectable) handleDestinationSelected(destination); };
+        actions.appendChild(selectBtn);
+
+        if (selectable) {
+            row.onclick = function () { handleDestinationSelected(destination); };
+            main.onclick = function () { handleDestinationSelected(destination); };
+        }
+
+        row.appendChild(main);
+        row.appendChild(actions);
+        resultsEl.appendChild(row);
+    });
+}
+
+function renderDestinationPicker() {
+    const modal = document.getElementById('destination-picker-modal');
+    if (!modal) return;
+    modal.style.display = destinationPickerOpen ? 'flex' : 'none';
+
+    const tabsContainer = document.getElementById('destination-picker-tabs');
+    const availableTabs = getAvailableDestinationTabs();
+    if (!availableTabs.some(function (t) { return t.type === destinationPickerTab; }) && availableTabs.length) {
+        destinationPickerTab = availableTabs.find(function (t) { return t.type === 'community'; })?.type || availableTabs[0].type;
+    }
+    if (tabsContainer) {
+        tabsContainer.innerHTML = '';
+        availableTabs.forEach(function (tab) {
+            const btn = document.createElement('button');
+            btn.className = 'destination-tab' + (tab.type === destinationPickerTab ? ' active' : '');
+            btn.textContent = tab.label;
+            btn.onclick = function () { setDestinationTab(tab.type); };
+            tabsContainer.appendChild(btn);
+        });
+    }
+
+    const searchInput = document.getElementById('destination-search-input');
+    if (searchInput) {
+        searchInput.placeholder = destinationPickerTab === 'official' ? 'Search official destinations' : 'Search communities';
+        searchInput.value = destinationPickerSearch;
+        searchInput.oninput = function (e) {
+            const value = e.target.value;
+            clearTimeout(destinationSearchTimeout);
+            destinationSearchTimeout = setTimeout(function () {
+                destinationPickerSearch = value.trim();
+                renderDestinationPicker();
+            }, 250);
+        };
+    }
+
+    renderDestinationCreateArea();
+    renderDestinationResults();
+}
+
+function openDestinationPicker(config = {}) {
+    activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG, ...config };
+    destinationPickerOpen = true;
+    const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+    const tabs = getAvailableDestinationTabs();
+    if (currentCategoryDoc && tabs.some(function (t) { return t.type === currentCategoryDoc.type; })) {
+        destinationPickerTab = currentCategoryDoc.type;
+    } else {
+        destinationPickerTab = tabs.find(function (t) { return t.type === 'community'; })?.type || (tabs[0]?.type || 'community');
+    }
+    destinationPickerSearch = '';
+    destinationCreateExpanded = false;
+    renderDestinationPicker();
+    setTimeout(function () {
+        const input = document.getElementById('destination-search-input');
+        if (input) input.focus();
+    }, 50);
+}
+
+function closeDestinationPicker() {
+    destinationPickerOpen = false;
+    renderDestinationPicker();
+}
+
+window.openDestinationPicker = openDestinationPicker;
+window.closeDestinationPicker = closeDestinationPicker;
 
 async function createCategory(payload) {
     if (!requireAuth()) return;
@@ -735,8 +953,12 @@ async function createCategory(payload) {
     await setDoc(docRef, categoryDoc);
     await joinCategory(slug, 'owner');
     selectedCategoryId = slug;
-    renderCategoryCenter();
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
+    closeDestinationPicker();
     toast('Category created', 'info');
+    return slug;
 }
 
 async function joinCategory(categoryId, role = 'member') {
@@ -774,7 +996,9 @@ async function joinCategory(categoryId, role = 'member') {
     ]);
 
     memberships[categoryId] = { ...membershipPayload, name: cat.name };
-    renderCategoryCenter();
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
 }
 
 async function leaveCategory(categoryId) {
@@ -791,7 +1015,9 @@ async function leaveCategory(categoryId) {
 
     await enforceCategoryPrivacy(categoryId, currentUser.uid);
     memberships[categoryId] = { ...memberships[categoryId], status: 'left' };
-    renderCategoryCenter();
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
 }
 
 async function kickMember(categoryId, targetUid, reason = '') {
@@ -829,13 +1055,24 @@ window.joinCategory = joinCategory;
 window.leaveCategory = leaveCategory;
 window.kickMember = kickMember;
 window.handleCreateCategoryForm = async function () {
-    const name = document.getElementById('new-category-name').value;
-    const description = document.getElementById('new-category-description').value;
-    const rulesText = document.getElementById('new-category-rules').value;
-    const isPublic = document.getElementById('new-category-public').checked;
+    const nameInput = document.getElementById('new-category-name');
+    const descriptionInput = document.getElementById('new-category-description');
+    const rulesInput = document.getElementById('new-category-rules');
+    const publicInput = document.getElementById('new-category-public');
+    if (!nameInput || !descriptionInput || !rulesInput || !publicInput) return;
+
+    const name = nameInput.value;
+    const description = descriptionInput.value;
+    const rulesText = rulesInput.value;
+    const isPublic = publicInput.checked;
     const rules = rulesText ? rulesText.split('\n').map(function (r) { return r.trim(); }).filter(Boolean) : [];
     await createCategory({ name, description, rules, isPublic, type: 'community' });
-    document.getElementById('create-category-form').style.display = 'none';
+    nameInput.value = '';
+    descriptionInput.value = '';
+    rulesInput.value = '';
+    publicInput.checked = true;
+    destinationCreateExpanded = false;
+    renderDestinationPicker();
 };
 
 // PATCH: New listener to fetch user's reviews across all posts
@@ -859,11 +1096,16 @@ async function startUserReviewListener(uid) {
         const initial = await getDocs(q);
         handleSnapshot(initial);
     } catch (error) {
-        console.log("Initial audit hydration error:", error.message);
+        if (error.code !== 'permission-denied') {
+            console.log("Initial audit hydration error:", error.message);
+        }
+        return; // Skip listener when access is not allowed
     }
 
     onSnapshot(q, handleSnapshot, function (error) {
-        console.log("Review listener note:", error.message);
+        if (error.code !== 'permission-denied') {
+            console.log("Review listener note:", error.message);
+        }
     });
 }
 
@@ -1407,15 +1649,18 @@ window.toggleCreateModal = function(show) {
     if(show && currentUser) {
         const avatarEl = document.getElementById('modal-user-avatar');
         if(userProfile.photoURL) {
-            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`; 
-            avatarEl.textContent = ''; 
+            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`;
+            avatarEl.textContent = '';
         } else { 
             avatarEl.style.backgroundImage = 'none'; 
             avatarEl.style.backgroundColor = getColorForUser(userProfile.name);
             avatarEl.textContent = userProfile.name[0];
             avatarEl.style.color = 'black';
         }
+        renderDestinationField();
         syncPostButtonState();
+    } else if (!show) {
+        closeDestinationPicker();
     }
 }
 
@@ -2916,6 +3161,12 @@ window.uploadVideo = async function() {
         toast('Video upload failed. Please try again.', 'error');
     }
 };
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && destinationPickerOpen) {
+        closeDestinationPicker();
+    }
+});
 
 window.likeVideo = async function(videoId) {
     if(!requireAuth()) return;
