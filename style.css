@@ -434,3 +434,37 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .panel-title { font-weight:800; margin-bottom:8px; }
 .badge { padding:4px 8px; border-radius:8px; font-size:0.75rem; border:1px solid var(--border); }
 .toast-msg { position: fixed; bottom: 20px; right: 20px; background: var(--bg-card); border:1px solid var(--border); padding:10px 14px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.4); z-index:2000; }
+
+/* Category Center */
+.category-center {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.75rem;
+    margin: 0 1rem 1rem 1rem;
+    background: var(--bg-hover);
+}
+
+.category-center-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.category-tabs { display: flex; gap: 8px; }
+.category-list { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; }
+.category-row { border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--bg-card); }
+.category-row-main { cursor: pointer; flex: 1; }
+.category-row-title { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.category-row-desc { font-size: 0.85rem; color: var(--text-muted); margin-top: 4px; }
+.category-row-actions { display: flex; gap: 8px; }
+.category-status-badge { color: #ff3d3d; font-size: 0.8rem; }
+.verified-badge { color: #00f2ea; font-size: 0.85rem; }
+.category-badge.inactive { color: #ff3d3d; border-color: #ff3d3d; }
+.category-rules { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; display: grid; gap: 6px; }
+.category-rule { font-size: 0.85rem; color: var(--text-muted); padding: 6px 8px; border-radius: 6px; background: var(--bg-card); }
+.category-helper { margin-top: 8px; font-size: 0.85rem; }
+.category-current { display: flex; flex-direction: column; gap: 4px; }
+.category-create-form { display: none; border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 0 1rem 1rem 1rem; background: var(--bg-card); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+.checkbox-row { font-size: 0.9rem; color: var(--text-muted); display:flex; gap:6px; align-items:center; }
