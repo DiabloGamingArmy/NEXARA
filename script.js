@@ -135,6 +135,13 @@ function normalizeUserProfileData(data = {}) {
     return { ...data, accountRoles };
 }
 
+function userHasRole(userLike = {}, role = '') {
+    const roles = new Set(Array.isArray(userLike.accountRoles) ? userLike.accountRoles : []);
+    if (userLike.role) roles.add(userLike.role);
+    if (userLike.verified === true) roles.add('verified');
+    return roles.has(role);
+}
+
 function hasGlobalRole(role) {
     return getAccountRoleSet().has(role);
 }
@@ -191,6 +198,24 @@ let videosCache = [];
 let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
+let postsUnsubscribe = null;
+
+if (!window.__activeUnsubscribes) window.__activeUnsubscribes = [];
+function trackSnapshot(unsub) {
+    if (typeof unsub === 'function') {
+        window.__activeUnsubscribes.push(unsub);
+    }
+    return unsub;
+}
+if (!window.__snapshotCleanupBound) {
+    window.__snapshotCleanupBound = true;
+    window.addEventListener('beforeunload', function() {
+        (window.__activeUnsubscribes || []).forEach(function(unsub) {
+            try { unsub(); } catch (e) {}
+        });
+        window.__activeUnsubscribes = [];
+    });
+}
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -467,6 +492,8 @@ async function ensureUserDocument(user) {
             region: "",
             email: user.email || "",
             accountRoles: [],
+            tagAffinity: {},
+            interests: [],
             createdAt: now,
             updatedAt: now
         }, { merge: true });
@@ -533,7 +560,9 @@ window.handleSignup = async function (e) {
             bio: "",
             website: "",
             region: "",
-            accountRoles: []
+            accountRoles: [],
+            tagAffinity: {},
+            interests: []
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
@@ -586,10 +615,11 @@ async function fetchMissingProfiles(posts) {
 }
 
 function startDataListener() {
+    if (postsUnsubscribe) postsUnsubscribe();
     const postsRef = collection(db, 'posts');
     const q = query(postsRef);
 
-    onSnapshot(q, function (snapshot) {
+    postsUnsubscribe = trackSnapshot(onSnapshot(q, function (snapshot) {
         const previousCache = { ...postSnapshotCache };
         const nextCache = {};
         allPosts = [];
@@ -628,7 +658,7 @@ function startDataListener() {
         });
 
         postSnapshotCache = nextCache;
-    });
+    }));
 
     // Start Live Stream Listener (Mock)
     if (typeof renderLive === 'function') renderLive();
@@ -642,7 +672,7 @@ function startCategoryStreams(uid) {
     destinationPickerError = '';
 
     const categoryRef = collection(db, 'categories');
-    categoryUnsubscribe = onSnapshot(categoryRef, function (snapshot) {
+    categoryUnsubscribe = trackSnapshot(onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
@@ -659,10 +689,10 @@ function startCategoryStreams(uid) {
         destinationPickerError = 'Unable to load destinations.';
         renderDestinationField();
         renderDestinationPicker();
-    });
+    }));
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    membershipUnsubscribe = onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = trackSnapshot(onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
@@ -676,7 +706,7 @@ function startCategoryStreams(uid) {
         renderFeed();
     }, function () {
         console.warn('Unable to load destination memberships');
-    });
+    }));
 }
 
 function getCategorySnapshot(categoryId) {
@@ -718,6 +748,8 @@ function normalizePostData(id, data) {
         categoryType,
         category: categoryName,
         contentType,
+        tags: Array.isArray(data.tags) ? data.tags : [],
+        mentions: Array.isArray(data.mentions) ? data.mentions : [],
         content,
         categoryStatus: memberships[categoryId]?.status || 'unknown'
     };
@@ -1225,11 +1257,11 @@ async function startUserReviewListener(uid) {
         return; // Skip listener when access is not allowed
     }
 
-    onSnapshot(q, handleSnapshot, function (error) {
+    trackSnapshot(onSnapshot(q, handleSnapshot, function (error) {
         if (error.code !== 'permission-denied') {
             console.log("Review listener note:", error.message);
         }
-    });
+    }));
 }
 
 // --- Navigation Logic ---
@@ -1406,6 +1438,9 @@ function getPostHTML(post) {
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
 
+        const authorVerified = userHasRole(authorData, 'verified');
+        const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
+
         const avatarStyle = authorData.photoURL
             ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;`
             : `background: ${getColorForUser(authorData.name)}`;
@@ -1418,12 +1453,20 @@ function getPostHTML(post) {
         const isFollowingTopic = followedCategories.has(post.category);
         const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
 
+        const followButtons = isSelfPost ? '' : `
+                                <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}"onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
+
         let trustBadge = "";
         if (post.trustScore > 2) {
             trustBadge = `<div style="font-size:0.75rem; color:#8b949e; display:flex; align-items:center; gap:7px; font-weight:600;"><i class="ph-fill ph-check-circle"></i> Publicly Verified</div>`;
         } else if (post.trustScore < -1) {
             trustBadge = `<div style="font-size:0.75rem; color:#ff3d3d; display:flex; align-items:center; gap:4px; font-weight:600;"><i class="ph-fill ph-warning-circle"></i> Disputed</div>`;
         }
+
+        const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
+        const formattedBody = formatContent(postText, post.tags, post.mentions);
+        const tagListHtml = renderTagList(post.tags || []);
 
         let mediaContent = '';
         if (post.mediaUrl) {
@@ -1458,14 +1501,14 @@ function getPostHTML(post) {
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
                         <div class="user-avatar" style="${avatarStyle}">${authorData.photoURL ? '' : authorData.name[0]}</div>
-                        <div class="header-info"><span class="author-name">${escapeHtml(authorData.name)}</span><span class="post-meta">@${escapeHtml(authorData.username)} • ${date}</span></div>
+                        <div class="header-info">
+                            <div class="author-line"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
+                            <span class="post-meta">@${escapeHtml(authorData.username)} • ${date}</span>
+                        </div>
                     </div>
                     <div style="flex:1; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
                         <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end; width:100%;">
-                            <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
-                                <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>
-                            </div>
+                            <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">${followButtons}</div>
                             ${getPostOptionsButton(post, 'feed')}
                         </div>
                         ${trustBadge}
@@ -1474,7 +1517,8 @@ function getPostHTML(post) {
                 <div class="card-content" onclick="window.openThread('${post.id}')">
                     <div class="category-badge">${post.category}</div>
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                    <p>${escapeHtml(cleanText(post.content))}</p>
+                    <p>${formattedBody}</p>
+                    ${tagListHtml}
                     ${mediaContent}
                     ${commentPreviewHtml}
                     ${savedTagHtml}
@@ -1497,6 +1541,7 @@ function renderFeed(targetId = 'feed-content') {
     const container = document.getElementById(targetId);
     if (!container) return;
 
+    renderCategoryPills();
     container.innerHTML = "";
     let displayPosts = allPosts.filter(function (post) {
         if (post.visibility === 'private') return currentUser && post.userId === currentUser.uid;
@@ -1514,6 +1559,14 @@ function renderFeed(targetId = 'feed-content') {
         else if (savedFilter === 'Images') displayPosts = displayPosts.filter(function (p) { return p.type === 'image'; });
     } else if (currentCategory !== 'For You') {
         displayPosts = allPosts.filter(function (post) { return post.category === currentCategory; });
+    }
+
+    if (currentCategory === 'For You') {
+        displayPosts = displayPosts.slice().sort(function(a, b) {
+            const scoreDiff = getPostAffinityScore(b) - getPostAffinityScore(a);
+            if (scoreDiff !== 0) return scoreDiff;
+            return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
+        });
     }
 
     if (displayPosts.length === 0) {
@@ -1604,10 +1657,10 @@ window.toggleLike = async function(postId, event) {
     const hadDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
 
     // Optimistic Update
-    if (wasLiked) { 
+    if (wasLiked) {
         post.likes = Math.max(0, (post.likes || 0) - 1); // Prevent negative likes
         post.likedBy = post.likedBy.filter(function(uid) { return uid !== currentUser.uid; });
-    } else { 
+    } else {
         post.likes = (post.likes || 0) + 1;
         if (!post.likedBy) post.likedBy = [];
         post.likedBy.push(currentUser.uid);
@@ -1616,6 +1669,8 @@ window.toggleLike = async function(postId, event) {
             post.dislikedBy = (post.dislikedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
         }
     }
+
+    recordTagAffinity(post.tags, wasLiked ? -1 : 1);
 
     refreshSinglePostUI(postId);
     const postRef = doc(db, 'posts', postId);
@@ -1662,17 +1717,99 @@ window.toggleSave = async function(postId, event) {
 }
 
 // --- Creation & Upload ---
-async function uploadFileToStorage(file, path) { 
-    if (!file) return null; 
-    const storageRef = ref(storage, path); 
-    await uploadBytes(storageRef, file); 
-    return await getDownloadURL(storageRef); 
+async function uploadFileToStorage(file, path) {
+    if (!file) return null;
+    const storageRef = ref(storage, path);
+    await uploadBytes(storageRef, file);
+    return await getDownloadURL(storageRef);
+}
+
+function parseTagsInput(raw = '') {
+    return raw.split(',').map(function(t) { return t.trim().replace(/^#/, '').toLowerCase(); }).filter(Boolean);
+}
+
+function parseMentionsInput(raw = '') {
+    return raw.split(',').map(function(t) { return t.trim().replace(/^@/, '').toLowerCase(); }).filter(Boolean);
+}
+
+function escapeRegex(str = '') {
+    return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+function renderTagList(tags = []) {
+    if (!tags.length) return '';
+    return `<div style="margin-top:8px;">${tags.map(function(tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
+}
+
+function formatContent(text = '', tags = [], mentions = []) {
+    let safe = escapeHtml(cleanText(text));
+    const mentionSet = new Set((mentions || []).map(function(m) { return m.toLowerCase(); }));
+    mentionSet.forEach(function(handle) {
+        const regex = new RegExp('@' + escapeRegex(handle), 'gi');
+        safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
+    });
+    (tags || []).forEach(function(tag) {
+        const regex = new RegExp('#' + escapeRegex(tag), 'gi');
+        safe = safe.replace(regex, `<span class="tag-chip">#${escapeHtml(tag)}</span>`);
+    });
+    return safe;
+}
+
+async function resolveMentionProfiles(handles = []) {
+    const cleaned = Array.from(new Set(handles.map(function(h) { return h.replace(/^@/, '').toLowerCase(); }).filter(Boolean)));
+    const results = [];
+    for (const handle of cleaned) {
+        const cached = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === handle; });
+        if (cached) { results.push({ uid: cached[0], handle }); continue; }
+        const qSnap = await getDocs(query(collection(db, 'users'), where('username', '==', handle)));
+        if (!qSnap.empty) {
+            const docSnap = qSnap.docs[0];
+            userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
+            results.push({ uid: docSnap.id, handle });
+        }
+    }
+    return results;
+}
+
+async function notifyMentionedUsers(resolved = [], postId) {
+    const tasks = resolved.map(function(entry) {
+        const notifRef = collection(db, 'users', entry.uid, 'notifications');
+        return addDoc(notifRef, {
+            type: 'mention',
+            postId,
+            fromUserId: currentUser.uid,
+            createdAt: serverTimestamp(),
+            read: false
+        });
+    });
+    await Promise.all(tasks);
+}
+
+function recordTagAffinity(tags = [], delta = 0) {
+    if (!currentUser || !delta || !Array.isArray(tags) || tags.length === 0) return;
+    const affinity = { ...(userProfile.tagAffinity || {}) };
+    tags.forEach(function(tag) {
+        affinity[tag] = (affinity[tag] || 0) + delta;
+    });
+    userProfile.tagAffinity = affinity;
+    userCache[currentUser.uid] = userProfile;
+    setDoc(doc(db, 'users', currentUser.uid), { tagAffinity: affinity }, { merge: true });
+}
+
+function getPostAffinityScore(post) {
+    const affinity = userProfile.tagAffinity || {};
+    const tags = Array.isArray(post.tags) ? post.tags : [];
+    return tags.reduce(function(total, tag) { return total + (affinity[tag] || 0); }, 0);
 }
 
 window.createPost = async function() {
      if (!requireAuth()) return;
      const title = document.getElementById('postTitle').value;
      const content = document.getElementById('postContent').value;
+     const tagsInput = document.getElementById('postTags');
+     const mentionsInput = document.getElementById('postMentions');
+     const tags = parseTagsInput(tagsInput ? tagsInput.value : '');
+     const mentions = parseMentionsInput(mentionsInput ? mentionsInput.value : '');
      const fileInput = document.getElementById('postFile');
      const btn = document.getElementById('publishBtn');
      setComposerError('');
@@ -1700,6 +1837,8 @@ window.createPost = async function() {
              }
          }
 
+         const mentionProfiles = await resolveMentionProfiles(mentions);
+
          let mediaUrl = null;
          if(fileInput.files[0]) {
              const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
@@ -1718,21 +1857,27 @@ window.createPost = async function() {
              categoryType: categoryDoc ? categoryDoc.type : null,
              visibility,
              contentType,
-             content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: {} },
+             content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: { tags, mentions } },
              mediaUrl,
              author: userProfile.name,
              userId: currentUser.uid,
+             tags,
+             mentions,
+             mentionUserIds: mentionProfiles.map(function(m) { return m.uid; }),
              likes: 0,
              likedBy: [],
              trustScore: 0,
              timestamp: serverTimestamp()
          };
 
-         await addDoc(collection(db, 'posts'), postPayload);
+         const postRef = await addDoc(collection(db, 'posts'), postPayload);
+         if (mentionProfiles.length) await notifyMentionedUsers(mentionProfiles, postRef.id);
 
          // Reset Form
          document.getElementById('postTitle').value = "";
          document.getElementById('postContent').value = "";
+         if (tagsInput) tagsInput.value = "";
+         if (mentionsInput) mentionsInput.value = "";
          fileInput.value = "";
          window.clearPostImage();
          window.toggleCreateModal(false);
@@ -1889,8 +2034,8 @@ window.openPeerReview = function(postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
     const q = query(reviewsRef); 
 
-    onSnapshot(q, function(snapshot) {
-        const container = document.getElementById('review-list'); 
+    trackSnapshot(onSnapshot(q, function(snapshot) {
+        const container = document.getElementById('review-list');
         container.innerHTML = "";
 
         let scores = { verified: 0, citation: 0, misleading: 0, total: 0 };
@@ -1967,7 +2112,7 @@ window.openPeerReview = function(postId) {
             document.getElementById('review-bar').innerHTML = `<div style="width:100%; background:#333; height:8px;"></div>`; 
             document.getElementById('review-stats-text').textContent = "No peer reviews yet."; 
         }
-    });
+    }));
 }
 
 // FIX: Review Submission Logic Stabilized
@@ -2052,7 +2197,7 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = onSnapshot(q, function(snapshot) {
+    threadUnsubscribe = trackSnapshot(onSnapshot(q, function(snapshot) {
         const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
@@ -2060,7 +2205,7 @@ function attachThreadComments(postId) {
     }, function(error) {
         console.error('Comments load error', error);
         container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
-    });
+    }));
 }
 
 const renderCommentHtml = function(c, isReply) {
@@ -2213,6 +2358,15 @@ function renderThreadMainPost(postId) {
     const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
     const avatarStyle = authorData.photoURL ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;` : `background: ${getColorForUser(authorData.name)}`;
 
+    const authorVerified = userHasRole(authorData, 'verified');
+    const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
+    const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
+    const formattedBody = formatContent(postText, post.tags, post.mentions);
+    const tagListHtml = renderTagList(post.tags || []);
+    const followButtons = isSelfPost ? '' : `
+                                <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
+
     let mediaContent = '';
     if (post.mediaUrl) { 
         if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`; 
@@ -2233,27 +2387,25 @@ function renderThreadMainPost(postId) {
     // Updated Layout for Thread Main Post to match Feed Header logic
     container.innerHTML = `
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                    <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
-                        <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
-                        <div>
-                            <div class="author-name" style="font-size:1rem;">${escapeHtml(authorData.name)}</div>
-                            <div class="post-meta">@${escapeHtml(authorData.username)}</div>
-                        </div>
-                    </div>
-                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-                        <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end; width:100%;">
-                            <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
-                                <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>
-                            </div>
-                            ${getPostOptionsButton(post, 'thread', '1.2rem')}
-                        </div>
-                        ${trustBadge}
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
+                    <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                    <div>
+                        <div class="author-line" style="font-size:1rem;"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
+                        <div class="post-meta">@${escapeHtml(authorData.username)}</div>
                     </div>
                 </div>
+                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+                    <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end; width:100%;">
+                        <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">${followButtons}</div>
+                        ${getPostOptionsButton(post, 'thread', '1.2rem')}
+                    </div>
+                    ${trustBadge}
+                </div>
+            </div>
             <h2 id="thread-view-title" data-post-id="${post.id}" style="font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; line-height: 1.3;">${escapeHtml(post.title)}</h2>
-            <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${escapeHtml(post.content)}</p>
+            <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${formattedBody}</p>
+            ${tagListHtml}
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span></div>
             <div class="card-actions" style="border:none; padding: 10px 0; justify-content: space-around;">
@@ -2429,6 +2581,8 @@ window.toggleDislike = async function(postId, event) {
             post.likedBy = (post.likedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
         }
     }
+
+    recordTagAffinity(post.tags, wasDisliked ? 1 : -1);
 
     refreshSinglePostUI(postId);
     const postRef = doc(db, 'posts', postId);
@@ -2741,11 +2895,11 @@ window.renderDiscover = async function() {
 }
 
 // --- Profile Rendering ---
-window.openUserProfile = async function(uid, event, pushToStack = true) { 
-    if(event) event.stopPropagation(); 
-    if (uid === currentUser.uid) { 
-        window.navigateTo('profile', pushToStack); 
-        return; 
+window.openUserProfile = async function(uid, event, pushToStack = true) {
+    if(event) event.stopPropagation();
+    if (uid === currentUser.uid) {
+        window.navigateTo('profile', pushToStack);
+        return;
     } 
 
     viewingUserId = uid; 
@@ -2765,6 +2919,22 @@ window.openUserProfile = async function(uid, event, pushToStack = true) {
     renderPublicProfile(uid, profile);
 }
 
+window.openUserProfileByHandle = async function(handle) {
+    const normalized = (handle || '').replace(/^@/, '').toLowerCase();
+    const cachedEntry = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === normalized; });
+    if (cachedEntry) {
+        openUserProfile(cachedEntry[0], null, true);
+        return;
+    }
+    const q = query(collection(db, 'users'), where('username', '==', normalized));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+        const docSnap = snap.docs[0];
+        userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
+        openUserProfile(docSnap.id, null, true);
+    }
+}
+
 function renderPublicProfile(uid, profileData = userCache[uid]) {
     if(!profileData) return;
     const normalizedProfile = normalizeUserProfileData(profileData);
@@ -2778,6 +2948,8 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const isSelfView = currentUser && currentUser.uid === uid;
     const userPosts = allPosts.filter(function(p) { return p.userId === uid && (isSelfView || p.visibility !== 'private'); });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
+
+    const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
 
     let linkHtml = ''; 
     if(normalizedProfile.links) {
@@ -2808,8 +2980,8 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                 <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
             </div>
             <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
-                <button onclick="window.toggleFollowUser('${uid}', event)" class="create-btn-sidebar js-follow-user-${uid}" style="width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};">${isFollowing ? 'Following' : 'Follow'}</button>
-                <button class="create-btn-sidebar" style="width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);">Message</button>
+                ${followCta}
+                ${isSelfView ? '' : '<button class="create-btn-sidebar" style="width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);">Message</button>'}
             </div>
         </div>
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
@@ -2833,11 +3005,14 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                 const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
                 const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
                 const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
+                const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
+                const formattedBody = formatContent(postText, post.tags, post.mentions);
+                const tagListHtml = renderTagList(post.tags || []);
 
-            let mediaContent = ''; 
-            if (post.mediaUrl) { 
-                if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`; 
-                else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`; 
+            let mediaContent = '';
+            if (post.mediaUrl) {
+                if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`;
+                else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
             } 
 
                 const membership = isSelfView ? memberships[post.categoryId] : null;
@@ -2856,7 +3031,8 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                             </div>
                         </div>
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                        <p>${escapeHtml(cleanText(post.content))}</p>
+                        <p>${formattedBody}</p>
+                        ${tagListHtml}
                         ${mediaContent}
                     </div>
                     <div class="card-actions">
@@ -2939,12 +3115,59 @@ function renderProfile() {
 }
 
 // --- Utils & Helpers ---
+function collectFollowedCategoryNames() {
+    const names = new Set();
+    Object.keys(memberships || {}).forEach(function(id) {
+        const snapshot = getCategorySnapshot(id);
+        const name = snapshot?.name || snapshot?.id || id;
+        if ((memberships[id]?.status || 'active') !== 'left') names.add(name);
+    });
+    followedCategories.forEach(function(name) { names.add(name); });
+    return Array.from(names);
+}
+
+function computeTrendingCategories(limit = 8) {
+    const counts = {};
+    allPosts.forEach(function(post) {
+        if (post.category) counts[post.category] = (counts[post.category] || 0) + 1;
+    });
+    return Object.entries(counts).sort(function(a, b) { return b[1] - a[1]; }).slice(0, limit).map(function(entry) { return entry[0]; });
+}
+
+function renderCategoryPills() {
+    const header = document.getElementById('category-header');
+    if (!header) return;
+    header.innerHTML = '';
+
+    const anchors = ['For You', 'Following'];
+    anchors.forEach(function(label) {
+        const pill = document.createElement('div');
+        pill.className = 'category-pill' + (currentCategory === label ? ' active' : '');
+        pill.textContent = label;
+        pill.onclick = function() { window.setCategory(label); };
+        header.appendChild(pill);
+    });
+
+    const divider = document.createElement('div');
+    divider.className = 'category-divider';
+    header.appendChild(divider);
+
+    const dynamic = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(10)])).filter(function(name) {
+        return name && !anchors.includes(name);
+    }).slice(0, 10);
+
+    dynamic.forEach(function(name) {
+        const pill = document.createElement('div');
+        pill.className = 'category-pill' + (currentCategory === name ? ' active' : '');
+        pill.textContent = name;
+        pill.onclick = function() { window.setCategory(name); };
+        header.appendChild(pill);
+    });
+}
+
 window.setCategory = function(c) {
     currentCategory = c;
-    document.querySelectorAll('.category-pill').forEach(function(el) {
-        if(el.textContent.includes(c) || (c === 'For You' && el.textContent === 'For You')) el.classList.add('active'); 
-        else el.classList.remove('active');
-    });
+    renderCategoryPills();
     document.documentElement.style.setProperty('--primary', '#00f2ea');
     renderFeed();
 }
@@ -3152,10 +3375,10 @@ function initConversations() {
     if(!requireAuth()) return;
     if(conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = onSnapshot(convRef, function(snap) {
+    conversationsUnsubscribe = trackSnapshot(onSnapshot(convRef, function(snap) {
         conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderConversationList();
-    });
+    }));
 }
 
 function renderConversationList() {
@@ -3188,10 +3411,10 @@ function setActiveConversation(convoId, convoData = null) {
 function listenToMessages(convoId) {
     if(messagesUnsubscribe) messagesUnsubscribe();
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = onSnapshot(msgRef, function(snap) {
+    messagesUnsubscribe = trackSnapshot(onSnapshot(msgRef, function(snap) {
         const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderMessages(msgs);
-    });
+    }));
 }
 
 function renderMessages(msgs = []) {
@@ -3281,10 +3504,10 @@ function pauseAllVideos() {
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = onSnapshot(refVideos, function(snap) {
+    videosUnsubscribe = trackSnapshot(onSnapshot(refVideos, function(snap) {
         videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderVideoFeed(videosCache);
-    });
+    }));
 }
 
 function renderVideoFeed(videos = []) {
@@ -3432,7 +3655,7 @@ window.toggleGoLiveModal = function(show = true) { const modal = document.getEle
 function renderLiveSessions() {
     if(liveSessionsUnsubscribe) return;
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
-    liveSessionsUnsubscribe = onSnapshot(liveRef, function(snap) {
+    liveSessionsUnsubscribe = trackSnapshot(onSnapshot(liveRef, function(snap) {
         const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const container = document.getElementById('live-grid-container');
         if(!container) return;
@@ -3444,7 +3667,7 @@ function renderLiveSessions() {
             card.innerHTML = `<div class="live-card-title">${escapeHtml(s.title || 'Live Session')}</div><div class="live-card-meta"><span>${escapeHtml(s.category || '')}</span><span>${(s.tags||[]).join(', ')}</span></div><div style="margin-top:10px;"><button class="icon-pill" onclick="window.openLiveSession('${s.id}')"><i class="ph ph-play"></i> Watch</button></div>`;
             container.appendChild(card);
         });
-    });
+    }));
 }
 
 window.createLiveSession = async function() {
@@ -3477,7 +3700,7 @@ window.openLiveSession = function(sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
-    onSnapshot(chatRef, function(snap) {
+    trackSnapshot(onSnapshot(chatRef, function(snap) {
         const chatEl = document.getElementById('live-chat');
         if(!chatEl) return;
         chatEl.innerHTML = '';
@@ -3487,7 +3710,7 @@ function listenLiveChat(sessionId) {
             row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
             chatEl.appendChild(row);
         });
-    });
+    }));
 }
 
 window.sendLiveChat = async function(sessionId) {
@@ -3517,7 +3740,7 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if(staffRequestsUnsub) return;
-    staffRequestsUnsub = onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+    staffRequestsUnsub = trackSnapshot(onSnapshot(collection(db, 'verificationRequests'), function(snap) {
         const container = document.getElementById('verification-requests');
         if(!container) return;
         container.innerHTML = '';
@@ -3528,7 +3751,7 @@ function listenVerificationRequests() {
             card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks||[]).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
             container.appendChild(card);
         });
-    });
+    }));
 }
 
 window.approveVerification = async function(requestId, userId) {
@@ -3544,7 +3767,7 @@ window.denyVerification = async function(requestId) {
 
 function listenReports() {
     if(staffReportsUnsub) return;
-    staffReportsUnsub = onSnapshot(collection(db, 'reports'), function(snap) {
+    staffReportsUnsub = trackSnapshot(onSnapshot(collection(db, 'reports'), function(snap) {
         const container = document.getElementById('reports-queue');
         if(!container) return;
         container.innerHTML = '';
@@ -3555,12 +3778,12 @@ function listenReports() {
             card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.type || 'report'}</div><div style="color:var(--text-muted); font-size:0.9rem;">${data.reason || ''}</div></div>`;
             container.appendChild(card);
         });
-    });
+    }));
 }
 
 function listenAdminLogs() {
     if(staffLogsUnsub) return;
-    staffLogsUnsub = onSnapshot(collection(db, 'adminLogs'), function(snap) {
+    staffLogsUnsub = trackSnapshot(onSnapshot(collection(db, 'adminLogs'), function(snap) {
         const container = document.getElementById('admin-logs');
         if(!container) return;
         container.innerHTML = '';
@@ -3570,7 +3793,7 @@ function listenAdminLogs() {
             row.textContent = `${data.actorId}: ${data.action}`;
             container.appendChild(row);
         });
-    });
+    }));
 }
 
 // --- Verification Request ---
