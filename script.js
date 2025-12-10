@@ -744,6 +744,7 @@ function getPostHTML(post) {
                     <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
                     <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
                     <button class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
+                    <button class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                 </div>
             </div>`;
     } catch(e) { 
@@ -782,6 +783,13 @@ function renderFeed(targetId = 'feed-content') {
     // Render loop
     displayPosts.forEach(post => {
         container.innerHTML += getPostHTML(post);
+    });
+
+    // Apply review state to freshly rendered posts using cached data
+    displayPosts.forEach(post => {
+        const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+        const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
+        applyReviewButtonState(reviewBtn, reviewValue);
     });
 
     applyMyReviewStylesToDOM();
@@ -1381,6 +1389,7 @@ function renderThreadMainPost(postId) {
                 <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
                 <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
                 <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
+                <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
             </div>
         </div>`;
 
@@ -1907,6 +1916,24 @@ async function createConversationWithUser(targetUid, targetData = {}) {
         console.error('Conversation create error', err);
         toast('Unable to start chat. Please try again.', 'error');
     }
+    const existing = conversationsCache.find(c => c.members && c.members.includes(targetUid));
+    if(existing) {
+        setActiveConversation(existing.id, existing);
+        toggleNewChatModal(false);
+        return;
+    }
+    const payload = {
+        members: [currentUser.uid, targetUid],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastMessageText: '',
+        lastMessageAt: serverTimestamp(),
+        requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
+    };
+    const convoRef = await addDoc(collection(db, 'conversations'), payload);
+    conversationsCache.push({ id: convoRef.id, ...payload });
+    toggleNewChatModal(false);
+    setActiveConversation(convoRef.id, payload);
 }
 
 function initConversations() {
@@ -1943,6 +1970,7 @@ function setActiveConversation(convoId, convoData = null) {
     const header = document.getElementById('message-header');
     const partnerId = (convoData || conversationsCache.find(c => c.id === convoId) || {}).members?.find(m => m !== currentUser.uid);
     if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
+    header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
     listenToMessages(convoId);
 }
 
@@ -2039,6 +2067,8 @@ function initVideoFeed() {
     videosUnsubscribe = onSnapshot(refVideos, snap => {
         videosCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         renderVideoFeed(videosCache);
+        const videos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderVideoFeed(videos);
     });
 }
 
@@ -2057,11 +2087,19 @@ function renderVideoFeed(videos = []) {
         const tags = (video.hashtags || []).map(t => '#' + t).join(' ');
         card.innerHTML = `
             <video src="${video.videoURL}" playsinline loop muted preload="metadata" data-video-id="${video.id}"></video>
+    feed.innerHTML = '';
+    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+    videos.forEach(video => {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        card.innerHTML = `
+            <video src="${video.videoURL}" playsinline loop muted></video>
             <div class="video-meta">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
                         <div style="font-weight:800;">${escapeHtml(video.caption || '')}</div>
                         <div style="color:var(--text-muted); font-size:0.85rem;">${tags}</div>
+                        <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(t => '#' + t).join(' ')}</div>
                     </div>
                     <div style="display:flex; gap:8px;">
                         <button class="icon-pill" onclick="window.likeVideo('${video.id}')"><i class="ph ph-heart"></i> ${video.stats?.likes || 0}</button>
@@ -2073,6 +2111,16 @@ function renderVideoFeed(videos = []) {
         feed.appendChild(card);
         observer.observe(vidEl);
     });
+        feed.appendChild(card);
+    });
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const vid = entry.target;
+            if(entry.isIntersecting) { vid.play(); incrementVideoViews(vid.dataset.videoId); }
+            else vid.pause();
+        });
+    }, { threshold: 0.6 });
+    feed.querySelectorAll('video').forEach((v, idx) => { v.dataset.videoId = videos[idx].id; observer.observe(v); });
 }
 
 window.uploadVideo = async function() {
@@ -2109,6 +2157,19 @@ window.uploadVideo = async function() {
         console.error('Video upload failed', err);
         toast('Video upload failed. Please try again.', 'error');
     }
+    await uploadBytes(storageRef, file);
+    const videoURL = await getDownloadURL(storageRef);
+    await setDoc(doc(db, 'videos', videoId), {
+        ownerId: currentUser.uid,
+        caption,
+        hashtags,
+        createdAt: serverTimestamp(),
+        videoURL,
+        thumbURL: '',
+        visibility,
+        stats: { likes: 0, comments: 0, saves: 0, views: 0 }
+    });
+    toggleVideoUploadModal(false);
 };
 
 window.likeVideo = async function(videoId) {

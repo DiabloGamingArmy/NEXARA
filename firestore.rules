@@ -37,6 +37,11 @@ service cloud.firestore {
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
         allow read: if request.auth != null && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
         allow update, delete: if request.auth != null && request.auth.uid == resource.data.senderId;
+    }
+    match /conversations/{cid} {
+      allow read, write: if request.auth != null && request.auth.uid in resource.data.members;
+      match /messages/{mid} {
+        allow read, write: if request.auth != null && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
       }
     }
     match /videos/{vid} {
