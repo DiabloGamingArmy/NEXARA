@@ -1312,6 +1312,8 @@ function renderThreadComments(comments = []) {
 
     const renderCommentHtml = function(c, isReply) {
         const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
+        const parentCommentId = c.parentCommentId || c.parentId;
+        const isReply = parentCommentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
         const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
         const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
         const mediaHtml = c.mediaUrl
