@@ -343,34 +343,66 @@ if (typeof window.handleLogin !== 'function') {
     };
 }
 
-// --- Auth Functions ---
-window.handleLogin = async function(e) {
-    e.preventDefault();
-    try {
-        return localStorage.getItem('nexara-theme');
-    } catch(e) {
-        return null;
-    }
+// --- Theme Helpers (renamed to avoid applyTheme shadowing) ---
+function getStoredThemePreference() {
+    try { return localStorage.getItem('nexara-theme'); }
+    catch (e) { return null; }
 }
 
-function applyTheme(preference = 'system') {
-    const resolved = preference === 'system' ? getSystemTheme() : preference;
+function applyThemePreference(preference) {
+    if (!preference) preference = 'system';
+    var resolved = (preference === 'system') ? getSystemTheme() : preference;
     document.body.classList.toggle('light-mode', resolved === 'light');
     document.body.dataset.themePreference = preference;
-    try { localStorage.setItem('nexara-theme', preference); } catch(e) { console.warn('Theme storage blocked'); }
+    try { localStorage.setItem('nexara-theme', preference); }
+    catch (e) { console.warn('Theme storage blocked'); }
 }
 
-async function persistThemePreference(preference = 'system') {
+async function persistThemePreference(preference) {
+    if (!preference) preference = 'system';
     userProfile.theme = preference;
-    applyTheme(preference);
-    if(currentUser) {
+    applyThemePreference(preference);
+
+    if (currentUser) {
         try {
             await setDoc(doc(db, "users", currentUser.uid), { theme: preference }, { merge: true });
-        } catch(e) {
+        } catch (e) {
             console.warn('Theme save failed', e.message);
         }
     }
 }
+
+// --- Auth Functions ---
+window.handleLogin = async function (e) {
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
+
+    try {
+        var emailEl = document.getElementById('email');
+        var passEl  = document.getElementById('password');
+        var errEl   = document.getElementById('auth-error');
+
+        if (errEl) errEl.textContent = '';
+
+        var email = emailEl ? emailEl.value : '';
+        var pass  = passEl ? passEl.value : '';
+
+        if (!email || !pass) {
+            if (errEl) errEl.textContent = 'Please enter email and password.';
+            return;
+        }
+
+        var cred = await signInWithEmailAndPassword(auth, email, pass);
+
+        // Ensure user doc exists (your helper is above in your file)
+        if (typeof ensureUserDocument === 'function') {
+            await ensureUserDocument(cred.user);
+        }
+    } catch (err) {
+        var errEl2 = document.getElementById('auth-error');
+        if (errEl2) errEl2.textContent = err.message;
+        console.error(err);
+    }
+};
 
 window.handleSignup = async function(e) {
     e.preventDefault();
