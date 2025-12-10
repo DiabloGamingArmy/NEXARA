@@ -2074,54 +2074,85 @@ function initVideoFeed() {
 
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
-    if(!feed) return;
-    pauseAllVideos();
-    feed.innerHTML = '';
-    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+    if (!feed) return;
 
-    const observer = ensureVideoObserver();
+    if (typeof pauseAllVideos === 'function') pauseAllVideos();
+    feed.innerHTML = '';
+
+    if (!Array.isArray(videos) || videos.length === 0) {
+        feed.innerHTML = '<div class="empty-state">No videos yet.</div>';
+        return;
+    }
+
+    // Prefer your shared observer if it exists, otherwise create a local one.
+    const observer = (typeof ensureVideoObserver === 'function')
+        ? ensureVideoObserver()
+        : new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                const vid = entry.target;
+                if (entry.isIntersecting) {
+                    vid.play().catch(() => {});
+                    if (!vid.dataset.viewed) {
+                        vid.dataset.viewed = '1';
+                        if (typeof incrementVideoViews === 'function' && vid.dataset.videoId) {
+                            incrementVideoViews(vid.dataset.videoId);
+                        }
+                    }
+                } else {
+                    vid.pause();
+                }
+            });
+        }, { threshold: 0.6 });
 
     videos.forEach(video => {
         const card = document.createElement('div');
         card.className = 'video-card';
-        const tags = (video.hashtags || []).map(t => '#' + t).join(' ');
+
+        const tags = (video.hashtags || []).map(t => `#${t}`).join(' ');
+        const caption = (typeof escapeHtml === 'function')
+            ? escapeHtml(video.caption || '')
+            : (video.caption || '');
+
         card.innerHTML = `
-            <video src="${video.videoURL}" playsinline loop muted preload="metadata" data-video-id="${video.id}"></video>
-    feed.innerHTML = '';
-    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
-    videos.forEach(video => {
-        const card = document.createElement('div');
-        card.className = 'video-card';
-        card.innerHTML = `
-            <video src="${video.videoURL}" playsinline loop muted></video>
+            <video
+                src="${video.videoURL}"
+                playsinline
+                loop
+                muted
+                preload="metadata"
+                data-video-id="${video.id}"
+            ></video>
             <div class="video-meta">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <div style="font-weight:800;">${escapeHtml(video.caption || '')}</div>
+                        <div style="font-weight:800;">${caption}</div>
                         <div style="color:var(--text-muted); font-size:0.85rem;">${tags}</div>
-                        <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(t => '#' + t).join(' ')}</div>
                     </div>
                     <div style="display:flex; gap:8px;">
-                        <button class="icon-pill" onclick="window.likeVideo('${video.id}')"><i class="ph ph-heart"></i> ${video.stats?.likes || 0}</button>
-                        <button class="icon-pill" onclick="window.saveVideo('${video.id}')"><i class="ph ph-bookmark"></i></button>
+                        <button class="icon-pill" onclick="window.likeVideo('${video.id}')">
+                            <i class="ph ph-heart"></i> ${video.stats?.likes || 0}
+                        </button>
+                        <button class="icon-pill" onclick="window.saveVideo('${video.id}')">
+                            <i class="ph ph-bookmark"></i>
+                        </button>
                     </div>
                 </div>
-            </div>`;
+            </div>
+        `;
+
         const vidEl = card.querySelector('video');
-        feed.appendChild(card);
-        observer.observe(vidEl);
+        if (vidEl) {
+            // Keep dataset.videoId consistent for observers/incrementer.
+            vidEl.dataset.videoId = video.id;
+            feed.appendChild(card);
+            observer.observe(vidEl);
+        } else {
+            // Failsafe: still append card so UI doesn’t break.
+            feed.appendChild(card);
+        }
     });
-        feed.appendChild(card);
-    });
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            const vid = entry.target;
-            if(entry.isIntersecting) { vid.play(); incrementVideoViews(vid.dataset.videoId); }
-            else vid.pause();
-        });
-    }, { threshold: 0.6 });
-    feed.querySelectorAll('video').forEach((v, idx) => { v.dataset.videoId = videos[idx].id; observer.observe(v); });
 }
+
 
 window.uploadVideo = async function() {
     if(!requireAuth()) return;
