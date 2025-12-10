@@ -198,6 +198,24 @@ let videosCache = [];
 let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
+let postsUnsubscribe = null;
+
+if (!window.__activeUnsubscribes) window.__activeUnsubscribes = [];
+function trackSnapshot(unsub) {
+    if (typeof unsub === 'function') {
+        window.__activeUnsubscribes.push(unsub);
+    }
+    return unsub;
+}
+if (!window.__snapshotCleanupBound) {
+    window.__snapshotCleanupBound = true;
+    window.addEventListener('beforeunload', function() {
+        (window.__activeUnsubscribes || []).forEach(function(unsub) {
+            try { unsub(); } catch (e) {}
+        });
+        window.__activeUnsubscribes = [];
+    });
+}
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -597,10 +615,11 @@ async function fetchMissingProfiles(posts) {
 }
 
 function startDataListener() {
+    if (postsUnsubscribe) postsUnsubscribe();
     const postsRef = collection(db, 'posts');
     const q = query(postsRef);
 
-    onSnapshot(q, function (snapshot) {
+    postsUnsubscribe = trackSnapshot(onSnapshot(q, function (snapshot) {
         const previousCache = { ...postSnapshotCache };
         const nextCache = {};
         allPosts = [];
@@ -639,7 +658,7 @@ function startDataListener() {
         });
 
         postSnapshotCache = nextCache;
-    });
+    }));
 
     // Start Live Stream Listener (Mock)
     if (typeof renderLive === 'function') renderLive();
@@ -653,7 +672,7 @@ function startCategoryStreams(uid) {
     destinationPickerError = '';
 
     const categoryRef = collection(db, 'categories');
-    categoryUnsubscribe = onSnapshot(categoryRef, function (snapshot) {
+    categoryUnsubscribe = trackSnapshot(onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
@@ -670,10 +689,10 @@ function startCategoryStreams(uid) {
         destinationPickerError = 'Unable to load destinations.';
         renderDestinationField();
         renderDestinationPicker();
-    });
+    }));
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    membershipUnsubscribe = onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = trackSnapshot(onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
@@ -687,7 +706,7 @@ function startCategoryStreams(uid) {
         renderFeed();
     }, function () {
         console.warn('Unable to load destination memberships');
-    });
+    }));
 }
 
 function getCategorySnapshot(categoryId) {
@@ -1238,11 +1257,11 @@ async function startUserReviewListener(uid) {
         return; // Skip listener when access is not allowed
     }
 
-    onSnapshot(q, handleSnapshot, function (error) {
+    trackSnapshot(onSnapshot(q, handleSnapshot, function (error) {
         if (error.code !== 'permission-denied') {
             console.log("Review listener note:", error.message);
         }
-    });
+    }));
 }
 
 // --- Navigation Logic ---
@@ -2015,8 +2034,8 @@ window.openPeerReview = function(postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
     const q = query(reviewsRef); 
 
-    onSnapshot(q, function(snapshot) {
-        const container = document.getElementById('review-list'); 
+    trackSnapshot(onSnapshot(q, function(snapshot) {
+        const container = document.getElementById('review-list');
         container.innerHTML = "";
 
         let scores = { verified: 0, citation: 0, misleading: 0, total: 0 };
@@ -2093,7 +2112,7 @@ window.openPeerReview = function(postId) {
             document.getElementById('review-bar').innerHTML = `<div style="width:100%; background:#333; height:8px;"></div>`; 
             document.getElementById('review-stats-text').textContent = "No peer reviews yet."; 
         }
-    });
+    }));
 }
 
 // FIX: Review Submission Logic Stabilized
@@ -2178,7 +2197,7 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = onSnapshot(q, function(snapshot) {
+    threadUnsubscribe = trackSnapshot(onSnapshot(q, function(snapshot) {
         const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
@@ -2186,7 +2205,7 @@ function attachThreadComments(postId) {
     }, function(error) {
         console.error('Comments load error', error);
         container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
-    });
+    }));
 }
 
 const renderCommentHtml = function(c, isReply) {
@@ -3356,10 +3375,10 @@ function initConversations() {
     if(!requireAuth()) return;
     if(conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = onSnapshot(convRef, function(snap) {
+    conversationsUnsubscribe = trackSnapshot(onSnapshot(convRef, function(snap) {
         conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderConversationList();
-    });
+    }));
 }
 
 function renderConversationList() {
@@ -3392,10 +3411,10 @@ function setActiveConversation(convoId, convoData = null) {
 function listenToMessages(convoId) {
     if(messagesUnsubscribe) messagesUnsubscribe();
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = onSnapshot(msgRef, function(snap) {
+    messagesUnsubscribe = trackSnapshot(onSnapshot(msgRef, function(snap) {
         const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderMessages(msgs);
-    });
+    }));
 }
 
 function renderMessages(msgs = []) {
@@ -3485,10 +3504,10 @@ function pauseAllVideos() {
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = onSnapshot(refVideos, function(snap) {
+    videosUnsubscribe = trackSnapshot(onSnapshot(refVideos, function(snap) {
         videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderVideoFeed(videosCache);
-    });
+    }));
 }
 
 function renderVideoFeed(videos = []) {
@@ -3636,7 +3655,7 @@ window.toggleGoLiveModal = function(show = true) { const modal = document.getEle
 function renderLiveSessions() {
     if(liveSessionsUnsubscribe) return;
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
-    liveSessionsUnsubscribe = onSnapshot(liveRef, function(snap) {
+    liveSessionsUnsubscribe = trackSnapshot(onSnapshot(liveRef, function(snap) {
         const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const container = document.getElementById('live-grid-container');
         if(!container) return;
@@ -3648,7 +3667,7 @@ function renderLiveSessions() {
             card.innerHTML = `<div class="live-card-title">${escapeHtml(s.title || 'Live Session')}</div><div class="live-card-meta"><span>${escapeHtml(s.category || '')}</span><span>${(s.tags||[]).join(', ')}</span></div><div style="margin-top:10px;"><button class="icon-pill" onclick="window.openLiveSession('${s.id}')"><i class="ph ph-play"></i> Watch</button></div>`;
             container.appendChild(card);
         });
-    });
+    }));
 }
 
 window.createLiveSession = async function() {
@@ -3681,7 +3700,7 @@ window.openLiveSession = function(sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
-    onSnapshot(chatRef, function(snap) {
+    trackSnapshot(onSnapshot(chatRef, function(snap) {
         const chatEl = document.getElementById('live-chat');
         if(!chatEl) return;
         chatEl.innerHTML = '';
@@ -3691,7 +3710,7 @@ function listenLiveChat(sessionId) {
             row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
             chatEl.appendChild(row);
         });
-    });
+    }));
 }
 
 window.sendLiveChat = async function(sessionId) {
@@ -3721,7 +3740,7 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if(staffRequestsUnsub) return;
-    staffRequestsUnsub = onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+    staffRequestsUnsub = trackSnapshot(onSnapshot(collection(db, 'verificationRequests'), function(snap) {
         const container = document.getElementById('verification-requests');
         if(!container) return;
         container.innerHTML = '';
@@ -3732,7 +3751,7 @@ function listenVerificationRequests() {
             card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks||[]).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
             container.appendChild(card);
         });
-    });
+    }));
 }
 
 window.approveVerification = async function(requestId, userId) {
@@ -3748,7 +3767,7 @@ window.denyVerification = async function(requestId) {
 
 function listenReports() {
     if(staffReportsUnsub) return;
-    staffReportsUnsub = onSnapshot(collection(db, 'reports'), function(snap) {
+    staffReportsUnsub = trackSnapshot(onSnapshot(collection(db, 'reports'), function(snap) {
         const container = document.getElementById('reports-queue');
         if(!container) return;
         container.innerHTML = '';
@@ -3759,12 +3778,12 @@ function listenReports() {
             card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.type || 'report'}</div><div style="color:var(--text-muted); font-size:0.9rem;">${data.reason || ''}</div></div>`;
             container.appendChild(card);
         });
-    });
+    }));
 }
 
 function listenAdminLogs() {
     if(staffLogsUnsub) return;
-    staffLogsUnsub = onSnapshot(collection(db, 'adminLogs'), function(snap) {
+    staffLogsUnsub = trackSnapshot(onSnapshot(collection(db, 'adminLogs'), function(snap) {
         const container = document.getElementById('admin-logs');
         if(!container) return;
         container.innerHTML = '';
@@ -3774,7 +3793,7 @@ function listenAdminLogs() {
             row.textContent = `${data.actorId}: ${data.action}`;
             container.appendChild(row);
         });
-    });
+    }));
 }
 
 // --- Verification Request ---
