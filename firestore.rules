@@ -12,6 +12,9 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.founder == true;
     }
 
+    // Backwards-compatible alias
+    function isFounder() { return hasFounderClaim(); }
+
     // -------------------------
     // User roles (Firestore-based, but NOT for founder)
     // -------------------------
@@ -48,19 +51,19 @@ service cloud.firestore {
     }
 
     function isCategoryMod(categoryId) {
-      if (hasFounderClaim()) return true;
-      if (!isSignedIn()) return false;
-
       let memberPath = /databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid);
+      let m = exists(memberPath) ? get(memberPath).data : null;
 
-      return exists(memberPath)
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(memberPath)
         && (
           // Newer model: roles: ['owner','mod',...]
-          (get(memberPath).data.roles is list
-            && (('owner' in get(memberPath).data.roles) || ('mod' in get(memberPath).data.roles)))
+          ((m.roles is list) && (('owner' in m.roles) || ('mod' in m.roles)))
           // Older model: role: 'owner'|'mod'
-          || (get(memberPath).data.role in ['owner','mod'])
-        );
+          || (m.role in ['owner','mod'])
+        )
+      );
     }
 
     // Prevent clients from escalating member roles for themselves on create/update.
@@ -199,20 +202,9 @@ service cloud.firestore {
       allow write: if isSignedIn()
         && request.auth.uid == request.resource.data.ownerId;
 
-      match /likes/{uid} {
-        allow read: if true;
-        allow write: if isSignedIn() && request.auth.uid == uid;
-      }
-
-      match /saves/{uid} {
-        allow read: if isSignedIn() && request.auth.uid == uid;
-        allow write: if isSignedIn() && request.auth.uid == uid;
-      }
-
-      match /comments/{cid} {
-        allow read: if true;
-        allow write: if isSignedIn();
-      }
+      match /likes/{uid} { allow read: if true; allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /comments/{cid} { allow read: if true; allow write: if isSignedIn(); }
     }
 
     // -------------------------
@@ -220,14 +212,8 @@ service cloud.firestore {
     // -------------------------
     match /liveSessions/{sid} {
       allow read: if true;
-
-      allow write: if isSignedIn()
-        && request.auth.uid == request.resource.data.hostId;
-
-      match /chat/{mid} {
-        allow read: if true;
-        allow write: if isSignedIn();
-      }
+      allow write: if isSignedIn() && request.auth.uid == request.resource.data.hostId;
+      match /chat/{mid} { allow read: if true; allow write: if isSignedIn(); }
     }
 
     // -------------------------
