@@ -235,6 +235,11 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 }
 .discover-pill:hover { background: var(--bg-hover); color: var(--text-main); box-shadow: 0 12px 24px rgba(0, 120, 150, 0.15); transform: translateY(-1px); }
 .discover-pill.active { background: rgba(0, 242, 234, 0.1); color: var(--primary); border-color: var(--primary); font-weight: 600; }
+.discover-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:1rem; }
+.discover-pill-row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.discover-dropdown { display:flex; align-items:center; gap:6px; background: var(--bg-card); border: 1px solid var(--border); padding: 6px 10px; border-radius: 10px; }
+.discover-select { background: var(--bg-body); border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; padding: 6px 10px; }
+.discover-section-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 
 /* Saved Pill Styles */
 .saved-pill {
@@ -656,4 +661,6 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 
 .checkbox-row { font-size: 0.9rem; color: var(--text-muted); display:flex; gap:6px; align-items:center; }
 .verified-badge { color: #00f2ea; font-size: 0.85rem; }
-.category-helper { margin-top: 8px; font-size: 0.85rem; color: var(--text-muted); }
+.category-helper { margin: 8px auto 0; font-size: 0.85rem; color: var(--text-muted); display: none; justify-content: center; }
+.category-helper.error { color: #ff3d3d; background: rgba(255, 61, 61, 0.1); border: 1px solid rgba(255, 61, 61, 0.35); padding: 8px 12px; border-radius: 10px; max-width: 720px; width: calc(100% - 24px); }
+.category-helper:not(.error) { background: transparent; border: none; padding: 0; }
