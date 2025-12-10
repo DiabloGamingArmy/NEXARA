@@ -48,37 +48,18 @@
         <div class="x-modal-content">
             <div class="x-modal-header">
                 <button onclick="window.toggleCreateModal(false)" class="x-close-btn">&times;</button>
-                <div class="category-current">
-                    <div class="category-current-label">Posting to: <span id="category-current-label">Loading...</span></div>
-                </div>
-            </div>
-
-            <div id="category-center" class="category-center">
-                <div class="category-center-top">
-                    <div class="category-tabs">
-                        <button class="icon-pill" onclick="window.setCategoryTab('official')">Official (Verified)</button>
-                        <button class="icon-pill" onclick="window.setCategoryTab('community')">Community</button>
+                <button class="destination-field" type="button" onclick="window.openDestinationPicker()" aria-label="Select posting destination">
+                    <div class="destination-field-label">Posting to</div>
+                    <div class="destination-field-value">
+                        <span id="destination-current-label">Select...</span>
+                        <span id="destination-current-verified" class="verified-badge" style="display:none;">✔</span>
                     </div>
-                    <button class="icon-pill" onclick="document.getElementById('create-category-form').style.display='block'">
-                        <i class="ph ph-plus"></i> Create Category
-                    </button>
-                </div>
-                <div id="category-list" class="category-list"></div>
-                <div id="category-rules" class="category-rules"></div>
-                <div id="category-post-helper" class="category-helper" style="display:none;"></div>
+                    <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
+                    <div id="destination-loading-spinner" class="inline-spinner" aria-hidden="true"></div>
+                </button>
             </div>
 
-            <div id="create-category-form" class="category-create-form">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-                    <h4 style="margin:0;">Create Community Category</h4>
-                    <button class="x-close-btn" onclick="document.getElementById('create-category-form').style.display='none'">&times;</button>
-                </div>
-                <input type="text" id="new-category-name" class="form-input" placeholder="Category name">
-                <textarea id="new-category-description" class="form-input" placeholder="Description"></textarea>
-                <textarea id="new-category-rules" class="form-input" placeholder="Additional rules (one per line)"></textarea>
-                <label class="checkbox-row"><input type="checkbox" id="new-category-public" checked> Publicly discoverable</label>
-                <button class="create-btn-sidebar" onclick="window.handleCreateCategoryForm()" style="width:100%;">Create</button>
-            </div>
+            <div id="destination-helper" class="category-helper"></div>
 
             <div class="x-body">
                 <div id="modal-user-avatar" class="x-avatar"></div>
@@ -128,6 +109,30 @@
                 </div>
                 <button id="publishBtn" onclick="window.createPost()" class="x-post-btn">Post</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Destination Picker Modal -->
+    <div id="destination-picker-modal" class="modal-overlay">
+        <div class="modal-content destination-picker">
+            <div class="destination-picker-header">
+                <div>
+                    <div class="destination-picker-title">Choose where to post</div>
+                    <div class="destination-picker-subtitle">Select a destination for your post.</div>
+                </div>
+                <button onclick="window.closeDestinationPicker()" class="x-close-btn" aria-label="Close destination picker">&times;</button>
+            </div>
+
+            <div id="destination-picker-tabs" class="destination-tabs"></div>
+
+            <div class="destination-search">
+                <i class="ph ph-magnifying-glass"></i>
+                <input id="destination-search-input" type="text" placeholder="Search destinations" aria-label="Search destinations">
+            </div>
+
+            <div id="destination-create-area"></div>
+
+            <div id="destination-results" class="destination-results"></div>
         </div>
     </div>
 
@@ -456,14 +461,32 @@
                 <div style="padding: 1rem 1rem 0 1rem;">
                     <h2 style="font-weight:800; font-size:1.5rem; margin-bottom:1rem;">Discover</h2>
                     <input type="text" class="form-input" placeholder="Search users, posts..." oninput="window.handleSearchInput(event)">
-                    
-                    <div style="display:flex; gap:10px; margin-bottom:1rem; overflow-x:auto;">
-                        <button class="discover-pill active" onclick="window.setDiscoverFilter('All Results')">All Results</button>
-                        <button class="discover-pill" onclick="window.setDiscoverFilter('Recent Posts')">Recent Posts</button>
-                        <button class="discover-pill" onclick="window.setDiscoverFilter('Popular Posts')">Popular Posts</button>
-                        <button class="discover-pill" onclick="window.setDiscoverFilter('Users')">Users</button>
-                        <button class="discover-pill" onclick="window.setDiscoverFilter('Videos')">Videos</button>
-                        <button class="discover-pill" onclick="window.setDiscoverFilter('Livestreams')">Livestreams</button>
+
+                    <div class="discover-controls">
+                        <div class="discover-pill-row">
+                            <button class="discover-pill active" data-filter="All Results" onclick="window.setDiscoverFilter('All Results')">All Results</button>
+                            <button class="discover-pill" data-filter="Posts" onclick="window.setDiscoverFilter('Posts')">Posts</button>
+                            <button class="discover-pill" data-filter="Categories" onclick="window.setDiscoverFilter('Categories')">Categories</button>
+                            <button class="discover-pill" data-filter="Users" onclick="window.setDiscoverFilter('Users')">Users</button>
+                            <button class="discover-pill" data-filter="Videos" onclick="window.setDiscoverFilter('Videos')">Videos</button>
+                            <button class="discover-pill" data-filter="Livestreams" onclick="window.setDiscoverFilter('Livestreams')">Livestreams</button>
+                        </div>
+                        <div id="discover-post-sort" class="discover-dropdown" style="display:none;">
+                            <label for="posts-sort-select">Sort:</label>
+                            <select id="posts-sort-select" class="discover-select" onchange="window.handlePostsSortChange(event)">
+                                <option value="recent">Recent</option>
+                                <option value="popular">Popular</option>
+                            </select>
+                        </div>
+                        <div id="discover-category-sort" class="discover-dropdown" style="display:none;">
+                            <label for="categories-sort-select">Categories:</label>
+                            <select id="categories-sort-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
+                                <option value="verified_first">Verified first</option>
+                                <option value="verified_only">Verified only</option>
+                                <option value="community_first">Community first</option>
+                                <option value="community_only">Community only</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <div id="discover-results" style="padding: 0 1rem 1rem 1rem; max-width:800px; margin:0 auto;">
