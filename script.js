@@ -1322,48 +1322,85 @@ function attachThreadComments(postId) {
     });
 }
 
-function renderThreadComments(comments = []) {
-    const container = document.getElementById('thread-stream');
-    if(!container) return;
-    threadComments = comments.slice();
-    container.innerHTML = "";
+const renderCommentHtml = function(c, isReply) {
+  const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
 
-    if (comments.length === 0) {
-        container.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--text-muted);">No comments yet. Be the first to reply!</div>`;
-        return;
-    }
+  const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
+  const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
-    const { roots, byParent } = groupCommentsByParent(comments);
+  const avatarBg = cAuthor.photoURL
+    ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;`
+    : `background:${getColorForUser(cAuthor.name || 'U')}`;
 
-    const renderCommentHtml = function(c, isReply) {
-        const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
-        const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
-        const isDisliked = c.dislikedBy && c.dislikedBy.includes(currentUser?.uid);
-        const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
-        const mediaHtml = c.mediaUrl
-            ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>`
-            : "";
+  const parentCommentId = c.parentCommentId || c.parentId;
+  const replyStyle = (isReply || !!parentCommentId)
+    ? 'margin-left: 40px; border-left: 2px solid var(--border);'
+    : '';
 
-        const replyStyle = isReply ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
+  const mediaHtml = c.mediaUrl
+    ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')">
+         <img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;">
+       </div>`
+    : "";
 
-        return `
-            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
-                <div style="display:flex; gap:10px; align-items:flex-start;">
-                    <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>
-                    <div style="flex:1;">
-                        <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
-                <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
-            ${mediaHtml}
-                        <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
-                           <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
-                            <button data-role="comment-like" data-comment-id="${c.id}" data-liked="${isLiked}" data-disliked="${isDisliked}" onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span class="comment-like-count" id="comment-like-count-${c.id}">${c.likes || 0}</span></button>
-                            <button data-role="comment-dislike" data-comment-id="${c.id}" data-liked="${isLiked}" data-disliked="${isDisliked}" onclick="window.toggleCommentDislike('${c.id}', event)" style="background:none; border:none; color:${isDisliked ? '#ff3d3d' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span class="comment-dislike-count" id="comment-dislike-count-${c.id}">${c.dislikes || 0}</span></button>
-                        </div>
-                        <div id="reply-slot-${c.id}"></div>
-                  </div>
-                </div>
-            </div>`;
-    };
+  return `
+    <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
+      <div style="display:flex; gap:10px; align-items:flex-start;">
+        <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">
+          ${cAuthor.photoURL ? '' : (cAuthor.name || 'U')[0]}
+        </div>
+
+        <div style="flex:1;">
+          <div style="font-size:0.9rem; margin-bottom:2px;">
+            <strong>${escapeHtml(cAuthor.name || 'User')}</strong>
+            <span style="color:var(--text-muted); font-size:0.8rem;">
+              • ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}
+            </span>
+          </div>
+
+          <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">
+            ${escapeHtml(c.text || '')}
+          </div>
+
+          ${mediaHtml}
+
+          <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
+            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name || 'User')}')"
+              style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+              <i class="ph ph-arrow-bend-up-left"></i> Reply
+            </button>
+
+            <button
+              data-role="comment-like"
+              data-comment-id="${c.id}"
+              data-liked="${isLiked ? 'true' : 'false'}"
+              data-disliked="${isDisliked ? 'true' : 'false'}"
+              onclick="window.toggleCommentLike('${c.id}', event)"
+              style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+              <i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i>
+              <span class="comment-like-count" id="comment-like-count-${c.id}">${c.likes || 0}</span>
+            </button>
+
+            <button
+              data-role="comment-dislike"
+              data-comment-id="${c.id}"
+              data-liked="${isLiked ? 'true' : 'false'}"
+              data-disliked="${isDisliked ? 'true' : 'false'}"
+              onclick="window.toggleCommentDislike('${c.id}', event)"
+              style="background:none; border:none; color:${isDisliked ? '#ff3d3d' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+              <i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i>
+              <span class="comment-dislike-count" id="comment-dislike-count-${c.id}">${c.dislikes || 0}</span>
+            </button>
+          </div>
+
+          <div id="reply-slot-${c.id}"></div>
+        </div>
+      </div>
+    </div>`;
+};
+
+
+ 
     roots.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
     roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
 
@@ -1396,12 +1433,14 @@ function renderThreadComments(comments = []) {
     }
 }
 
+
 function renderThreadMainPost(postId) {
     const container = document.getElementById('thread-main-post');
     const post = allPosts.find(function(p) { return p.id === postId; });
     if(!post) return;
 
     const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
     const isFollowingUser = followedUsers.has(post.userId);
     const isFollowingTopic = followedCategories.has(post.category);
@@ -1645,63 +1684,76 @@ window.toggleDislike = async function(postId, event) {
 }
 
 window.toggleCommentDislike = async function(commentId, event) {
-    if(event) event.stopPropagation();
-    if(!activePostId || !currentUser) return;
-    const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
-    const btn = event?.currentTarget;
-    let comment = threadComments.find(function(c) { return c.id === commentId; });
+  if (event) event.stopPropagation();
+  if (!activePostId || !currentUser) return;
 
-    if(!comment) {
-        try {
-            const snap = await getDoc(commentRef);
-            if (snap.exists()) comment = { id: commentId, ...snap.data() };
-        } catch (e) { console.error(e); }
-    }
+  const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
+  const btn = event?.currentTarget;
 
-    let likes = comment?.likes || 0;
-    let dislikes = comment?.dislikes || 0;
-    let likedBy = comment?.likedBy ? comment.likedBy.slice() : [];
-    let dislikedBy = comment?.dislikedBy ? comment.dislikedBy.slice() : [];
+  let comment = threadComments.find(function(c) { return c.id === commentId; });
 
-    const wasDisliked = dislikedBy.includes(currentUser.uid) || (btn?.dataset.disliked === 'true');
-    const hadLiked = likedBy.includes(currentUser.uid) || (btn?.dataset.liked === 'true');
-
-    if (wasDisliked) {
-        dislikes = Math.max(0, dislikes - 1);
-        dislikedBy = dislikedBy.filter(function(uid) { return uid !== currentUser.uid; });
-    } else {
-        dislikes = dislikes + 1;
-        if (!dislikedBy.includes(currentUser.uid)) dislikedBy.push(currentUser.uid);
-        if (hadLiked) {
-            likes = Math.max(0, likes - 1);
-            likedBy = likedBy.filter(function(uid) { return uid !== currentUser.uid; });
-        }
-    }
-
-    if (comment) {
-        comment.likes = likes;
-        comment.dislikes = dislikes;
-        comment.likedBy = likedBy;
-        comment.dislikedBy = dislikedBy;
-    }
-
-    const isLikedNow = likedBy.includes(currentUser.uid);
-    const isDislikedNow = dislikedBy.includes(currentUser.uid);
-    updateCommentReactionUI(commentId, likes, dislikes, isLikedNow, isDislikedNow);
-
+  if (!comment) {
     try {
-        if (wasDisliked) {
-            await updateDoc(commentRef, { dislikes: increment(-1), dislikedBy: arrayRemove(currentUser.uid) });
-        } else {
-            const payload = { dislikes: increment(1), dislikedBy: arrayUnion(currentUser.uid) };
-            if (hadLiked) {
-                payload.likes = increment(-1);
-                payload.likedBy = arrayRemove(currentUser.uid);
-            }
-            await updateDoc(commentRef, payload);
-        }
-    } catch(e) { console.error(e); }
-}
+      const snap = await getDoc(commentRef);
+      if (snap.exists()) comment = { id: commentId, ...snap.data() };
+    } catch (e) { console.error(e); }
+  }
+
+  let likes = comment?.likes || 0;
+  let dislikes = comment?.dislikes || 0;
+  let likedBy = Array.isArray(comment?.likedBy) ? comment.likedBy.slice() : [];
+  let dislikedBy = Array.isArray(comment?.dislikedBy) ? comment.dislikedBy.slice() : [];
+
+  const wasDisliked = dislikedBy.includes(currentUser.uid) || (btn?.dataset.disliked === 'true');
+  const hadLiked = likedBy.includes(currentUser.uid) || (btn?.dataset.liked === 'true');
+
+  if (wasDisliked) {
+    dislikes = Math.max(0, dislikes - 1);
+    dislikedBy = dislikedBy.filter(function(uid) { return uid !== currentUser.uid; });
+  } else {
+    dislikes = dislikes + 1;
+    if (!dislikedBy.includes(currentUser.uid)) dislikedBy.push(currentUser.uid);
+
+    if (hadLiked) {
+      likes = Math.max(0, likes - 1);
+      likedBy = likedBy.filter(function(uid) { return uid !== currentUser.uid; });
+    }
+  }
+
+  // update local cache + UI immediately
+  if (comment) {
+    comment.likes = likes;
+    comment.dislikes = dislikes;
+    comment.likedBy = likedBy;
+    comment.dislikedBy = dislikedBy;
+  }
+
+  const isLikedNow = likedBy.includes(currentUser.uid);
+  const isDislikedNow = dislikedBy.includes(currentUser.uid);
+  updateCommentReactionUI(commentId, likes, dislikes, isLikedNow, isDislikedNow);
+
+  try {
+    if (wasDisliked) {
+      await updateDoc(commentRef, {
+        dislikes: increment(-1),
+        dislikedBy: arrayRemove(currentUser.uid)
+      });
+    } else {
+      const payload = {
+        dislikes: increment(1),
+        dislikedBy: arrayUnion(currentUser.uid)
+      };
+      if (hadLiked) {
+        payload.likes = increment(-1);
+        payload.likedBy = arrayRemove(currentUser.uid);
+      }
+      await updateDoc(commentRef, payload);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+};
+
 
 // --- Discovery & Search ---
 window.renderDiscover = async function() {
