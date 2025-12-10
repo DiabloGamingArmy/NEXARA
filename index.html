@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nexara: Stream, Socialize, Strive</title>
+    <title>Nexera: Stream, Socialize, Strive</title>
     <!-- codex connection successful. -->
 
     <!-- Tailwind for utilities -->
@@ -17,13 +17,13 @@
 <body>
 
     <!-- Loading -->
-    <div id="loading-overlay"><div class="spike-logo-load nexara-gradient-text">⚡</div><div style="color:var(--text-muted);">Initializing Nexara...</div></div>
+    <div id="loading-overlay"><div class="spike-logo-load nexera-gradient-text">⚡</div><div style="color:var(--text-muted);">Initializing Nexera...</div></div>
 
     <!-- Auth -->
     <div id="auth-screen">
-        <div class="spike-logo-load nexara-gradient-text">⚡</div>
+        <div class="spike-logo-load nexera-gradient-text">⚡</div>
         <div class="auth-box">
-            <h2 class="nexara-gradient-text" style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">NEXARA</h2>
+            <h2 class="nexera-gradient-text" style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">NEXERA</h2>
             <p style="color:var(--text-muted); margin-bottom: 1.5rem;">Enter the stream.</p>
             <input type="email" id="email" class="form-input" placeholder="Email">
             <input type="password" id="password" class="form-input" placeholder="Password">
@@ -231,7 +231,7 @@
             <label class="settings-label">Caption</label>
             <textarea id="video-caption" class="form-input" rows="2"></textarea>
             <label class="settings-label">Hashtags (comma separated)</label>
-            <input id="video-tags" class="form-input" placeholder="#nexara,#coding">
+            <input id="video-tags" class="form-input" placeholder="#nexera,#coding">
             <label class="settings-label">Visibility</label>
             <select id="video-visibility" class="form-input"><option value="public">Public</option><option value="private">Private</option></select>
             <button class="create-btn-sidebar" onclick="window.uploadVideo()">Publish</button>
@@ -305,8 +305,8 @@
     <!-- App Layout -->
     <div id="app-layout" class="app-layout">
         <nav class="sidebar-left glass-panel">
-            <div class="nexara-gradient-text" style="font-size:1.8rem; font-weight:900; margin-bottom:2rem; cursor:pointer; display:flex; align-items:center; gap:10px;" onclick="window.navigateTo('feed')">
-                <i class="ph-fill ph-asterisk-simple"></i> Nexara
+            <div class="nexera-gradient-text" style="font-size:1.8rem; font-weight:900; margin-bottom:2rem; cursor:pointer; display:flex; align-items:center; gap:10px;" onclick="window.navigateTo('feed')">
+                <i class="ph-fill ph-asterisk-simple"></i> Nexera
             </div>
             <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i class="ph-bold ph-house"></i> Home</a>
             <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i> Live</a>
@@ -477,12 +477,12 @@
                 </div>
             </div>
             
-            <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexara Network</div>
+            <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexera Network</div>
         </aside>
     </div>
 
     <!-- Main JS logic -->
-    <script type="module" src="script.js"></script>
+    <script type="module" src="debug.js"></script>
 
 </body>
 </html>
