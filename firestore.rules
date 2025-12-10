@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /posts/{postId} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == request.resource.data.userId;
+    }
+    match /conversations/{cid} {
+      allow read, write: if request.auth != null && request.auth.uid in resource.data.members;
+      match /messages/{mid} {
+        allow read, write: if request.auth != null && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
+      }
+    }
+    match /videos/{vid} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == request.resource.data.ownerId;
+      match /likes/{uid} { allow read: if true; allow write: if request.auth != null && request.auth.uid == uid; }
+      match /saves/{uid} { allow read: if request.auth != null && request.auth.uid == uid; allow write: if request.auth != null && request.auth.uid == uid; }
+      match /comments/{cid} { allow read: if true; allow write: if request.auth != null; }
+    }
+    match /liveSessions/{sid} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == request.resource.data.hostId;
+      match /chat/{mid} { allow read: if true; allow write: if request.auth != null; }
+    }
+    match /verificationRequests/{rid} {
+      allow write: if request.auth != null && request.auth.uid == request.resource.data.userId;
+      allow read: if request.auth != null && (request.auth.token.role in ['staff','admin']);
+    }
+    match /reports/{reportId} {
+      allow create: if request.auth != null;
+      allow read, update: if request.auth != null && (request.auth.token.role in ['staff','admin']);
+    }
+    match /adminLogs/{logId} {
+      allow read, write: if request.auth != null && (request.auth.token.role in ['staff','admin']);
+    }
+  }
+}

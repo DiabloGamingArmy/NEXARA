@@ -84,9 +84,19 @@ let userProfile = {
 // Thread & View State
 let activePostId = null;
 let activeReplyId = null; 
-let threadUnsubscribe = null; 
-let viewingUserId = null; 
+let threadUnsubscribe = null;
+let viewingUserId = null;
 let currentReviewId = null;
+let conversationsUnsubscribe = null;
+let messagesUnsubscribe = null;
+let activeConversationId = null;
+let conversationsCache = [];
+let activeMessageUpload = null;
+let videosUnsubscribe = null;
+let liveSessionsUnsubscribe = null;
+let staffRequestsUnsub = null;
+let staffReportsUnsub = null;
+let staffLogsUnsub = null;
 
 // --- Navigation Stack ---
 let navStack = [];
@@ -152,6 +162,27 @@ const THEMES = {
     'Gaming': '#7000ff',     'News': '#ff3d3d',       'Music': '#00bfff'
 };
 
+// Shared state + render helpers
+window.getCurrentUser = () => currentUser;
+window.getUserDoc = async (uid) => getDoc(doc(db, 'users', uid));
+window.requireAuth = () => {
+    if(!currentUser) {
+        document.getElementById('auth-screen').style.display = 'flex';
+        document.getElementById('app-layout').style.display = 'none';
+        return false;
+    }
+    return true;
+};
+window.setView = (name) => window.navigateTo(name);
+window.toast = (msg, type = 'info') => {
+    console.log(`[${type}]`, msg);
+    const overlay = document.createElement('div');
+    overlay.textContent = msg;
+    overlay.className = 'toast-msg';
+    document.body.appendChild(overlay);
+    setTimeout(() => overlay.remove(), 2500);
+};
+
 // --- Initialization & Auth Listener ---
 function initApp() {
     onAuthStateChanged(auth, async (user) => {
@@ -164,10 +195,9 @@ function initApp() {
             console.log("User logged in:", user.uid);
 
             try {
+                const ensuredSnap = await ensureUserDocument(user);
+                const docSnap = ensuredSnap;
                 // Fetch User Profile
-                const docRef = doc(db, "users", user.uid);
-                const docSnap = await getDoc(docRef);
-
                 if (docSnap.exists()) {
                     userProfile = { ...userProfile, ...docSnap.data() };
                     userCache[user.uid] = userProfile;
@@ -181,6 +211,8 @@ function initApp() {
                     if (userProfile.following) {
                         userProfile.following.forEach(uid => followedUsers.add(uid));
                     }
+                    const staffNav = document.getElementById('nav-staff');
+                    if(staffNav) staffNav.style.display = (userProfile.role === 'staff' || userProfile.role === 'admin') ? 'flex' : 'none';
                 } else {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
@@ -188,6 +220,8 @@ function initApp() {
                     const storedTheme = getStoredThemePreference() || userProfile.theme || 'system';
                     userProfile.theme = storedTheme;
                     applyTheme(storedTheme);
+                    const staffNav = document.getElementById('nav-staff');
+                    if(staffNav) staffNav.style.display = 'none';
                 }
             } catch (e) { 
                 console.error("Profile Load Error", e); 
@@ -257,6 +291,29 @@ async function persistThemePreference(preference = 'system') {
     }
 }
 
+async function ensureUserDocument(user) {
+    const ref = doc(db, "users", user.uid);
+    const snap = await getDoc(ref);
+    const now = serverTimestamp();
+    if(!snap.exists()) {
+        await setDoc(ref, {
+            displayName: user.displayName || "Nexara User",
+            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0,6)}`,
+            photoURL: user.photoURL || "",
+            bio: "",
+            website: "",
+            region: "",
+            email: user.email || "",
+            role: user.role || "user",
+            createdAt: now,
+            updatedAt: now
+        }, { merge: true });
+        return await getDoc(ref);
+    }
+    await setDoc(ref, { updatedAt: now }, { merge: true });
+    return await getDoc(ref);
+}
+
 function shouldRerenderThread(newData, prevData = {}) {
     const fieldsToWatch = ['title', 'content', 'mediaUrl', 'type', 'category', 'trustScore'];
     return fieldsToWatch.some(key => newData[key] !== prevData[key]);
@@ -278,16 +335,22 @@ window.handleSignup = async (e) => {
         const cred = await createUserWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
         // Create initial user document
         await setDoc(doc(db, "users", cred.user.uid), {
-            name: "New Explorer", 
-            username: cred.user.email.split('@')[0], 
-            email: cred.user.email, 
-            joined: serverTimestamp(), 
-            savedPosts: [], 
-            followersCount: 0, 
-            following: []
+            displayName: "New Explorer",
+            username: cred.user.email.split('@')[0],
+            email: cred.user.email,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            savedPosts: [],
+            followersCount: 0,
+            following: [],
+            photoURL: "",
+            bio: "",
+            website: "",
+            region: "",
+            role: "user"
         });
-    } catch (err) { 
-        document.getElementById('auth-error').textContent = err.message; 
+    } catch (err) {
+        document.getElementById('auth-error').textContent = err.message;
     }
 }
 
@@ -436,13 +499,17 @@ window.navigateTo = function(viewId, pushToStack = true) {
     }
 
     // View Specific Logic
-    if(viewId === 'feed' && pushToStack) { 
-        currentCategory = 'For You'; 
-        renderFeed(); 
+    if(viewId === 'feed' && pushToStack) {
+        currentCategory = 'For You';
+        renderFeed();
     }
     if(viewId === 'saved') { renderSaved(); }
     if(viewId === 'profile') renderProfile();
     if(viewId === 'discover') { renderDiscover(); }
+    if(viewId === 'messages') { initConversations(); }
+    if(viewId === 'videos') { initVideoFeed(); }
+    if(viewId === 'live') { renderLiveSessions(); }
+    if(viewId === 'staff') { renderStaffConsole(); }
 
     currentViewId = viewId;
     window.scrollTo(0,0);
@@ -1710,6 +1777,398 @@ window.previewPostImage = function(input) { if(input.files && input.files[0]) { 
 window.clearPostImage = function() { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
 window.togglePostOption = function(type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type); ['poll', 'gif', 'schedule', 'location'].forEach(t => { if(t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
 window.closeReview = () => document.getElementById('review-modal').style.display = 'none';
+
+// --- Messaging (DMs) ---
+window.toggleNewChatModal = function(show = true) {
+    const modal = document.getElementById('new-chat-modal');
+    if(modal) modal.style.display = show ? 'flex' : 'none';
+};
+window.openNewChatModal = () => window.toggleNewChatModal(true);
+
+window.searchChatUsers = async function(term = '') {
+    const resultsEl = document.getElementById('chat-search-results');
+    if(!resultsEl) return;
+    resultsEl.innerHTML = '';
+    const cleaned = term.trim().toLowerCase();
+    if(cleaned.length < 2) return;
+    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
+    qSnap.forEach(docSnap => {
+        const data = docSnap.data();
+        const row = document.createElement('div');
+        row.className = 'conversation-item';
+        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexara User'}</div></div>`;
+        row.onclick = () => createConversationWithUser(docSnap.id, data);
+        resultsEl.appendChild(row);
+    });
+};
+
+async function createConversationWithUser(targetUid, targetData = {}) {
+    if(!requireAuth()) return;
+    const existing = conversationsCache.find(c => c.members && c.members.includes(targetUid));
+    if(existing) {
+        setActiveConversation(existing.id, existing);
+        toggleNewChatModal(false);
+        return;
+    }
+    const payload = {
+        members: [currentUser.uid, targetUid],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastMessageText: '',
+        lastMessageAt: serverTimestamp(),
+        requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
+    };
+    const convoRef = await addDoc(collection(db, 'conversations'), payload);
+    conversationsCache.push({ id: convoRef.id, ...payload });
+    toggleNewChatModal(false);
+    setActiveConversation(convoRef.id, payload);
+}
+
+function initConversations() {
+    if(!requireAuth()) return;
+    if(conversationsUnsubscribe) conversationsUnsubscribe();
+    const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
+    conversationsUnsubscribe = onSnapshot(convRef, snap => {
+        conversationsCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderConversationList();
+    });
+}
+
+function renderConversationList() {
+    const listEl = document.getElementById('conversation-list');
+    if(!listEl) return;
+    listEl.innerHTML = '';
+    if(conversationsCache.length === 0) {
+        listEl.innerHTML = '<div class="empty-state">No conversations yet.</div>';
+        return;
+    }
+    conversationsCache.forEach(convo => {
+        const partnerId = convo.members.find(m => m !== currentUser.uid) || currentUser.uid;
+        const display = userCache[partnerId]?.username || 'user';
+        const item = document.createElement('div');
+        item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
+        item.innerHTML = `<div><strong>@${display}</strong><div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div></div><span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
+        item.onclick = () => setActiveConversation(convo.id, convo);
+        listEl.appendChild(item);
+    });
+}
+
+function setActiveConversation(convoId, convoData = null) {
+    activeConversationId = convoId;
+    const header = document.getElementById('message-header');
+    const partnerId = (convoData || conversationsCache.find(c => c.id === convoId) || {}).members?.find(m => m !== currentUser.uid);
+    header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
+    listenToMessages(convoId);
+}
+
+function listenToMessages(convoId) {
+    if(messagesUnsubscribe) messagesUnsubscribe();
+    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    messagesUnsubscribe = onSnapshot(msgRef, snap => {
+        const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderMessages(msgs);
+    });
+}
+
+function renderMessages(msgs = []) {
+    const body = document.getElementById('message-thread');
+    if(!body) return;
+    body.innerHTML = '';
+    msgs.forEach(msg => {
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble ' + (msg.senderId === currentUser.uid ? 'self' : 'other');
+        bubble.innerHTML = msg.type === 'image' ? `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">` : escapeHtml(msg.text || '');
+        body.appendChild(bubble);
+    });
+    body.scrollTop = body.scrollHeight;
+}
+
+window.sendMessage = async function() {
+    if(!activeConversationId || !requireAuth()) return;
+    const input = document.getElementById('message-input');
+    const fileInput = document.getElementById('message-media');
+    const text = (input?.value || '').trim();
+    if(!text && !fileInput?.files?.length) return;
+    const msgRef = collection(db, 'conversations', activeConversationId, 'messages');
+    let mediaURL = null;
+    if(fileInput && fileInput.files && fileInput.files[0]) {
+        const file = fileInput.files[0];
+        const storageRef = ref(storage, `dm_media/${activeConversationId}/${Date.now()}_${file.name}`);
+        await uploadBytes(storageRef, file);
+        mediaURL = await getDownloadURL(storageRef);
+    }
+    await addDoc(msgRef, {
+        senderId: currentUser.uid,
+        type: mediaURL ? 'image' : 'text',
+        text: mediaURL ? '' : text,
+        mediaURL: mediaURL || '',
+        createdAt: serverTimestamp()
+    });
+    await updateDoc(doc(db, 'conversations', activeConversationId), {
+        lastMessageText: mediaURL ? '📷 Photo' : text,
+        lastMessageAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        requestState: { [currentUser.uid]: 'inbox' }
+    }, { merge: true });
+    if(input) input.value = '';
+    if(fileInput) fileInput.value = '';
+};
+
+// --- Videos ---
+window.openVideoUploadModal = () => window.toggleVideoUploadModal(true);
+window.toggleVideoUploadModal = function(show = true) {
+    const modal = document.getElementById('video-upload-modal');
+    if(modal) modal.style.display = show ? 'flex' : 'none';
+};
+
+function initVideoFeed() {
+    if(videosUnsubscribe) return; // already live
+    const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
+    videosUnsubscribe = onSnapshot(refVideos, snap => {
+        const videos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderVideoFeed(videos);
+    });
+}
+
+function renderVideoFeed(videos = []) {
+    const feed = document.getElementById('video-feed');
+    if(!feed) return;
+    feed.innerHTML = '';
+    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+    videos.forEach(video => {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        card.innerHTML = `
+            <video src="${video.videoURL}" playsinline loop muted></video>
+            <div class="video-meta">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <div style="font-weight:800;">${escapeHtml(video.caption || '')}</div>
+                        <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(t => '#' + t).join(' ')}</div>
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="icon-pill" onclick="window.likeVideo('${video.id}')"><i class="ph ph-heart"></i> ${video.stats?.likes || 0}</button>
+                        <button class="icon-pill" onclick="window.saveVideo('${video.id}')"><i class="ph ph-bookmark"></i></button>
+                    </div>
+                </div>
+            </div>`;
+        feed.appendChild(card);
+    });
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const vid = entry.target;
+            if(entry.isIntersecting) { vid.play(); incrementVideoViews(vid.dataset.videoId); }
+            else vid.pause();
+        });
+    }, { threshold: 0.6 });
+    feed.querySelectorAll('video').forEach((v, idx) => { v.dataset.videoId = videos[idx].id; observer.observe(v); });
+}
+
+window.uploadVideo = async function() {
+    if(!requireAuth()) return;
+    const fileInput = document.getElementById('video-file');
+    if(!fileInput || !fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+    const caption = document.getElementById('video-caption').value || '';
+    const hashtags = (document.getElementById('video-tags').value || '').split(',').map(t => t.replace('#','').trim()).filter(Boolean);
+    const visibility = document.getElementById('video-visibility').value || 'public';
+    const videoId = `${Date.now()}`;
+    const storageRef = ref(storage, `videos/${currentUser.uid}/${videoId}/source.mp4`);
+    await uploadBytes(storageRef, file);
+    const videoURL = await getDownloadURL(storageRef);
+    await setDoc(doc(db, 'videos', videoId), {
+        ownerId: currentUser.uid,
+        caption,
+        hashtags,
+        createdAt: serverTimestamp(),
+        videoURL,
+        thumbURL: '',
+        visibility,
+        stats: { likes: 0, comments: 0, saves: 0, views: 0 }
+    });
+    toggleVideoUploadModal(false);
+};
+
+window.likeVideo = async function(videoId) {
+    if(!requireAuth()) return;
+    const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
+    await setDoc(likeRef, { createdAt: serverTimestamp() });
+    await updateDoc(doc(db, 'videos', videoId), { 'stats.likes': increment(1) });
+};
+
+window.saveVideo = async function(videoId) {
+    if(!requireAuth()) return;
+    await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
+    await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
+};
+
+async function incrementVideoViews(videoId) {
+    try {
+        await updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) });
+    } catch(e) { console.warn('view inc', e.message); }
+}
+
+// --- Live Sessions ---
+window.toggleGoLiveModal = function(show = true) { const modal = document.getElementById('go-live-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
+
+function renderLiveSessions() {
+    if(liveSessionsUnsubscribe) return;
+    const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
+    liveSessionsUnsubscribe = onSnapshot(liveRef, snap => {
+        const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const container = document.getElementById('live-grid-container');
+        if(!container) return;
+        container.innerHTML = '';
+        if(sessions.length === 0) { container.innerHTML = '<div class="empty-state">No live sessions.</div>'; return; }
+        sessions.forEach(s => {
+            const card = document.createElement('div');
+            card.className = 'live-card';
+            card.innerHTML = `<div class="live-card-title">${escapeHtml(s.title || 'Live Session')}</div><div class="live-card-meta"><span>${escapeHtml(s.category || '')}</span><span>${(s.tags||[]).join(', ')}</span></div><div style="margin-top:10px;"><button class="icon-pill" onclick="window.openLiveSession('${s.id}')"><i class="ph ph-play"></i> Watch</button></div>`;
+            container.appendChild(card);
+        });
+    });
+}
+
+window.createLiveSession = async function() {
+    if(!requireAuth()) return;
+    const title = document.getElementById('live-title').value;
+    const category = document.getElementById('live-category').value;
+    const tags = (document.getElementById('live-tags').value || '').split(',').map(t => t.trim()).filter(Boolean);
+    const streamEmbedURL = document.getElementById('live-url').value;
+    await addDoc(collection(db, 'liveSessions'), {
+        hostId: currentUser.uid,
+        title,
+        category,
+        tags,
+        status: 'live',
+        streamEmbedURL,
+        createdAt: serverTimestamp()
+    });
+    toggleGoLiveModal(false);
+};
+
+window.openLiveSession = function(sessionId) {
+    const container = document.getElementById('live-grid-container');
+    if(!container) return;
+    const sessionCard = document.createElement('div');
+    sessionCard.className = 'social-card';
+    sessionCard.innerHTML = `<div style="padding:1rem;"><div id="live-player" style="margin-bottom:10px;"></div><div id="live-chat" style="max-height:200px; overflow:auto;"></div><div style="display:flex; gap:8px; margin-top:8px;"><input id="live-chat-input" class="form-input" placeholder="Chat"/><button class="create-btn-sidebar" style="width:auto;" onclick="window.sendLiveChat('${sessionId}')">Send</button></div></div>`;
+    container.prepend(sessionCard);
+    listenLiveChat(sessionId);
+};
+
+function listenLiveChat(sessionId) {
+    const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
+    onSnapshot(chatRef, snap => {
+        const chatEl = document.getElementById('live-chat');
+        if(!chatEl) return;
+        chatEl.innerHTML = '';
+        snap.docs.forEach(docSnap => {
+            const data = docSnap.data();
+            const row = document.createElement('div');
+            row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
+            chatEl.appendChild(row);
+        });
+    });
+}
+
+window.sendLiveChat = async function(sessionId) {
+    if(!requireAuth()) return;
+    const input = document.getElementById('live-chat-input');
+    if(!input || !input.value.trim()) return;
+    await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
+    input.value = '';
+};
+
+// --- Staff Console ---
+function renderStaffConsole() {
+    const warning = document.getElementById('staff-access-warning');
+    const panels = document.getElementById('staff-panels');
+    const isStaff = userProfile.role === 'staff' || userProfile.role === 'admin';
+    if(!isStaff) {
+        if(warning) warning.style.display = 'block';
+        if(panels) panels.style.display = 'none';
+        return;
+    }
+    if(warning) warning.style.display = 'none';
+    if(panels) panels.style.display = 'block';
+    listenVerificationRequests();
+    listenReports();
+    listenAdminLogs();
+}
+
+function listenVerificationRequests() {
+    if(staffRequestsUnsub) return;
+    staffRequestsUnsub = onSnapshot(collection(db, 'verificationRequests'), snap => {
+        const container = document.getElementById('verification-requests');
+        if(!container) return;
+        container.innerHTML = '';
+        snap.docs.forEach(docSnap => {
+            const data = docSnap.data();
+            const card = document.createElement('div');
+            card.className = 'social-card';
+            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks||[]).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
+            container.appendChild(card);
+        });
+    });
+}
+
+window.approveVerification = async function(requestId, userId) {
+    await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'approved', reviewedAt: serverTimestamp() });
+    if(userId) await setDoc(doc(db, 'users', userId), { verified: true, updatedAt: serverTimestamp() }, { merge: true });
+    await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'approveVerification', targetRef: requestId, createdAt: serverTimestamp() });
+};
+
+window.denyVerification = async function(requestId) {
+    await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'denied', reviewedAt: serverTimestamp() });
+    await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'denyVerification', targetRef: requestId, createdAt: serverTimestamp() });
+};
+
+function listenReports() {
+    if(staffReportsUnsub) return;
+    staffReportsUnsub = onSnapshot(collection(db, 'reports'), snap => {
+        const container = document.getElementById('reports-queue');
+        if(!container) return;
+        container.innerHTML = '';
+        snap.docs.forEach(docSnap => {
+            const data = docSnap.data();
+            const card = document.createElement('div');
+            card.className = 'social-card';
+            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.type || 'report'}</div><div style="color:var(--text-muted); font-size:0.9rem;">${data.reason || ''}</div></div>`;
+            container.appendChild(card);
+        });
+    });
+}
+
+function listenAdminLogs() {
+    if(staffLogsUnsub) return;
+    staffLogsUnsub = onSnapshot(collection(db, 'adminLogs'), snap => {
+        const container = document.getElementById('admin-logs');
+        if(!container) return;
+        container.innerHTML = '';
+        snap.docs.forEach(docSnap => {
+            const data = docSnap.data();
+            const row = document.createElement('div');
+            row.textContent = `${data.actorId}: ${data.action}`;
+            container.appendChild(row);
+        });
+    });
+}
+
+// --- Verification Request ---
+window.openVerificationRequest = function() { toggleVerificationModal(true); };
+window.toggleVerificationModal = function(show = true) { const modal = document.getElementById('verification-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
+window.submitVerificationRequest = async function() {
+    if(!requireAuth()) return;
+    const category = document.getElementById('verify-category').value;
+    const links = (document.getElementById('verify-links').value || '').split('\n').map(l => l.trim()).filter(Boolean);
+    const notes = document.getElementById('verify-notes').value;
+    await addDoc(collection(db, 'verificationRequests'), { userId: currentUser.uid, category, evidenceLinks: links, notes, status: 'pending', createdAt: serverTimestamp() });
+    toggleVerificationModal(false);
+};
+
+// --- Security Rules Snippet (reference) ---
+// See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
 
 // Start App
 initApp();

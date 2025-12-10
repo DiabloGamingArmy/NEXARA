@@ -288,3 +288,23 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .remove-attachment { position: absolute; top: 5px; left: 5px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; }
 
 .extra-options-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: none; background: rgba(255,255,255,0.02); }
+/* Messaging, Videos, Staff */
+.messages-layout { display:grid; grid-template-columns: 320px 1fr; height: calc(100vh - 80px); }
+.messages-sidebar { border-right:1px solid var(--border); padding:1rem; overflow-y:auto; }
+.messages-thread { display:flex; flex-direction:column; }
+.message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; }
+.message-thread-body { flex:1; padding:1rem; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+.message-compose { display:flex; gap:10px; padding:1rem; border-top:1px solid var(--border); align-items:center; }
+.conversation-item { padding:10px; border-radius:10px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; border:1px solid var(--border); margin-bottom:8px; }
+.conversation-item.active { border-color: var(--primary); background: rgba(0,242,234,0.05); }
+.message-bubble { padding:10px 12px; border-radius:12px; max-width:70%; }
+.message-bubble.self { background: rgba(0,242,234,0.12); border:1px solid rgba(0,242,234,0.3); margin-left:auto; }
+.message-bubble.other { background: var(--bg-hover); border:1px solid var(--border); margin-right:auto; }
+.video-feed { display:flex; flex-direction:column; gap:20px; padding:1rem; }
+.video-card { border:1px solid var(--border); border-radius:16px; overflow:hidden; background:var(--bg-card); }
+.video-card video { width:100%; max-height:70vh; object-fit:cover; }
+.video-meta { padding:1rem; }
+.staff-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top:1rem; }
+.panel-title { font-weight:800; margin-bottom:8px; }
+.badge { padding:4px 8px; border-radius:8px; font-size:0.75rem; border:1px solid var(--border); }
+.toast-msg { position: fixed; bottom: 20px; right: 20px; background: var(--bg-card); border:1px solid var(--border); padding:10px 14px; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.4); z-index:2000; }
