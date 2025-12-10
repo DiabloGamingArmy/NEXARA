@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 // --- Firebase Configuration ---
 const firebaseConfig = {
@@ -63,6 +63,14 @@ function applyReviewButtonState(buttonEl, reviewValue) {
     buttonEl.innerHTML = `<i class="ph ph-scales" style="font-size:${iconSize};"></i> ${label}`;
 }
 
+function applyMyReviewStylesToDOM() {
+    const cache = window.myReviewCache || {};
+    document.querySelectorAll('.review-action').forEach(btn => {
+        const pid = btn.dataset.postId;
+        applyReviewButtonState(btn, pid ? cache[pid] : null);
+    });
+}
+
 let userProfile = {
     name: "Nexara User",
     realName: "",
@@ -93,6 +101,9 @@ let activeConversationId = null;
 let conversationsCache = [];
 let activeMessageUpload = null;
 let videosUnsubscribe = null;
+let videosCache = [];
+let videoObserver = null;
+const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
@@ -462,6 +473,7 @@ function startUserReviewListener(uid) {
 
         // Refresh UI for all loaded posts to apply colors
         allPosts.forEach(post => refreshSinglePostUI(post.id));
+        applyMyReviewStylesToDOM();
     }, (error) => {
         console.log("Review listener note:", error.message);
     });
@@ -470,9 +482,13 @@ function startUserReviewListener(uid) {
 // --- Navigation Logic ---
 window.navigateTo = function(viewId, pushToStack = true) {
     // Cleanup previous listeners if leaving thread
-    if(viewId !== 'thread' && threadUnsubscribe) { 
-        threadUnsubscribe(); 
-        threadUnsubscribe = null; 
+    if(viewId !== 'thread' && threadUnsubscribe) {
+        threadUnsubscribe();
+        threadUnsubscribe = null;
+    }
+
+    if(viewId !== 'videos' && currentViewId === 'videos') {
+        pauseAllVideos();
     }
 
     // Stack Management
@@ -727,6 +743,7 @@ function getPostHTML(post) {
                     <button class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
                     <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
                     <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
+                    <button class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                     <button class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                 </div>
             </div>`;
@@ -775,11 +792,7 @@ function renderFeed(targetId = 'feed-content') {
         applyReviewButtonState(reviewBtn, reviewValue);
     });
 
-    // PATCH: Apply colors immediately after rendering
-    // This catches cases where review data loaded BEFORE the feed rendered
-    setTimeout(() => {
-        // window.applyReviewColors(); // Removed as it was undefined in provided code, relying on getPostHTML logic
-    }, 50);
+    applyMyReviewStylesToDOM();
 }
 
 function refreshSinglePostUI(postId) {
@@ -1109,6 +1122,7 @@ window.openPeerReview = function(postId) {
                 // Cache my review to update the feed button color
                 window.myReviewCache[activePostId] = data.rating;
                 refreshSinglePostUI(activePostId);
+                applyMyReviewStylesToDOM();
             }
             const rAuthor = userCache[data.userId] || { name: "Reviewer" };
             scores.total++; 
@@ -1191,6 +1205,7 @@ window.submitReview = async function() {
 
         // 2. Update UI Immediately
         refreshSinglePostUI(activePostId);
+        applyMyReviewStylesToDOM();
         noteEl.value = "";
 
         // 3. Close Modal
@@ -1223,6 +1238,7 @@ window.removeReview = async function() {
 
     // Reset UI color
     refreshSinglePostUI(activePostId);
+    applyMyReviewStylesToDOM();
     window.closeReview(); // Close modal
 
     try { 
@@ -1234,68 +1250,83 @@ window.removeReview = async function() {
 
 // --- Thread & Comments ---
 window.openThread = function(postId) {
-    activePostId = postId; 
-    activeReplyId = null; 
-    window.resetInputBox(); 
-    window.navigateTo('thread'); 
+    activePostId = postId;
+    activeReplyId = null;
+    window.resetInputBox();
+    window.navigateTo('thread');
     renderThreadMainPost(postId);
+    attachThreadComments(postId);
+}
 
-    const commentsRef = collection(db, 'posts', postId, 'comments'); 
-    const q = query(commentsRef); 
+function attachThreadComments(postId) {
+    const container = document.getElementById('thread-stream');
+    if (!container) return;
+
+    const commentsRef = collection(db, 'posts', postId, 'comments');
+    const q = query(commentsRef, orderBy('timestamp', 'asc'));
 
     if (threadUnsubscribe) threadUnsubscribe();
 
     threadUnsubscribe = onSnapshot(q, (snapshot) => {
-        const container = document.getElementById('thread-stream'); 
-        container.innerHTML = "";
-
-        const comments = []; 
-        snapshot.forEach(d => comments.push({id: d.id, ...d.data()}));
-        comments.sort((a,b) => (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0));
-
+        const comments = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         const missingCommentUsers = comments.filter(c => !userCache[c.userId]).map(c => ({userId: c.userId}));
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
-
-        if (comments.length === 0) {
-            container.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--text-muted);">No comments yet. Be the first to reply!</div>`;
-        }
-
-        comments.forEach(c => {
-            const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
-            const isReply = c.parentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
-            const isLiked = c.likedBy && c.likedBy.includes(currentUser.uid);
-
-            let mediaHtml = c.mediaUrl 
-                ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>` 
-                : "";
-
-            container.innerHTML += `
-                <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${isReply}">
-                    <div style="display:flex; gap:10px; align-items:flex-start;">
-                        <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; background-image:url('${cAuthor.photoURL||''}'); background-size:cover; background-color:#333;">${cAuthor.photoURL ? '' : cAuthor.name[0]}</div>
-                        <div style="flex:1;">
-                            <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name)}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
-                            <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text)}</div>
-                            ${mediaHtml}
-                            <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
-                                <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name)}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
-                                <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}</button>
-                            </div>
-                            <div id="reply-slot-${c.id}"></div>
-                        </div>
-                    </div>
-                </div>`;
-        });
-
-        if (activeReplyId) { 
-            const slot = document.getElementById(`reply-slot-${activeReplyId}`); 
-            const inputArea = document.getElementById('thread-input-area'); 
-            if (slot && inputArea && !slot.contains(inputArea)) { 
-                slot.appendChild(inputArea); 
-                document.getElementById('thread-input').focus(); 
-            } 
-        }
+        renderThreadComments(comments);
+    }, (error) => {
+        console.error('Comments load error', error);
+        container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
     });
+}
+
+function renderThreadComments(comments = []) {
+    const container = document.getElementById('thread-stream');
+    if(!container) return;
+    container.innerHTML = "";
+
+    if (comments.length === 0) {
+        container.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--text-muted);">No comments yet. Be the first to reply!</div>`;
+        return;
+    }
+
+    comments.sort((a,b) => (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0));
+
+    comments.forEach(c => {
+        const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
+        const isReply = c.parentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
+        const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
+
+        const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
+        let mediaHtml = c.mediaUrl
+            ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>`
+            : "";
+
+        container.innerHTML += `
+            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${isReply}">
+                <div style="display:flex; gap:10px; align-items:flex-start;">
+                    <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>
+                    <div style="flex:1;">
+                        <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
+                        <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
+                        ${mediaHtml}
+                        <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
+                            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
+                            <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}</button>
+                        </div>
+                        <div id="reply-slot-${c.id}"></div>
+                    </div>
+                </div>
+            </div>`;
+    });
+
+    if (activeReplyId) {
+        const slot = document.getElementById(`reply-slot-${activeReplyId}`);
+        const inputArea = document.getElementById('thread-input-area');
+        if (slot && inputArea && !slot.contains(inputArea)) {
+            slot.appendChild(inputArea);
+            const input = document.getElementById('thread-input');
+            if(input) input.focus();
+        }
+    }
 }
 
 function renderThreadMainPost(postId) {
@@ -1357,6 +1388,7 @@ function renderThreadMainPost(postId) {
                 <button id="thread-like-btn" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}; font-size: 1.2rem;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span></button>
                 <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
                 <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
+                <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
                 <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
             </div>
         </div>`;
@@ -1372,6 +1404,7 @@ function renderThreadMainPost(postId) {
 
     const threadReviewBtn = document.getElementById('thread-review-btn');
     applyReviewButtonState(threadReviewBtn, myReview);
+    applyMyReviewStylesToDOM();
 }
 
 window.sendComment = async function() {
@@ -1437,13 +1470,47 @@ window.toggleCommentLike = async function(commentId, event) {
 
 // --- Discovery & Search ---
 window.renderDiscover = async function() {
-    const container = document.getElementById('discover-results'); 
+    const container = document.getElementById('discover-results');
     container.innerHTML = "";
+
+    const renderVideosSection = async (onlyVideos = false) => {
+        if(!videosCache.length) {
+            const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
+            videosCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        }
+        let filteredVideos = videosCache;
+        if(discoverSearchTerm) {
+            filteredVideos = filteredVideos.filter(v =>
+                (v.caption || '').toLowerCase().includes(discoverSearchTerm) ||
+                (v.hashtags || []).some(tag => (`#${tag}`).toLowerCase().includes(discoverSearchTerm))
+            );
+        }
+        if(filteredVideos.length === 0) {
+            if(onlyVideos) container.innerHTML = `<div class="empty-state"><p>No videos found.</p></div>`;
+            return;
+        }
+
+        container.innerHTML += `<div class="discover-section-header">Videos</div>`;
+        filteredVideos.forEach(video => {
+            const tags = (video.hashtags || []).map(t => '#' + t).join(' ');
+            container.innerHTML += `
+                <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;" onclick="window.navigateTo('videos');">
+                    <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
+                        <i class="ph-fill ph-play-circle" style="font-size:2rem;"></i>
+                    </div>
+                    <div style="flex:1;">
+                        <div style="font-weight:800; margin-bottom:4px;">${escapeHtml(video.caption || 'Untitled video')}</div>
+                        <div style="color:var(--text-muted); font-size:0.9rem;">${tags}</div>
+                        <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">Views: ${video.stats?.views || 0}</div>
+                    </div>
+                </div>`;
+        });
+    };
 
     const renderUsers = () => {
         let matches = [];
         if (discoverSearchTerm) {
-            matches = Object.values(userCache).filter(u => 
+            matches = Object.values(userCache).filter(u =>
                 (u.name && u.name.toLowerCase().includes(discoverSearchTerm)) || 
                 (u.username && u.username.toLowerCase().includes(discoverSearchTerm))
             );
@@ -1526,18 +1593,23 @@ window.renderDiscover = async function() {
         }
     };
 
-    if (discoverFilter === 'All Results') { 
-        renderLiveSection(); 
-        renderUsers(); 
-        renderPostsSection(); 
-        if(container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`; 
+    if (discoverFilter === 'All Results') {
+        renderLiveSection();
+        renderUsers();
+        renderPostsSection();
+        await renderVideosSection();
+        if(container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
     } else if (discoverFilter === 'Users') {
-        renderUsers(); 
+        renderUsers();
     } else if (discoverFilter === 'Livestreams') {
-        renderLiveSection(); 
+        renderLiveSection();
+    } else if (discoverFilter === 'Videos') {
+        await renderVideosSection(true);
     } else {
         renderPostsSection();
     }
+
+    applyMyReviewStylesToDOM();
 }
 
 // --- Profile Rendering ---
@@ -1804,6 +1876,46 @@ window.searchChatUsers = async function(term = '') {
 
 async function createConversationWithUser(targetUid, targetData = {}) {
     if(!requireAuth()) return;
+    try {
+        const sortedMembers = [currentUser.uid, targetUid].sort();
+        const existing = conversationsCache.find(c => {
+            const members = c.members || [];
+            return members.length === 2 && sortedMembers.every(id => members.includes(id));
+        });
+        if(existing) {
+            setActiveConversation(existing.id, existing);
+            toggleNewChatModal(false);
+            return;
+        }
+
+        const convoId = `${sortedMembers[0]}_${sortedMembers[1]}`;
+        const convoRef = doc(db, 'conversations', convoId);
+        const existingSnap = await getDoc(convoRef);
+        if(existingSnap.exists()) {
+            const data = existingSnap.data();
+            conversationsCache.push({ id: convoId, ...data });
+            toggleNewChatModal(false);
+            setActiveConversation(convoId, data);
+            return;
+        }
+
+        const payload = {
+            members: sortedMembers,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            lastMessageText: '',
+            lastMessageAt: serverTimestamp(),
+            requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
+        };
+
+        await setDoc(convoRef, payload, { merge: true });
+        conversationsCache.push({ id: convoId, ...payload });
+        toggleNewChatModal(false);
+        setActiveConversation(convoId, payload);
+    } catch(err) {
+        console.error('Conversation create error', err);
+        toast('Unable to start chat. Please try again.', 'error');
+    }
     const existing = conversationsCache.find(c => c.members && c.members.includes(targetUid));
     if(existing) {
         setActiveConversation(existing.id, existing);
@@ -1857,6 +1969,7 @@ function setActiveConversation(convoId, convoData = null) {
     activeConversationId = convoId;
     const header = document.getElementById('message-header');
     const partnerId = (convoData || conversationsCache.find(c => c.id === convoId) || {}).members?.find(m => m !== currentUser.uid);
+    if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
     header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
     listenToMessages(convoId);
 }
@@ -1921,10 +2034,39 @@ window.toggleVideoUploadModal = function(show = true) {
     if(modal) modal.style.display = show ? 'flex' : 'none';
 };
 
+function ensureVideoObserver() {
+    if(videoObserver) return videoObserver;
+    videoObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const vid = entry.target;
+            if(entry.isIntersecting) {
+                vid.play().catch(() => {});
+                const vidId = vid.dataset.videoId;
+                if(vidId && !viewedVideos.has(vidId)) {
+                    viewedVideos.add(vidId);
+                    incrementVideoViews(vidId);
+                }
+            } else {
+                vid.pause();
+            }
+        });
+    }, { threshold: 0.6 });
+    return videoObserver;
+}
+
+function pauseAllVideos() {
+    document.querySelectorAll('#video-feed video').forEach(v => {
+        v.pause();
+        if(videoObserver) videoObserver.unobserve(v);
+    });
+}
+
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
     videosUnsubscribe = onSnapshot(refVideos, snap => {
+        videosCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderVideoFeed(videosCache);
         const videos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         renderVideoFeed(videos);
     });
@@ -1933,6 +2075,18 @@ function initVideoFeed() {
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
     if(!feed) return;
+    pauseAllVideos();
+    feed.innerHTML = '';
+    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+
+    const observer = ensureVideoObserver();
+
+    videos.forEach(video => {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        const tags = (video.hashtags || []).map(t => '#' + t).join(' ');
+        card.innerHTML = `
+            <video src="${video.videoURL}" playsinline loop muted preload="metadata" data-video-id="${video.id}"></video>
     feed.innerHTML = '';
     if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
     videos.forEach(video => {
@@ -1944,6 +2098,7 @@ function renderVideoFeed(videos = []) {
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
                         <div style="font-weight:800;">${escapeHtml(video.caption || '')}</div>
+                        <div style="color:var(--text-muted); font-size:0.85rem;">${tags}</div>
                         <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(t => '#' + t).join(' ')}</div>
                     </div>
                     <div style="display:flex; gap:8px;">
@@ -1952,6 +2107,10 @@ function renderVideoFeed(videos = []) {
                     </div>
                 </div>
             </div>`;
+        const vidEl = card.querySelector('video');
+        feed.appendChild(card);
+        observer.observe(vidEl);
+    });
         feed.appendChild(card);
     });
     const observer = new IntersectionObserver((entries) => {
@@ -1974,6 +2133,30 @@ window.uploadVideo = async function() {
     const visibility = document.getElementById('video-visibility').value || 'public';
     const videoId = `${Date.now()}`;
     const storageRef = ref(storage, `videos/${currentUser.uid}/${videoId}/source.mp4`);
+    try {
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        await new Promise((resolve, reject) => {
+            uploadTask.on('state_changed', () => {}, reject, resolve);
+        });
+        const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
+        const docData = {
+            ownerId: currentUser.uid,
+            caption,
+            hashtags,
+            createdAt: serverTimestamp(),
+            videoURL,
+            thumbURL: '',
+            visibility,
+            stats: { likes: 0, comments: 0, saves: 0, views: 0 }
+        };
+        await setDoc(doc(db, 'videos', videoId), docData);
+        videosCache = [{ id: videoId, ...docData }, ...videosCache];
+        renderVideoFeed(videosCache);
+        toggleVideoUploadModal(false);
+    } catch(err) {
+        console.error('Video upload failed', err);
+        toast('Video upload failed. Please try again.', 'error');
+    }
     await uploadBytes(storageRef, file);
     const videoURL = await getDownloadURL(storageRef);
     await setDoc(doc(db, 'videos', videoId), {
