@@ -22,7 +22,10 @@ service cloud.firestore {
     match /categories/{categoryId} {
       allow read: if true;
       allow create: if isSignedIn();
-      allow update: if isSignedIn() && ((resource.data.type == 'official' && request.auth.token.role in ['staff','admin']) || isCategoryMod(categoryId));
+      allow update: if isSignedIn() && (
+        (resource.data.type == 'official' && request.resource.data.type == 'official' && request.resource.data.verified == true)
+        || isCategoryMod(categoryId)
+      );
       allow delete: if false;
       match /members/{uid} {
         allow read: if true;
