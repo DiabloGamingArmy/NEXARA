@@ -1313,17 +1313,46 @@ function renderThreadComments(comments = []) {
     const renderCommentHtml = function(c, isReply) {
         const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
         const parentCommentId = c.parentCommentId || c.parentId;
-        const isReply = parentCommentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
+
+        // derive styling without redeclaring isReply
+        const replyStyle = (isReply || !!parentCommentId)
+            ? 'margin-left: 40px; border-left: 2px solid var(--border);'
+            : '';
+
         const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
-        const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
+        const avatarBg = cAuthor.photoURL
+            ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;`
+            : `background:${getColorForUser(cAuthor.name||'U')}`;
+
         const mediaHtml = c.mediaUrl
-            ? `<div onclick=\"window.openFullscreenMedia('${c.mediaUrl}', 'image')\"><img src=\"${c.mediaUrl}\" style=\"max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;\"></div>`
+            ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>`
             : "";
 
-        const replyStyle = isReply ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
-
         return `
-            <div id=\"comment-${c.id}\" style=\"margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}\">\n                <div style=\"display:flex; gap:10px; align-items:flex-start;\">\n                    <div class=\"user-avatar\" style=\"width:36px; height:36px; font-size:0.9rem; ${avatarBg}\">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>\n                    <div style=\"flex:1;\">\n                        <div style=\"font-size:0.9rem; margin-bottom:2px;\"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style=\"color:var(--text-muted); font-size:0.8rem;\">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>\n                        <div style=\"margin-top:2px; font-size:0.95rem; line-height:1.4;\">${escapeHtml(c.text||'')}</div>\n                        ${mediaHtml}\n                        <div style=\"margin-top:8px; display:flex; gap:15px; align-items:center;\">\n                            <button onclick=\"window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')\" style=\"background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;\"><i class=\"ph ph-arrow-bend-up-left\"></i> Reply</button>\n                            <button onclick=\"window.toggleCommentLike('${c.id}', event)\" style=\"background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;\"><i class=\"${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up\"></i> ${c.likes || 0}</button>\n                        </div>\n                        <div id=\"reply-slot-${c.id}\"></div>\n                    </div>\n                </div>\n            </div>`;
+            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
+                <div style="display:flex; gap:10px; align-items:flex-start;">
+                    <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>
+                    <div style="flex:1;">
+                        <div style="font-size:0.9rem; margin-bottom:2px;">
+                            <strong>${escapeHtml(cAuthor.name||'User')}</strong>
+                            <span style="color:var(--text-muted); font-size:0.8rem;">
+                                • ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}
+                            </span>
+                        </div>
+                        <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
+                        ${mediaHtml}
+                        <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
+                            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+                                <i class="ph ph-arrow-bend-up-left"></i> Reply
+                            </button>
+                            <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
+                                <i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}
+                            </button>
+                        </div>
+                        <div id="reply-slot-${c.id}"></div>
+                    </div>
+                </div>
+            </div>`;
     };
 
     roots.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
@@ -1357,6 +1386,7 @@ function renderThreadComments(comments = []) {
         }
     }
 }
+
 
 function renderThreadMainPost(postId) {
     const container = document.getElementById('thread-main-post');
