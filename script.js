@@ -40,6 +40,12 @@ let followedUsers = new Set();
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
 
+// Category state
+let categories = [];
+let memberships = {};
+let selectedCategoryId = null;
+let categoryTab = 'official';
+
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
 
 function getReviewDisplay(reviewValue) {
@@ -181,6 +187,29 @@ const THEMES = {
     'Gaming': '#7000ff', 'News': '#ff3d3d', 'Music': '#00bfff'
 };
 
+const DEFAULT_CATEGORY_RULES = [
+    'Stay on-topic; explain context for beginners.',
+    'No misinformation; if making factual claims, include a source link when possible.',
+    'No low-effort engagement bait (ragebait, spam, “bro just trust me”).',
+    'Respectful critique only; attack ideas, not people.',
+    'No unsolicited self-promo; keep it relevant and add value.',
+    'Mark speculation vs fact clearly.',
+    'Keep titles descriptive; avoid clickbait.'
+];
+
+const OFFICIAL_CATEGORIES = [
+    'STEM Lab',
+    'Code & Coffee',
+    'History’s Greatest Hits',
+    'Mythbusters Academy',
+    'Money Moves (Personal Finance)',
+    'Language Lounge',
+    'Space Desk',
+    'Design & Media',
+    'Life Skills 101',
+    'Health & Fitness (No Bro-Science)'
+];
+
 // Shared state + render helpers
 window.getCurrentUser = function () { return currentUser; };
 window.getUserDoc = async function (uid) { return getDoc(doc(db, 'users', uid)); };
@@ -201,6 +230,35 @@ window.toast = function (msg, type = 'info') {
     document.body.appendChild(overlay);
     setTimeout(() => overlay.remove(), 2500);
 };
+
+function slugifyCategory(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 80);
+}
+
+async function ensureOfficialCategories() {
+    const promises = OFFICIAL_CATEGORIES.map(async function (name) {
+        const slug = slugifyCategory(name);
+        const catRef = doc(db, 'categories', slug);
+        const snap = await getDoc(catRef);
+        const payload = {
+            name,
+            slug,
+            type: 'official',
+            verified: true,
+            description: `${name} official category`,
+            rules: DEFAULT_CATEGORY_RULES,
+            createdBy: null,
+            ownerId: null,
+            createdAt: snap.exists() ? snap.data().createdAt || serverTimestamp() : serverTimestamp(),
+            isPublic: true,
+            memberCount: snap.exists() && snap.data().memberCount ? snap.data().memberCount : 0,
+            mods: []
+        };
+        await setDoc(catRef, payload, { merge: true });
+    });
+
+    await Promise.all(promises);
+}
 
 // --- Initialization & Auth Listener ---
 function initApp() {
@@ -253,6 +311,8 @@ function initApp() {
             if (loadingOverlay) loadingOverlay.style.display = 'none';
 
             // Start Logic
+            await ensureOfficialCategories();
+            startCategoryStreams(user.uid);
             startDataListener();
             startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
             updateTimeCapsule();
@@ -452,7 +512,8 @@ function startDataListener() {
         allPosts = [];
         snapshot.forEach(function (doc) {
             const data = doc.data();
-            allPosts.push({ id: doc.id, ...data });
+            const normalized = normalizePostData(doc.id, data);
+            allPosts.push(normalized);
             nextCache[doc.id] = data;
         });
 
@@ -489,6 +550,293 @@ function startDataListener() {
     // Start Live Stream Listener (Mock)
     if (typeof renderLive === 'function') renderLive();
 }
+
+function startCategoryStreams(uid) {
+    onSnapshot(collection(db, 'categories'), function (snapshot) {
+        categories = snapshot.docs.map(function (docSnap) {
+            return { id: docSnap.id, ...docSnap.data() };
+        });
+        allPosts = allPosts.map(function (p) { return normalizePostData(p.id, p); });
+        renderCategoryCenter();
+        renderFeed();
+    });
+
+    const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
+    onSnapshot(membershipRef, function (snapshot) {
+        memberships = {};
+        snapshot.forEach(function (docSnap) {
+            memberships[docSnap.id] = docSnap.data();
+        });
+        allPosts = allPosts.map(function (post) {
+            return { ...post, categoryStatus: memberships[post.categoryId]?.status || post.categoryStatus };
+        });
+        renderCategoryCenter();
+        renderFeed();
+    });
+}
+
+function getCategorySnapshot(categoryId) {
+    return categories.find(function (c) { return c.id === categoryId; }) || null;
+}
+
+function normalizePostData(id, data) {
+    const visibility = data.visibility || (data.isPrivate ? 'private' : 'public');
+    const categoryId = data.categoryId || null;
+    const categoryDoc = getCategorySnapshot(categoryId) || {};
+    const categoryName = data.categoryName || data.category || categoryDoc.name || 'Uncategorized';
+    const categorySlug = data.categorySlug || categoryDoc.slug || slugifyCategory(categoryName);
+    const categoryVerified = data.categoryVerified !== undefined ? data.categoryVerified : !!categoryDoc.verified;
+    const categoryType = data.categoryType || categoryDoc.type || null;
+
+    const contentType = data.contentType || (data.type === 'video' ? 'video' : data.type === 'image' ? 'image' : 'text');
+    const incomingContent = typeof data.content === 'object' && data.content !== null ? data.content : {};
+    const content = {
+        text: typeof data.content === 'string' ? data.content : incomingContent.text || data.title || '',
+        mediaUrl: incomingContent.mediaUrl || data.mediaUrl || null,
+        linkUrl: incomingContent.linkUrl || data.linkUrl || null,
+        profileUid: incomingContent.profileUid || data.profileUid || null,
+        meta: incomingContent.meta || data.meta || {}
+    };
+
+    const normalized = {
+        id,
+        ...data,
+        visibility,
+        categoryId,
+        categoryName,
+        categorySlug,
+        categoryVerified,
+        categoryType,
+        category: categoryName,
+        contentType,
+        content,
+        categoryStatus: memberships[categoryId]?.status || 'unknown'
+    };
+
+    if (!normalized.title && typeof data.title === 'string') normalized.title = data.title;
+    if (!normalized.content && typeof data.content === 'string') normalized.content = data.content;
+
+    return normalized;
+}
+
+function renderCategoryCenter() {
+    const center = document.getElementById('category-center');
+    const listEl = document.getElementById('category-list');
+    const rulesEl = document.getElementById('category-rules');
+    const currentLabel = document.getElementById('category-current-label');
+    if (!center || !listEl) return;
+
+    if (!selectedCategoryId && categories.length) {
+        const fallback = categories.find(function (c) { return c.type === 'official'; }) || categories[0];
+        selectedCategoryId = fallback ? fallback.id : null;
+    }
+
+    const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+    if (currentLabel) currentLabel.textContent = currentCategoryDoc ? currentCategoryDoc.name : 'No category selected';
+
+    const filtered = categories.filter(function (c) { return categoryTab === 'official' ? c.type === 'official' : c.type === 'community'; });
+    const sorted = filtered.sort(function (a, b) {
+        const aJoined = memberships[a.id]?.status === 'active';
+        const bJoined = memberships[b.id]?.status === 'active';
+        if (aJoined === bJoined) return (a.name || '').localeCompare(b.name || '');
+        return aJoined ? -1 : 1;
+    });
+
+    listEl.innerHTML = '';
+    sorted.forEach(function (cat) {
+        const membership = memberships[cat.id];
+        const isMember = membership && membership.status === 'active';
+        const isPending = membership && membership.status && membership.status !== 'active';
+        const btnLabel = isMember ? 'Leave' : 'Join';
+        const badge = cat.verified ? '<span class="verified-badge">✔</span>' : '';
+        const statusLabel = membership ? membership.status : 'none';
+        const redStatus = isPending && membership.status !== 'active';
+
+        const row = document.createElement('div');
+        row.className = 'category-row';
+        row.innerHTML = `
+            <div class="category-row-main" onclick="window.selectCategory('${cat.id}')">
+                <div>
+                    <div class="category-row-title">${cat.name} ${badge}</div>
+                    <div class="category-row-desc">${cat.description || ''}</div>
+                </div>
+                <div class="category-row-meta">${redStatus ? `<span class="category-status-badge">${statusLabel}</span>` : ''}</div>
+            </div>
+            <div class="category-row-actions">
+                <button class="icon-pill" data-cat="${cat.id}" onclick="event.stopPropagation(); window.${isMember ? 'leaveCategory' : 'joinCategory'}('${cat.id}')">${btnLabel}</button>
+            </div>`;
+        listEl.appendChild(row);
+    });
+
+    if (rulesEl) renderCategoryRules(currentCategoryDoc, rulesEl);
+    syncPostButtonState();
+}
+
+function renderCategoryRules(categoryDoc, rulesEl) {
+    if (!rulesEl) return;
+    if (!categoryDoc) {
+        rulesEl.innerHTML = '<div class="category-rule"><em>Select a category to see its rules.</em></div>';
+        return;
+    }
+    const rules = categoryDoc.rules && categoryDoc.rules.length ? categoryDoc.rules : DEFAULT_CATEGORY_RULES;
+    rulesEl.innerHTML = rules.map(function (r) { return `<div class="category-rule">${r}</div>`; }).join('');
+}
+
+window.setCategoryTab = function (tab) { categoryTab = tab; renderCategoryCenter(); };
+window.selectCategory = function (categoryId) { selectedCategoryId = categoryId; renderCategoryCenter(); };
+
+function syncPostButtonState() {
+    const btn = document.getElementById('publishBtn');
+    const helper = document.getElementById('category-post-helper');
+    if (!btn) return;
+    let disabled = false;
+    let message = '';
+    if (selectedCategoryId) {
+        const membership = memberships[selectedCategoryId];
+        if (!membership || membership.status !== 'active') {
+            disabled = true;
+            message = 'Join this category to post.';
+        }
+    }
+    btn.disabled = disabled;
+    if (helper) {
+        helper.style.display = message ? 'block' : 'none';
+        helper.textContent = message;
+        helper.style.color = disabled ? '#ff3d3d' : 'var(--text-muted)';
+    }
+}
+
+async function createCategory(payload) {
+    if (!requireAuth()) return;
+    const name = (payload.name || '').trim();
+    if (!name) return toast('Name required', 'error');
+
+    let slug = slugifyCategory(name);
+    const slugExists = categories.some(function (c) { return c.slug === slug; });
+    if (slugExists) slug = `${slug}-${Math.random().toString(36).substring(2, 6)}`;
+
+    const rules = DEFAULT_CATEGORY_RULES.concat((payload.rules || []).filter(function (r) { return r && r.trim(); }));
+    const categoryDoc = {
+        name,
+        slug,
+        type: payload.type || 'community',
+        verified: payload.type === 'official',
+        description: payload.description || '',
+        rules,
+        createdBy: payload.type === 'official' ? null : currentUser.uid,
+        createdAt: serverTimestamp(),
+        isPublic: payload.isPublic !== false,
+        memberCount: 0,
+        mods: [],
+        ownerId: payload.type === 'official' ? null : currentUser.uid
+    };
+
+    const docRef = doc(db, 'categories', slug);
+    await setDoc(docRef, categoryDoc);
+    await joinCategory(slug, 'owner');
+    selectedCategoryId = slug;
+    renderCategoryCenter();
+    toast('Category created', 'info');
+}
+
+async function joinCategory(categoryId, role = 'member') {
+    if (!requireAuth()) return;
+    const catRef = doc(db, 'categories', categoryId);
+    const membershipRef = doc(db, `categories/${categoryId}/members/${currentUser.uid}`);
+    const userMembershipRef = doc(db, `users/${currentUser.uid}/categoryMemberships/${categoryId}`);
+    const catSnap = await getDoc(catRef);
+    if (!catSnap.exists()) return toast('Category missing', 'error');
+    const cat = catSnap.data();
+
+    const membershipPayload = {
+        uid: currentUser.uid,
+        role,
+        status: 'active',
+        joinedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        updatedBy: currentUser.uid
+    };
+
+    await Promise.all([
+        setDoc(membershipRef, membershipPayload, { merge: true }),
+        setDoc(userMembershipRef, {
+            categoryId,
+            name: cat.name,
+            slug: cat.slug,
+            type: cat.type,
+            verified: !!cat.verified,
+            role,
+            status: 'active',
+            joinedAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+        }, { merge: true }),
+        updateDoc(catRef, { memberCount: increment(1) })
+    ]);
+
+    memberships[categoryId] = { ...membershipPayload, name: cat.name };
+    renderCategoryCenter();
+}
+
+async function leaveCategory(categoryId) {
+    if (!requireAuth()) return;
+    const membershipRef = doc(db, `categories/${categoryId}/members/${currentUser.uid}`);
+    const userMembershipRef = doc(db, `users/${currentUser.uid}/categoryMemberships/${categoryId}`);
+    const catRef = doc(db, 'categories', categoryId);
+
+    await Promise.all([
+        setDoc(membershipRef, { status: 'left', updatedAt: serverTimestamp(), updatedBy: currentUser.uid }, { merge: true }),
+        setDoc(userMembershipRef, { status: 'left', updatedAt: serverTimestamp() }, { merge: true }),
+        updateDoc(catRef, { memberCount: increment(-1) })
+    ]);
+
+    await enforceCategoryPrivacy(categoryId, currentUser.uid);
+    memberships[categoryId] = { ...memberships[categoryId], status: 'left' };
+    renderCategoryCenter();
+}
+
+async function kickMember(categoryId, targetUid, reason = '') {
+    if (!requireAuth()) return;
+    const membership = memberships[categoryId];
+    if (!membership || (membership.role !== 'owner' && membership.role !== 'mod')) {
+        return toast('Only mods/owners can kick', 'error');
+    }
+
+    const membershipRef = doc(db, `categories/${categoryId}/members/${targetUid}`);
+    const userMembershipRef = doc(db, `users/${targetUid}/categoryMemberships/${categoryId}`);
+    const catRef = doc(db, 'categories', categoryId);
+
+    await Promise.all([
+        setDoc(membershipRef, { status: 'kicked', updatedAt: serverTimestamp(), updatedBy: currentUser.uid, reason }, { merge: true }),
+        setDoc(userMembershipRef, { status: 'kicked', updatedAt: serverTimestamp(), reason }, { merge: true }),
+        updateDoc(catRef, { memberCount: increment(-1) })
+    ]);
+
+    await enforceCategoryPrivacy(categoryId, targetUid);
+    toast('Member removed', 'info');
+}
+
+async function enforceCategoryPrivacy(categoryId, targetUid) {
+    const q = query(collection(db, 'posts'), where('userId', '==', targetUid), where('categoryId', '==', categoryId));
+    const snaps = await getDocs(q);
+    const updates = snaps.docs.map(function (docSnap) {
+        return updateDoc(docSnap.ref, { visibility: 'private', categoryAccess: 'removed', categoryAccessAt: serverTimestamp() });
+    });
+    await Promise.all(updates);
+}
+
+window.createCategory = createCategory;
+window.joinCategory = joinCategory;
+window.leaveCategory = leaveCategory;
+window.kickMember = kickMember;
+window.handleCreateCategoryForm = async function () {
+    const name = document.getElementById('new-category-name').value;
+    const description = document.getElementById('new-category-description').value;
+    const rulesText = document.getElementById('new-category-rules').value;
+    const isPublic = document.getElementById('new-category-public').checked;
+    const rules = rulesText ? rulesText.split('\n').map(function (r) { return r.trim(); }).filter(Boolean) : [];
+    await createCategory({ name, description, rules, isPublic, type: 'community' });
+    document.getElementById('create-category-form').style.display = 'none';
+};
 
 // PATCH: New listener to fetch user's reviews across all posts
 async function startUserReviewListener(uid) {
@@ -784,7 +1132,10 @@ function renderFeed(targetId = 'feed-content') {
     if (!container) return;
 
     container.innerHTML = "";
-    let displayPosts = allPosts;
+    let displayPosts = allPosts.filter(function (post) {
+        if (post.visibility === 'private') return currentUser && post.userId === currentUser.uid;
+        return true;
+    });
 
     if (currentCategory === 'Following') {
         displayPosts = allPosts.filter(function (post) { return followedCategories.has(post.category); });
@@ -952,25 +1303,34 @@ async function uploadFileToStorage(file, path) {
     return await getDownloadURL(storageRef); 
 }
 
-window.createPost = async function() { 
+window.createPost = async function() {
      const title = document.getElementById('postTitle').value;
      const content = document.getElementById('postContent').value;
-     const category = document.getElementById('postCategory').value;
      const fileInput = document.getElementById('postFile');
      const btn = document.getElementById('publishBtn');
 
-     let type = 'text';
+     if (selectedCategoryId) {
+         const membership = memberships[selectedCategoryId];
+         if (!membership || membership.status !== 'active') {
+             btn.disabled = true;
+             toast('Join this category to post.', 'error');
+             btn.disabled = false;
+             return;
+         }
+     }
+
+     let contentType = 'text';
      if (fileInput.files[0]) {
          const mime = fileInput.files[0].type;
-         if (mime.startsWith('video')) type = 'video'; 
-         else if (mime.startsWith('image')) type = 'image';
+         if (mime.startsWith('video')) contentType = 'video';
+         else if (mime.startsWith('image')) contentType = 'image';
      }
 
      if(!title.trim() && !content.trim() && !fileInput.files[0]) {
          return alert("Please add a title, content, or media.");
      }
 
-     btn.disabled = true; 
+     btn.disabled = true;
      btn.textContent = "Uploading...";
 
      try {
@@ -980,34 +1340,44 @@ window.createPost = async function() {
              mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
          }
 
-         await addDoc(collection(db, 'posts'), { 
-             title, 
-             content, 
-             category, 
-             type, 
-             mediaUrl, 
-             author: userProfile.name, 
-             userId: currentUser.uid, 
-             likes: 0, 
-             likedBy: [], 
-             trustScore: 0, 
-             timestamp: serverTimestamp() 
-         });
+         const categoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+         const visibility = 'public';
+         const postPayload = {
+             title,
+             content,
+             categoryId: selectedCategoryId || null,
+             categoryName: categoryDoc ? categoryDoc.name : null,
+             categorySlug: categoryDoc ? categoryDoc.slug : null,
+             categoryVerified: categoryDoc ? !!categoryDoc.verified : false,
+             categoryType: categoryDoc ? categoryDoc.type : null,
+             visibility,
+             contentType,
+             content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: {} },
+             mediaUrl,
+             author: userProfile.name,
+             userId: currentUser.uid,
+             likes: 0,
+             likedBy: [],
+             trustScore: 0,
+             timestamp: serverTimestamp()
+         };
+
+         await addDoc(collection(db, 'posts'), postPayload);
 
          // Reset Form
-         document.getElementById('postTitle').value = ""; 
-         document.getElementById('postContent').value = ""; 
-         fileInput.value = ""; 
-         window.clearPostImage(); 
-         window.toggleCreateModal(false); 
+         document.getElementById('postTitle').value = "";
+         document.getElementById('postContent').value = "";
+         fileInput.value = "";
+         window.clearPostImage();
+         window.toggleCreateModal(false);
          window.navigateTo('feed');
 
-     } catch (e) { 
-         console.error(e); 
-         alert("Post failed: " + e.message); 
-     } finally { 
-         btn.disabled = false; 
-         btn.textContent = "Post"; 
+     } catch (e) {
+         console.error(e);
+         alert("Post failed: " + e.message);
+     } finally {
+         btn.disabled = false;
+         btn.textContent = "Post";
      }
 }
 
@@ -1041,11 +1411,12 @@ window.toggleCreateModal = function(show) {
             avatarEl.textContent = ''; 
         } else { 
             avatarEl.style.backgroundImage = 'none'; 
-            avatarEl.style.backgroundColor = getColorForUser(userProfile.name); 
-            avatarEl.textContent = userProfile.name[0]; 
-            avatarEl.style.color = 'black'; 
-        } 
-    } 
+            avatarEl.style.backgroundColor = getColorForUser(userProfile.name);
+            avatarEl.textContent = userProfile.name[0];
+            avatarEl.style.color = 'black';
+        }
+        syncPostButtonState();
+    }
 }
 
 window.toggleSettingsModal = function(show) {
@@ -1959,7 +2330,8 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
         : `background: ${getColorForUser(profileData.name)}`; 
 
     const isFollowing = followedUsers.has(uid); 
-    const userPosts = allPosts.filter(function(p) { return p.userId === uid; });
+    const isSelfView = currentUser && currentUser.uid === uid;
+    const userPosts = allPosts.filter(function(p) { return p.userId === uid && (isSelfView || p.visibility !== 'private'); });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     let linkHtml = ''; 
@@ -2021,11 +2393,16 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                 else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`; 
             } 
 
-            feedContainer.innerHTML += `
+                const membership = isSelfView ? memberships[post.categoryId] : null;
+                const inactive = membership && membership.status !== 'active';
+                const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
+                const badgeLabel = inactive ? `${post.category} (Not a member)` : post.category;
+
+                feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
                     <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
                         <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                            <div class="category-badge">${post.category}</div>
+                            <div class="${badgeClass}">${badgeLabel}</div>
                             <div style="display:flex; align-items:center; gap:8px;">
                                 <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
                                 ${getPostOptionsButton(post, 'public-profile', '1rem')}
@@ -2040,9 +2417,9 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                         <button class="action-btn" onclick="window.openThread('${post.id}')"><span>💬</span> Discuss</button>
                         <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><span>${isSaved ? '🔖' : '🔖'}</span> ${isSaved ? 'Saved' : 'Save'}</button>
                     </div>
-                </div>`; 
-        }); 
-    } 
+                </div>`;
+        });
+    }
 }
 
 function renderProfile() {
@@ -2090,11 +2467,16 @@ function renderProfile() {
         feedContainer.innerHTML = "";
         filteredPosts.forEach(function(post) {
             const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
+            const membership = memberships[post.categoryId];
+            const inactive = membership && membership.status !== 'active';
+            const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
+            const badgeLabel = inactive ? `${post.category} (Not a member anymore)` : post.category;
+
             feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
                     <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
                         <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                            <div class="category-badge">${post.category}</div>
+                            <div class="${badgeClass}">${badgeLabel}</div>
                             <div style="display:flex; align-items:center; gap:8px;">
                                 <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
                                 ${getPostOptionsButton(post, 'profile', '1rem')}
@@ -2105,7 +2487,7 @@ function renderProfile() {
                     </div>
                 </div>`;
         });
-    } 
+    }
 }
 
 // --- Utils & Helpers ---
