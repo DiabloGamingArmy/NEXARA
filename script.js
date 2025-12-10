@@ -1999,14 +1999,17 @@ window.sendMessage = async function() {
     const fileInput = document.getElementById('message-media');
     const text = (input?.value || '').trim();
     if(!text && !fileInput?.files?.length) return;
+
     const msgRef = collection(db, 'conversations', activeConversationId, 'messages');
     let mediaURL = null;
+
     if(fileInput && fileInput.files && fileInput.files[0]) {
         const file = fileInput.files[0];
         const storageRef = ref(storage, `dm_media/${activeConversationId}/${Date.now()}_${file.name}`);
         await uploadBytes(storageRef, file);
         mediaURL = await getDownloadURL(storageRef);
     }
+
     await addDoc(msgRef, {
         senderId: currentUser.uid,
         type: mediaURL ? 'image' : 'text',
@@ -2014,12 +2017,15 @@ window.sendMessage = async function() {
         mediaURL: mediaURL || '',
         createdAt: serverTimestamp()
     });
+
+    // updateDoc does not accept { merge: true }; use a nested field update for requestState
     await updateDoc(doc(db, 'conversations', activeConversationId), {
         lastMessageText: mediaURL ? '📷 Photo' : text,
         lastMessageAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        requestState: { [currentUser.uid]: 'inbox' }
-    }, { merge: true });
+        [`requestState.${currentUser.uid}`]: 'inbox'
+    });
+
     if(input) input.value = '';
     if(fileInput) fileInput.value = '';
 };
@@ -2075,7 +2081,6 @@ function renderVideoFeed(videos = []) {
     if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
 
     const observer = ensureVideoObserver();
-
 
     videos.forEach(function(video) {
         const card = document.createElement('div');
@@ -2425,28 +2430,12 @@ async function createConversationWithUser(targetUid, targetData = {}) {
         conversationsCache.push({ id: convoId, ...payload });
         toggleNewChatModal(false);
         setActiveConversation(convoId, payload);
+        return;
     } catch(err) {
         console.error('Conversation create error', err);
         toast('Unable to start chat. Please try again.', 'error');
-    }
-    const existing = conversationsCache.find(c => c.members && c.members.includes(targetUid));
-    if(existing) {
-        setActiveConversation(existing.id, existing);
-        toggleNewChatModal(false);
         return;
     }
-    const payload = {
-        members: [currentUser.uid, targetUid],
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lastMessageText: '',
-        lastMessageAt: serverTimestamp(),
-        requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
-    };
-    const convoRef = await addDoc(collection(db, 'conversations'), payload);
-    conversationsCache.push({ id: convoRef.id, ...payload });
-    toggleNewChatModal(false);
-    setActiveConversation(convoRef.id, payload);
 }
 
 function initConversations() {
@@ -2483,7 +2472,6 @@ function setActiveConversation(convoId, convoData = null) {
     const header = document.getElementById('message-header');
     const partnerId = (convoData || conversationsCache.find(c => c.id === convoId) || {}).members?.find(m => m !== currentUser.uid);
     if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
-    header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
     listenToMessages(convoId);
 }
 
@@ -2508,381 +2496,6 @@ function renderMessages(msgs = []) {
     });
     body.scrollTop = body.scrollHeight;
 }
-
-window.sendMessage = async function() {
-    if(!activeConversationId || !requireAuth()) return;
-    const input = document.getElementById('message-input');
-    const fileInput = document.getElementById('message-media');
-    const text = (input?.value || '').trim();
-    if(!text && !fileInput?.files?.length) return;
-    const msgRef = collection(db, 'conversations', activeConversationId, 'messages');
-    let mediaURL = null;
-    if(fileInput && fileInput.files && fileInput.files[0]) {
-        const file = fileInput.files[0];
-        const storageRef = ref(storage, `dm_media/${activeConversationId}/${Date.now()}_${file.name}`);
-        await uploadBytes(storageRef, file);
-        mediaURL = await getDownloadURL(storageRef);
-    }
-    await addDoc(msgRef, {
-        senderId: currentUser.uid,
-        type: mediaURL ? 'image' : 'text',
-        text: mediaURL ? '' : text,
-        mediaURL: mediaURL || '',
-        createdAt: serverTimestamp()
-    });
-    await updateDoc(doc(db, 'conversations', activeConversationId), {
-        lastMessageText: mediaURL ? '📷 Photo' : text,
-        lastMessageAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        requestState: { [currentUser.uid]: 'inbox' }
-    }, { merge: true });
-    if(input) input.value = '';
-    if(fileInput) fileInput.value = '';
-};
-
-// --- Videos ---
-window.openVideoUploadModal = () => window.toggleVideoUploadModal(true);
-window.toggleVideoUploadModal = function(show = true) {
-    const modal = document.getElementById('video-upload-modal');
-    if(modal) modal.style.display = show ? 'flex' : 'none';
-};
-
-function ensureVideoObserver() {
-    if(videoObserver) return videoObserver;
-    videoObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            const vid = entry.target;
-            if(entry.isIntersecting) {
-                vid.play().catch(() => {});
-                const vidId = vid.dataset.videoId;
-                if(vidId && !viewedVideos.has(vidId)) {
-                    viewedVideos.add(vidId);
-                    incrementVideoViews(vidId);
-                }
-            } else {
-                vid.pause();
-            }
-        });
-    }, { threshold: 0.6 });
-    return videoObserver;
-}
-
-function pauseAllVideos() {
-    document.querySelectorAll('#video-feed video').forEach(v => {
-        v.pause();
-        if(videoObserver) videoObserver.unobserve(v);
-    });
-}
-
-function initVideoFeed() {
-    if(videosUnsubscribe) return; // already live
-    const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = onSnapshot(refVideos, snap => {
-        videosCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderVideoFeed(videosCache);
-        const videos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderVideoFeed(videos);
-    });
-}
-
-function renderVideoFeed(videos = []) {
-  const feed = document.getElementById('video-feed');
-  if (!feed) return;
-
-  // If you have this helper elsewhere, keep it; if not, this line is harmless to remove.
-  if (typeof pauseAllVideos === "function") pauseAllVideos();
-
-  feed.innerHTML = '';
-  if (!Array.isArray(videos) || videos.length === 0) {
-    feed.innerHTML = '<div class="empty-state">No videos yet.</div>';
-    return;
-  }
-
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      const vid = entry.target;
-      if (entry.isIntersecting) {
-        const p = vid.play();
-        if (p && typeof p.catch === "function") p.catch(() => {});
-        if (typeof incrementVideoViews === "function" && vid.dataset.videoId) {
-          incrementVideoViews(vid.dataset.videoId);
-        }
-      } else {
-        vid.pause();
-      }
-    });
-  }, { threshold: 0.6 });
-
-  videos.forEach(video => {
-    const card = document.createElement('div');
-    card.className = 'video-card';
-
-    const tags = (video.hashtags || []).map(t => `#${t}`).join(' ');
-
-    card.innerHTML = `
-      <video
-        src="${video.videoURL || ''}"
-        playsinline
-        loop
-        muted
-        preload="metadata"
-        data-video-id="${video.id || ''}"
-      ></video>
-      <div class="video-meta">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div>
-            <div style="font-weight:800;">${escapeHtml(video.caption || '')}</div>
-            <div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(tags)}</div>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button class="icon-pill" onclick="window.likeVideo('${video.id}')">
-              <i class="ph ph-heart"></i> ${video.stats?.likes || 0}
-            </button>
-            <button class="icon-pill" onclick="window.saveVideo('${video.id}')">
-              <i class="ph ph-bookmark"></i>
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    const vidEl = card.querySelector('video');
-    feed.appendChild(card);
-    if (vidEl) observer.observe(vidEl);
-  });
-}
-
-
-
-window.uploadVideo = async function() {
-    if(!requireAuth()) return;
-    const fileInput = document.getElementById('video-file');
-    if(!fileInput || !fileInput.files || !fileInput.files[0]) return;
-    const file = fileInput.files[0];
-    const caption = document.getElementById('video-caption').value || '';
-    const hashtags = (document.getElementById('video-tags').value || '').split(',').map(t => t.replace('#','').trim()).filter(Boolean);
-    const visibility = document.getElementById('video-visibility').value || 'public';
-    const videoId = `${Date.now()}`;
-    const storageRef = ref(storage, `videos/${currentUser.uid}/${videoId}/source.mp4`);
-    try {
-        const uploadTask = uploadBytesResumable(storageRef, file);
-        await new Promise((resolve, reject) => {
-            uploadTask.on('state_changed', () => {}, reject, resolve);
-        });
-        const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
-        const docData = {
-            ownerId: currentUser.uid,
-            caption,
-            hashtags,
-            createdAt: serverTimestamp(),
-            videoURL,
-            thumbURL: '',
-            visibility,
-            stats: { likes: 0, comments: 0, saves: 0, views: 0 }
-        };
-        await setDoc(doc(db, 'videos', videoId), docData);
-        videosCache = [{ id: videoId, ...docData }, ...videosCache];
-        renderVideoFeed(videosCache);
-        toggleVideoUploadModal(false);
-    } catch(err) {
-        console.error('Video upload failed', err);
-        toast('Video upload failed. Please try again.', 'error');
-    }
-    await uploadBytes(storageRef, file);
-    const videoURL = await getDownloadURL(storageRef);
-    await setDoc(doc(db, 'videos', videoId), {
-        ownerId: currentUser.uid,
-        caption,
-        hashtags,
-        createdAt: serverTimestamp(),
-        videoURL,
-        thumbURL: '',
-        visibility,
-        stats: { likes: 0, comments: 0, saves: 0, views: 0 }
-    });
-    toggleVideoUploadModal(false);
-};
-
-window.likeVideo = async function(videoId) {
-    if(!requireAuth()) return;
-    const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
-    await setDoc(likeRef, { createdAt: serverTimestamp() });
-    await updateDoc(doc(db, 'videos', videoId), { 'stats.likes': increment(1) });
-};
-
-window.saveVideo = async function(videoId) {
-    if(!requireAuth()) return;
-    await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
-    await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
-};
-
-async function incrementVideoViews(videoId) {
-    try {
-        await updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) });
-    } catch(e) { console.warn('view inc', e.message); }
-}
-
-// --- Live Sessions ---
-window.toggleGoLiveModal = function(show = true) { const modal = document.getElementById('go-live-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
-
-function renderLiveSessions() {
-    if(liveSessionsUnsubscribe) return;
-    const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
-    liveSessionsUnsubscribe = onSnapshot(liveRef, snap => {
-        const sessions = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        const container = document.getElementById('live-grid-container');
-        if(!container) return;
-        container.innerHTML = '';
-        if(sessions.length === 0) { container.innerHTML = '<div class="empty-state">No live sessions.</div>'; return; }
-        sessions.forEach(s => {
-            const card = document.createElement('div');
-            card.className = 'live-card';
-            card.innerHTML = `<div class="live-card-title">${escapeHtml(s.title || 'Live Session')}</div><div class="live-card-meta"><span>${escapeHtml(s.category || '')}</span><span>${(s.tags||[]).join(', ')}</span></div><div style="margin-top:10px;"><button class="icon-pill" onclick="window.openLiveSession('${s.id}')"><i class="ph ph-play"></i> Watch</button></div>`;
-            container.appendChild(card);
-        });
-    });
-}
-
-window.createLiveSession = async function() {
-    if(!requireAuth()) return;
-    const title = document.getElementById('live-title').value;
-    const category = document.getElementById('live-category').value;
-    const tags = (document.getElementById('live-tags').value || '').split(',').map(t => t.trim()).filter(Boolean);
-    const streamEmbedURL = document.getElementById('live-url').value;
-    await addDoc(collection(db, 'liveSessions'), {
-        hostId: currentUser.uid,
-        title,
-        category,
-        tags,
-        status: 'live',
-        streamEmbedURL,
-        createdAt: serverTimestamp()
-    });
-    toggleGoLiveModal(false);
-};
-
-window.openLiveSession = function(sessionId) {
-    const container = document.getElementById('live-grid-container');
-    if(!container) return;
-    const sessionCard = document.createElement('div');
-    sessionCard.className = 'social-card';
-    sessionCard.innerHTML = `<div style="padding:1rem;"><div id="live-player" style="margin-bottom:10px;"></div><div id="live-chat" style="max-height:200px; overflow:auto;"></div><div style="display:flex; gap:8px; margin-top:8px;"><input id="live-chat-input" class="form-input" placeholder="Chat"/><button class="create-btn-sidebar" style="width:auto;" onclick="window.sendLiveChat('${sessionId}')">Send</button></div></div>`;
-    container.prepend(sessionCard);
-    listenLiveChat(sessionId);
-};
-
-function listenLiveChat(sessionId) {
-    const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
-    onSnapshot(chatRef, snap => {
-        const chatEl = document.getElementById('live-chat');
-        if(!chatEl) return;
-        chatEl.innerHTML = '';
-        snap.docs.forEach(docSnap => {
-            const data = docSnap.data();
-            const row = document.createElement('div');
-            row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
-            chatEl.appendChild(row);
-        });
-    });
-}
-
-window.sendLiveChat = async function(sessionId) {
-    if(!requireAuth()) return;
-    const input = document.getElementById('live-chat-input');
-    if(!input || !input.value.trim()) return;
-    await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
-    input.value = '';
-};
-
-// --- Staff Console ---
-function renderStaffConsole() {
-    const warning = document.getElementById('staff-access-warning');
-    const panels = document.getElementById('staff-panels');
-    const isStaff = userProfile.role === 'staff' || userProfile.role === 'admin';
-    if(!isStaff) {
-        if(warning) warning.style.display = 'block';
-        if(panels) panels.style.display = 'none';
-        return;
-    }
-    if(warning) warning.style.display = 'none';
-    if(panels) panels.style.display = 'block';
-    listenVerificationRequests();
-    listenReports();
-    listenAdminLogs();
-}
-
-function listenVerificationRequests() {
-    if(staffRequestsUnsub) return;
-    staffRequestsUnsub = onSnapshot(collection(db, 'verificationRequests'), snap => {
-        const container = document.getElementById('verification-requests');
-        if(!container) return;
-        container.innerHTML = '';
-        snap.docs.forEach(docSnap => {
-            const data = docSnap.data();
-            const card = document.createElement('div');
-            card.className = 'social-card';
-            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks||[]).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
-            container.appendChild(card);
-        });
-    });
-}
-
-window.approveVerification = async function(requestId, userId) {
-    await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'approved', reviewedAt: serverTimestamp() });
-    if(userId) await setDoc(doc(db, 'users', userId), { verified: true, updatedAt: serverTimestamp() }, { merge: true });
-    await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'approveVerification', targetRef: requestId, createdAt: serverTimestamp() });
-};
-
-window.denyVerification = async function(requestId) {
-    await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'denied', reviewedAt: serverTimestamp() });
-    await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'denyVerification', targetRef: requestId, createdAt: serverTimestamp() });
-};
-
-function listenReports() {
-    if(staffReportsUnsub) return;
-    staffReportsUnsub = onSnapshot(collection(db, 'reports'), snap => {
-        const container = document.getElementById('reports-queue');
-        if(!container) return;
-        container.innerHTML = '';
-        snap.docs.forEach(docSnap => {
-            const data = docSnap.data();
-            const card = document.createElement('div');
-            card.className = 'social-card';
-            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.type || 'report'}</div><div style="color:var(--text-muted); font-size:0.9rem;">${data.reason || ''}</div></div>`;
-            container.appendChild(card);
-        });
-    });
-}
-
-function listenAdminLogs() {
-    if(staffLogsUnsub) return;
-    staffLogsUnsub = onSnapshot(collection(db, 'adminLogs'), snap => {
-        const container = document.getElementById('admin-logs');
-        if(!container) return;
-        container.innerHTML = '';
-        snap.docs.forEach(docSnap => {
-            const data = docSnap.data();
-            const row = document.createElement('div');
-            row.textContent = `${data.actorId}: ${data.action}`;
-            container.appendChild(row);
-        });
-    });
-}
-
-// --- Verification Request ---
-window.openVerificationRequest = function() { toggleVerificationModal(true); };
-window.toggleVerificationModal = function(show = true) { const modal = document.getElementById('verification-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
-window.submitVerificationRequest = async function() {
-    if(!requireAuth()) return;
-    const category = document.getElementById('verify-category').value;
-    const links = (document.getElementById('verify-links').value || '').split('\n').map(l => l.trim()).filter(Boolean);
-    const notes = document.getElementById('verify-notes').value;
-    await addDoc(collection(db, 'verificationRequests'), { userId: currentUser.uid, category, evidenceLinks: links, notes, status: 'pending', createdAt: serverTimestamp() });
-    toggleVerificationModal(false);
-};
-
-// --- Security Rules Snippet (reference) ---
-// See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
 
 // Start App
 initApp();
