@@ -330,20 +330,6 @@ function shouldRerenderThread(newData, prevData = {}) {
     return fieldsToWatch.some(function (key) { return newData[key] !== prevData[key]; });
 }
 
-// If the file fails to parse earlier, this won't run; keep as a safety net anyway.
-if (typeof window.handleLogin !== 'function') {
-    window.handleLogin = function (event) {
-        if (event && typeof event.preventDefault === 'function') { event.preventDefault(); }
-        try {
-            if (typeof handleLogin === 'function' && handleLogin !== window.handleLogin) { return handleLogin(event); }
-            if (typeof login === 'function') { return login(event); }
-        } catch (err) {
-            console.error(err);
-        }
-        console.error('handleLogin is not wired correctly.');
-    };
-}
-
 // --- Auth Functions ---
 window.handleLogin = async function (e) {
     if (e && typeof e.preventDefault === "function") e.preventDefault();
@@ -869,7 +855,7 @@ window.toggleLike = async function(postId, event) {
 
     // Optimistic Update
     if (wasLiked) { 
-        post.likes = (post.likes || 0) - 1; 
+        post.likes = Math.max(0, (post.likes || 0) - 1); // Prevent negative likes
         post.likedBy = post.likedBy.filter(function(uid) { return uid !== currentUser.uid; });
     } else { 
         post.likes = (post.likes || 0) + 1; 
@@ -1405,7 +1391,6 @@ function renderThreadMainPost(postId) {
                 <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
                 <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
                 <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
-                <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
             </div>
         </div>`;
 
@@ -2367,135 +2352,6 @@ window.submitVerificationRequest = async function() {
 
 // --- Security Rules Snippet (reference) ---
 // See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
-
-// --- Messaging (DMs) ---
-window.toggleNewChatModal = function(show = true) {
-    const modal = document.getElementById('new-chat-modal');
-    if(modal) modal.style.display = show ? 'flex' : 'none';
-};
-window.openNewChatModal = () => window.toggleNewChatModal(true);
-
-window.searchChatUsers = async function(term = '') {
-    const resultsEl = document.getElementById('chat-search-results');
-    if(!resultsEl) return;
-    resultsEl.innerHTML = '';
-    const cleaned = term.trim().toLowerCase();
-    if(cleaned.length < 2) return;
-    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
-    qSnap.forEach(docSnap => {
-        const data = docSnap.data();
-        const row = document.createElement('div');
-        row.className = 'conversation-item';
-        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexara User'}</div></div>`;
-        row.onclick = () => createConversationWithUser(docSnap.id, data);
-        resultsEl.appendChild(row);
-    });
-};
-
-async function createConversationWithUser(targetUid, targetData = {}) {
-    if(!requireAuth()) return;
-    try {
-        const sortedMembers = [currentUser.uid, targetUid].sort();
-        const existing = conversationsCache.find(c => {
-            const members = c.members || [];
-            return members.length === 2 && sortedMembers.every(id => members.includes(id));
-        });
-        if(existing) {
-            setActiveConversation(existing.id, existing);
-            toggleNewChatModal(false);
-            return;
-        }
-
-        const convoId = `${sortedMembers[0]}_${sortedMembers[1]}`;
-        const convoRef = doc(db, 'conversations', convoId);
-        const existingSnap = await getDoc(convoRef);
-        if(existingSnap.exists()) {
-            const data = existingSnap.data();
-            conversationsCache.push({ id: convoId, ...data });
-            toggleNewChatModal(false);
-            setActiveConversation(convoId, data);
-            return;
-        }
-
-        const payload = {
-            members: sortedMembers,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            lastMessageText: '',
-            lastMessageAt: serverTimestamp(),
-            requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
-        };
-
-        await setDoc(convoRef, payload, { merge: true });
-        conversationsCache.push({ id: convoId, ...payload });
-        toggleNewChatModal(false);
-        setActiveConversation(convoId, payload);
-        return;
-    } catch(err) {
-        console.error('Conversation create error', err);
-        toast('Unable to start chat. Please try again.', 'error');
-        return;
-    }
-}
-
-function initConversations() {
-    if(!requireAuth()) return;
-    if(conversationsUnsubscribe) conversationsUnsubscribe();
-    const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = onSnapshot(convRef, snap => {
-        conversationsCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderConversationList();
-    });
-}
-
-function renderConversationList() {
-    const listEl = document.getElementById('conversation-list');
-    if(!listEl) return;
-    listEl.innerHTML = '';
-    if(conversationsCache.length === 0) {
-        listEl.innerHTML = '<div class="empty-state">No conversations yet.</div>';
-        return;
-    }
-    conversationsCache.forEach(convo => {
-        const partnerId = convo.members.find(m => m !== currentUser.uid) || currentUser.uid;
-        const display = userCache[partnerId]?.username || 'user';
-        const item = document.createElement('div');
-        item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
-        item.innerHTML = `<div><strong>@${display}</strong><div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div></div><span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
-        item.onclick = () => setActiveConversation(convo.id, convo);
-        listEl.appendChild(item);
-    });
-}
-
-function setActiveConversation(convoId, convoData = null) {
-    activeConversationId = convoId;
-    const header = document.getElementById('message-header');
-    const partnerId = (convoData || conversationsCache.find(c => c.id === convoId) || {}).members?.find(m => m !== currentUser.uid);
-    if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
-    listenToMessages(convoId);
-}
-
-function listenToMessages(convoId) {
-    if(messagesUnsubscribe) messagesUnsubscribe();
-    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = onSnapshot(msgRef, snap => {
-        const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        renderMessages(msgs);
-    });
-}
-
-function renderMessages(msgs = []) {
-    const body = document.getElementById('message-thread');
-    if(!body) return;
-    body.innerHTML = '';
-    msgs.forEach(msg => {
-        const bubble = document.createElement('div');
-        bubble.className = 'message-bubble ' + (msg.senderId === currentUser.uid ? 'self' : 'other');
-        bubble.innerHTML = msg.type === 'image' ? `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">` : escapeHtml(msg.text || '');
-        body.appendChild(bubble);
-    });
-    body.scrollTop = body.scrollHeight;
-}
 
 // Start App
 initApp();
