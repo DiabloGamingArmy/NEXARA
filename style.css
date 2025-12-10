@@ -27,7 +27,7 @@ body.light-mode {
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: var(--font-main); background-color: var(--bg-body); color: var(--text-main); overflow-x: hidden; width: 100vw; height: 100vh; }
 
-/* --- NEXARA GRADIENTS & ANIMATIONS --- */
+/* --- NEXERA GRADIENTS & ANIMATIONS --- */
 @keyframes gradientFlow {
     0% { background-position: 0% 50%; }
     50% { background-position: 100% 50%; }
@@ -46,7 +46,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     100% { box-shadow: 0 0 0 0 rgba(0, 242, 234, 0); }
 }
 
-.nexara-gradient-text {
+.nexera-gradient-text {
     background-image: linear-gradient(270deg, #ffffff, #00f2ea, #005bb5);
     background-size: 200% 200%;
     -webkit-background-clip: text;
@@ -60,7 +60,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .sidebar-left { width: 250px; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
 .sidebar-right { width: 320px; border-left: 1px solid var(--border); display: none; }
 
-/* NEXARA FEED BACKGROUND */
+/* NEXERA FEED BACKGROUND */
 .main-feed { 
     flex: 1; 
     border-right: 1px solid var(--border); 
@@ -74,7 +74,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 /* Components */
 .glass-panel { background: var(--glass); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
 
-/* NEXARA NAV ITEMS */
+/* NEXERA NAV ITEMS */
 .nav-item {
     display: flex;
     align-items: center;
@@ -315,7 +315,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .theme-option { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--bg-body); }
 .theme-option input { accent-color: var(--primary); }
 
-/* --- NEXARA AUTH SCREEN --- */
+/* --- NEXERA AUTH SCREEN --- */
 #loading-overlay, #auth-screen { 
     position: fixed; 
     top: 0; 
