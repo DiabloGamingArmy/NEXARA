@@ -317,6 +317,11 @@
         </div>
     </div>
 
+    <div id="post-options-dropdown" class="post-options-dropdown">
+        <button onclick="window.handlePostOptionSelect('report')"><i class="ph ph-flag"></i> Report</button>
+        <button id="dropdown-delete-btn" onclick="window.handlePostOptionSelect('delete')" style="display:none;"><i class="ph ph-trash"></i> Delete</button>
+    </div>
+
     <div id="report-modal" class="modal-overlay">
         <div class="modal-content" style="max-width:480px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">

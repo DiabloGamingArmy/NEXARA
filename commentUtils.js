@@ -15,3 +15,20 @@ export function buildReplyRecord({ text = '', mediaUrl = null, parentCommentId =
         likedBy: []
     };
 }
+
+export function groupCommentsByParent(comments = []) {
+    const byParent = {};
+    const roots = [];
+
+    comments.forEach(function (c) {
+        const parentId = normalizeReplyTarget(c.parentCommentId || c.parentId);
+        if (parentId) {
+            if (!byParent[parentId]) byParent[parentId] = [];
+            byParent[parentId].push(c);
+        } else {
+            roots.push(c);
+        }
+    });
+
+    return { roots, byParent };
+}

@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
-import { normalizeReplyTarget, buildReplyRecord } from "./commentUtils.js";
+import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
 // --- Firebase Configuration ---
 const firebaseConfig = {
@@ -57,7 +57,7 @@ function getReviewDisplay(reviewValue) {
 
 function getPostOptionsButton(post, context = 'feed', iconSize = '1.1rem') {
     const ownerId = post.userId;
-    return `<button class="post-options-btn" onclick="event.stopPropagation(); window.openPostOptions('${post.id}', '${ownerId}', '${context}')" aria-label="Post options"><i class="ph ph-dots-three" style="font-size:${iconSize};"></i></button>`;
+    return `<button class="post-options-btn" onclick="event.stopPropagation(); window.openPostOptions(event, '${post.id}', '${ownerId}', '${context}')" aria-label="Post options"><i class="ph ph-dots-three" style="font-size:${iconSize};"></i></button>`;
 }
 
 function applyReviewButtonState(buttonEl, reviewValue) {
@@ -490,22 +490,30 @@ function startDataListener() {
 }
 
 // PATCH: New listener to fetch user's reviews across all posts
-function startUserReviewListener(uid) {
+async function startUserReviewListener(uid) {
     const q = query(collectionGroup(db, 'reviews'), where('userId', '==', uid));
-    onSnapshot(q, function (snapshot) {
+
+    const handleSnapshot = function (snapshot) {
         window.myReviewCache = {};
         snapshot.forEach(function (doc) {
-            // In a Collection Group query, we can access the parent Post ID
             const parentPostRef = doc.ref.parent.parent;
             if (parentPostRef) {
                 window.myReviewCache[parentPostRef.id] = doc.data().rating;
             }
         });
 
-        // Refresh UI for all loaded posts to apply colors
         allPosts.forEach(function (post) { refreshSinglePostUI(post.id); });
         applyMyReviewStylesToDOM();
-    }, function (error) {
+    };
+
+    try {
+        const initial = await getDocs(q);
+        handleSnapshot(initial);
+    } catch (error) {
+        console.log("Initial audit hydration error:", error.message);
+    }
+
+    onSnapshot(q, handleSnapshot, function (error) {
         console.log("Review listener note:", error.message);
     });
 }
@@ -1300,40 +1308,48 @@ function renderThreadComments(comments = []) {
         return;
     }
 
-    comments.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+    const { roots, byParent } = groupCommentsByParent(comments);
 
-    comments.forEach(function(c) {
+    const renderCommentHtml = function(c, isReply) {
         const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
         const parentCommentId = c.parentCommentId || c.parentId;
         const isReply = parentCommentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
         const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
-
         const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
-        let mediaHtml = c.mediaUrl
-            ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>`
+        const mediaHtml = c.mediaUrl
+            ? `<div onclick=\"window.openFullscreenMedia('${c.mediaUrl}', 'image')\"><img src=\"${c.mediaUrl}\" style=\"max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;\"></div>`
             : "";
 
-        container.innerHTML += `
-            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${isReply}">
-                <div style="display:flex; gap:10px; align-items:flex-start;">
-                    <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>
-                    <div style="flex:1;">
-                        <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
-                        <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
-                        ${mediaHtml}
-                        <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
-                            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
-                            <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}</button>
-                        </div>
-                        <div id="reply-slot-${c.id}"></div>
-                    </div>
-                </div>
-            </div>`;
-    });
+        const replyStyle = isReply ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
+
+        return `
+            <div id=\"comment-${c.id}\" style=\"margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}\">\n                <div style=\"display:flex; gap:10px; align-items:flex-start;\">\n                    <div class=\"user-avatar\" style=\"width:36px; height:36px; font-size:0.9rem; ${avatarBg}\">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>\n                    <div style=\"flex:1;\">\n                        <div style=\"font-size:0.9rem; margin-bottom:2px;\"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style=\"color:var(--text-muted); font-size:0.8rem;\">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>\n                        <div style=\"margin-top:2px; font-size:0.95rem; line-height:1.4;\">${escapeHtml(c.text||'')}</div>\n                        ${mediaHtml}\n                        <div style=\"margin-top:8px; display:flex; gap:15px; align-items:center;\">\n                            <button onclick=\"window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')\" style=\"background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;\"><i class=\"ph ph-arrow-bend-up-left\"></i> Reply</button>\n                            <button onclick=\"window.toggleCommentLike('${c.id}', event)\" style=\"background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;\"><i class=\"${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up\"></i> ${c.likes || 0}</button>\n                        </div>\n                        <div id=\"reply-slot-${c.id}\"></div>\n                    </div>\n                </div>\n            </div>`;
+    };
+
+    roots.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+    roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+
+    const renderReplies = function(parentId) {
+        const replies = (byParent[parentId] || []).slice().sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+        replies.forEach(function(reply) {
+            const slot = document.getElementById(`reply-slot-${parentId}`);
+            if (slot) {
+                slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+            }
+            renderReplies(reply.id);
+        });
+    };
+
+    roots.forEach(function(c) { renderReplies(c.id); });
+
+    const inputArea = document.getElementById('thread-input-area');
+    const defaultSlot = document.getElementById('thread-input-default-slot');
+    if (inputArea && !inputArea.parentElement && defaultSlot) {
+        defaultSlot.appendChild(inputArea);
+    }
 
     if (activeReplyId) {
         const slot = document.getElementById(`reply-slot-${activeReplyId}`);
-        const inputArea = document.getElementById('thread-input-area');
         if (slot && inputArea && !slot.contains(inputArea)) {
             slot.appendChild(inputArea);
             const input = document.getElementById('thread-input');
@@ -1460,10 +1476,15 @@ window.sendComment = async function() {
         document.getElementById('attach-btn-text').style.color = "var(--text-muted)"; 
         fileInput.value = "";
     } catch(e) { 
-        console.error(e); 
-    } finally { 
-        btn.disabled = false; 
-        btn.textContent = "Reply"; 
+        console.error(e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Reply";
+        const defaultSlot = document.getElementById('thread-input-default-slot');
+        const inputArea = document.getElementById('thread-input-area');
+        if (defaultSlot && inputArea && !defaultSlot.contains(inputArea)) {
+            defaultSlot.appendChild(inputArea);
+        }
     }
 }
 
@@ -1875,9 +1896,44 @@ window.previewPostImage = function(input) { if(input.files && input.files[0]) { 
 window.clearPostImage = function() { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
 window.togglePostOption = function(type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type); ['poll', 'gif', 'schedule', 'location'].forEach(function(t) { if(t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
 window.closeReview = function() { return document.getElementById('review-modal').style.display = 'none'; };
-window.openPostOptions = function(postId, ownerId, context = 'feed') { if(!requireAuth()) return; activeOptionsPost = { id: postId, ownerId, context }; const modal = document.getElementById('post-options-modal'); const deleteBtn = document.getElementById('delete-post-btn'); if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'inline-flex' : 'none'; if(modal) modal.style.display = 'flex'; }
-window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; }
-window.openReportModal = function() { const opts = document.getElementById('post-options-modal'); if(opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'flex'; }
+function closePostOptionsDropdown() {
+    const dropdown = document.getElementById('post-options-dropdown');
+    if (dropdown) dropdown.style.display = 'none';
+    document.removeEventListener('click', handlePostOptionsOutside, true);
+    document.removeEventListener('keydown', handlePostOptionsEscape, true);
+}
+
+function handlePostOptionsOutside(event) {
+    const dropdown = document.getElementById('post-options-dropdown');
+    if (!dropdown) return;
+    if (dropdown.contains(event.target)) return;
+    closePostOptionsDropdown();
+}
+
+function handlePostOptionsEscape(event) {
+    if (event.key === 'Escape') closePostOptionsDropdown();
+}
+
+window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
+    if(!requireAuth()) return;
+    activeOptionsPost = { id: postId, ownerId, context };
+    const dropdown = document.getElementById('post-options-dropdown');
+    const deleteBtn = document.getElementById('dropdown-delete-btn');
+    if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if (dropdown && event && event.currentTarget) {
+        dropdown.style.display = 'block';
+        const rect = event.currentTarget.getBoundingClientRect();
+        const dropdownRect = dropdown.getBoundingClientRect();
+        dropdown.style.top = `${rect.bottom + window.scrollY + 6}px`;
+        dropdown.style.left = `${Math.max(10, rect.right + window.scrollX - dropdownRect.width)}px`;
+    }
+    document.addEventListener('click', handlePostOptionsOutside, true);
+    document.addEventListener('keydown', handlePostOptionsEscape, true);
+};
+
+window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
+window.handlePostOptionSelect = function(action) { closePostOptionsDropdown(); if(action === 'report') return window.openReportModal(); if(action === 'delete') return window.confirmDeletePost(); }
+window.openReportModal = function() { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if(opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'flex'; }
 window.closeReportModal = function() { const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'none'; }
 window.submitReport = async function() { if(!requireAuth()) return; if(!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if(!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if(detailEl) detailEl.value = ''; if(categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch(e) { console.error(e); toast('Could not submit report.', 'error'); } }
 window.confirmDeletePost = async function() { if(!activeOptionsPost || !activeOptionsPost.id) return; if(!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if(!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function(p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if(currentViewId === 'profile') renderProfile(); if(currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if(activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if(threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch(e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
