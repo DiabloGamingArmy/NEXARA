@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexara: Stream, Socialize, Strive</title>
+    
+    <!-- Tailwind for utilities -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Loading -->
+    <div id="loading-overlay"><div class="spike-logo-load nexara-gradient-text">⚡</div><div style="color:var(--text-muted);">Initializing Nexara...</div></div>
+
+    <!-- Auth -->
+    <div id="auth-screen">
+        <div class="spike-logo-load nexara-gradient-text">⚡</div>
+        <div class="auth-box">
+            <h2 class="nexara-gradient-text" style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">NEXARA</h2>
+            <p style="color:var(--text-muted); margin-bottom: 1.5rem;">Enter the stream.</p>
+            <input type="email" id="email" class="form-input" placeholder="Email">
+            <input type="password" id="password" class="form-input" placeholder="Password">
+            <div id="auth-error" style="color:#ff3d3d; font-size:0.8rem; margin:5px 0;"></div>
+            <button onclick="window.handleLogin(event)" class="create-btn-sidebar" style="background: var(--primary); color:black;">Log In</button>
+            <button onclick="window.handleSignup(event)" class="create-btn-sidebar" style="background:transparent; border:1px solid var(--border); color:var(--text-main); margin-top:10px;">Sign Up</button>
+            <button onclick="window.handleAnon()" style="margin-top:15px; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size: 0.85rem;">Continue as Guest</button>
+        </div>
+    </div>
+    
+    <!-- Media Modal (Lightbox) -->
+    <div id="media-modal" class="modal-overlay" onclick="window.closeFullscreenMedia()">
+        <div id="media-modal-content" style="max-width:90vw; max-height:90vh; display:flex; justify-content:center; align-items:center;">
+            <!-- Media injected here -->
+        </div>
+        <button onclick="window.closeFullscreenMedia()" style="position:absolute; top:20px; right:20px; background:none; border:none; color:white; font-size:2rem; cursor:pointer;">&times;</button>
+    </div>
+
+    <!-- Modals -->
+    <!-- Create Post Modal -->
+    <div id="create-modal" class="modal-overlay" style="align-items: flex-start; padding-top: 5vh;">
+        <div class="x-modal-content">
+            <div class="x-modal-header">
+                <button onclick="window.toggleCreateModal(false)" class="x-close-btn">&times;</button>
+                 <select id="postCategory" class="x-pill-select" style="margin-left: auto; border-color: transparent; color: var(--primary);">
+                    <option>STEM</option><option>Coding</option><option>History</option><option>Gaming</option><option>Brainrot</option><option>Sports</option>
+                </select>
+            </div>
+
+            <div class="x-body">
+                <div id="modal-user-avatar" class="x-avatar"></div>
+                <div class="x-inputs">
+                    <select id="postVisibility" class="x-pill-select">
+                        <option value="Everyone">Everyone can reply</option>
+                        <option value="Followers">Followers only</option>
+                        <option value="Mentions">Only people you mention</option>
+                    </select>
+
+                    <input type="text" id="postTitle" class="x-input-title" placeholder="Title (Optional)">
+                    <textarea id="postContent" class="x-input-content" placeholder="What is happening?!" rows="3"></textarea>
+                    
+                    <div id="img-preview-container" class="attachment-preview">
+                        <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
+                        <img id="img-preview-tag" src="">
+                    </div>
+
+                    <div id="extra-options-area" class="extra-options-panel">
+                        <div id="post-opt-poll" style="display:none;">
+                            <label style="font-size:0.8rem; color:var(--text-muted);">Poll Options</label>
+                            <input type="text" class="form-input poll-opt" placeholder="Option 1" style="margin:5px 0;">
+                            <input type="text" class="form-input poll-opt" placeholder="Option 2" style="margin-bottom:5px;">
+                        </div>
+                        <div id="post-opt-gif" style="display:none;">
+                            <input type="text" class="form-input" placeholder="Paste GIF URL..." style="margin-bottom:0;">
+                        </div>
+                         <div id="post-opt-schedule" style="display:none;">
+                            <input type="datetime-local" class="form-input" style="margin-bottom:0;">
+                        </div>
+                        <div id="post-opt-location" style="display:none;">
+                            <input type="text" class="form-input" placeholder="Add Location" style="margin-bottom:0;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="x-footer">
+                <div class="x-toolbar">
+                    <input type="file" id="postFile" style="display: none;" accept="image/*" onchange="window.previewPostImage(this)">
+                    <button class="x-tool-btn" onclick="document.getElementById('postFile').click()" title="Media"><i class="ph ph-camera"></i></button>
+                    <button class="x-tool-btn" onclick="window.togglePostOption('gif')" title="GIF"><i class="ph ph-gif"></i></button>
+                    <button class="x-tool-btn" onclick="window.togglePostOption('poll')" title="Poll"><i class="ph ph-chart-bar"></i></button>
+                    <button class="x-tool-btn" onclick="alert('Emoji picker coming soon!')" title="Emoji"><i class="ph ph-smiley"></i></button>
+                    <button class="x-tool-btn" onclick="window.togglePostOption('schedule')" title="Schedule"><i class="ph ph-calendar"></i></button>
+                    <button class="x-tool-btn" onclick="window.togglePostOption('location')" title="Location"><i class="ph ph-map-pin"></i></button>
+                </div>
+                <button id="publishBtn" onclick="window.createPost()" class="x-post-btn">Post</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h2 style="margin-bottom:1rem; font-weight:800;">Settings</h2>
+            <input type="text" id="set-name" class="form-input" placeholder="Display Name">
+            <input type="text" id="set-username" class="form-input" placeholder="Username">
+            <textarea id="set-bio" class="form-input" placeholder="Bio"></textarea>
+            <label style="color:var(--text-muted); font-size:0.8rem;">Profile Picture</label>
+            <input type="file" id="set-pic-file" class="form-input">
+            <button onclick="window.saveSettings()" class="create-btn-sidebar">Save Changes</button>
+            <button onclick="window.toggleSettingsModal(false)" style="margin-top:10px; width:100%; padding:10px; background:transparent; border:1px solid var(--border); color:var(--text-muted); border-radius:30px; cursor:pointer;">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Review Modal -->
+    <div id="review-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div style="display:flex; justify-content:space-between; margin-bottom:1rem;">
+                <h2 style="font-weight:800;"><i class="ph ph-scales"></i> Peer Review</h2>
+                <button onclick="window.closeReview()" style="background:none; border:none; color:var(--text-muted); font-size:1.5rem;">&times;</button>
+            </div>
+
+            <div style="background:#000; padding:1rem; border-radius:8px; margin-bottom:1rem; text-align:center;">
+                <div id="review-bar" style="display:flex; height:8px; background:#333; border-radius:4px; overflow:hidden; margin-bottom:10px;"></div>
+                <div id="review-stats-text" style="font-size:0.85rem; font-weight:bold;">Loading...</div>
+            </div>
+
+            <div id="review-list" style="max-height:200px; overflow-y:auto; margin-bottom:1rem;"></div>
+
+            <div id="review-submit-section">
+                <h3 style="font-size:1rem; margin-bottom:10px;">Submit Audit</h3>
+                <select id="review-rating" class="form-select">
+                    <option value="verified">Verified Accurate</option>
+                    <option value="citation">Needs Citations</option>
+                    <option value="misleading">Misleading / False</option>
+                </select>
+                <textarea id="review-note" class="form-input" rows="2" placeholder="Explanation..."></textarea>
+                <button onclick="window.submitReview()" class="create-btn-sidebar" style="margin-top:0;">Submit Review</button>
+            </div>
+
+            <div id="review-remove-section" style="display:none; text-align:center; padding-top:10px; border-top:1px solid var(--border);">
+                 <!-- Added container to show what they rated -->
+                <div id="review-user-status" style="margin-bottom:10px; font-weight:bold; color:var(--text-main);"></div>
+                <button onclick="window.removeReview()" class="create-btn-sidebar" style="background:#ff3d3d; border:none; color:white; width:auto; padding: 10px 20px;">Remove My Review</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Layout -->
+    <div id="app-layout" class="app-layout">
+        <nav class="sidebar-left glass-panel">
+            <div class="nexara-gradient-text" style="font-size:1.8rem; font-weight:900; margin-bottom:2rem; cursor:pointer; display:flex; align-items:center; gap:10px;" onclick="window.navigateTo('feed')">
+                <i class="ph-fill ph-asterisk-simple"></i> Nexara
+            </div>
+            <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i class="ph-bold ph-house"></i> Home</a>
+            <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i> Live</a>
+            <a onclick="window.navigateTo('discover')" id="nav-discover" class="nav-item"><i class="ph-bold ph-compass"></i> Discover</a>
+            <a onclick="window.navigateTo('saved')" id="nav-saved" class="nav-item"><i class="ph-bold ph-bookmark"></i> Saved</a>
+            <a onclick="window.navigateTo('profile')" id="nav-profile" class="nav-item"><i class="ph-bold ph-user"></i> Profile</a>
+            <button onclick="window.toggleCreateModal(true)" class="create-btn-sidebar"><i class="ph-bold ph-plus"></i> Post</button>
+        </nav>
+
+        <main class="main-feed">
+            <div id="view-feed" class="view-section">
+                <div class="category-header">
+                    <div class="category-pill active" onclick="window.setCategory('For You')">For You</div>
+                    <div class="category-pill" onclick="window.setCategory('STEM')"><i class="ph ph-flask"></i> STEM</div>
+                    <div class="category-pill" onclick="window.setCategory('Coding')"><i class="ph ph-code"></i> Coding</div>
+                    <div class="category-pill" onclick="window.setCategory('History')"><i class="ph ph-scroll"></i> History</div>
+                    <div class="category-pill" onclick="window.setCategory('Brainrot')"><i class="ph ph-skull"></i> Brainrot</div>
+                </div>
+                <div id="feed-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
+            </div>
+
+            <div id="view-saved" class="view-section" style="display:none;">
+                <div style="padding: 1rem 1rem 0 1rem;">
+                    <h2 style="font-weight:800; font-size:1.5rem; margin-bottom:1rem;">Saved Posts</h2>
+                    <input type="text" class="form-input" placeholder="Search your saved posts..." oninput="window.handleSavedSearch(event)">
+                    
+                    <div style="display:flex; gap:10px; margin-bottom:1rem; overflow-x:auto; padding-bottom:5px;">
+                        <button class="saved-pill active" onclick="window.setSavedFilter('All Saved')">All Saved</button>
+                        <button class="saved-pill" onclick="window.setSavedFilter('Recent')">Recently Saved</button>
+                        <button class="saved-pill" onclick="window.setSavedFilter('Oldest')">Oldest Saved</button>
+                        <button class="saved-pill" onclick="window.setSavedFilter('Videos')">Videos</button>
+                        <button class="saved-pill" onclick="window.setSavedFilter('Images')">Images</button>
+                    </div>
+                </div>
+                <div id="saved-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
+            </div>
+
+            <div id="view-thread" class="view-section" style="display:none;">
+                <div class="glass-panel" style="position: sticky; top: 0; z-index: 20; padding: 1rem; display: flex; align-items: center; gap: 15px;">
+                     <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                        <span>←</span> Back
+                    </button>
+                    <h2 style="font-weight: 800; font-size: 1.2rem;">Thread</h2>
+                </div>
+                <div id="thread-main-post"></div>
+                
+                <div id="thread-input-default-slot" style="padding: 1rem; border-bottom: 1px solid var(--border);">
+                    <div id="thread-input-area" style="display: flex; gap: 10px;">
+                         <div id="thread-input-pfp" style="width: 40px; height: 40px; border-radius: 12px; background: #333;"></div>
+                         <div style="flex: 1;">
+                             <textarea id="thread-input" class="form-input" placeholder="Post your reply" rows="2" style="margin-bottom: 5px; background: transparent; border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 0;"></textarea>
+                             <div style="display: flex; justify-content: space-between; align-items: center;">
+                                 <div>
+                                     <input type="file" id="thread-file" style="display: none;" onchange="window.handleFileSelect(this)">
+                                     <button onclick="window.triggerFileSelect()" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 0.9rem;" id="attach-btn-text">📎 Attach</button>
+                                 </div>
+                                 <div>
+                                     <button id="thread-cancel-btn" onclick="window.resetInputBox()" style="background: transparent; color: var(--text-muted); border: none; margin-right: 10px; cursor: pointer; display: none;">Cancel</button>
+                                     <button id="thread-send-btn" onclick="window.sendComment()" class="create-btn-sidebar" style="width: auto; padding: 6px 15px; margin-top: 0; font-size: 0.9rem;">Reply</button>
+                                 </div>
+                             </div>
+                         </div>
+                    </div>
+                </div>
+                <div id="thread-stream" style="padding: 1rem; max-width: 800px; margin: 0 auto;"></div>
+            </div>
+
+            <div id="view-public-profile" class="view-section" style="display:none;"></div>
+
+            <div id="view-discover" class="view-section" style="display:none;">
+                <div style="padding: 1rem 1rem 0 1rem;">
+                    <h2 style="font-weight:800; font-size:1.5rem; margin-bottom:1rem;">Discover</h2>
+                    <input type="text" class="form-input" placeholder="Search users, posts..." oninput="window.handleSearchInput(event)">
+                    
+                    <div style="display:flex; gap:10px; margin-bottom:1rem; overflow-x:auto;">
+                        <button class="discover-pill active" onclick="window.setDiscoverFilter('All Results')">All Results</button>
+                        <button class="discover-pill" onclick="window.setDiscoverFilter('Recent Posts')">Recent Posts</button>
+                        <button class="discover-pill" onclick="window.setDiscoverFilter('Popular Posts')">Popular Posts</button>
+                        <button class="discover-pill" onclick="window.setDiscoverFilter('Users')">Users</button>
+                        <button class="discover-pill" onclick="window.setDiscoverFilter('Livestreams')">Livestreams</button>
+                    </div>
+                </div>
+                <div id="discover-results" style="padding: 0 1rem 1rem 1rem; max-width:800px; margin:0 auto;">
+                    <div class="empty-state"><p>Start typing to search or explore categories.</p></div>
+                </div>
+            </div>
+
+            <div id="view-live" class="view-section" style="padding:1rem; display:none;"><h2><i class="ph-fill ph-broadcast"></i> Live Network</h2><div id="live-grid-container" class="live-grid"></div></div>
+            <div id="view-profile" class="view-section" style="display:none;"></div>
+        </main>
+
+        <aside class="sidebar-right glass-panel">
+            <div class="trend-box">
+                <div class="trend-title">Trending <i class="ph-fill ph-trend-up"></i></div>
+                <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
+                <div class="trend-item"><span>#AI</span><span style="color:var(--text-muted);">8k</span></div>
+            </div>
+            
+            <div class="trend-box">
+                <div class="trend-title"><i class="ph-fill ph-hourglass"></i> Time Capsule</div>
+                <div class="otd-widget">
+                    <div class="otd-date" id="otd-date-display">...</div>
+                    <div class="otd-event" id="otd-event-display">Loading history...</div>
+                </div>
+            </div>
+            
+            <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexara Network</div>
+        </aside>
+    </div>
+
+    <!-- Main JS logic -->
+    <script type="module" src="script.js"></script>
+
+</body>
+</html>

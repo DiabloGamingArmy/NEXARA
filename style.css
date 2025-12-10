@@ -1,0 +1,272 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+
+:root { 
+    --bg-body: #08090a; 
+    --bg-card: #161b22; 
+    --bg-hover: #21262d; 
+    --primary: #00f2ea; 
+    --text-main: #f0f6fc; 
+    --text-muted: #8b949e; 
+    --border: #30363d; 
+    --radius: 12px; 
+    --glass: rgba(22, 27, 34, 0.7); 
+    --font-main: 'Inter', sans-serif; 
+}
+
+body.light-mode { 
+    --bg-body: #f0f2f5; 
+    --bg-card: #ffffff; 
+    --bg-hover: #e4e6eb; 
+    --text-main: #050505; 
+    --text-muted: #65676b; 
+    --border: #ced0d4; 
+    --glass: rgba(255, 255, 255, 0.85); 
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-main); background-color: var(--bg-body); color: var(--text-main); overflow-x: hidden; width: 100vw; height: 100vh; }
+
+/* --- NEXARA GRADIENTS & ANIMATIONS --- */
+@keyframes gradientFlow {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+.nexara-gradient-text {
+    background-image: linear-gradient(270deg, #ffffff, #00f2ea, #005bb5);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradientFlow 6s ease infinite;
+}
+
+/* Layout & Common */
+.app-layout { display: none; min-height: 100vh; width: 100%; }
+.sidebar-left, .sidebar-right { position: sticky; top: 0; height: 100vh; flex-shrink: 0; padding: 2rem 1.5rem; }
+.sidebar-left { width: 250px; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.sidebar-right { width: 320px; border-left: 1px solid var(--border); display: none; }
+
+/* NEXARA FEED BACKGROUND */
+.main-feed { 
+    flex: 1; 
+    border-right: 1px solid var(--border); 
+    min-width: 0;
+    /* Subtle stream gradient */
+    background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%); 
+}
+
+@media(min-width: 1024px) { .sidebar-right { display: block; } }
+
+/* Components */
+.glass-panel { background: var(--glass); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+
+/* NEXARA NAV ITEMS */
+.nav-item { 
+    display: flex; 
+    align-items: center; 
+    padding: 0.8rem 1rem; 
+    color: #b0b3b8; /* Dark White/Muted Gray */
+    text-decoration: none; 
+    border-radius: var(--radius); 
+    margin-bottom: 5px; 
+    cursor: pointer; 
+    transition: 0.2s; 
+    font-weight: 600;
+}
+
+.nav-item:hover { background: var(--bg-hover); color: var(--text-main); }
+
+/* Active Nav Item - Moving Gradient */
+.nav-item.active { 
+    background: rgba(0, 242, 234, 0.05); /* Very slight tint */
+}
+
+/* Apply gradient specifically to text and icon inside active nav */
+.nav-item.active i, .nav-item.active {
+    background-image: linear-gradient(270deg, #ffffff, #00f2ea, #005bb5);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradientFlow 6s ease infinite;
+}
+
+/* Icon spacing fix */
+.nav-item i { margin-right: 12px; font-size: 1.3rem; }
+
+.create-btn-sidebar { background: var(--primary); color: #000; border: none; padding: 0.9rem; border-radius: 30px; font-weight: 700; width: 100%; cursor: pointer; margin-top: 1rem; transition: transform 0.2s; }
+
+/* Feed Cards */
+.social-card { background: var(--bg-card); border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 1.5rem; overflow: hidden; transition: 0.2s; opacity: 0; animation: fadeIn 0.4s forwards; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+.card-header { padding: 1rem; display: flex; gap: 12px; align-items: center; }
+.user-avatar { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: black; font-weight: bold; font-size: 1.1rem; }
+.header-info { flex: 1; }
+.author-wrapper { display: flex; align-items: center; gap: 12px; padding: 4px 8px; border-radius: 8px; transition: 0.2s; cursor: pointer; margin-left: -8px; }
+.author-wrapper:hover { background: rgba(255,255,255,0.05); border: 1px solid var(--border); }
+.author-name { font-weight: 700; color: var(--text-main); }
+.post-meta { font-size: 0.8rem; color: var(--text-muted); padding-left: 5px;}
+
+.card-content { padding: 0 1rem 1rem; transition: background 0.2s; border-radius: 8px; cursor: pointer; }
+.card-content:hover { background: rgba(255,255,255,0.02); box-shadow: 0 0 0 1px var(--border); }
+
+.post-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-main); }
+
+/* UPDATED IMAGE STYLES: CONTAIN & CENTERED */
+.post-media { 
+    width: 100%; 
+    border-radius: 8px; 
+    margin-top: 10px; 
+    max-height: 500px; 
+    object-fit: contain; 
+    background: transparent; /* or black if preferred */
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+}
+/* Ensure video container also respects centering */
+.video-container { width: 100%; background: #000; border-radius: 8px; margin-top: 10px; display: flex; justify-content: center; max-height: 500px; overflow: hidden;}
+.video-container video { max-height: 500px; width: 100%; object-fit: contain; }
+
+.card-actions { padding: 0.8rem 1rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; }
+.action-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; display: flex; gap: 6px; font-weight: 600; align-items: center; padding: 5px 10px; border-radius: 6px; }
+.action-btn:hover { background: var(--bg-hover); color: var(--primary); }
+
+/* New Button Styles */
+.follow-btn { background: rgba(255,255,255,0.1); border-radius: 10px; border-color: transparent; color: var(--text-main);}
+.follow-btn:hover { border-color: var(--primary); color: var(--primary); }
+.follow-btn.following {  background: transparent; border: 1px solid var(--border); color: var(--text-muted); padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; cursor: pointer; transition:0.2s;  }
+
+.back-btn-outline { border: 1px solid var(--border); padding: 5px 12px; border-radius: 20px; transition: 0.2s; }
+.back-btn-outline:hover { background: var(--bg-hover); border-color: var(--primary); }
+
+.category-header { display: flex; gap: 10px; padding: 1rem; overflow-x: auto; position: sticky; top: 0; z-index: 10; scrollbar-width: none; }
+.category-pill { padding: 8px 18px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 100px; cursor: pointer; white-space: nowrap; font-size: 0.85rem; color: var(--text-muted); font-weight: 600;}
+.category-pill.active { background: var(--primary); color: black; border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 242, 234, 0.3); }
+.category-badge { font-size: 0.7rem; padding: 4px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.03); color: var(--primary); border: 1px solid var(--border); font-weight: 600; display: inline-block; margin-bottom: 0.5rem; }
+
+/* Discover Pill Styles */
+.discover-pill {
+    padding: 6px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; background: transparent; color: var(--text-muted); border: 1px solid transparent; transition: 0.2s;
+}
+.discover-pill:hover { background: var(--bg-hover); color: var(--text-main); }
+.discover-pill.active { background: rgba(0, 242, 234, 0.1); color: var(--primary); border-color: var(--primary); font-weight: 600; }
+
+/* Saved Pill Styles */
+.saved-pill {
+    padding: 6px 12px; border-radius: 8px; font-size: 0.85rem; cursor: pointer; background: transparent; color: var(--text-muted); border: 1px solid transparent; transition: 0.2s; white-space: nowrap;
+}
+.saved-pill:hover { background: var(--bg-hover); color: var(--text-main); }
+.saved-pill.active { background: rgba(0, 242, 234, 0.1); color: var(--primary); border-color: var(--primary); font-weight: 600; }
+
+.discover-section-header {
+    font-size: 1.1rem; font-weight: 800; margin: 1.5rem 0 0.5rem 0; color: var(--text-muted); border-bottom: 1px solid var(--border); padding-bottom: 5px;
+}
+
+/* Widgets, Modals */
+.trend-box { background: var(--bg-card); border-radius: var(--radius); padding: 1.2rem; border: 1px solid var(--border); margin-bottom: 1.5rem; }
+.trend-title { font-weight: 800; margin-bottom: 1rem; color: var(--text-main); }
+.trend-item { display: flex; justify-content: space-between; margin-bottom: 1rem; cursor: pointer; padding: 8px; border-radius: 8px; }
+.trend-item:hover { background: var(--bg-hover); }
+.otd-widget { border-left: 3px solid var(--primary); padding-left: 15px; background: linear-gradient(90deg, rgba(0, 242, 234, 0.05), transparent); padding: 10px 10px 10px 15px; border-radius: 0 8px 8px 0; }
+.otd-date { font-size: 0.75rem; color: var(--primary); font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+.otd-event { font-size: 0.9rem; line-height: 1.5; color: var(--text-main); }
+
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
+.modal-content { background: var(--bg-card); width: 90%; max-width: 550px; padding: 2rem; border-radius: 16px; border: 1px solid var(--border); max-height: 90vh; overflow-y: auto; color: var(--text-main); position: relative; }
+.form-input, .form-select { width: 100%; padding: 12px; background: var(--bg-body); border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; font-family: inherit; margin-bottom: 10px; }
+
+/* --- NEXARA AUTH SCREEN --- */
+#loading-overlay, #auth-screen { 
+    position: fixed; 
+    top: 0; 
+    left: 0; 
+    width: 100%; 
+    height: 100%; 
+    z-index: 9999; 
+    display: flex; 
+    flex-direction: column; 
+    justify-content: center; 
+    align-items: center; 
+}
+
+/* Dark Blue/Black to Black Radial Gradient */
+#auth-screen {
+    background: radial-gradient(circle at center, #0f1419 0%, #000000 100%);
+    backdrop-filter: blur(10px);
+}
+
+#loading-overlay { background: var(--bg-body); }
+
+/* Glass Shard Auth Box */
+.auth-box { 
+    background: rgba(22, 27, 34, 0.65); 
+    padding: 2.5rem 2rem; 
+    border-radius: 16px; 
+    border: 1px solid rgba(0, 242, 234, 0.3); /* Thin glowing border */
+    width: 90%; 
+    max-width: 400px; 
+    text-align: center; 
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8); /* Heavy drop shadow */
+    animation: floatUpFade 0.8s ease-out forwards;
+}
+
+@keyframes floatUpFade {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.spike-logo-load { font-size: 5rem; animation: pulse 1.5s infinite; margin-bottom: 1.5rem; text-shadow: 0 0 30px rgba(0, 242, 234, 0.4); }
+@keyframes pulse { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.1); opacity: 0.8; } 100% { transform: scale(1); opacity: 1; } }
+
+.profile-header { text-align: center; padding: 2rem; border-bottom: 1px solid var(--border); }
+.profile-pic { width: 100px; height: 100px; border-radius: 50%; margin: 0 auto 1rem; display: flex; align-items: center; justify-content: center; font-size: 2rem; font-weight: bold; color: black; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary); }
+.stats-row { display: flex; justify-content: center; gap: 2rem; margin-top: 1rem; }
+.stat-item div:first-child { font-size: 1.2rem; font-weight: 800; color: var(--text-main); }
+.stat-item div:last-child { font-size: 0.8rem; color: var(--text-muted); }
+.empty-state { text-align: center; padding: 4rem 2rem; color: var(--text-muted); border: 2px dashed var(--border); border-radius: var(--radius); margin: 2rem auto; width: 90%; }
+
+/* X-STYLE COMPOSER CSS */
+.x-modal-content { background: var(--bg-card); width: 100%; max-width: 600px; border-radius: 16px; border: 1px solid var(--border); overflow: hidden; position: relative; }
+.x-modal-header { display: flex; justify-content: flex-start; padding: 10px 15px; }
+.x-close-btn { background: none; border: none; color: var(--text-main); font-size: 1.5rem; cursor: pointer; padding: 5px; line-height: 1; }
+.x-body { display: flex; padding: 5px 20px 15px 20px; gap: 12px; }
+.x-avatar { flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; background-color: #333; background-size: cover; background-position: center; }
+.x-inputs { flex: 1; display: flex; flex-direction: column; }
+
+.x-pill-select {
+    appearance: none; background: transparent; color: var(--primary); border: 1px solid var(--border); 
+    border-radius: 20px; padding: 2px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer; 
+    margin-bottom: 10px; width: fit-content; text-align: center;
+}
+.x-pill-select:hover { background: rgba(0, 242, 234, 0.1); }
+.x-pill-select:focus { outline: none; border-color: var(--primary); }
+
+.x-input-title {
+    background: transparent; border: none; color: var(--text-main); font-weight: 800; font-size: 1.2rem;
+    width: 100%; outline: none; margin-bottom: 5px; font-family: inherit;
+}
+.x-input-content {
+    background: transparent; border: none; color: var(--text-main); font-size: 1.1rem;
+    width: 100%; outline: none; resize: none; font-family: inherit; min-height: 100px;
+}
+
+.x-footer {
+    border-top: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; margin-top: 10px;
+}
+.x-toolbar { display: flex; gap: 15px; }
+.x-tool-btn { background: none; border: none; color: var(--primary); font-size: 1.1rem; cursor: pointer; padding: 5px; border-radius: 50%; transition: 0.2s; }
+.x-tool-btn:hover { background: rgba(0, 242, 234, 0.1); }
+
+.x-post-btn {
+    background: var(--primary); color: #000; border: none; padding: 8px 20px; border-radius: 20px; font-weight: 700; font-size: 0.95rem; cursor: pointer; opacity: 0.9;
+}
+.x-post-btn:hover { opacity: 1; }
+.x-post-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.attachment-preview { position: relative; width: 100%; margin-top: 10px; border-radius: 12px; overflow: hidden; display: none; }
+.attachment-preview img { width: 100%; max-height: 300px; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); }
+.remove-attachment { position: absolute; top: 5px; left: 5px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; }
+
+.extra-options-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: none; background: rgba(255,255,255,0.02); }
