@@ -72,10 +72,10 @@ function applyMyReviewStylesToDOM() {
 }
 
 let userProfile = {
-    name: "Nexara User",
+    name: "Nexera User",
     realName: "",
     nickname: "",
-    username: "nexara_explorer",
+    username: "nexera_explorer",
     bio: "Stream, Socialize, and Strive.",
     links: "mysite.com",
     email: "",
@@ -215,7 +215,7 @@ function initApp() {
                     userCache[user.uid] = userProfile;
 
                     // Apply stored theme preference
-                    const savedTheme = userProfile.theme || nexaraGetStoredThemePreference() || 'system';
+                    const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
                     userProfile.theme = savedTheme;
                     applyTheme(savedTheme);
 
@@ -228,8 +228,8 @@ function initApp() {
                 } else {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
-                    userProfile.name = user.displayName || "Nexara User";
-                    const storedTheme = nexaraGetStoredThemePreference() || userProfile.theme || 'system';
+                    userProfile.name = user.displayName || "Nexera User";
+                    const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
                     userProfile.theme = storedTheme;
                     applyTheme(storedTheme);
                     const staffNav = document.getElementById('nav-staff');
@@ -277,8 +277,8 @@ function getSystemTheme() {
 }
 
 // Unique helper to avoid name collisions elsewhere in the module
-function nexaraGetStoredThemePreference() {
-    try { return localStorage.getItem('nexara-theme'); }
+function nexeraGetStoredThemePreference() {
+    try { return localStorage.getItem('nexera-theme'); }
     catch (e) { return null; }
 }
 
@@ -286,7 +286,7 @@ function applyTheme(preference = 'system') {
     const resolved = preference === 'system' ? getSystemTheme() : preference;
     document.body.classList.toggle('light-mode', resolved === 'light');
     document.body.dataset.themePreference = preference;
-    try { localStorage.setItem('nexara-theme', preference); }
+    try { localStorage.setItem('nexera-theme', preference); }
     catch (e) { console.warn('Theme storage blocked'); }
 }
 
@@ -308,7 +308,7 @@ async function ensureUserDocument(user) {
     const now = serverTimestamp();
     if (!snap.exists()) {
         await setDoc(ref, {
-            displayName: user.displayName || "Nexara User",
+            displayName: user.displayName || "Nexera User",
             username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
             photoURL: user.photoURL || "",
             bio: "",
@@ -1732,7 +1732,7 @@ function renderProfile() {
     const userPosts = allPosts.filter(function(p) { return p.userId === currentUser.uid; });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
-    const displayName = userProfile.name || userProfile.nickname || "Nexara User";
+    const displayName = userProfile.name || userProfile.nickname || "Nexera User";
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -1869,7 +1869,7 @@ window.searchChatUsers = async function(term = '') {
         const data = docSnap.data();
         const row = document.createElement('div');
         row.className = 'conversation-item';
-        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexara User'}</div></div>`;
+        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexera User'}</div></div>`;
         row.onclick = function() { return createConversationWithUser(docSnap.id, data); };
         resultsEl.appendChild(row);
     });
