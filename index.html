@@ -302,6 +302,52 @@
         </div>
     </div>
 
+    <div id="post-options-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width:420px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 style="margin:0; font-weight:800;">Post Options</h3>
+                <button class="x-close-btn" onclick="window.closePostOptions()">&times;</button>
+            </div>
+            <div id="post-options-actions" style="display:flex; flex-direction:column; gap:10px;">
+                <button class="icon-pill" onclick="window.openReportModal()"><i class="ph ph-flag"></i> Report</button>
+                <button id="delete-post-btn" class="icon-pill" style="display:none; background:#ff3d3d; border:none; color:white;" onclick="window.confirmDeletePost()">
+                    <i class="ph ph-trash"></i> Delete
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="post-options-dropdown" class="post-options-dropdown">
+        <button onclick="window.handlePostOptionSelect('report')"><i class="ph ph-flag"></i> Report</button>
+        <button id="dropdown-delete-btn" onclick="window.handlePostOptionSelect('delete')" style="display:none;"><i class="ph ph-trash"></i> Delete</button>
+    </div>
+
+    <div id="report-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width:480px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 style="margin:0; font-weight:800;">Report Post</h3>
+                <button class="x-close-btn" onclick="window.closeReportModal()">&times;</button>
+            </div>
+            <label class="settings-label">Category</label>
+            <select id="report-category" class="form-select">
+                <option value="">Select category</option>
+                <option>Spam</option>
+                <option>Harassment / Hate</option>
+                <option>Nudity / Sexual content</option>
+                <option>Violence / Dangerous content</option>
+                <option>Misinformation</option>
+                <option>Illegal activity</option>
+                <option>Other</option>
+            </select>
+            <label class="settings-label">Details (optional)</label>
+            <textarea id="report-details" class="form-input" rows="3" maxlength="500" placeholder="Add any context that helps our team"></textarea>
+            <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:12px;">
+                <button class="icon-pill" onclick="window.closeReportModal()">Cancel</button>
+                <button class="create-btn-sidebar" style="width:auto;" onclick="window.submitReport()">Report</button>
+            </div>
+        </div>
+    </div>
+
     <!-- App Layout -->
     <div id="app-layout" class="app-layout">
         <nav class="sidebar-left glass-panel">
