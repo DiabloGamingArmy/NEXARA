@@ -12,7 +12,9 @@ export function buildReplyRecord({ text = '', mediaUrl = null, parentCommentId =
         parentId: normalizeReplyTarget(parentCommentId),
         userId,
         likes: 0,
-        likedBy: []
+        likedBy: [],
+        dislikes: 0,
+        dislikedBy: []
     };
 }
 
