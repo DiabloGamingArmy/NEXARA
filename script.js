@@ -113,10 +113,38 @@ let userProfile = {
     region: "",
     photoURL: "",
     theme: "system",
+    accountRoles: [],
     savedPosts: [],
     following: [],
     followersCount: 0
 };
+
+function getAccountRoleSet(profile = userProfile) {
+    const roles = new Set(profile.accountRoles || []);
+    // Backward compatibility for legacy `role` strings stored on the profile
+    if (profile.role) roles.add(profile.role);
+    return roles;
+}
+
+function normalizeUserProfileData(data = {}) {
+    const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
+    return { ...data, accountRoles };
+}
+
+function hasGlobalRole(role) {
+    return getAccountRoleSet().has(role);
+}
+
+function getMembershipRoles(categoryId) {
+    const membership = memberships[categoryId] || {};
+    const roleList = Array.isArray(membership.roles) ? membership.roles.slice() : [];
+    if (membership.role && !roleList.includes(membership.role)) roleList.push(membership.role);
+    return new Set(roleList);
+}
+
+function hasCommunityRole(categoryId, role) {
+    return getMembershipRoles(categoryId).has(role);
+}
 
 // Thread & View State
 let activePostId = null;
@@ -294,8 +322,11 @@ function initApp() {
 
                 // Fetch User Profile
                 if (docSnap.exists()) {
-                    userProfile = { ...userProfile, ...docSnap.data() };
+                    userProfile = { ...userProfile, ...normalizeUserProfileData(docSnap.data()) };
                     userCache[user.uid] = userProfile;
+
+                    // Normalize role storage
+                    userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
 
                     // Apply stored theme preference
                     const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
@@ -307,7 +338,7 @@ function initApp() {
                         userProfile.following.forEach(function (uid) { followedUsers.add(uid); });
                     }
                     const staffNav = document.getElementById('nav-staff');
-                    if (staffNav) staffNav.style.display = (userProfile.role === 'staff' || userProfile.role === 'admin') ? 'flex' : 'none';
+                    if (staffNav) staffNav.style.display = hasGlobalRole('staff') || hasGlobalRole('admin') ? 'flex' : 'none';
                 } else {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
@@ -400,7 +431,7 @@ async function ensureUserDocument(user) {
             website: "",
             region: "",
             email: user.email || "",
-            role: user.role || "user",
+            accountRoles: [],
             createdAt: now,
             updatedAt: now
         }, { merge: true });
@@ -467,7 +498,7 @@ window.handleSignup = async function (e) {
             bio: "",
             website: "",
             region: "",
-            role: "user"
+            accountRoles: []
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
@@ -505,7 +536,7 @@ async function fetchMissingProfiles(posts) {
         const userDocs = await Promise.all(fetchPromises);
         userDocs.forEach(function (docSnap) {
             if (docSnap.exists()) {
-                userCache[docSnap.id] = docSnap.data();
+                userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
             } else {
                 userCache[docSnap.id] = { name: "Unknown User", username: "unknown" };
             }
@@ -599,7 +630,7 @@ function startCategoryStreams(uid) {
     membershipUnsubscribe = onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
-            memberships[docSnap.id] = docSnap.data();
+            memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
         });
         allPosts = allPosts.map(function (post) {
             return { ...post, categoryStatus: memberships[post.categoryId]?.status || post.categoryStatus };
@@ -615,6 +646,11 @@ function startCategoryStreams(uid) {
 
 function getCategorySnapshot(categoryId) {
     return categories.find(function (c) { return c.id === categoryId; }) || null;
+}
+
+function normalizeMembershipData(raw = {}) {
+    const roles = Array.isArray(raw.roles) ? raw.roles : (raw.role ? [raw.role] : []);
+    return { ...raw, roles };
 }
 
 function normalizePostData(id, data) {
@@ -972,7 +1008,7 @@ async function joinCategory(categoryId, role = 'member') {
 
     const membershipPayload = {
         uid: currentUser.uid,
-        role,
+        roles: [role],
         status: 'active',
         joinedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -987,7 +1023,7 @@ async function joinCategory(categoryId, role = 'member') {
             slug: cat.slug,
             type: cat.type,
             verified: !!cat.verified,
-            role,
+            roles: [role],
             status: 'active',
             joinedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
@@ -1023,7 +1059,8 @@ async function leaveCategory(categoryId) {
 async function kickMember(categoryId, targetUid, reason = '') {
     if (!requireAuth()) return;
     const membership = memberships[categoryId];
-    if (!membership || (membership.role !== 'owner' && membership.role !== 'mod')) {
+    const membershipRoles = getMembershipRoles(categoryId);
+    if (!membership || (!membershipRoles.has('owner') && !membershipRoles.has('mod'))) {
         return toast('Only mods/owners can kick', 'error');
     }
 
@@ -2553,52 +2590,55 @@ window.openUserProfile = async function(uid, event, pushToStack = true) {
     currentProfileFilter = 'All'; 
     window.navigateTo('public-profile', pushToStack); 
 
-    let profile = userCache[uid]; 
-    if (!profile) { 
-        const docSnap = await getDoc(doc(db, "users", uid)); 
-        if (docSnap.exists()) { 
-            profile = docSnap.data(); 
-            userCache[uid] = profile; 
-        } else { 
-            profile = { name: "Unknown User", username: "unknown" }; 
-        } 
-    } 
-    renderPublicProfile(uid, profile); 
+    let profile = userCache[uid];
+    if (!profile) {
+        const docSnap = await getDoc(doc(db, "users", uid));
+        if (docSnap.exists()) {
+            profile = normalizeUserProfileData(docSnap.data());
+            userCache[uid] = profile;
+        } else {
+            profile = { name: "Unknown User", username: "unknown" };
+        }
+    }
+    renderPublicProfile(uid, profile);
 }
 
-function renderPublicProfile(uid, profileData = userCache[uid]) { 
-    if(!profileData) return; 
-    const container = document.getElementById('view-public-profile'); 
+function renderPublicProfile(uid, profileData = userCache[uid]) {
+    if(!profileData) return;
+    const normalizedProfile = normalizeUserProfileData(profileData);
+    const container = document.getElementById('view-public-profile');
 
-    const pfpStyle = profileData.photoURL 
-        ? `background-image: url('${profileData.photoURL}'); background-size: cover; color: transparent;` 
-        : `background: ${getColorForUser(profileData.name)}`; 
+    const pfpStyle = normalizedProfile.photoURL
+        ? `background-image: url('${normalizedProfile.photoURL}'); background-size: cover; color: transparent;`
+        : `background: ${getColorForUser(normalizedProfile.name)}`;
 
-    const isFollowing = followedUsers.has(uid); 
+    const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
     const userPosts = allPosts.filter(function(p) { return p.userId === uid && (isSelfView || p.visibility !== 'private'); });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     let linkHtml = ''; 
-    if(profileData.links) { 
-        let url = profileData.links; 
-        if(!url.startsWith('http')) url = 'https://' + url; 
-        linkHtml = `<a href="${url}" target="_blank" style="color: var(--primary); font-size: 0.9rem; text-decoration: none; margin-top: 5px; display: inline-block;">🔗 ${escapeHtml(profileData.links)}</a>`; 
-    } 
+    if(normalizedProfile.links) {
+        let url = normalizedProfile.links;
+        if(!url.startsWith('http')) url = 'https://' + url;
+        linkHtml = `<a href="${url}" target="_blank" style="color: var(--primary); font-size: 0.9rem; text-decoration: none; margin-top: 5px; display: inline-block;">🔗 ${escapeHtml(normalizedProfile.links)}</a>`;
+    }
 
-    const followersCount = profileData.followersCount || 0; 
+    const followersCount = normalizedProfile.followersCount || 0;
+    const profileRoles = getAccountRoleSet(normalizedProfile);
+    const verifiedBadge = profileRoles.has('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
 
     // FIX: Added specific ID to follower count for real-time updates
     container.innerHTML = `
         <div class="glass-panel" style="position: sticky; top: 0; z-index: 20; padding: 1rem; display: flex; align-items: center; gap: 15px;">
             <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;"><span>←</span> Back</button>
-            <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(profileData.username)}</h2>
+            <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(normalizedProfile.username)}</h2>
         </div>
         <div class="profile-header" style="padding-top:1rem;">
-            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${profileData.photoURL ? '' : profileData.name[0]}</div>
-            <h2 style="font-weight: 800; margin-bottom: 5px;">${escapeHtml(profileData.name)}</h2>
-            <p style="color: var(--text-muted);">@${escapeHtml(profileData.username)}</p>
-            <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(profileData.bio || "No bio yet.")}</p>
+            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${normalizedProfile.photoURL ? '' : normalizedProfile.name[0]}</div>
+            <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
+            <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
+            <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div id="profile-follower-count-${uid}">${followersCount}</div><div>Followers</div></div>
@@ -2672,6 +2712,7 @@ function renderProfile() {
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
+    const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -2687,7 +2728,7 @@ function renderProfile() {
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
             <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
-            <h2 style="font-weight:800;">${escapeHtml(displayName)}</h2>
+            <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
             ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
             <p style="margin-top:10px;">${escapeHtml(userProfile.bio)}</p>
@@ -3263,7 +3304,7 @@ window.sendLiveChat = async function(sessionId) {
 function renderStaffConsole() {
     const warning = document.getElementById('staff-access-warning');
     const panels = document.getElementById('staff-panels');
-    const isStaff = userProfile.role === 'staff' || userProfile.role === 'admin';
+    const isStaff = hasGlobalRole('staff') || hasGlobalRole('admin');
     if(!isStaff) {
         if(warning) warning.style.display = 'block';
         if(panels) panels.style.display = 'none';
@@ -3294,7 +3335,7 @@ function listenVerificationRequests() {
 
 window.approveVerification = async function(requestId, userId) {
     await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'approved', reviewedAt: serverTimestamp() });
-    if(userId) await setDoc(doc(db, 'users', userId), { verified: true, updatedAt: serverTimestamp() }, { merge: true });
+    if(userId) await setDoc(doc(db, 'users', userId), { accountRoles: arrayUnion('verified'), verified: true, updatedAt: serverTimestamp() }, { merge: true });
     await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'approveVerification', targetRef: requestId, createdAt: serverTimestamp() });
 };
 

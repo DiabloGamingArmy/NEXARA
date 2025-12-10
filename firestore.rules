@@ -2,18 +2,44 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSignedIn() { return request.auth != null; }
+    function hasFounderClaim() { return isSignedIn() && request.auth.token.founder == true; }
+    function getAccountRoles(uid) {
+      return (exists(/databases/$(database)/documents/users/$(uid)) && get(/databases/$(database)/documents/users/$(uid)).data.accountRoles is list)
+        ? get(/databases/$(database)/documents/users/$(uid)).data.accountRoles
+        : [];
+    }
+    function hasAccountRole(role) {
+      return isSignedIn() && role in getAccountRoles(request.auth.uid);
+    }
+    function accountRolesUnchanged(userId) {
+      return !('accountRoles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/users/$(userId)) && request.resource.data.accountRoles == [])
+        || (exists(/databases/$(database)/documents/users/$(userId)) && request.resource.data.accountRoles == get(/databases/$(database)/documents/users/$(userId)).data.accountRoles);
+    }
     function isCategoryMember(categoryId) {
-      return isSignedIn() && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
-        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.status == 'active';
+      return hasFounderClaim() || (isSignedIn() && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.status == 'active');
     }
     function isCategoryMod(categoryId) {
-      return isSignedIn() && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
-        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.role in ['owner','mod'];
+      if (hasFounderClaim()) return true;
+      if (!isSignedIn()) return false;
+      let memberPath = /databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid);
+      return exists(memberPath)
+        && ((get(memberPath).data.roles is list && (('owner' in get(memberPath).data.roles) || ('mod' in get(memberPath).data.roles)))
+        || (get(memberPath).data.role in ['owner','mod']));
+    }
+    function memberRolesUnchanged(categoryId, uid) {
+      return !('roles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) && (request.resource.data.roles == ['member'] || request.resource.data.roles == ['owner']))
+        || (exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) && request.resource.data.roles == get(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)).data.roles);
+    }
+    function isStaffAccount() {
+      return hasFounderClaim() || hasAccountRole('staff') || hasAccountRole('admin');
     }
 
     match /users/{userId} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if (request.auth != null && request.auth.uid == userId && accountRolesUnchanged(userId)) || hasFounderClaim();
     }
     match /users/{userId}/categoryMemberships/{categoryId} {
       allow read: if isSignedIn() && request.auth.uid == userId;
@@ -23,13 +49,14 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isSignedIn();
       allow update: if isSignedIn() && (
-        (resource.data.type == 'official' && request.resource.data.type == 'official' && request.resource.data.verified == true)
+        hasFounderClaim()
+        || (resource.data.type == 'official' && request.resource.data.type == 'official' && request.resource.data.verified == true)
         || isCategoryMod(categoryId)
       );
       allow delete: if false;
       match /members/{uid} {
         allow read: if true;
-        allow create, update: if isSignedIn() && ((uid == request.auth.uid && request.resource.data.status in ['active','left']) || isCategoryMod(categoryId));
+        allow create, update: if isSignedIn() && (((uid == request.auth.uid && memberRolesUnchanged(categoryId, uid) && request.resource.data.status in ['active','left'])) || isCategoryMod(categoryId));
       }
     }
     match /posts/{postId} {
@@ -81,14 +108,14 @@ service cloud.firestore {
     }
     match /verificationRequests/{rid} {
       allow write: if request.auth != null && request.auth.uid == request.resource.data.userId;
-      allow read: if request.auth != null && (request.auth.token.role in ['staff','admin']);
+      allow read: if request.auth != null && isStaffAccount();
     }
     match /reports/{reportId} {
       allow create: if request.auth != null;
-      allow read, update: if request.auth != null && (request.auth.token.role in ['staff','admin']);
+      allow read, update: if request.auth != null && isStaffAccount();
     }
     match /adminLogs/{logId} {
-      allow read, write: if request.auth != null && (request.auth.token.role in ['staff','admin']);
+      allow read, write: if request.auth != null && isStaffAccount();
     }
   }
 }
