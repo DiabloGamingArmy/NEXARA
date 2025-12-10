@@ -343,12 +343,6 @@ if (typeof window.handleLogin !== 'function') {
     };
 }
 
-// --- Theme Helpers (avoid applyTheme shadowing) ---
-function getStoredThemePreference() {
-    try { return localStorage.getItem('nexara-theme'); }
-    catch (e) { return null; }
-}
-
 function applyThemePreference(preference) {
     if (!preference) preference = 'system';
     var resolved = (preference === 'system') ? getSystemTheme() : preference;
