@@ -331,10 +331,14 @@ function shouldRerenderThread(newData, prevData = {}) {
 }
 
 // --- Auth Functions ---
-window.handleLogin = window.handleLogin || (e) => {
-  if (e && typeof e.preventDefault === "function") e.preventDefault();
-  console.error("handleLogin is not wired correctly; script may not be the latest deployed version.");
-};
+// ES5-safe fallback: avoids arrow functions (=>) entirely
+if (typeof window.handleLogin !== "function") {
+  window.handleLogin = function (e) {
+    if (e && typeof e.preventDefault === "function") e.preventDefault();
+    console.error("handleLogin is not wired correctly; script may not be the latest deployed version.");
+  };
+}
+
 
 
 window.handleSignup = async (e) => {
