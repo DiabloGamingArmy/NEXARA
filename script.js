@@ -29,6 +29,8 @@ let currentCategory = 'For You';
 let currentProfileFilter = 'All';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
+let discoverPostsSort = 'recent';
+let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
 let isInitialLoad = true;
@@ -44,7 +46,26 @@ let postSnapshotCache = {};
 let categories = [];
 let memberships = {};
 let selectedCategoryId = null;
-let categoryTab = 'official';
+let destinationPickerTab = 'community';
+let destinationPickerSearch = '';
+let destinationPickerOpen = false;
+let destinationPickerLoading = true;
+let destinationPickerError = '';
+let destinationSearchTimeout = null;
+let destinationCreateExpanded = false;
+let categoryUnsubscribe = null;
+let membershipUnsubscribe = null;
+let authClaims = {};
+let composerError = '';
+const DEFAULT_DESTINATION_CONFIG = {
+    enableOfficialTab: true,
+    enableCommunityTab: true,
+    enableCreateCommunity: true,
+    officialTabLabel: 'Official (Verified)',
+    communityTabLabel: 'Community',
+    officialSelectable: true
+};
+let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
 
@@ -96,10 +117,63 @@ let userProfile = {
     region: "",
     photoURL: "",
     theme: "system",
+    accountRoles: [],
     savedPosts: [],
     following: [],
     followersCount: 0
 };
+
+function getAccountRoleSet(profile = userProfile) {
+    const roles = new Set(profile.accountRoles || []);
+    // Backward compatibility for legacy `role` strings stored on the profile
+    if (profile.role) roles.add(profile.role);
+    return roles;
+}
+
+function normalizeUserProfileData(data = {}) {
+    const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
+    return { ...data, accountRoles };
+}
+
+function hasGlobalRole(role) {
+    return getAccountRoleSet().has(role);
+}
+
+function getMembershipRoles(categoryId) {
+    const membership = memberships[categoryId] || {};
+    const roleList = Array.isArray(membership.roles) ? membership.roles.slice() : [];
+    if (membership.role && !roleList.includes(membership.role)) roleList.push(membership.role);
+    return new Set(roleList);
+}
+
+function hasCommunityRole(categoryId, role) {
+    return getMembershipRoles(categoryId).has(role);
+}
+
+async function refreshIdToken() {
+    const u = auth.currentUser;
+    if (!u) return null;
+    await u.getIdToken(true);
+    const res = await u.getIdTokenResult();
+    updateAuthClaims(res?.claims || {});
+    return res;
+}
+
+async function getClaims() {
+    const u = auth.currentUser;
+    if (!u) return {};
+    const res = await u.getIdTokenResult();
+    updateAuthClaims(res?.claims || {});
+    return res?.claims || {};
+}
+
+function updateAuthClaims(claims = {}) {
+    authClaims = claims || {};
+}
+
+function hasFounderClaimClient() {
+    return authClaims.founder === true;
+}
 
 // Thread & View State
 let activePostId = null;
@@ -221,6 +295,8 @@ window.requireAuth = function () {
     }
     return true;
 };
+window.refreshIdToken = refreshIdToken;
+window.getClaims = getClaims;
 window.setView = function (name) { return window.navigateTo(name); };
 window.toast = function (msg, type = 'info') {
     console.log(`[${type}]`, msg);
@@ -236,6 +312,7 @@ function slugifyCategory(name) {
 }
 
 async function ensureOfficialCategories() {
+    if (!hasFounderClaimClient()) return;
     const promises = OFFICIAL_CATEGORIES.map(async function (name) {
         const slug = slugifyCategory(name);
         const catRef = doc(db, 'categories', slug);
@@ -272,13 +349,18 @@ function initApp() {
             console.log("User logged in:", user.uid);
 
             try {
+                const claimResult = await getClaims();
+                updateAuthClaims(claimResult);
                 const ensuredSnap = await ensureUserDocument(user);
                 const docSnap = ensuredSnap;
 
                 // Fetch User Profile
                 if (docSnap.exists()) {
-                    userProfile = { ...userProfile, ...docSnap.data() };
+                    userProfile = { ...userProfile, ...normalizeUserProfileData(docSnap.data()) };
                     userCache[user.uid] = userProfile;
+
+                    // Normalize role storage
+                    userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
 
                     // Apply stored theme preference
                     const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
@@ -290,7 +372,7 @@ function initApp() {
                         userProfile.following.forEach(function (uid) { followedUsers.add(uid); });
                     }
                     const staffNav = document.getElementById('nav-staff');
-                    if (staffNav) staffNav.style.display = (userProfile.role === 'staff' || userProfile.role === 'admin') ? 'flex' : 'none';
+                    if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
                 } else {
                     // Create new profile placeholder if it doesn't exist
                     userProfile.email = user.email || "";
@@ -320,6 +402,7 @@ function initApp() {
             renderProfile(); // Pre-render profile
         } else {
             currentUser = null;
+            updateAuthClaims({});
             if (loadingOverlay) loadingOverlay.style.display = 'none';
             if (appLayout) appLayout.style.display = 'none';
             if (authScreen) authScreen.style.display = 'flex';
@@ -383,7 +466,7 @@ async function ensureUserDocument(user) {
             website: "",
             region: "",
             email: user.email || "",
-            role: user.role || "user",
+            accountRoles: [],
             createdAt: now,
             updatedAt: now
         }, { merge: true });
@@ -450,7 +533,7 @@ window.handleSignup = async function (e) {
             bio: "",
             website: "",
             region: "",
-            role: "user"
+            accountRoles: []
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
@@ -488,7 +571,7 @@ async function fetchMissingProfiles(posts) {
         const userDocs = await Promise.all(fetchPromises);
         userDocs.forEach(function (docSnap) {
             if (docSnap.exists()) {
-                userCache[docSnap.id] = docSnap.data();
+                userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
             } else {
                 userCache[docSnap.id] = { name: "Unknown User", username: "unknown" };
             }
@@ -552,31 +635,57 @@ function startDataListener() {
 }
 
 function startCategoryStreams(uid) {
-    onSnapshot(collection(db, 'categories'), function (snapshot) {
+    if (categoryUnsubscribe) categoryUnsubscribe();
+    if (membershipUnsubscribe) membershipUnsubscribe();
+
+    destinationPickerLoading = true;
+    destinationPickerError = '';
+
+    const categoryRef = collection(db, 'categories');
+    categoryUnsubscribe = onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
         allPosts = allPosts.map(function (p) { return normalizePostData(p.id, p); });
-        renderCategoryCenter();
+        destinationPickerLoading = false;
+        destinationPickerError = '';
+        ensureDefaultDestination();
+        renderDestinationField();
+        renderDestinationPicker();
+        syncPostButtonState();
         renderFeed();
+    }, function () {
+        destinationPickerLoading = false;
+        destinationPickerError = 'Unable to load destinations.';
+        renderDestinationField();
+        renderDestinationPicker();
     });
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
-            memberships[docSnap.id] = docSnap.data();
+            memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
         });
         allPosts = allPosts.map(function (post) {
             return { ...post, categoryStatus: memberships[post.categoryId]?.status || post.categoryStatus };
         });
-        renderCategoryCenter();
+        renderDestinationField();
+        renderDestinationPicker();
+        syncPostButtonState();
         renderFeed();
+    }, function () {
+        console.warn('Unable to load destination memberships');
     });
 }
 
 function getCategorySnapshot(categoryId) {
     return categories.find(function (c) { return c.id === categoryId; }) || null;
+}
+
+function normalizeMembershipData(raw = {}) {
+    const roles = Array.isArray(raw.roles) ? raw.roles : (raw.role ? [raw.role] : []);
+    return { ...raw, roles };
 }
 
 function normalizePostData(id, data) {
@@ -619,92 +728,268 @@ function normalizePostData(id, data) {
     return normalized;
 }
 
-function renderCategoryCenter() {
-    const center = document.getElementById('category-center');
-    const listEl = document.getElementById('category-list');
-    const rulesEl = document.getElementById('category-rules');
-    const currentLabel = document.getElementById('category-current-label');
-    if (!center || !listEl) return;
+function getDestinationFromCategory(cat) {
+    return {
+        type: cat.type === 'official' ? 'official' : 'community',
+        id: cat.id,
+        name: cat.name || 'Unnamed',
+        avatarUrl: cat.avatarUrl || cat.iconUrl || null,
+        verified: !!cat.verified,
+        meta: { memberCount: cat.memberCount, description: cat.description }
+    };
+}
 
+function ensureDefaultDestination() {
     if (!selectedCategoryId && categories.length) {
-        const fallback = categories.find(function (c) { return c.type === 'official'; }) || categories[0];
+        const fallback = categories.find(function (c) { return c.type === 'community'; })
+            || categories.find(function (c) { return c.type === 'official'; })
+            || categories[0];
         selectedCategoryId = fallback ? fallback.id : null;
     }
+}
 
+function renderDestinationField() {
+    const labelEl = document.getElementById('destination-current-label');
+    const verifiedEl = document.getElementById('destination-current-verified');
+    const spinner = document.getElementById('destination-loading-spinner');
     const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
-    if (currentLabel) currentLabel.textContent = currentCategoryDoc ? currentCategoryDoc.name : 'No category selected';
 
-    const filtered = categories.filter(function (c) { return categoryTab === 'official' ? c.type === 'official' : c.type === 'community'; });
-    const sorted = filtered.sort(function (a, b) {
-        const aJoined = memberships[a.id]?.status === 'active';
-        const bJoined = memberships[b.id]?.status === 'active';
-        if (aJoined === bJoined) return (a.name || '').localeCompare(b.name || '');
-        return aJoined ? -1 : 1;
-    });
+    if (spinner) spinner.style.display = destinationPickerLoading ? 'block' : 'none';
+    if (labelEl) labelEl.textContent = currentCategoryDoc ? currentCategoryDoc.name : 'Select...';
+    if (verifiedEl) verifiedEl.style.display = currentCategoryDoc && currentCategoryDoc.verified ? 'inline' : 'none';
+}
 
-    listEl.innerHTML = '';
-    sorted.forEach(function (cat) {
-        const membership = memberships[cat.id];
-        const isMember = membership && membership.status === 'active';
-        const isPending = membership && membership.status && membership.status !== 'active';
-        const btnLabel = isMember ? 'Leave' : 'Join';
-        const badge = cat.verified ? '<span class="verified-badge">✔</span>' : '';
-        const statusLabel = membership ? membership.status : 'none';
-        const redStatus = isPending && membership.status !== 'active';
-
-        const row = document.createElement('div');
-        row.className = 'category-row';
-        row.innerHTML = `
-            <div class="category-row-main" onclick="window.selectCategory('${cat.id}')">
-                <div>
-                    <div class="category-row-title">${cat.name} ${badge}</div>
-                    <div class="category-row-desc">${cat.description || ''}</div>
-                </div>
-                <div class="category-row-meta">${redStatus ? `<span class="category-status-badge">${statusLabel}</span>` : ''}</div>
-            </div>
-            <div class="category-row-actions">
-                <button class="icon-pill" data-cat="${cat.id}" onclick="event.stopPropagation(); window.${isMember ? 'leaveCategory' : 'joinCategory'}('${cat.id}')">${btnLabel}</button>
-            </div>`;
-        listEl.appendChild(row);
-    });
-
-    if (rulesEl) renderCategoryRules(currentCategoryDoc, rulesEl);
+function setComposerError(message = '') {
+    composerError = message || '';
     syncPostButtonState();
 }
 
-function renderCategoryRules(categoryDoc, rulesEl) {
-    if (!rulesEl) return;
-    if (!categoryDoc) {
-        rulesEl.innerHTML = '<div class="category-rule"><em>Select a category to see its rules.</em></div>';
-        return;
-    }
-    const rules = categoryDoc.rules && categoryDoc.rules.length ? categoryDoc.rules : DEFAULT_CATEGORY_RULES;
-    rulesEl.innerHTML = rules.map(function (r) { return `<div class="category-rule">${r}</div>`; }).join('');
-}
-
-window.setCategoryTab = function (tab) { categoryTab = tab; renderCategoryCenter(); };
-window.selectCategory = function (categoryId) { selectedCategoryId = categoryId; renderCategoryCenter(); };
-
 function syncPostButtonState() {
     const btn = document.getElementById('publishBtn');
-    const helper = document.getElementById('category-post-helper');
+    const helper = document.getElementById('destination-helper');
     if (!btn) return;
-    let disabled = false;
-    let message = '';
-    if (selectedCategoryId) {
-        const membership = memberships[selectedCategoryId];
-        if (!membership || membership.status !== 'active') {
-            disabled = true;
-            message = 'Join this category to post.';
-        }
-    }
-    btn.disabled = disabled;
+    btn.disabled = false;
     if (helper) {
-        helper.style.display = message ? 'block' : 'none';
-        helper.textContent = message;
-        helper.style.color = disabled ? '#ff3d3d' : 'var(--text-muted)';
+        helper.style.display = composerError ? 'flex' : 'none';
+        helper.textContent = composerError || '';
+        helper.classList.toggle('error', !!composerError);
     }
 }
+
+function getAvailableDestinationTabs() {
+    const tabs = [];
+    if (activeDestinationConfig.enableCommunityTab !== false) tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
+    if (activeDestinationConfig.enableOfficialTab !== false) tabs.push({ type: 'official', label: activeDestinationConfig.officialTabLabel || 'Official (Verified)' });
+    return tabs;
+}
+
+function setDestinationTab(tab) {
+    destinationPickerTab = tab;
+    destinationPickerSearch = '';
+    destinationCreateExpanded = false;
+    renderDestinationPicker();
+    setTimeout(function () {
+        const input = document.getElementById('destination-search-input');
+        if (input) input.focus();
+    }, 50);
+}
+
+function handleDestinationSelected(destination) {
+    selectedCategoryId = destination ? destination.id : null;
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
+    closeDestinationPicker();
+}
+
+function renderDestinationCreateArea() {
+    const area = document.getElementById('destination-create-area');
+    if (!area) return;
+    if (destinationPickerTab !== 'community' || activeDestinationConfig.enableCreateCommunity === false) {
+        area.innerHTML = '';
+        return;
+    }
+
+    area.innerHTML = `
+        <div class="destination-create">
+            <button class="icon-pill" id="destination-create-toggle"><i class="ph ph-plus"></i> ${destinationCreateExpanded ? 'Hide Create Community' : 'Create Community'}</button>
+            ${destinationCreateExpanded ? `
+                <div class="destination-create-form">
+                    <input type="text" id="new-category-name" class="form-input" placeholder="Community name" aria-label="Community name">
+                    <textarea id="new-category-description" class="form-input" placeholder="Description" aria-label="Community description"></textarea>
+                    <textarea id="new-category-rules" class="form-input" placeholder="Additional rules (one per line)" aria-label="Community rules"></textarea>
+                    <label class="checkbox-row"><input type="checkbox" id="new-category-public" checked> Publicly discoverable</label>
+                    <button class="create-btn-sidebar" id="destination-create-submit" style="width:100%;">Create</button>
+                </div>
+            ` : ''}
+        </div>`;
+
+    const toggle = document.getElementById('destination-create-toggle');
+    if (toggle) toggle.onclick = function () { destinationCreateExpanded = !destinationCreateExpanded; renderDestinationPicker(); };
+    const submit = document.getElementById('destination-create-submit');
+    if (submit) submit.onclick = function (e) { e.preventDefault(); window.handleCreateCategoryForm(); };
+}
+
+function retryDestinationLoad() {
+    if (!currentUser) return;
+    destinationPickerError = '';
+    destinationPickerLoading = true;
+    renderDestinationPicker();
+    startCategoryStreams(currentUser.uid);
+}
+
+function renderDestinationResults() {
+    const resultsEl = document.getElementById('destination-results');
+    if (!resultsEl) return;
+    if (destinationPickerError) {
+        resultsEl.innerHTML = `<div class="destination-error">${destinationPickerError}<div style="margin-top:8px;"><button class="icon-pill" id="destination-retry-btn">Retry</button></div></div>`;
+        const retryBtn = document.getElementById('destination-retry-btn');
+        if (retryBtn) retryBtn.onclick = function () { retryDestinationLoad(); };
+        return;
+    }
+    if (destinationPickerLoading) {
+        resultsEl.innerHTML = '<div class="destination-loading"><div class="inline-spinner" style="display:block; margin: 0 auto 8px;"></div>Loading destinations...</div>';
+        return;
+    }
+
+    const filtered = categories
+        .filter(function (c) { return destinationPickerTab === 'official' ? c.type === 'official' : c.type === 'community'; })
+        .filter(function (c) { return !destinationPickerSearch || (c.name || '').toLowerCase().includes(destinationPickerSearch.toLowerCase()); })
+        .sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
+
+    if (!filtered.length) {
+        const message = destinationPickerTab === 'official' ? 'No official destinations found.' : 'No communities found. Create one?';
+        resultsEl.innerHTML = `<div class="destination-empty">${message}</div>`;
+        return;
+    }
+
+    resultsEl.innerHTML = '';
+    filtered.forEach(function (cat) {
+        const destination = getDestinationFromCategory(cat);
+        const isSelected = destination.id === selectedCategoryId;
+        const selectable = destination.type === 'official' ? activeDestinationConfig.officialSelectable !== false : true;
+
+        const row = document.createElement('div');
+        row.className = 'destination-row' + (isSelected ? ' selected' : '');
+
+        const main = document.createElement('div');
+        main.className = 'destination-row-main';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'destination-avatar';
+        avatar.textContent = (destination.name || 'U')[0];
+        if (destination.avatarUrl) {
+            avatar.style.backgroundImage = `url('${destination.avatarUrl}')`;
+            avatar.style.backgroundSize = 'cover';
+            avatar.textContent = '';
+        }
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'destination-row-text';
+        const title = document.createElement('div');
+        title.className = 'destination-row-title';
+        title.textContent = destination.name || 'Unnamed';
+        if (destination.verified) {
+            const badge = document.createElement('span');
+            badge.className = 'verified-badge';
+            badge.textContent = '✔';
+            title.appendChild(badge);
+        }
+        const desc = document.createElement('div');
+        desc.className = 'destination-row-desc';
+        const memberCount = destination.meta && destination.meta.memberCount ? `${destination.meta.memberCount} members` : '';
+        desc.textContent = destination.meta?.description || memberCount || '';
+        textWrap.appendChild(title);
+        textWrap.appendChild(desc);
+
+        main.appendChild(avatar);
+        main.appendChild(textWrap);
+
+        const actions = document.createElement('div');
+        actions.className = 'destination-row-actions';
+        const selectBtn = document.createElement('button');
+        selectBtn.className = 'icon-pill';
+        selectBtn.disabled = !selectable;
+        selectBtn.innerHTML = isSelected ? '<i class="ph ph-check"></i> Selected' : 'Select';
+        selectBtn.onclick = function (e) { e.stopPropagation(); if (selectable) handleDestinationSelected(destination); };
+        actions.appendChild(selectBtn);
+
+        if (selectable) {
+            row.onclick = function () { handleDestinationSelected(destination); };
+            main.onclick = function () { handleDestinationSelected(destination); };
+        }
+
+        row.appendChild(main);
+        row.appendChild(actions);
+        resultsEl.appendChild(row);
+    });
+}
+
+function renderDestinationPicker() {
+    const modal = document.getElementById('destination-picker-modal');
+    if (!modal) return;
+    modal.style.display = destinationPickerOpen ? 'flex' : 'none';
+
+    const tabsContainer = document.getElementById('destination-picker-tabs');
+    const availableTabs = getAvailableDestinationTabs();
+    if (!availableTabs.some(function (t) { return t.type === destinationPickerTab; }) && availableTabs.length) {
+        destinationPickerTab = availableTabs.find(function (t) { return t.type === 'community'; })?.type || availableTabs[0].type;
+    }
+    if (tabsContainer) {
+        tabsContainer.innerHTML = '';
+        availableTabs.forEach(function (tab) {
+            const btn = document.createElement('button');
+            btn.className = 'destination-tab' + (tab.type === destinationPickerTab ? ' active' : '');
+            btn.textContent = tab.label;
+            btn.onclick = function () { setDestinationTab(tab.type); };
+            tabsContainer.appendChild(btn);
+        });
+    }
+
+    const searchInput = document.getElementById('destination-search-input');
+    if (searchInput) {
+        searchInput.placeholder = destinationPickerTab === 'official' ? 'Search official destinations' : 'Search communities';
+        searchInput.value = destinationPickerSearch;
+        searchInput.oninput = function (e) {
+            const value = e.target.value;
+            clearTimeout(destinationSearchTimeout);
+            destinationSearchTimeout = setTimeout(function () {
+                destinationPickerSearch = value.trim();
+                renderDestinationPicker();
+            }, 250);
+        };
+    }
+
+    renderDestinationCreateArea();
+    renderDestinationResults();
+}
+
+function openDestinationPicker(config = {}) {
+    activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG, ...config };
+    destinationPickerOpen = true;
+    const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+    const tabs = getAvailableDestinationTabs();
+    if (currentCategoryDoc && tabs.some(function (t) { return t.type === currentCategoryDoc.type; })) {
+        destinationPickerTab = currentCategoryDoc.type;
+    } else {
+        destinationPickerTab = tabs.find(function (t) { return t.type === 'community'; })?.type || (tabs[0]?.type || 'community');
+    }
+    destinationPickerSearch = '';
+    destinationCreateExpanded = false;
+    renderDestinationPicker();
+    setTimeout(function () {
+        const input = document.getElementById('destination-search-input');
+        if (input) input.focus();
+    }, 50);
+}
+
+function closeDestinationPicker() {
+    destinationPickerOpen = false;
+    renderDestinationPicker();
+}
+
+window.openDestinationPicker = openDestinationPicker;
+window.closeDestinationPicker = closeDestinationPicker;
 
 async function createCategory(payload) {
     if (!requireAuth()) return;
@@ -735,8 +1020,12 @@ async function createCategory(payload) {
     await setDoc(docRef, categoryDoc);
     await joinCategory(slug, 'owner');
     selectedCategoryId = slug;
-    renderCategoryCenter();
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
+    closeDestinationPicker();
     toast('Category created', 'info');
+    return slug;
 }
 
 async function joinCategory(categoryId, role = 'member') {
@@ -750,7 +1039,7 @@ async function joinCategory(categoryId, role = 'member') {
 
     const membershipPayload = {
         uid: currentUser.uid,
-        role,
+        roles: [role],
         status: 'active',
         joinedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -765,7 +1054,7 @@ async function joinCategory(categoryId, role = 'member') {
             slug: cat.slug,
             type: cat.type,
             verified: !!cat.verified,
-            role,
+            roles: [role],
             status: 'active',
             joinedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
@@ -774,7 +1063,28 @@ async function joinCategory(categoryId, role = 'member') {
     ]);
 
     memberships[categoryId] = { ...membershipPayload, name: cat.name };
-    renderCategoryCenter();
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
+}
+
+async function isMemberOfCategory(categoryId, uid = currentUser?.uid) {
+    if (!categoryId || !uid) return false;
+    const membership = memberships[categoryId];
+    if (membership && membership.status === 'active') return true;
+
+    const membershipRef = doc(db, `categories/${categoryId}/members/${uid}`);
+    const snap = await getDoc(membershipRef);
+    return snap.exists() && snap.data().status === 'active';
+}
+
+async function ensureJoinedCategory(categoryId, uid = currentUser?.uid) {
+    if (!categoryId || !uid) throw new Error('Missing categoryId/uid');
+    const alreadyMember = await isMemberOfCategory(categoryId, uid);
+    if (alreadyMember) return true;
+
+    await joinCategory(categoryId, 'member');
+    return isMemberOfCategory(categoryId, uid);
 }
 
 async function leaveCategory(categoryId) {
@@ -791,13 +1101,16 @@ async function leaveCategory(categoryId) {
 
     await enforceCategoryPrivacy(categoryId, currentUser.uid);
     memberships[categoryId] = { ...memberships[categoryId], status: 'left' };
-    renderCategoryCenter();
+    renderDestinationField();
+    renderDestinationPicker();
+    syncPostButtonState();
 }
 
 async function kickMember(categoryId, targetUid, reason = '') {
     if (!requireAuth()) return;
     const membership = memberships[categoryId];
-    if (!membership || (membership.role !== 'owner' && membership.role !== 'mod')) {
+    const membershipRoles = getMembershipRoles(categoryId);
+    if (!membership || (!membershipRoles.has('owner') && !membershipRoles.has('mod'))) {
         return toast('Only mods/owners can kick', 'error');
     }
 
@@ -829,13 +1142,24 @@ window.joinCategory = joinCategory;
 window.leaveCategory = leaveCategory;
 window.kickMember = kickMember;
 window.handleCreateCategoryForm = async function () {
-    const name = document.getElementById('new-category-name').value;
-    const description = document.getElementById('new-category-description').value;
-    const rulesText = document.getElementById('new-category-rules').value;
-    const isPublic = document.getElementById('new-category-public').checked;
+    const nameInput = document.getElementById('new-category-name');
+    const descriptionInput = document.getElementById('new-category-description');
+    const rulesInput = document.getElementById('new-category-rules');
+    const publicInput = document.getElementById('new-category-public');
+    if (!nameInput || !descriptionInput || !rulesInput || !publicInput) return;
+
+    const name = nameInput.value;
+    const description = descriptionInput.value;
+    const rulesText = rulesInput.value;
+    const isPublic = publicInput.checked;
     const rules = rulesText ? rulesText.split('\n').map(function (r) { return r.trim(); }).filter(Boolean) : [];
     await createCategory({ name, description, rules, isPublic, type: 'community' });
-    document.getElementById('create-category-form').style.display = 'none';
+    nameInput.value = '';
+    descriptionInput.value = '';
+    rulesInput.value = '';
+    publicInput.checked = true;
+    destinationCreateExpanded = false;
+    renderDestinationPicker();
 };
 
 // PATCH: New listener to fetch user's reviews across all posts
@@ -859,11 +1183,16 @@ async function startUserReviewListener(uid) {
         const initial = await getDocs(q);
         handleSnapshot(initial);
     } catch (error) {
-        console.log("Initial audit hydration error:", error.message);
+        if (error.code !== 'permission-denied') {
+            console.log("Initial audit hydration error:", error.message);
+        }
+        return; // Skip listener when access is not allowed
     }
 
     onSnapshot(q, handleSnapshot, function (error) {
-        console.log("Review listener note:", error.message);
+        if (error.code !== 'permission-denied') {
+            console.log("Review listener note:", error.message);
+        }
     });
 }
 
@@ -1304,20 +1633,12 @@ async function uploadFileToStorage(file, path) {
 }
 
 window.createPost = async function() {
+     if (!requireAuth()) return;
      const title = document.getElementById('postTitle').value;
      const content = document.getElementById('postContent').value;
      const fileInput = document.getElementById('postFile');
      const btn = document.getElementById('publishBtn');
-
-     if (selectedCategoryId) {
-         const membership = memberships[selectedCategoryId];
-         if (!membership || membership.status !== 'active') {
-             btn.disabled = true;
-             toast('Join this category to post.', 'error');
-             btn.disabled = false;
-             return;
-         }
-     }
+     setComposerError('');
 
      let contentType = 'text';
      if (fileInput.files[0]) {
@@ -1334,6 +1655,14 @@ window.createPost = async function() {
      btn.textContent = "Uploading...";
 
      try {
+         if (selectedCategoryId && currentUser?.uid) {
+             const joined = await ensureJoinedCategory(selectedCategoryId, currentUser.uid);
+             if (!joined) {
+                 setComposerError('Unable to join this category. Please try again.');
+                 return;
+             }
+         }
+
          let mediaUrl = null;
          if(fileInput.files[0]) {
              const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
@@ -1373,8 +1702,8 @@ window.createPost = async function() {
          window.navigateTo('feed');
 
      } catch (e) {
-         console.error(e);
-         alert("Post failed: " + e.message);
+         console.error('Post/auto-join failed:', e);
+         setComposerError('Could not post right now. Please try again.');
      } finally {
          btn.disabled = false;
          btn.textContent = "Post";
@@ -1407,15 +1736,19 @@ window.toggleCreateModal = function(show) {
     if(show && currentUser) {
         const avatarEl = document.getElementById('modal-user-avatar');
         if(userProfile.photoURL) {
-            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`; 
-            avatarEl.textContent = ''; 
+            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`;
+            avatarEl.textContent = '';
         } else { 
             avatarEl.style.backgroundImage = 'none'; 
             avatarEl.style.backgroundColor = getColorForUser(userProfile.name);
             avatarEl.textContent = userProfile.name[0];
             avatarEl.style.color = 'black';
         }
+        setComposerError('');
+        renderDestinationField();
         syncPostButtonState();
+    } else if (!show) {
+        closeDestinationPicker();
     }
 }
 
@@ -2152,6 +2485,20 @@ window.renderDiscover = async function() {
     const container = document.getElementById('discover-results');
     container.innerHTML = "";
 
+    const postsSelect = document.getElementById('posts-sort-select');
+    if (postsSelect) postsSelect.value = discoverPostsSort;
+    const categoriesSelect = document.getElementById('categories-sort-select');
+    if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
+
+    const categoriesDropdown = function(id = 'section') {
+        return `<div class="discover-dropdown"><label for="categories-${id}-select">Categories:</label><select id="categories-${id}-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
+            <option value="verified_first" ${discoverCategoriesMode === 'verified_first' ? 'selected' : ''}>Verified first</option>
+            <option value="verified_only" ${discoverCategoriesMode === 'verified_only' ? 'selected' : ''}>Verified only</option>
+            <option value="community_first" ${discoverCategoriesMode === 'community_first' ? 'selected' : ''}>Community first</option>
+            <option value="community_only" ${discoverCategoriesMode === 'community_only' ? 'selected' : ''}>Community only</option>
+        </select></div>`;
+    };
+
     const renderVideosSection = async function(onlyVideos = false) {
         if(!videosCache.length) {
             const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
@@ -2244,10 +2591,13 @@ window.renderDiscover = async function() {
     const renderPostsSection = function() {
         let filteredPosts = allPosts;
         if(discoverSearchTerm) {
-            filteredPosts = allPosts.filter(function(p) { return p.title.toLowerCase().includes(discoverSearchTerm) || p.content.toLowerCase().includes(discoverSearchTerm); });
+            filteredPosts = allPosts.filter(function(p) {
+                const body = typeof p.content === 'string' ? p.content : (p.content?.text || '');
+                return (p.title || '').toLowerCase().includes(discoverSearchTerm) || body.toLowerCase().includes(discoverSearchTerm);
+            });
         }
 
-        if(discoverFilter === 'Popular Posts') {
+        if(discoverPostsSort === 'popular') {
             filteredPosts.sort(function(a,b) { return (b.likes || 0) - (a.likes || 0); });
         } else {
             filteredPosts.sort(function(a,b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
@@ -2257,6 +2607,7 @@ window.renderDiscover = async function() {
             container.innerHTML += `<div class="discover-section-header">Posts</div>`;
             filteredPosts.forEach(function(post) {
                 const author = userCache[post.userId] || {name: post.author};
+                const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
                 container.innerHTML += `
                     <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'}; cursor:pointer;" onclick="window.openThread('${post.id}')">
                         <div class="card-content" style="padding:1rem;">
@@ -2268,12 +2619,64 @@ window.renderDiscover = async function() {
                                 </div>
                             </div>
                             <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                            <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(post.content).substring(0, 100))}...</p>
+                            <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
                         </div>
                     </div>`;
             });
-        } else if ((discoverFilter === 'Recent Posts' || discoverFilter === 'Popular Posts') && discoverSearchTerm) {
+        } else if (discoverFilter === 'Posts' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No posts found.</p></div>`;
+        }
+    };
+
+    const renderCategoriesSection = function(onlyCategories = false) {
+        let filteredCategories = categories.slice();
+        if (discoverSearchTerm) {
+            const term = discoverSearchTerm.toLowerCase();
+            filteredCategories = filteredCategories.filter(function(c) {
+                return (c.name || '').toLowerCase().includes(term) || (c.slug || '').toLowerCase().includes(term) || (c.description || '').toLowerCase().includes(term);
+            });
+        }
+
+        if (discoverCategoriesMode === 'verified_only') {
+            filteredCategories = filteredCategories.filter(function(c) { return !!c.verified; });
+        } else if (discoverCategoriesMode === 'community_only') {
+            filteredCategories = filteredCategories.filter(function(c) { return (c.type || 'community') === 'community'; });
+        }
+
+        const sorted = filteredCategories.slice().sort(function(a, b) {
+            const memberDiff = (b.memberCount || 0) - (a.memberCount || 0);
+            if (discoverCategoriesMode === 'verified_first') {
+                if (!!a.verified !== !!b.verified) return Number(b.verified) - Number(a.verified);
+                return memberDiff;
+            }
+            if (discoverCategoriesMode === 'community_first') {
+                const aComm = (a.type || 'community') === 'community';
+                const bComm = (b.type || 'community') === 'community';
+                if (aComm !== bComm) return Number(bComm) - Number(aComm);
+                return memberDiff;
+            }
+            return memberDiff;
+        });
+
+        const visible = onlyCategories ? sorted : sorted.slice(0, 6);
+        if (visible.length > 0) {
+            container.innerHTML += `<div class="discover-section-header discover-section-row"><span>Categories</span>${categoriesDropdown('section')}</div>`;
+            visible.forEach(function(cat) {
+                const verifiedMark = cat.verified ? '<span class="verified-badge">✔</span>' : '';
+                const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
+                const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
+                container.innerHTML += `
+                    <div class="social-card" style="padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid ${cat.verified ? '#00f2ea' : 'var(--border)'};">
+                        <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
+                        <div style="flex:1;">
+                            <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
+                            <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
+                        </div>
+                        <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
+                    </div>`;
+            });
+        } else if (discoverFilter === 'Categories' && discoverSearchTerm) {
+            container.innerHTML = `<div class="empty-state"><p>No categories found.</p></div>`;
         }
     };
 
@@ -2281,6 +2684,7 @@ window.renderDiscover = async function() {
         renderLiveSection();
         renderUsers();
         renderPostsSection();
+        renderCategoriesSection();
         await renderVideosSection();
         if(container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
     } else if (discoverFilter === 'Users') {
@@ -2289,6 +2693,8 @@ window.renderDiscover = async function() {
         renderLiveSection();
     } else if (discoverFilter === 'Videos') {
         await renderVideosSection(true);
+    } else if (discoverFilter === 'Categories') {
+        renderCategoriesSection(true);
     } else {
         renderPostsSection();
     }
@@ -2308,52 +2714,55 @@ window.openUserProfile = async function(uid, event, pushToStack = true) {
     currentProfileFilter = 'All'; 
     window.navigateTo('public-profile', pushToStack); 
 
-    let profile = userCache[uid]; 
-    if (!profile) { 
-        const docSnap = await getDoc(doc(db, "users", uid)); 
-        if (docSnap.exists()) { 
-            profile = docSnap.data(); 
-            userCache[uid] = profile; 
-        } else { 
-            profile = { name: "Unknown User", username: "unknown" }; 
-        } 
-    } 
-    renderPublicProfile(uid, profile); 
+    let profile = userCache[uid];
+    if (!profile) {
+        const docSnap = await getDoc(doc(db, "users", uid));
+        if (docSnap.exists()) {
+            profile = normalizeUserProfileData(docSnap.data());
+            userCache[uid] = profile;
+        } else {
+            profile = { name: "Unknown User", username: "unknown" };
+        }
+    }
+    renderPublicProfile(uid, profile);
 }
 
-function renderPublicProfile(uid, profileData = userCache[uid]) { 
-    if(!profileData) return; 
-    const container = document.getElementById('view-public-profile'); 
+function renderPublicProfile(uid, profileData = userCache[uid]) {
+    if(!profileData) return;
+    const normalizedProfile = normalizeUserProfileData(profileData);
+    const container = document.getElementById('view-public-profile');
 
-    const pfpStyle = profileData.photoURL 
-        ? `background-image: url('${profileData.photoURL}'); background-size: cover; color: transparent;` 
-        : `background: ${getColorForUser(profileData.name)}`; 
+    const pfpStyle = normalizedProfile.photoURL
+        ? `background-image: url('${normalizedProfile.photoURL}'); background-size: cover; color: transparent;`
+        : `background: ${getColorForUser(normalizedProfile.name)}`;
 
-    const isFollowing = followedUsers.has(uid); 
+    const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
     const userPosts = allPosts.filter(function(p) { return p.userId === uid && (isSelfView || p.visibility !== 'private'); });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     let linkHtml = ''; 
-    if(profileData.links) { 
-        let url = profileData.links; 
-        if(!url.startsWith('http')) url = 'https://' + url; 
-        linkHtml = `<a href="${url}" target="_blank" style="color: var(--primary); font-size: 0.9rem; text-decoration: none; margin-top: 5px; display: inline-block;">🔗 ${escapeHtml(profileData.links)}</a>`; 
-    } 
+    if(normalizedProfile.links) {
+        let url = normalizedProfile.links;
+        if(!url.startsWith('http')) url = 'https://' + url;
+        linkHtml = `<a href="${url}" target="_blank" style="color: var(--primary); font-size: 0.9rem; text-decoration: none; margin-top: 5px; display: inline-block;">🔗 ${escapeHtml(normalizedProfile.links)}</a>`;
+    }
 
-    const followersCount = profileData.followersCount || 0; 
+    const followersCount = normalizedProfile.followersCount || 0;
+    const profileRoles = getAccountRoleSet(normalizedProfile);
+    const verifiedBadge = profileRoles.has('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
 
     // FIX: Added specific ID to follower count for real-time updates
     container.innerHTML = `
         <div class="glass-panel" style="position: sticky; top: 0; z-index: 20; padding: 1rem; display: flex; align-items: center; gap: 15px;">
             <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;"><span>←</span> Back</button>
-            <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(profileData.username)}</h2>
+            <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(normalizedProfile.username)}</h2>
         </div>
         <div class="profile-header" style="padding-top:1rem;">
-            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${profileData.photoURL ? '' : profileData.name[0]}</div>
-            <h2 style="font-weight: 800; margin-bottom: 5px;">${escapeHtml(profileData.name)}</h2>
-            <p style="color: var(--text-muted);">@${escapeHtml(profileData.username)}</p>
-            <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(profileData.bio || "No bio yet.")}</p>
+            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${normalizedProfile.photoURL ? '' : normalizedProfile.name[0]}</div>
+            <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
+            <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
+            <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div id="profile-follower-count-${uid}">${followersCount}</div><div>Followers</div></div>
@@ -2427,6 +2836,7 @@ function renderProfile() {
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
+    const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -2442,7 +2852,7 @@ function renderProfile() {
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
             <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
-            <h2 style="font-weight:800;">${escapeHtml(displayName)}</h2>
+            <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
             ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
             <p style="margin-top:10px;">${escapeHtml(userProfile.bio)}</p>
@@ -2538,7 +2948,24 @@ function cleanText(text) { if(typeof text !== 'string') return ""; return text.r
 function renderSaved() { currentCategory = 'Saved'; renderFeed('saved-content'); }
 
 // Small Interaction Utils
-window.setDiscoverFilter = function(filter) { discoverFilter = filter; document.querySelectorAll('.discover-pill').forEach(function(el) { if(el.textContent.includes(filter)) el.classList.add('active'); else el.classList.remove('active'); }); renderDiscover(); }
+window.setDiscoverFilter = function(filter) {
+    discoverFilter = filter;
+    document.querySelectorAll('.discover-pill').forEach(function(el) {
+        if(el.dataset.filter === filter) el.classList.add('active');
+        else el.classList.remove('active');
+    });
+    const postSort = document.getElementById('discover-post-sort');
+    if (postSort) postSort.style.display = filter === 'Posts' ? 'flex' : 'none';
+    const categorySort = document.getElementById('discover-category-sort');
+    if (categorySort) categorySort.style.display = filter === 'Categories' ? 'flex' : 'none';
+    const postsSelect = document.getElementById('posts-sort-select');
+    if (postsSelect) postsSelect.value = discoverPostsSort;
+    const categoriesSelect = document.getElementById('categories-sort-select');
+    if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
+    renderDiscover();
+}
+window.handlePostsSortChange = function(e) { discoverPostsSort = e.target.value; renderDiscover(); }
+window.handleCategoriesModeChange = function(e) { discoverCategoriesMode = e.target.value; renderDiscover(); }
 window.handleSearchInput = function(e) { discoverSearchTerm = e.target.value.toLowerCase(); renderDiscover(); }
 window.setSavedFilter = function(filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function(el) { if(el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
 window.handleSavedSearch = function(e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
@@ -2917,6 +3344,12 @@ window.uploadVideo = async function() {
     }
 };
 
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && destinationPickerOpen) {
+        closeDestinationPicker();
+    }
+});
+
 window.likeVideo = async function(videoId) {
     if(!requireAuth()) return;
     const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
@@ -3012,7 +3445,7 @@ window.sendLiveChat = async function(sessionId) {
 function renderStaffConsole() {
     const warning = document.getElementById('staff-access-warning');
     const panels = document.getElementById('staff-panels');
-    const isStaff = userProfile.role === 'staff' || userProfile.role === 'admin';
+    const isStaff = hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient();
     if(!isStaff) {
         if(warning) warning.style.display = 'block';
         if(panels) panels.style.display = 'none';
@@ -3043,7 +3476,7 @@ function listenVerificationRequests() {
 
 window.approveVerification = async function(requestId, userId) {
     await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'approved', reviewedAt: serverTimestamp() });
-    if(userId) await setDoc(doc(db, 'users', userId), { verified: true, updatedAt: serverTimestamp() }, { merge: true });
+    if(userId) await setDoc(doc(db, 'users', userId), { accountRoles: arrayUnion('verified'), verified: true, updatedAt: serverTimestamp() }, { merge: true });
     await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'approveVerification', targetRef: requestId, createdAt: serverTimestamp() });
 };
 
