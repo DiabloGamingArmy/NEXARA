@@ -1,13 +1,38 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isCategoryMember(categoryId) {
+      return isSignedIn() && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.status == 'active';
+    }
+    function isCategoryMod(categoryId) {
+      return isSignedIn() && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.role in ['owner','mod'];
+    }
+
     match /users/{userId} {
       allow read: if true;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
-    match /posts/{postId} {
+    match /users/{userId}/categoryMemberships/{categoryId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+    }
+    match /categories/{categoryId} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == request.resource.data.userId;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && ((resource.data.type == 'official' && request.auth.token.role in ['staff','admin']) || isCategoryMod(categoryId));
+      allow delete: if false;
+      match /members/{uid} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && ((uid == request.auth.uid && request.resource.data.status in ['active','left']) || isCategoryMod(categoryId));
+      }
+    }
+    match /posts/{postId} {
+      allow read: if !('visibility' in resource.data) || resource.data.visibility != 'private' || (isSignedIn() && request.auth.uid == resource.data.userId);
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId && (request.resource.data.categoryId == null || isCategoryMember(request.resource.data.categoryId));
+      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.userId;
 
       match /comments/{commentId} {
         allow read: if true;

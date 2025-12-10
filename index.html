@@ -48,9 +48,36 @@
         <div class="x-modal-content">
             <div class="x-modal-header">
                 <button onclick="window.toggleCreateModal(false)" class="x-close-btn">&times;</button>
-                 <select id="postCategory" class="x-pill-select" style="margin-left: auto; border-color: transparent; color: var(--primary);">
-                    <option>STEM</option><option>Coding</option><option>History</option><option>Gaming</option><option>Brainrot</option><option>Sports</option>
-                </select>
+                <div class="category-current">
+                    <div class="category-current-label">Posting to: <span id="category-current-label">Loading...</span></div>
+                </div>
+            </div>
+
+            <div id="category-center" class="category-center">
+                <div class="category-center-top">
+                    <div class="category-tabs">
+                        <button class="icon-pill" onclick="window.setCategoryTab('official')">Official (Verified)</button>
+                        <button class="icon-pill" onclick="window.setCategoryTab('community')">Community</button>
+                    </div>
+                    <button class="icon-pill" onclick="document.getElementById('create-category-form').style.display='block'">
+                        <i class="ph ph-plus"></i> Create Category
+                    </button>
+                </div>
+                <div id="category-list" class="category-list"></div>
+                <div id="category-rules" class="category-rules"></div>
+                <div id="category-post-helper" class="category-helper" style="display:none;"></div>
+            </div>
+
+            <div id="create-category-form" class="category-create-form">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <h4 style="margin:0;">Create Community Category</h4>
+                    <button class="x-close-btn" onclick="document.getElementById('create-category-form').style.display='none'">&times;</button>
+                </div>
+                <input type="text" id="new-category-name" class="form-input" placeholder="Category name">
+                <textarea id="new-category-description" class="form-input" placeholder="Description"></textarea>
+                <textarea id="new-category-rules" class="form-input" placeholder="Additional rules (one per line)"></textarea>
+                <label class="checkbox-row"><input type="checkbox" id="new-category-public" checked> Publicly discoverable</label>
+                <button class="create-btn-sidebar" onclick="window.handleCreateCategoryForm()" style="width:100%;">Create</button>
             </div>
 
             <div class="x-body">
