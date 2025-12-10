@@ -859,11 +859,16 @@ async function startUserReviewListener(uid) {
         const initial = await getDocs(q);
         handleSnapshot(initial);
     } catch (error) {
-        console.log("Initial audit hydration error:", error.message);
+        if (error.code !== 'permission-denied') {
+            console.log("Initial audit hydration error:", error.message);
+        }
+        return; // Skip listener when access is not allowed
     }
 
     onSnapshot(q, handleSnapshot, function (error) {
-        console.log("Review listener note:", error.message);
+        if (error.code !== 'permission-denied') {
+            console.log("Review listener note:", error.message);
+        }
     });
 }
 
