@@ -331,14 +331,11 @@ function shouldRerenderThread(newData, prevData = {}) {
 }
 
 // --- Auth Functions ---
-window.handleLogin = async (e) => {
-    e.preventDefault();
-    try {
-        await signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
-    } catch (err) { 
-        document.getElementById('auth-error').textContent = err.message; 
-    }
-}
+window.handleLogin = window.handleLogin || (e) => {
+  if (e && typeof e.preventDefault === "function") e.preventDefault();
+  console.error("handleLogin is not wired correctly; script may not be the latest deployed version.");
+};
+
 
 window.handleSignup = async (e) => {
     e.preventDefault();
@@ -2073,85 +2070,72 @@ function initVideoFeed() {
 }
 
 function renderVideoFeed(videos = []) {
-    const feed = document.getElementById('video-feed');
-    if (!feed) return;
+  const feed = document.getElementById('video-feed');
+  if (!feed) return;
 
-    if (typeof pauseAllVideos === 'function') pauseAllVideos();
-    feed.innerHTML = '';
+  // If you have this helper elsewhere, keep it; if not, this line is harmless to remove.
+  if (typeof pauseAllVideos === "function") pauseAllVideos();
 
-    if (!Array.isArray(videos) || videos.length === 0) {
-        feed.innerHTML = '<div class="empty-state">No videos yet.</div>';
-        return;
-    }
+  feed.innerHTML = '';
+  if (!Array.isArray(videos) || videos.length === 0) {
+    feed.innerHTML = '<div class="empty-state">No videos yet.</div>';
+    return;
+  }
 
-    // Prefer your shared observer if it exists, otherwise create a local one.
-    const observer = (typeof ensureVideoObserver === 'function')
-        ? ensureVideoObserver()
-        : new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                const vid = entry.target;
-                if (entry.isIntersecting) {
-                    vid.play().catch(() => {});
-                    if (!vid.dataset.viewed) {
-                        vid.dataset.viewed = '1';
-                        if (typeof incrementVideoViews === 'function' && vid.dataset.videoId) {
-                            incrementVideoViews(vid.dataset.videoId);
-                        }
-                    }
-                } else {
-                    vid.pause();
-                }
-            });
-        }, { threshold: 0.6 });
-
-    videos.forEach(video => {
-        const card = document.createElement('div');
-        card.className = 'video-card';
-
-        const tags = (video.hashtags || []).map(t => `#${t}`).join(' ');
-        const caption = (typeof escapeHtml === 'function')
-            ? escapeHtml(video.caption || '')
-            : (video.caption || '');
-
-        card.innerHTML = `
-            <video
-                src="${video.videoURL}"
-                playsinline
-                loop
-                muted
-                preload="metadata"
-                data-video-id="${video.id}"
-            ></video>
-            <div class="video-meta">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <div style="font-weight:800;">${caption}</div>
-                        <div style="color:var(--text-muted); font-size:0.85rem;">${tags}</div>
-                    </div>
-                    <div style="display:flex; gap:8px;">
-                        <button class="icon-pill" onclick="window.likeVideo('${video.id}')">
-                            <i class="ph ph-heart"></i> ${video.stats?.likes || 0}
-                        </button>
-                        <button class="icon-pill" onclick="window.saveVideo('${video.id}')">
-                            <i class="ph ph-bookmark"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        const vidEl = card.querySelector('video');
-        if (vidEl) {
-            // Keep dataset.videoId consistent for observers/incrementer.
-            vidEl.dataset.videoId = video.id;
-            feed.appendChild(card);
-            observer.observe(vidEl);
-        } else {
-            // Failsafe: still append card so UI doesn’t break.
-            feed.appendChild(card);
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const vid = entry.target;
+      if (entry.isIntersecting) {
+        const p = vid.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+        if (typeof incrementVideoViews === "function" && vid.dataset.videoId) {
+          incrementVideoViews(vid.dataset.videoId);
         }
+      } else {
+        vid.pause();
+      }
     });
+  }, { threshold: 0.6 });
+
+  videos.forEach(video => {
+    const card = document.createElement('div');
+    card.className = 'video-card';
+
+    const tags = (video.hashtags || []).map(t => `#${t}`).join(' ');
+
+    card.innerHTML = `
+      <video
+        src="${video.videoURL || ''}"
+        playsinline
+        loop
+        muted
+        preload="metadata"
+        data-video-id="${video.id || ''}"
+      ></video>
+      <div class="video-meta">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div style="font-weight:800;">${escapeHtml(video.caption || '')}</div>
+            <div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(tags)}</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="icon-pill" onclick="window.likeVideo('${video.id}')">
+              <i class="ph ph-heart"></i> ${video.stats?.likes || 0}
+            </button>
+            <button class="icon-pill" onclick="window.saveVideo('${video.id}')">
+              <i class="ph ph-bookmark"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const vidEl = card.querySelector('video');
+    feed.appendChild(card);
+    if (vidEl) observer.observe(vidEl);
+  });
 }
+
 
 
 window.uploadVideo = async function() {
