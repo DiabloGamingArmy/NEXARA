@@ -1354,7 +1354,7 @@ const renderCommentHtml = function(c, isReply) {
           <div style="font-size:0.9rem; margin-bottom:2px;">
             <strong>${escapeHtml(cAuthor.name || 'User')}</strong>
             <span style="color:var(--text-muted); font-size:0.8rem;">
-              • ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}
+              • ${c.timestamp ? new Date(c.timestamp.seconds * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : 'Now'}
             </span>
           </div>
 
@@ -1399,39 +1399,60 @@ const renderCommentHtml = function(c, isReply) {
     </div>`;
 };
 
+function renderThreadComments(comments) {
+  const container = document.getElementById('thread-stream');
+  if (!container) return;
 
- 
-    roots.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
-    roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+  // Build parent -> replies map, and root list
+  const byParent = {};
+  const roots = [];
 
-    const renderReplies = function(parentId) {
-        const replies = (byParent[parentId] || []).slice().sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
-        replies.forEach(function(reply) {
-            const slot = document.getElementById(`reply-slot-${parentId}`);
-            if (slot) {
-                slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
-            }
-            renderReplies(reply.id);
-        });
-    };
-
-    roots.forEach(function(c) { renderReplies(c.id); });
-
-    const inputArea = document.getElementById('thread-input-area');
-    const defaultSlot = document.getElementById('thread-input-default-slot');
-    if (inputArea && !inputArea.parentElement && defaultSlot) {
-        defaultSlot.appendChild(inputArea);
+  (comments || []).forEach(function(c) {
+    const parentId = c.parentCommentId || c.parentId;
+    if (parentId) {
+      (byParent[parentId] = byParent[parentId] || []).push(c);
+    } else {
+      roots.push(c);
     }
+  });
 
-    if (activeReplyId) {
-        const slot = document.getElementById(`reply-slot-${activeReplyId}`);
-        if (slot && inputArea && !slot.contains(inputArea)) {
-            slot.appendChild(inputArea);
-            const input = document.getElementById('thread-input');
-            if(input) input.focus();
-        }
+  // Clear + render roots
+  container.innerHTML = '';
+  roots.sort(function(a, b) { return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0); });
+  roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+
+  const renderReplies = function(parentId) {
+    const replies = (byParent[parentId] || []).slice().sort(function(a, b) {
+      return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0);
+    });
+
+    replies.forEach(function(reply) {
+      const slot = document.getElementById(`reply-slot-${parentId}`);
+      if (slot) slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+      renderReplies(reply.id);
+    });
+  };
+
+  roots.forEach(function(c) { renderReplies(c.id); });
+
+  // Re-anchor input area if needed
+  const inputArea = document.getElementById('thread-input-area');
+  const defaultSlot = document.getElementById('thread-input-default-slot');
+  if (inputArea && !inputArea.parentElement && defaultSlot) {
+    defaultSlot.appendChild(inputArea);
+  }
+
+  // Move input under active reply target if set
+  if (typeof activeReplyId !== 'undefined' && activeReplyId) {
+    const slot = document.getElementById(`reply-slot-${activeReplyId}`);
+    if (slot && inputArea && !slot.contains(inputArea)) {
+      slot.appendChild(inputArea);
+      const input = document.getElementById('thread-input');
+      if (input) input.focus();
     }
+  }
 }
+
 
 
 function renderThreadMainPost(postId) {
