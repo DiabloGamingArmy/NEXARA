@@ -2,6 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
 // --- Firebase Configuration ---
 const firebaseConfig = {
@@ -51,7 +52,12 @@ function getReviewDisplay(reviewValue) {
     if (reviewValue === 'misleading') {
         return { label: 'Misleading/False', className: 'review-misleading' };
     }
-    return { label: 'Review', className: '' };
+    return { label: 'Audit', className: '' };
+}
+
+function getPostOptionsButton(post, context = 'feed', iconSize = '1.1rem') {
+    const ownerId = post.userId;
+    return `<button class="post-options-btn" onclick="event.stopPropagation(); window.openPostOptions(event, '${post.id}', '${ownerId}', '${context}')" aria-label="Post options"><i class="ph ph-dots-three" style="font-size:${iconSize};"></i></button>`;
 }
 
 function applyReviewButtonState(buttonEl, reviewValue) {
@@ -108,6 +114,8 @@ let liveSessionsUnsubscribe = null;
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
+let activeOptionsPost = null;
+let threadComments = [];
 
 // --- Navigation Stack ---
 let navStack = [];
@@ -483,22 +491,30 @@ function startDataListener() {
 }
 
 // PATCH: New listener to fetch user's reviews across all posts
-function startUserReviewListener(uid) {
+async function startUserReviewListener(uid) {
     const q = query(collectionGroup(db, 'reviews'), where('userId', '==', uid));
-    onSnapshot(q, function (snapshot) {
+
+    const handleSnapshot = function (snapshot) {
         window.myReviewCache = {};
         snapshot.forEach(function (doc) {
-            // In a Collection Group query, we can access the parent Post ID
             const parentPostRef = doc.ref.parent.parent;
             if (parentPostRef) {
                 window.myReviewCache[parentPostRef.id] = doc.data().rating;
             }
         });
 
-        // Refresh UI for all loaded posts to apply colors
         allPosts.forEach(function (post) { refreshSinglePostUI(post.id); });
         applyMyReviewStylesToDOM();
-    }, function (error) {
+    };
+
+    try {
+        const initial = await getDocs(q);
+        handleSnapshot(initial);
+    } catch (error) {
+        console.log("Initial audit hydration error:", error.message);
+    }
+
+    onSnapshot(q, handleSnapshot, function (error) {
         console.log("Review listener note:", error.message);
     });
 }
@@ -682,6 +698,7 @@ function getPostHTML(post) {
             : `background: ${getColorForUser(authorData.name)}`;
 
         const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+        const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
         const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
         const isFollowingUser = followedUsers.has(post.userId);
         const isFollowingTopic = followedCategories.has(post.category);
@@ -729,10 +746,13 @@ function getPostHTML(post) {
                         <div class="user-avatar" style="${avatarStyle}">${authorData.photoURL ? '' : authorData.name[0]}</div>
                         <div class="header-info"><span class="author-name">${escapeHtml(authorData.name)}</span><span class="post-meta">@${escapeHtml(authorData.username)} • ${date}</span></div>
                     </div>
-                    <div style="flex:1; display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
-                        <div style="display:flex; gap:5px;">
-                            <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                            <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>
+                    <div style="flex:1; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+                        <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end; width:100%;">
+                            <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+                                <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>
+                            </div>
+                            ${getPostOptionsButton(post, 'feed')}
                         </div>
                         ${trustBadge}
                     </div>
@@ -746,9 +766,10 @@ function getPostHTML(post) {
                     ${savedTagHtml}
                 </div>
                 <div class="card-actions">
-                    <button class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
+                    <button id="post-like-btn-${post.id}" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
+                    <button id="post-dislike-btn-${post.id}" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}</button>
                     <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
-                    <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
+                    <button id="post-save-btn-${post.id}" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
                     <button class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                 </div>
             </div>`;
@@ -801,17 +822,23 @@ function refreshSinglePostUI(postId) {
     const post = allPosts.find(function(p) { return p.id === postId; });
     if (!post) return;
 
-    const likeBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(1)`);
-    const saveBtn = document.querySelector(`#post-card-${postId} .action-btn:nth-child(3)`);
+    const likeBtn = document.getElementById(`post-like-btn-${postId}`);
+    const dislikeBtn = document.getElementById(`post-dislike-btn-${postId}`);
+    const saveBtn = document.getElementById(`post-save-btn-${postId}`);
     const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
     const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
-    if(likeBtn) { 
-        likeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}`; 
-        likeBtn.style.color = isLiked ? '#00f2ea' : 'inherit'; 
+    if(likeBtn) {
+        likeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}`;
+        likeBtn.style.color = isLiked ? '#00f2ea' : 'inherit';
+    }
+    if(dislikeBtn) {
+        dislikeBtn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}`;
+        dislikeBtn.style.color = isDisliked ? '#ff3d3d' : 'inherit';
     }
     if(saveBtn) { 
         // FIX: Ensure text toggles between Save and Saved
@@ -824,14 +851,19 @@ function refreshSinglePostUI(postId) {
 
     // Update Thread View if active
     const threadLikeBtn = document.getElementById('thread-like-btn');
+    const threadDislikeBtn = document.getElementById('thread-dislike-btn');
     const threadSaveBtn = document.getElementById('thread-save-btn');
     const threadTitle = document.getElementById('thread-view-title');
     const threadReviewBtn = document.getElementById('thread-review-btn');
 
     if(threadTitle && threadTitle.dataset.postId === postId) {
-        if(threadLikeBtn) { 
-            threadLikeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span>`; 
-            threadLikeBtn.style.color = isLiked ? '#00f2ea' : 'inherit'; 
+        if(threadLikeBtn) {
+            threadLikeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span>`;
+            threadLikeBtn.style.color = isLiked ? '#00f2ea' : 'inherit';
+        }
+        if(threadDislikeBtn) {
+            threadDislikeBtn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span style="font-size:1rem; margin-left:5px;">${post.dislikes || 0}</span>`;
+            threadDislikeBtn.style.color = isDisliked ? '#ff3d3d' : 'inherit';
         }
         if(threadSaveBtn) {
             threadSaveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span>`;
@@ -852,15 +884,20 @@ window.toggleLike = async function(postId, event) {
     if(!post) return;
 
     const wasLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+    const hadDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
 
     // Optimistic Update
     if (wasLiked) { 
         post.likes = Math.max(0, (post.likes || 0) - 1); // Prevent negative likes
         post.likedBy = post.likedBy.filter(function(uid) { return uid !== currentUser.uid; });
     } else { 
-        post.likes = (post.likes || 0) + 1; 
-        if (!post.likedBy) post.likedBy = []; 
-        post.likedBy.push(currentUser.uid); 
+        post.likes = (post.likes || 0) + 1;
+        if (!post.likedBy) post.likedBy = [];
+        post.likedBy.push(currentUser.uid);
+        if (hadDisliked) {
+            post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
+            post.dislikedBy = (post.dislikedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
+        }
     }
 
     refreshSinglePostUI(postId);
@@ -870,9 +907,14 @@ window.toggleLike = async function(postId, event) {
         if(wasLiked) {
             await updateDoc(postRef, { likes: increment(-1), likedBy: arrayRemove(currentUser.uid) });
         } else {
-            await updateDoc(postRef, { likes: increment(1), likedBy: arrayUnion(currentUser.uid) });
+            const updatePayload = { likes: increment(1), likedBy: arrayUnion(currentUser.uid) };
+            if (hadDisliked) {
+                updatePayload.dislikes = increment(-1);
+                updatePayload.dislikedBy = arrayRemove(currentUser.uid);
+            }
+            await updateDoc(postRef, updatePayload);
         }
-    } catch(e) { 
+    } catch(e) {
         console.error("Like error:", e); 
         // Revert on error would go here, or just let snapshot fix it
         startDataListener(); 
@@ -1283,6 +1325,7 @@ function attachThreadComments(postId) {
 function renderThreadComments(comments = []) {
     const container = document.getElementById('thread-stream');
     if(!container) return;
+    threadComments = comments.slice();
     container.innerHTML = "";
 
     if (comments.length === 0) {
@@ -1290,39 +1333,61 @@ function renderThreadComments(comments = []) {
         return;
     }
 
-    comments.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+    const { roots, byParent } = groupCommentsByParent(comments);
 
-    comments.forEach(function(c) {
+    const renderCommentHtml = function(c, isReply) {
         const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
-        const isReply = c.parentId ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
         const isLiked = c.likedBy && c.likedBy.includes(currentUser?.uid);
-
+        const isDisliked = c.dislikedBy && c.dislikedBy.includes(currentUser?.uid);
         const avatarBg = cAuthor.photoURL ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;` : `background:${getColorForUser(cAuthor.name||'U')}`;
-        let mediaHtml = c.mediaUrl
+        const mediaHtml = c.mediaUrl
             ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')"><img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;"></div>`
             : "";
 
-        container.innerHTML += `
-            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${isReply}">
+        const replyStyle = isReply ? 'margin-left: 40px; border-left: 2px solid var(--border);' : '';
+
+        return `
+            <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
                 <div style="display:flex; gap:10px; align-items:flex-start;">
                     <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">${cAuthor.photoURL ? '' : (cAuthor.name||'U')[0]}</div>
                     <div style="flex:1;">
                         <div style="font-size:0.9rem; margin-bottom:2px;"><strong>${escapeHtml(cAuthor.name||'User')}</strong> <span style="color:var(--text-muted); font-size:0.8rem;">• ${c.timestamp ? new Date(c.timestamp.seconds*1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'Now'}</span></div>
-                        <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
-                        ${mediaHtml}
+                <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">${escapeHtml(c.text||'')}</div>
+            ${mediaHtml}
                         <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
-                            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
-                            <button onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> ${c.likes || 0}</button>
+                           <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name||'User')}')" style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="ph ph-arrow-bend-up-left"></i> Reply</button>
+                            <button data-role="comment-like" data-comment-id="${c.id}" data-liked="${isLiked}" data-disliked="${isDisliked}" onclick="window.toggleCommentLike('${c.id}', event)" style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span class="comment-like-count" id="comment-like-count-${c.id}">${c.likes || 0}</span></button>
+                            <button data-role="comment-dislike" data-comment-id="${c.id}" data-liked="${isLiked}" data-disliked="${isDisliked}" onclick="window.toggleCommentDislike('${c.id}', event)" style="background:none; border:none; color:${isDisliked ? '#ff3d3d' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span class="comment-dislike-count" id="comment-dislike-count-${c.id}">${c.dislikes || 0}</span></button>
                         </div>
                         <div id="reply-slot-${c.id}"></div>
-                    </div>
+                  </div>
                 </div>
             </div>`;
-    });
+    };
+    roots.sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+    roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+
+    const renderReplies = function(parentId) {
+        const replies = (byParent[parentId] || []).slice().sort(function(a,b) { return (a.timestamp?.seconds||0) - (b.timestamp?.seconds||0); });
+        replies.forEach(function(reply) {
+            const slot = document.getElementById(`reply-slot-${parentId}`);
+            if (slot) {
+                slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+            }
+            renderReplies(reply.id);
+        });
+    };
+
+    roots.forEach(function(c) { renderReplies(c.id); });
+
+    const inputArea = document.getElementById('thread-input-area');
+    const defaultSlot = document.getElementById('thread-input-default-slot');
+    if (inputArea && !inputArea.parentElement && defaultSlot) {
+        defaultSlot.appendChild(inputArea);
+    }
 
     if (activeReplyId) {
         const slot = document.getElementById(`reply-slot-${activeReplyId}`);
-        const inputArea = document.getElementById('thread-input-area');
         if (slot && inputArea && !slot.contains(inputArea)) {
             slot.appendChild(inputArea);
             const input = document.getElementById('thread-input');
@@ -1366,28 +1431,32 @@ function renderThreadMainPost(postId) {
     // Updated Layout for Thread Main Post to match Feed Header logic
     container.innerHTML = `
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
-                    <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
-                    <div>
-                        <div class="author-name" style="font-size:1rem;">${escapeHtml(authorData.name)}</div>
-                        <div class="post-meta">@${escapeHtml(authorData.username)}</div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                    <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
+                        <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                        <div>
+                            <div class="author-name" style="font-size:1rem;">${escapeHtml(authorData.name)}</div>
+                            <div class="post-meta">@${escapeHtml(authorData.username)}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+                        <div style="display:flex; gap:10px; align-items:center; justify-content:flex-end; width:100%;">
+                            <div style="display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+                                <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>
+                            </div>
+                            ${getPostOptionsButton(post, 'thread', '1.2rem')}
+                        </div>
+                        ${trustBadge}
                     </div>
                 </div>
-                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
-                    <div style="display:flex; gap:5px;">
-                        <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                        <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>
-                    </div>
-                    ${trustBadge}
-                </div>
-            </div>
             <h2 id="thread-view-title" data-post-id="${post.id}" style="font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; line-height: 1.3;">${escapeHtml(post.title)}</h2>
             <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${escapeHtml(post.content)}</p>
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span></div>
             <div class="card-actions" style="border:none; padding: 10px 0; justify-content: space-around;">
                 <button id="thread-like-btn" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}; font-size: 1.2rem;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span></button>
+                <button id="thread-dislike-btn" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}; font-size: 1.2rem;"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span style="font-size:1rem; margin-left:5px;">${post.dislikes || 0}</span></button>
                 <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
                 <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
                 <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
@@ -1426,15 +1495,11 @@ window.sendComment = async function() {
             mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
         }
 
-        await addDoc(collection(db, 'posts', activePostId, 'comments'), { 
-            text, 
-            mediaUrl, 
-            parentId: activeReplyId, 
-            userId: currentUser.uid, 
-            timestamp: serverTimestamp(), 
-            likes: 0, 
-            likedBy: [] 
-        });
+        const parentCommentId = normalizeReplyTarget(activeReplyId);
+        const payload = buildReplyRecord({ text, mediaUrl, parentCommentId, userId: currentUser.uid });
+        payload.timestamp = serverTimestamp();
+
+        await addDoc(collection(db, 'posts', activePostId, 'comments'), payload);
 
         const postRef = doc(db, 'posts', activePostId);
         await updateDoc(postRef, { 
@@ -1450,22 +1515,191 @@ window.sendComment = async function() {
         document.getElementById('attach-btn-text').style.color = "var(--text-muted)"; 
         fileInput.value = "";
     } catch(e) { 
-        console.error(e); 
-    } finally { 
-        btn.disabled = false; 
-        btn.textContent = "Reply"; 
+        console.error(e);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Reply";
+        const defaultSlot = document.getElementById('thread-input-default-slot');
+        const inputArea = document.getElementById('thread-input-area');
+        if (defaultSlot && inputArea && !defaultSlot.contains(inputArea)) {
+            defaultSlot.appendChild(inputArea);
+        }
+    }
+}
+
+function updateCommentReactionUI(commentId, likes, dislikes, isLiked, isDisliked) {
+    const likeBtn = document.querySelector(`button[data-role="comment-like"][data-comment-id="${commentId}"]`);
+    const dislikeBtn = document.querySelector(`button[data-role="comment-dislike"][data-comment-id="${commentId}"]`);
+
+    if (likeBtn) {
+        likeBtn.dataset.liked = isLiked ? 'true' : 'false';
+        likeBtn.dataset.disliked = isDisliked ? 'true' : 'false';
+        likeBtn.style.color = isLiked ? '#00f2ea' : 'var(--text-muted)';
+        likeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span class="comment-like-count" id="comment-like-count-${commentId}">${likes}</span>`;
+    }
+
+    if (dislikeBtn) {
+        dislikeBtn.dataset.liked = isLiked ? 'true' : 'false';
+        dislikeBtn.dataset.disliked = isDisliked ? 'true' : 'false';
+        dislikeBtn.style.color = isDisliked ? '#ff3d3d' : 'var(--text-muted)';
+        dislikeBtn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span class="comment-dislike-count" id="comment-dislike-count-${commentId}">${dislikes}</span>`;
     }
 }
 
 window.toggleCommentLike = async function(commentId, event) {
     if(event) event.stopPropagation();
-    if(!activePostId) return;
+    if(!activePostId || !currentUser) return;
     const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
-    const btn = event.currentTarget;
-    const isLiked = btn.style.color === 'rgb(0, 242, 234)'; 
+    const btn = event?.currentTarget;
+    let comment = threadComments.find(function(c) { return c.id === commentId; });
+
+    if(!comment) {
+        try {
+            const snap = await getDoc(commentRef);
+            if (snap.exists()) comment = { id: commentId, ...snap.data() };
+        } catch (e) { console.error(e); }
+    }
+
+    let likes = comment?.likes || 0;
+    let dislikes = comment?.dislikes || 0;
+    let likedBy = comment?.likedBy ? comment.likedBy.slice() : [];
+    let dislikedBy = comment?.dislikedBy ? comment.dislikedBy.slice() : [];
+
+    const wasLiked = likedBy.includes(currentUser.uid) || (btn?.dataset.liked === 'true');
+    const hadDisliked = dislikedBy.includes(currentUser.uid) || (btn?.dataset.disliked === 'true');
+
+    if (wasLiked) {
+        likes = Math.max(0, likes - 1);
+        likedBy = likedBy.filter(function(uid) { return uid !== currentUser.uid; });
+    } else {
+        likes = likes + 1;
+        if (!likedBy.includes(currentUser.uid)) likedBy.push(currentUser.uid);
+        if (hadDisliked) {
+            dislikes = Math.max(0, dislikes - 1);
+            dislikedBy = dislikedBy.filter(function(uid) { return uid !== currentUser.uid; });
+        }
+    }
+
+    if (comment) {
+        comment.likes = likes;
+        comment.dislikes = dislikes;
+        comment.likedBy = likedBy;
+        comment.dislikedBy = dislikedBy;
+    }
+
+    const isLikedNow = likedBy.includes(currentUser.uid);
+    const isDislikedNow = dislikedBy.includes(currentUser.uid);
+    updateCommentReactionUI(commentId, likes, dislikes, isLikedNow, isDislikedNow);
+
     try {
-        if(isLiked) await updateDoc(commentRef, { likes: increment(-1), likedBy: arrayRemove(currentUser.uid) });
-        else await updateDoc(commentRef, { likes: increment(1), likedBy: arrayUnion(currentUser.uid) });
+        if (wasLiked) {
+            await updateDoc(commentRef, { likes: increment(-1), likedBy: arrayRemove(currentUser.uid) });
+        } else {
+            const payload = { likes: increment(1), likedBy: arrayUnion(currentUser.uid) };
+            if (hadDisliked) {
+                payload.dislikes = increment(-1);
+                payload.dislikedBy = arrayRemove(currentUser.uid);
+            }
+            await updateDoc(commentRef, payload);
+        }
+    } catch(e) { console.error(e); }
+}
+
+window.toggleDislike = async function(postId, event) {
+    if(event) event.stopPropagation();
+    if(!currentUser) return alert("Please log in to dislike posts.");
+
+    const post = allPosts.find(function(p) { return p.id === postId; });
+    if(!post) return;
+
+    const wasDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
+    const hadLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+
+    if (wasDisliked) {
+        post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
+        post.dislikedBy = (post.dislikedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
+    } else {
+        post.dislikes = (post.dislikes || 0) + 1;
+        if (!post.dislikedBy) post.dislikedBy = [];
+        post.dislikedBy.push(currentUser.uid);
+        if (hadLiked) {
+            post.likes = Math.max(0, (post.likes || 0) - 1);
+            post.likedBy = (post.likedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
+        }
+    }
+
+    refreshSinglePostUI(postId);
+    const postRef = doc(db, 'posts', postId);
+    try {
+        if (wasDisliked) {
+            await updateDoc(postRef, { dislikes: increment(-1), dislikedBy: arrayRemove(currentUser.uid) });
+        } else {
+            const updatePayload = { dislikes: increment(1), dislikedBy: arrayUnion(currentUser.uid) };
+            if (hadLiked) {
+                updatePayload.likes = increment(-1);
+                updatePayload.likedBy = arrayRemove(currentUser.uid);
+            }
+            await updateDoc(postRef, updatePayload);
+        }
+    } catch (e) { console.error('Dislike error:', e); }
+}
+
+window.toggleCommentDislike = async function(commentId, event) {
+    if(event) event.stopPropagation();
+    if(!activePostId || !currentUser) return;
+    const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
+    const btn = event?.currentTarget;
+    let comment = threadComments.find(function(c) { return c.id === commentId; });
+
+    if(!comment) {
+        try {
+            const snap = await getDoc(commentRef);
+            if (snap.exists()) comment = { id: commentId, ...snap.data() };
+        } catch (e) { console.error(e); }
+    }
+
+    let likes = comment?.likes || 0;
+    let dislikes = comment?.dislikes || 0;
+    let likedBy = comment?.likedBy ? comment.likedBy.slice() : [];
+    let dislikedBy = comment?.dislikedBy ? comment.dislikedBy.slice() : [];
+
+    const wasDisliked = dislikedBy.includes(currentUser.uid) || (btn?.dataset.disliked === 'true');
+    const hadLiked = likedBy.includes(currentUser.uid) || (btn?.dataset.liked === 'true');
+
+    if (wasDisliked) {
+        dislikes = Math.max(0, dislikes - 1);
+        dislikedBy = dislikedBy.filter(function(uid) { return uid !== currentUser.uid; });
+    } else {
+        dislikes = dislikes + 1;
+        if (!dislikedBy.includes(currentUser.uid)) dislikedBy.push(currentUser.uid);
+        if (hadLiked) {
+            likes = Math.max(0, likes - 1);
+            likedBy = likedBy.filter(function(uid) { return uid !== currentUser.uid; });
+        }
+    }
+
+    if (comment) {
+        comment.likes = likes;
+        comment.dislikes = dislikes;
+        comment.likedBy = likedBy;
+        comment.dislikedBy = dislikedBy;
+    }
+
+    const isLikedNow = likedBy.includes(currentUser.uid);
+    const isDislikedNow = dislikedBy.includes(currentUser.uid);
+    updateCommentReactionUI(commentId, likes, dislikes, isLikedNow, isDislikedNow);
+
+    try {
+        if (wasDisliked) {
+            await updateDoc(commentRef, { dislikes: increment(-1), dislikedBy: arrayRemove(currentUser.uid) });
+        } else {
+            const payload = { dislikes: increment(1), dislikedBy: arrayUnion(currentUser.uid) };
+            if (hadLiked) {
+                payload.likes = increment(-1);
+                payload.likedBy = arrayRemove(currentUser.uid);
+            }
+            await updateDoc(commentRef, payload);
+        }
     } catch(e) { console.error(e); }
 }
 
@@ -1582,8 +1816,13 @@ window.renderDiscover = async function() {
                 container.innerHTML += `
                     <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'}; cursor:pointer;" onclick="window.openThread('${post.id}')">
                         <div class="card-content" style="padding:1rem;">
-                            <div class="category-badge">${post.category}</div>
-                            <span style="float:right; font-size:0.8rem; color:var(--text-muted);">by ${escapeHtml(author.name)}</span>
+                            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                                <div class="category-badge">${post.category}</div>
+                                <div style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:var(--text-muted);">
+                                    <span>by ${escapeHtml(author.name)}</span>
+                                    ${getPostOptionsButton(post, 'discover', '1rem')}
+                                </div>
+                            </div>
                             <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                             <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(post.content).substring(0, 100))}...</p>
                         </div>
@@ -1697,11 +1936,11 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     if(filteredPosts.length === 0) { 
         feedContainer.innerHTML = `<div class="empty-state"><p>No posts found in ${currentProfileFilter}.</p></div>`; 
     } else { 
-        feedContainer.innerHTML = ""; 
-        filteredPosts.forEach(function(post) { 
-            const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now'; 
-            const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid); 
-            const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id); 
+            feedContainer.innerHTML = "";
+            filteredPosts.forEach(function(post) {
+                const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
+                const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+                const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
 
             let mediaContent = ''; 
             if (post.mediaUrl) { 
@@ -1712,8 +1951,13 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
                     <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
-                        <div class="category-badge">${post.category}</div>
-                        <span style="font-size:0.8rem; color:var(--text-muted); float:right;">${date}</span>
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                            <div class="category-badge">${post.category}</div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
+                                ${getPostOptionsButton(post, 'public-profile', '1rem')}
+                            </div>
+                        </div>
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                         <p>${escapeHtml(cleanText(post.content))}</p>
                         ${mediaContent}
@@ -1770,19 +2014,24 @@ function renderProfile() {
     if(filteredPosts.length === 0) {
         feedContainer.innerHTML = `<div class="empty-state"><p>No posts.</p></div>`; 
     } else { 
-        feedContainer.innerHTML = ""; 
-        filteredPosts.forEach(function(post) { 
-            const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now'; 
+        feedContainer.innerHTML = "";
+        filteredPosts.forEach(function(post) {
+            const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
             feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
                     <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
-                        <div class="category-badge">${post.category}</div>
-                        <span style="float:right; font-size:0.8rem; color:var(--text-muted);">${date}</span>
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                            <div class="category-badge">${post.category}</div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
+                                ${getPostOptionsButton(post, 'profile', '1rem')}
+                            </div>
+                        </div>
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                         <p>${escapeHtml(cleanText(post.content))}</p>
                     </div>
-                </div>`; 
-        }); 
+                </div>`;
+        });
     } 
 }
 
@@ -1850,6 +2099,47 @@ window.previewPostImage = function(input) { if(input.files && input.files[0]) { 
 window.clearPostImage = function() { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
 window.togglePostOption = function(type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type); ['poll', 'gif', 'schedule', 'location'].forEach(function(t) { if(t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
 window.closeReview = function() { return document.getElementById('review-modal').style.display = 'none'; };
+function closePostOptionsDropdown() {
+    const dropdown = document.getElementById('post-options-dropdown');
+    if (dropdown) dropdown.style.display = 'none';
+    document.removeEventListener('click', handlePostOptionsOutside, true);
+    document.removeEventListener('keydown', handlePostOptionsEscape, true);
+}
+
+function handlePostOptionsOutside(event) {
+    const dropdown = document.getElementById('post-options-dropdown');
+    if (!dropdown) return;
+    if (dropdown.contains(event.target)) return;
+    closePostOptionsDropdown();
+}
+
+function handlePostOptionsEscape(event) {
+    if (event.key === 'Escape') closePostOptionsDropdown();
+}
+
+window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
+    if(!requireAuth()) return;
+    activeOptionsPost = { id: postId, ownerId, context };
+    const dropdown = document.getElementById('post-options-dropdown');
+    const deleteBtn = document.getElementById('dropdown-delete-btn');
+    if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if (dropdown && event && event.currentTarget) {
+        dropdown.style.display = 'block';
+        const rect = event.currentTarget.getBoundingClientRect();
+        const dropdownRect = dropdown.getBoundingClientRect();
+        dropdown.style.top = `${rect.bottom + window.scrollY + 6}px`;
+        dropdown.style.left = `${Math.max(10, rect.right + window.scrollX - dropdownRect.width)}px`;
+    }
+    document.addEventListener('click', handlePostOptionsOutside, true);
+    document.addEventListener('keydown', handlePostOptionsEscape, true);
+};
+
+window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
+window.handlePostOptionSelect = function(action) { closePostOptionsDropdown(); if(action === 'report') return window.openReportModal(); if(action === 'delete') return window.confirmDeletePost(); }
+window.openReportModal = function() { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if(opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'flex'; }
+window.closeReportModal = function() { const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'none'; }
+window.submitReport = async function() { if(!requireAuth()) return; if(!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if(!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if(detailEl) detailEl.value = ''; if(categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch(e) { console.error(e); toast('Could not submit report.', 'error'); } }
+window.confirmDeletePost = async function() { if(!activeOptionsPost || !activeOptionsPost.id) return; if(!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if(!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function(p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if(currentViewId === 'profile') renderProfile(); if(currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if(activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if(threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch(e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
 
 // --- Messaging (DMs) ---
 window.toggleNewChatModal = function(show = true) {
