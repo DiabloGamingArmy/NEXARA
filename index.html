@@ -77,6 +77,11 @@
                     <input type="text" id="postTitle" class="x-input-title" placeholder="Title (Optional)">
                     <textarea id="postContent" class="x-input-content" placeholder="What is happening?!" rows="3"></textarea>
 
+                    <div class="tag-mention-row">
+                        <input type="text" id="postTags" class="form-input" placeholder="#tags (comma separated)">
+                        <input type="text" id="postMentions" class="form-input" placeholder="@mentions (comma separated)">
+                    </div>
+
                     <div id="img-preview-container" class="attachment-preview">
                         <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
                         <img id="img-preview-tag" src="">
@@ -178,9 +183,6 @@
 
                 <input type="file" id="set-pic-file" class="form-input" accept="image/*" style="display:none;">
                 <input type="file" id="set-pic-camera" class="form-input" accept="image/*" capture="environment" style="display:none;">
-
-                <label class="settings-label">Profile Picture (URL)</label>
-                <input type="url" id="set-photo-url" class="form-input" placeholder="https://...">
 
                 <div class="settings-grid">
                     <div>
@@ -402,13 +404,7 @@
 
         <main class="main-feed">
             <div id="view-feed" class="view-section">
-                <div class="category-header">
-                    <div class="category-pill active" onclick="window.setCategory('For You')">For You</div>
-                    <div class="category-pill" onclick="window.setCategory('STEM')"><i class="ph ph-flask"></i> STEM</div>
-                    <div class="category-pill" onclick="window.setCategory('Coding')"><i class="ph ph-code"></i> Coding</div>
-                    <div class="category-pill" onclick="window.setCategory('History')"><i class="ph ph-scroll"></i> History</div>
-                    <div class="category-pill" onclick="window.setCategory('Brainrot')"><i class="ph ph-skull"></i> Brainrot</div>
-                </div>
+            <div id="category-header" class="category-header"></div>
                 <div id="feed-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
             </div>
 
