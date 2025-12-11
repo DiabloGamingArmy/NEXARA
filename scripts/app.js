@@ -3,7 +3,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "../commentUtils.js";
-import { buildTopBar } from "./ui/topBar.js";
+import { buildTopBar, buildTopBarControls } from "./ui/topBar.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -40,6 +40,7 @@ let videoSortMode = 'recent';
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
+let liveTagFilter = '';
 let isInitialLoad = true;
 let composerTags = [];
 let composerMentions = [];
@@ -4777,8 +4778,20 @@ function parseViewerCount(value) {
     return 0;
 }
 
+function resolveLiveThumbnail(session = {}) {
+    const candidates = [session.thumbnail, session.thumbnailUrl, session.coverImage, session.imageUrl];
+    const resolved = candidates.find(Boolean);
+    if (resolved) return resolved;
+    return 'https://images.unsplash.com/photo-1525186402429-b4ff38bedbec?auto=format&fit=crop&w=800&q=80';
+}
+
 function handleLiveSearchInput(event) {
     liveSearchTerm = (event.target.value || '').toLowerCase();
+    renderLiveDirectoryFromCache();
+}
+
+function handleLiveTagFilterInput(event) {
+    liveTagFilter = (event.target.value || '').toLowerCase();
     renderLiveDirectoryFromCache();
 }
 
@@ -4797,13 +4810,13 @@ function renderLiveTopBar() {
     if (!container) return;
 
     const goLiveBtn = document.createElement('button');
-    goLiveBtn.className = 'create-btn-sidebar';
-    goLiveBtn.style.width = 'auto';
+    goLiveBtn.type = 'button';
+    goLiveBtn.className = 'create-btn-sidebar topbar-go-live';
     goLiveBtn.innerHTML = '<i class="ph ph-broadcast"></i> Go Live';
     goLiveBtn.onclick = function () { window.openGoLiveSetupPage(); };
 
     const topBar = buildTopBar({
-        title: 'Live Network',
+        title: 'Live Directory',
         searchPlaceholder: 'Search live streams...',
         searchValue: liveSearchTerm,
         onSearch: handleLiveSearchInput,
@@ -4838,6 +4851,81 @@ function renderLiveTopBar() {
     container.appendChild(topBar);
 }
 
+function renderLiveFilterRow() {
+    const container = document.getElementById('live-filter-row');
+    if (!container) return;
+
+    const filterShell = document.createElement('div');
+    filterShell.className = 'topbar-shell live-filter-shell';
+
+    const controls = buildTopBarControls({
+        filters: [
+            { label: 'All Streams', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'All', onClick: function () { setLiveCategoryFilter('All'); } },
+            { label: 'STEM', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'STEM', onClick: function () { setLiveCategoryFilter('STEM'); } },
+            { label: 'Gaming', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'Gaming', onClick: function () { setLiveCategoryFilter('Gaming'); } },
+            { label: 'Music', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'Music', onClick: function () { setLiveCategoryFilter('Music'); } },
+            { label: 'Sports', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'Sports', onClick: function () { setLiveCategoryFilter('Sports'); } }
+        ],
+        dropdowns: [
+            {
+                id: 'live-sort-secondary',
+                className: 'discover-dropdown',
+                forId: 'live-sort-secondary-select',
+                label: 'Sort:',
+                options: [
+                    { value: 'featured', label: 'Featured' },
+                    { value: 'popular', label: 'Most Popular' },
+                    { value: 'most_viewed', label: 'Most Viewed Right Now' },
+                    { value: 'new', label: 'New' }
+                ],
+                selected: liveSortMode,
+                onChange: function (event) { setLiveSortMode(event.target.value); }
+            },
+            {
+                id: 'live-category-dropdown',
+                className: 'discover-dropdown',
+                forId: 'live-category-dropdown-select',
+                label: 'Category:',
+                options: [
+                    { value: 'All', label: 'All Categories' },
+                    { value: 'STEM', label: 'STEM' },
+                    { value: 'Gaming', label: 'Gaming' },
+                    { value: 'Music', label: 'Music' },
+                    { value: 'Sports', label: 'Sports' }
+                ],
+                selected: liveCategoryFilter,
+                onChange: function (event) { setLiveCategoryFilter(event.target.value); }
+            },
+            {
+                id: 'live-tag-filter',
+                render: function () {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'discover-dropdown live-tag-filter';
+
+                    const label = document.createElement('label');
+                    label.setAttribute('for', 'live-tag-filter-input');
+                    label.textContent = 'Tags:';
+                    wrap.appendChild(label);
+
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.id = 'live-tag-filter-input';
+                    input.className = 'form-input';
+                    input.placeholder = 'Filter by tag';
+                    input.value = liveTagFilter;
+                    input.addEventListener('input', handleLiveTagFilterInput);
+                    wrap.appendChild(input);
+                    return wrap;
+                }
+            }
+        ]
+    });
+
+    filterShell.appendChild(controls);
+    container.innerHTML = '';
+    container.appendChild(filterShell);
+}
+
 function renderLiveFeatured(sessions = []) {
     const container = document.getElementById('live-featured-row');
     if (!container) return;
@@ -4852,17 +4940,24 @@ function renderLiveFeatured(sessions = []) {
         const card = document.createElement('div');
         card.className = 'social-card live-featured-card';
         card.onclick = function () { window.openLiveSession(session.id); };
+        const thumbnail = escapeHtml(resolveLiveThumbnail(session));
+        const viewerCount = escapeHtml(session.viewerCount || session.stats?.viewerCount || '0');
+        const tags = escapeHtml((session.tags || []).join(', '));
         card.innerHTML = `
             <div class="live-featured-thumb">
+                <img src="${thumbnail}" alt="Live thumbnail" class="live-thumb-img" loading="lazy" />
                 <div class="live-featured-badge"><i class="ph-fill ph-broadcast"></i> LIVE</div>
             </div>
             <div class="live-featured-body">
                 <div class="live-featured-title">${escapeHtml(session.title || 'Live Session')}</div>
                 <div class="live-featured-meta">
                     <span class="live-streamer">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>
-                    <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${escapeHtml(session.viewerCount || session.stats?.viewerCount || '0')}</span>
+                    <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</span>
                 </div>
-                <div class="live-featured-category">${escapeHtml(session.category || 'Live')}</div>
+                <div class="live-featured-footer">
+                    <span class="live-featured-category">${escapeHtml(session.category || 'Live')}</span>
+                    <span class="live-featured-tags">${tags}</span>
+                </div>
             </div>`;
         container.appendChild(card);
     });
@@ -4882,15 +4977,19 @@ function renderLiveGrid(sessions = []) {
         card.className = 'social-card live-directory-card';
         card.onclick = function () { window.openLiveSession(session.id); };
         const tags = (session.tags || []).join(', ');
+        const thumbnail = escapeHtml(resolveLiveThumbnail(session));
+        const viewerCount = escapeHtml(session.viewerCount || session.stats?.viewerCount || '0');
         card.innerHTML = `
             <div class="live-directory-thumb">
+                <img src="${thumbnail}" alt="Live thumbnail" class="live-thumb-img" loading="lazy" />
                 <div class="live-directory-badge">LIVE</div>
+                <div class="live-viewers live-directory-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</div>
             </div>
             <div class="live-directory-body">
                 <div class="live-directory-title">${escapeHtml(session.title || 'Live Session')}</div>
                 <div class="live-directory-meta">
                     <span class="live-streamer">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>
-                    <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${escapeHtml(session.viewerCount || session.stats?.viewerCount || '0')}</span>
+                    <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</span>
                 </div>
                 <div class="live-directory-footer">
                     <span class="live-directory-category">${escapeHtml(session.category || 'Live')}</span>
@@ -4903,6 +5002,7 @@ function renderLiveGrid(sessions = []) {
 
 function renderLiveDirectoryFromCache() {
     renderLiveTopBar();
+    renderLiveFilterRow();
     const divider = document.getElementById('live-divider');
     const sessions = liveSessionsCache.slice();
 
@@ -4919,6 +5019,12 @@ function renderLiveDirectoryFromCache() {
 
     if (liveCategoryFilter !== 'All') {
         filtered = filtered.filter(function (session) { return (session.category || '').toLowerCase() === liveCategoryFilter.toLowerCase(); });
+    }
+
+    if (liveTagFilter) {
+        filtered = filtered.filter(function (session) {
+            return (session.tags || []).some(function (tag) { return (tag || '').toLowerCase().includes(liveTagFilter); });
+        });
     }
 
     if (liveSortMode === 'popular' || liveSortMode === 'most_viewed') {
