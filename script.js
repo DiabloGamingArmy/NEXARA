@@ -2211,9 +2211,17 @@ async function searchMentionSuggestions(term = '') {
         return;
     }
     try {
-        const userQuery = query(collection(db, 'users'), orderBy('username'), startAt(cleaned), endAt(cleaned + '\uf8ff'), limit(5));
+        const userQuery = query(
+            collection(db, 'users'),
+            orderBy('username'),
+            startAt(cleaned),
+            endAt(cleaned + '\uf8ff'),
+            limit(5)
+        );
         const snap = await getDocs(userQuery);
-        const results = snap.docs.map(function (d) { return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) }; });
+        const results = snap.docs.map(function (d) {
+            return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) };
+        });
         if (!results.length) {
             listEl.innerHTML = '';
             listEl.style.display = 'none';
@@ -2222,7 +2230,18 @@ async function searchMentionSuggestions(term = '') {
         listEl.style.display = 'block';
         listEl.innerHTML = results.map(function (profile) {
             const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
-            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({ uid: profile.id || profile.uid, username: profile.username, displayName: profile.name || profile.nickname || profile.displayName || '', accountRoles: profile.accountRoles || [] }).replace(/'/g, "&apos;")})'>${avatar}<div class="mention-suggestion-meta"><div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div><div class="mention-handle">@${escapeHtml(profile.username || '')}</div></div></button>`;
+            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({
+                uid: profile.id || profile.uid,
+                username: profile.username,
+                displayName: profile.name || profile.nickname || profile.displayName || '',
+                accountRoles: profile.accountRoles || []
+            }).replace(/'/g, "&apos;")})'>
+                ${avatar}
+                <div class="mention-suggestion-meta">
+                    <div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div>
+                    <div class="mention-handle">@${escapeHtml(profile.username || '')}</div>
+                </div>
+            </button>`;
         }).join('');
     } catch (err) {
         console.warn('Mention search failed', err);

@@ -15,29 +15,28 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
-    <link rel="icon" href="icon.png">
-    <link rel="shortcut icon" href="icon.png">
-    <link rel="icon" type="image/x-icon" href="icon.png">
-    <link rel="apple-touch-icon" href="icon.png">
-    
+    <link rel="icon" href="https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media">
+    <link rel="shortcut icon" href="https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media">
+    <link rel="apple-touch-icon" href="https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media">
 </head>
 <body>
 
     <!-- Loading -->
-<div id="loading-overlay"><img class="brand-logo brand-logo-splash" data-logo-variant="auto" alt="Nexera logo" src="icon.png"><div style="color:var(--text-muted);">Initializing Nexera...</div></div>
+    <div id="loading-overlay"><img class="brand-logo brand-logo-splash" data-logo-variant="auto" alt="Nexera logo" src="https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media"><div style="color:var(--text-muted);">Initializing Nexera...</div></div>
 
-<!-- Auth -->
-<div id="auth-screen">
-    <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo" src="whiteicon.png">
-    <div class="auth-box">
-        <h2 class="nexara-gradient-text" style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">Greetings, Traveler.</h2>
-        <p style="color:var(--text-muted); margin-bottom: 1.5rem;">Welcome to Nexera!</p>
-        <input type="email" id="email" class="form-input" placeholder="Email">
-        <input type="password" id="password" class="form-input" placeholder="Password">
-        <div id="auth-error" style="color:#ff3d3d; font-size:0.8rem; margin:5px 0;"></div>
-        <button onclick="window.handleLogin(event)" class="create-btn-sidebar" style="background: var(--primary); color:black;">Log In</button>
-        <button onclick="window.handleSignup(event)" class="create-btn-sidebar" style="background:transparent; border:1px solid var(--border); color:var(--text-main); margin-top:10px;">Sign Up</button>
-        <!-- <button onclick="window.handleAnon()" style="margin-top:15px; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size: 0.85rem;">Continue as Guest</button> -->
+    <!-- Auth -->
+    <div id="auth-screen">
+        <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo" src="https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media">
+        <div class="auth-box">
+            <h2 class="nexara-gradient-text" style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">Greetings, Traveler.</h2>
+            <p style="color:var(--text-muted); margin-bottom: 1.5rem;">Welcome to Nexera!</p>
+            <input type="email" id="email" class="form-input" placeholder="Email">
+            <input type="password" id="password" class="form-input" placeholder="Password">
+            <div id="auth-error" style="color:#ff3d3d; font-size:0.8rem; margin:5px 0;"></div>
+            <button onclick="window.handleLogin(event)" class="create-btn-sidebar" style="background: var(--primary); color:black;">Log In</button>
+            <button onclick="window.handleSignup(event)" class="create-btn-sidebar" style="background:transparent; border:1px solid var(--border); color:var(--text-main); margin-top:10px;">Sign Up</button>
+            <button onclick="window.handleAnon()" style="margin-top:15px; background:none; border:none; color:var(--text-muted); cursor:pointer; font-size: 0.85rem;">Continue as Guest</button>
+        </div>
     </div>
 </div>
 
@@ -189,11 +188,17 @@
         <div class="settings-section">
             <div class="settings-section-header">Public Profile</div>
 
-            <div class="settings-avatar-row">
-                <div class="avatar-edit-wrapper">
-                    <div id="settings-avatar-preview" class="profile-pic" style="width:80px; height:80px; margin:0;">
-                        <span>U</span>
-                        <button type="button" class="avatar-edit-btn" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-pencil"></i></button>
+                <div class="settings-avatar-row">
+                    <div class="avatar-edit-wrapper">
+                        <div id="settings-avatar-preview" class="profile-pic" style="width:80px; height:80px; margin:0;">
+                            <span>U</span>
+                            <button type="button" class="avatar-edit-btn" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-pencil"></i></button>
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-upload-simple"></i> Upload Photo</button>
+                        <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-camera').click()"><i class="ph ph-camera"></i> Take Photo</button>
+                        <button type="button" id="remove-photo-btn" class="icon-pill" onclick="window.removeProfilePhoto()"><i class="ph ph-x-circle"></i> Remove Photo</button>
                     </div>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:6px;">
