@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
 // --- Firebase Configuration ---
@@ -34,6 +34,20 @@ let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
 let isInitialLoad = true;
+let composerTags = [];
+let composerMentions = [];
+let composerPoll = { title: '', options: ['', ''] };
+let composerScheduledFor = '';
+let composerLocation = '';
+let recentLocations = [];
+let categoryVisibleCount = 10;
+let commentRootDisplayCount = {};
+let replyExpansionState = {};
+let currentEditPost = null;
+let tagSuggestionPool = [];
+let mentionSearchTimer = null;
+let currentThreadComments = [];
+let scheduledRenderTimer = null;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -68,6 +82,36 @@ const DEFAULT_DESTINATION_CONFIG = {
 let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
+
+const BRAND_LOGO_VARIANTS = {
+    icon: 'https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media',
+    dark: 'https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media',
+    light: 'https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Fblackicon.png?alt=media'
+};
+
+function resolveBrandLogoVariant(el) {
+    if (!el) return BRAND_LOGO_VARIANTS.icon;
+    const variant = el.dataset.logoVariant || 'auto';
+    if (variant === 'icon') return BRAND_LOGO_VARIANTS.icon;
+    if (variant === 'dark') return BRAND_LOGO_VARIANTS.dark;
+    if (variant === 'light') return BRAND_LOGO_VARIANTS.light;
+    const background = el.dataset.logoBackground;
+    if (background === 'dark') return BRAND_LOGO_VARIANTS.dark;
+    if (background === 'light') return BRAND_LOGO_VARIANTS.light;
+    const prefersLight = document.body.classList.contains('light-mode');
+    return prefersLight ? BRAND_LOGO_VARIANTS.light : BRAND_LOGO_VARIANTS.dark;
+}
+
+function refreshBrandLogos() {
+    const logoNodes = document.querySelectorAll('[data-logo-variant]');
+    logoNodes.forEach(function (node) {
+        const resolved = resolveBrandLogoVariant(node);
+        if (node.getAttribute('src') !== resolved) {
+            node.setAttribute('src', resolved);
+        }
+    });
+}
+window.refreshBrandLogos = refreshBrandLogos;
 
 function getReviewDisplay(reviewValue) {
     if (reviewValue === 'verified') {
@@ -116,12 +160,76 @@ let userProfile = {
     gender: "Prefer not to say",
     region: "",
     photoURL: "",
+    photoPath: "",
+    avatarColor: "",
     theme: "system",
     accountRoles: [],
     savedPosts: [],
     following: [],
     followersCount: 0
 };
+
+const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
+const AVATAR_TEXT_COLOR = '#0f172a';
+let avatarColorBackfilled = false;
+
+function computeAvatarColor(seed = 'user') {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        hash = (hash << 5) - hash + seed.charCodeAt(i);
+        hash |= 0;
+    }
+    return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function resolveAvatarInitial(userLike = {}) {
+    const source = userLike.nickname || userLike.displayName || userLike.name || userLike.username || 'U';
+    return (source || 'U').trim().charAt(0).toUpperCase() || 'U';
+}
+
+function ensureAvatarColor(profile = {}, uid = '') {
+    if (profile.avatarColor) return profile.avatarColor;
+    const color = computeAvatarColor(uid || profile.username || profile.displayName || profile.name || 'user');
+    profile.avatarColor = color;
+    return color;
+}
+
+function resolveAvatarData(userLike = {}, uidOverride = '') {
+    const uid = uidOverride || userLike.uid || userLike.id || '';
+    const avatarColor = ensureAvatarColor(userLike, uid);
+    const initial = resolveAvatarInitial(userLike);
+    return { photoURL: userLike.photoURL || '', avatarColor, initial };
+}
+
+function renderAvatar(userLike = {}, options = {}) {
+    const { size = 42, className = '', shape = 'circle' } = options;
+    const data = resolveAvatarData(userLike);
+    const hasPhoto = !!data.photoURL;
+    const background = hasPhoto
+        ? `background-image:url('${data.photoURL}'); background-size:cover; background-position:center; color:transparent;`
+        : `background:${data.avatarColor}; color:${AVATAR_TEXT_COLOR};`;
+    const radius = shape === 'rounded' ? '12px' : '50%';
+    return `<div class="user-avatar ${className}" style="width:${size}px; height:${size}px; border-radius:${radius}; ${background}">${hasPhoto ? '' : data.initial}</div>`;
+}
+
+function applyAvatarToElement(el, userLike = {}, options = {}) {
+    if (!el) return;
+    const { size } = options;
+    const data = resolveAvatarData(userLike);
+    const hasPhoto = !!data.photoURL;
+    el.classList.add('user-avatar');
+    if (size) {
+        el.style.width = `${size}px`;
+        el.style.height = `${size}px`;
+    }
+    el.style.borderRadius = el.classList.contains('profile-pic') ? '50%' : '50%';
+    el.style.backgroundImage = hasPhoto ? `url('${data.photoURL}')` : 'none';
+    el.style.backgroundSize = hasPhoto ? 'cover' : '';
+    el.style.backgroundPosition = hasPhoto ? 'center' : '';
+    el.style.backgroundColor = hasPhoto ? '' : data.avatarColor;
+    el.style.color = hasPhoto ? 'transparent' : AVATAR_TEXT_COLOR;
+    el.textContent = hasPhoto ? '' : data.initial;
+}
 
 function getAccountRoleSet(profile = userProfile) {
     const roles = new Set(profile.accountRoles || []);
@@ -132,7 +240,11 @@ function getAccountRoleSet(profile = userProfile) {
 
 function normalizeUserProfileData(data = {}) {
     const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
-    return { ...data, accountRoles };
+    const profile = { ...data, accountRoles };
+    profile.photoPath = data.photoPath || '';
+    profile.avatarColor = data.avatarColor || computeAvatarColor(data.username || data.displayName || data.name || 'user');
+    profile.locationHistory = Array.isArray(data.locationHistory) ? data.locationHistory : [];
+    return profile;
 }
 
 function userHasRole(userLike = {}, role = '') {
@@ -199,23 +311,62 @@ let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let postsUnsubscribe = null;
+let activeLiveSessionId = null;
 
-if (!window.__activeUnsubscribes) window.__activeUnsubscribes = [];
-function trackSnapshot(unsub) {
-    if (typeof unsub === 'function') {
-        window.__activeUnsubscribes.push(unsub);
+const ListenerRegistry = (function () {
+    const listeners = new Map();
+    const loggedKeys = new Set();
+
+    function devLog(message, key) {
+        const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
+        if (shouldLog && !loggedKeys.has(`${key}-replace`)) {
+            console.debug(message);
+            loggedKeys.add(`${key}-replace`);
+        }
     }
-    return unsub;
-}
-if (!window.__snapshotCleanupBound) {
-    window.__snapshotCleanupBound = true;
-    window.addEventListener('beforeunload', function() {
-        (window.__activeUnsubscribes || []).forEach(function(unsub) {
-            try { unsub(); } catch (e) {}
-        });
-        window.__activeUnsubscribes = [];
-    });
-}
+
+    return {
+        register(key, unsubscribeFn) {
+            if (!key || typeof unsubscribeFn !== 'function') return unsubscribeFn;
+
+            if (listeners.has(key)) {
+                const existing = listeners.get(key);
+                try { existing(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                devLog(`ListenerRegistry: replaced existing listener for key "${key}"`, key);
+            }
+
+            listeners.set(key, unsubscribeFn);
+            return function deregister() {
+                if (!listeners.has(key)) return;
+                const current = listeners.get(key);
+                listeners.delete(key);
+                try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            };
+        },
+        unregister(key) {
+            if (!listeners.has(key)) return;
+            const unsub = listeners.get(key);
+            listeners.delete(key);
+            try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+        },
+        clearAll() {
+            listeners.forEach(function (unsub, key) {
+                try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            });
+            listeners.clear();
+        },
+        has(key) {
+            return listeners.has(key);
+        },
+        debugPrint() {
+            console.log('Active listeners:', Array.from(listeners.keys()));
+        }
+    };
+})();
+
+window.ListenerRegistry = ListenerRegistry;
+window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
+window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -386,6 +537,9 @@ function initApp() {
 
                     // Normalize role storage
                     userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
+                    recentLocations = Array.isArray(userProfile.locationHistory) ? userProfile.locationHistory.slice() : [];
+
+                    await backfillAvatarColorIfMissing(user.uid, userProfile);
 
                     // Apply stored theme preference
                     const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
@@ -404,6 +558,9 @@ function initApp() {
                     userProfile.name = user.displayName || "Nexera User";
                     const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
                     userProfile.theme = storedTheme;
+                    userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
+                    userProfile.locationHistory = [];
+                    recentLocations = [];
                     applyTheme(storedTheme);
                     const staffNav = document.getElementById('nav-staff');
                     if (staffNav) staffNav.style.display = 'none';
@@ -462,6 +619,7 @@ function applyTheme(preference = 'system') {
     const resolved = preference === 'system' ? getSystemTheme() : preference;
     document.body.classList.toggle('light-mode', resolved === 'light');
     document.body.dataset.themePreference = preference;
+    refreshBrandLogos();
     try { localStorage.setItem('nexera-theme', preference); }
     catch (e) { console.warn('Theme storage blocked'); }
 }
@@ -483,14 +641,18 @@ async function ensureUserDocument(user) {
     const snap = await getDoc(ref);
     const now = serverTimestamp();
     if (!snap.exists()) {
+        const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
         await setDoc(ref, {
             displayName: user.displayName || "Nexera User",
             username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
             photoURL: user.photoURL || "",
+            photoPath: "",
+            avatarColor,
             bio: "",
             website: "",
             region: "",
             email: user.email || "",
+            locationHistory: [],
             accountRoles: [],
             tagAffinity: {},
             interests: [],
@@ -501,6 +663,22 @@ async function ensureUserDocument(user) {
     }
     await setDoc(ref, { updatedAt: now }, { merge: true });
     return await getDoc(ref);
+}
+
+async function backfillAvatarColorIfMissing(uid, profile = {}) {
+    if (!uid || avatarColorBackfilled) return;
+    if (!profile.avatarColor) {
+        const color = computeAvatarColor(uid || profile.username || profile.name || 'user');
+        profile.avatarColor = color;
+        try {
+            await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
+            avatarColorBackfilled = true;
+        } catch (e) {
+            console.warn('Unable to backfill avatar color', e);
+        }
+    } else {
+        avatarColorBackfilled = true;
+    }
 }
 
 function shouldRerenderThread(newData, prevData = {}) {
@@ -557,6 +735,8 @@ window.handleSignup = async function (e) {
             followersCount: 0,
             following: [],
             photoURL: "",
+            photoPath: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
             bio: "",
             website: "",
             region: "",
@@ -619,7 +799,7 @@ function startDataListener() {
     const postsRef = collection(db, 'posts');
     const q = query(postsRef);
 
-    postsUnsubscribe = trackSnapshot(onSnapshot(q, function (snapshot) {
+    postsUnsubscribe = ListenerRegistry.register('feed:all', onSnapshot(q, function (snapshot) {
         const previousCache = { ...postSnapshotCache };
         const nextCache = {};
         allPosts = [];
@@ -632,6 +812,12 @@ function startDataListener() {
 
         // Sort posts by date (newest first)
         allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
+
+        if (currentUser) {
+            const ownLocs = allPosts.filter(function(p) { return p.userId === currentUser.uid && p.location; }).map(function(p) { return p.location; });
+            const merged = new Set([...(recentLocations || []), ...ownLocs]);
+            recentLocations = Array.from(merged).slice(-10);
+        }
 
         // Fetch profiles for these posts
         fetchMissingProfiles(allPosts);
@@ -662,6 +848,13 @@ function startDataListener() {
 
     // Start Live Stream Listener (Mock)
     if (typeof renderLive === 'function') renderLive();
+
+    if (scheduledRenderTimer) clearInterval(scheduledRenderTimer);
+    scheduledRenderTimer = setInterval(function() {
+        if (currentViewId === 'feed') {
+            renderFeed();
+        }
+    }, 60000);
 }
 
 function startCategoryStreams(uid) {
@@ -672,7 +865,7 @@ function startCategoryStreams(uid) {
     destinationPickerError = '';
 
     const categoryRef = collection(db, 'categories');
-    categoryUnsubscribe = trackSnapshot(onSnapshot(categoryRef, function (snapshot) {
+    categoryUnsubscribe = ListenerRegistry.register('categories:all', onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
@@ -692,7 +885,7 @@ function startCategoryStreams(uid) {
     }));
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    membershipUnsubscribe = trackSnapshot(onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = ListenerRegistry.register(`memberships:${uid}`, onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
@@ -718,6 +911,20 @@ function normalizeMembershipData(raw = {}) {
     return { ...raw, roles };
 }
 
+function normalizeMentionsField(raw = []) {
+    if (!Array.isArray(raw)) return [];
+    const mentions = raw.map(function (entry) {
+        if (typeof entry === 'string') return normalizeMentionEntry(entry);
+        return normalizeMentionEntry(entry || {});
+    }).filter(function (m) { return !!m.username; });
+    const seen = new Set();
+    return mentions.filter(function (m) {
+        if (seen.has(m.username)) return false;
+        seen.add(m.username);
+        return true;
+    });
+}
+
 function normalizePostData(id, data) {
     const visibility = data.visibility || (data.isPrivate ? 'private' : 'public');
     const categoryId = data.categoryId || null;
@@ -737,6 +944,15 @@ function normalizePostData(id, data) {
         meta: incomingContent.meta || data.meta || {}
     };
 
+    const normalizedTags = Array.isArray(data.tags) ? Array.from(new Set(data.tags.map(normalizeTagValue).filter(Boolean))) : [];
+    const normalizedMentions = normalizeMentionsField(data.mentions);
+    const normalizedPoll = normalizePollPayload(data.poll);
+    const scheduledField = data.scheduledFor;
+    const scheduledFor = scheduledField instanceof Timestamp
+        ? scheduledField
+        : (scheduledField && typeof scheduledField.seconds === 'number' ? new Timestamp(scheduledField.seconds, scheduledField.nanoseconds || 0) : null);
+    const location = data.location || '';
+
     const normalized = {
         id,
         ...data,
@@ -748,10 +964,13 @@ function normalizePostData(id, data) {
         categoryType,
         category: categoryName,
         contentType,
-        tags: Array.isArray(data.tags) ? data.tags : [],
-        mentions: Array.isArray(data.mentions) ? data.mentions : [],
+        tags: normalizedTags,
+        mentions: normalizedMentions,
         content,
-        categoryStatus: memberships[categoryId]?.status || 'unknown'
+        categoryStatus: memberships[categoryId]?.status || 'unknown',
+        poll: normalizedPoll,
+        scheduledFor,
+        location
     };
 
     if (!normalized.title && typeof data.title === 'string') normalized.title = data.title;
@@ -1257,7 +1476,7 @@ async function startUserReviewListener(uid) {
         return; // Skip listener when access is not allowed
     }
 
-    trackSnapshot(onSnapshot(q, handleSnapshot, function (error) {
+    ListenerRegistry.register(`reviews:user:${uid}`, onSnapshot(q, handleSnapshot, function (error) {
         if (error.code !== 'permission-denied') {
             console.log("Review listener note:", error.message);
         }
@@ -1266,14 +1485,36 @@ async function startUserReviewListener(uid) {
 
 // --- Navigation Logic ---
 window.navigateTo = function (viewId, pushToStack = true) {
-    // Cleanup previous listeners if leaving thread
-    if (viewId !== 'thread' && threadUnsubscribe) {
-        threadUnsubscribe();
+    // Cleanup previous listeners if leaving specific views
+    if (viewId !== 'thread') {
+        if (threadUnsubscribe) threadUnsubscribe();
+        if (activePostId) ListenerRegistry.unregister(`comments:${activePostId}`);
         threadUnsubscribe = null;
+    }
+
+    if (viewId !== 'messages') {
+        ListenerRegistry.unregister('messages:list');
+        if (activeConversationId) ListenerRegistry.unregister(`messages:thread:${activeConversationId}`);
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
         pauseAllVideos();
+        ListenerRegistry.unregister('videos:feed');
+        videosUnsubscribe = null;
+    }
+
+    if (viewId !== 'live') {
+        ListenerRegistry.unregister('live:sessions');
+        if (activeLiveSessionId) {
+            ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
+            activeLiveSessionId = null;
+        }
+    }
+
+    if (viewId !== 'staff') {
+        ListenerRegistry.unregister('staff:verificationRequests');
+        ListenerRegistry.unregister('staff:reports');
+        ListenerRegistry.unregister('staff:adminLogs');
     }
 
     // Stack Management
@@ -1441,9 +1682,7 @@ function getPostHTML(post) {
         const authorVerified = userHasRole(authorData, 'verified');
         const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
 
-        const avatarStyle = authorData.photoURL
-            ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;`
-            : `background: ${getColorForUser(authorData.name)}`;
+        const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
         const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
         const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
@@ -1467,6 +1706,9 @@ function getPostHTML(post) {
         const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
         const formattedBody = formatContent(postText, post.tags, post.mentions);
         const tagListHtml = renderTagList(post.tags || []);
+        const pollBlock = renderPollBlock(post);
+        const locationBadge = renderLocationBadge(post.location);
+        const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
 
         let mediaContent = '';
         if (post.mediaUrl) {
@@ -1500,7 +1742,7 @@ function getPostHTML(post) {
             <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid ${THEMES['For You']};">
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
-                        <div class="user-avatar" style="${avatarStyle}">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                        ${avatarHtml}
                         <div class="header-info">
                             <div class="author-line"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
                             <span class="post-meta">@${escapeHtml(authorData.username)} • ${date}</span>
@@ -1519,6 +1761,9 @@ function getPostHTML(post) {
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                     <p>${formattedBody}</p>
                     ${tagListHtml}
+                    ${locationBadge}
+                    ${scheduledChip}
+                    ${pollBlock}
                     ${mediaContent}
                     ${commentPreviewHtml}
                     ${savedTagHtml}
@@ -1545,6 +1790,11 @@ function renderFeed(targetId = 'feed-content') {
     container.innerHTML = "";
     let displayPosts = allPosts.filter(function (post) {
         if (post.visibility === 'private') return currentUser && post.userId === currentUser.uid;
+        return true;
+    });
+
+    displayPosts = displayPosts.filter(function(post) {
+        if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
         return true;
     });
 
@@ -1724,13 +1974,292 @@ async function uploadFileToStorage(file, path) {
     return await getDownloadURL(storageRef);
 }
 
-function parseTagsInput(raw = '') {
-    return raw.split(',').map(function(t) { return t.trim().replace(/^#/, '').toLowerCase(); }).filter(Boolean);
+function normalizeTagValue(tag = '') {
+    return tag.trim().replace(/^#/, '').toLowerCase();
 }
 
-function parseMentionsInput(raw = '') {
-    return raw.split(',').map(function(t) { return t.trim().replace(/^@/, '').toLowerCase(); }).filter(Boolean);
+function ensurePollOptionSlots() {
+    if (!Array.isArray(composerPoll.options)) composerPoll.options = ['', ''];
+    while (composerPoll.options.length < 2) composerPoll.options.push('');
+    if (composerPoll.options.length > 5) composerPoll.options = composerPoll.options.slice(0, 5);
 }
+
+function renderPollOptions() {
+    ensurePollOptionSlots();
+    const container = document.getElementById('poll-options-container');
+    if (!container) return;
+    container.innerHTML = '';
+    composerPoll.options.forEach(function (opt, idx) {
+        const row = document.createElement('div');
+        row.className = 'poll-option-row';
+        row.innerHTML = `
+            <input type="text" class="form-input" value="${escapeHtml(opt)}" placeholder="Option ${idx + 1}" oninput="window.handlePollOptionInput(${idx}, this.value)">
+            <button type="button" class="icon-pill" ${composerPoll.options.length <= 2 ? 'disabled' : ''} onclick="window.removePollOption(${idx})"><i class="ph ph-x"></i></button>
+        `;
+        container.appendChild(row);
+    });
+}
+
+function handlePollOptionInput(index, value) {
+    ensurePollOptionSlots();
+    if (index < 0 || index >= composerPoll.options.length) return;
+    composerPoll.options[index] = value;
+}
+
+function handlePollTitleChange(value) {
+    composerPoll.title = value;
+}
+
+function addPollOption() {
+    ensurePollOptionSlots();
+    if (composerPoll.options.length >= 5) return toast('Polls can have up to 5 options.', 'info');
+    composerPoll.options.push('');
+    renderPollOptions();
+}
+
+function removePollOption(index) {
+    ensurePollOptionSlots();
+    if (composerPoll.options.length <= 2) return;
+    composerPoll.options.splice(index, 1);
+    renderPollOptions();
+}
+
+function handleScheduleChange(value = '') {
+    composerScheduledFor = value;
+}
+
+function setComposerLocation(value = '') {
+    composerLocation = value;
+    const input = document.getElementById('location-input');
+    if (input) input.value = value;
+    renderLocationSuggestions(value);
+}
+
+function handleLocationInput(value = '') {
+    setComposerLocation(value);
+}
+
+function renderLocationSuggestions(queryText = '') {
+    const listEl = document.getElementById('location-suggestions');
+    if (!listEl) return;
+    const cleaned = (queryText || '').toLowerCase();
+    const source = Array.isArray(recentLocations) ? recentLocations : [];
+    const matches = source.filter(function (loc) { return !cleaned || loc.toLowerCase().includes(cleaned); }).slice(0, 5);
+    if (!matches.length) {
+        listEl.style.display = 'none';
+        listEl.innerHTML = '';
+        return;
+    }
+    listEl.style.display = 'block';
+    listEl.innerHTML = matches.map(function (loc) {
+        return `<button type="button" class="suggestion-chip" onclick="window.setComposerLocation('${escapeHtml(loc)}')"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(loc)}</button>`;
+    }).join('');
+}
+
+function resetComposerState() {
+    composerTags = [];
+    composerMentions = [];
+    composerPoll = { title: '', options: ['', ''] };
+    composerScheduledFor = '';
+    composerLocation = '';
+    currentEditPost = null;
+    renderComposerTags();
+    renderComposerMentions();
+    renderPollOptions();
+    const scheduleInput = document.getElementById('schedule-input');
+    if (scheduleInput) scheduleInput.value = '';
+    setComposerLocation('');
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    if (title) title.value = '';
+    if (content) content.value = '';
+    const fileInput = document.getElementById('postFile');
+    if (fileInput) fileInput.value = '';
+    clearPostImage();
+    syncComposerMode();
+}
+
+function syncComposerMode() {
+    const btn = document.getElementById('publishBtn');
+    if (btn) btn.textContent = currentEditPost ? 'Save Changes' : 'Post';
+}
+
+function getKnownTags() {
+    const collected = new Set(tagSuggestionPool);
+    allPosts.forEach(function (post) {
+        (post.tags || []).forEach(function (tag) { collected.add(normalizeTagValue(tag)); });
+    });
+    return Array.from(collected).filter(Boolean);
+}
+
+function addComposerTag(tag = '') {
+    const normalized = normalizeTagValue(tag);
+    if (!normalized) return;
+    if (composerTags.includes(normalized)) return;
+    composerTags.push(normalized);
+    renderComposerTags();
+}
+
+function removeComposerTag(tag = '') {
+    composerTags = composerTags.filter(function (t) { return t !== tag; });
+    renderComposerTags();
+}
+
+function renderComposerTags() {
+    const container = document.getElementById('composer-tags-list');
+    if (!container) return;
+    if (!composerTags.length) {
+        container.innerHTML = '<div class="empty-chip">No tags added</div>';
+        return;
+    }
+    container.innerHTML = composerTags.map(function (tag) {
+        return `<span class="tag-chip filled">#${escapeHtml(tag)} <button type="button" class="chip-remove" onclick="window.removeComposerTag('${tag}')">&times;</button></span>`;
+    }).join('');
+}
+
+function filterTagSuggestions(queryText = '') {
+    const listEl = document.getElementById('tag-suggestions');
+    if (!listEl) return;
+    const cleaned = normalizeTagValue(queryText);
+    const known = getKnownTags();
+    const matches = cleaned ? known.filter(function (t) { return t.includes(cleaned) && !composerTags.includes(t); }).slice(0, 5) : known.slice(0, 5);
+    if (!matches.length) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    listEl.style.display = 'block';
+    listEl.innerHTML = matches.map(function (tag) {
+        return `<button type="button" class="suggestion-chip" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
+    }).join('');
+}
+
+function toggleTagInput(show) {
+    const row = document.getElementById('tag-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('tag-input');
+        if (input) {
+            input.focus();
+            filterTagSuggestions(input.value);
+        }
+    }
+}
+
+function handleTagInputKey(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        const input = event.target;
+        addComposerTag(input.value || '');
+        input.value = '';
+        filterTagSuggestions('');
+    } else {
+        filterTagSuggestions(event.target.value || '');
+    }
+}
+
+function normalizeMentionEntry(raw = {}) {
+    if (typeof raw === 'string') {
+        return { username: raw.replace(/^@/, '').toLowerCase(), uid: raw.uid || null };
+    }
+    const username = (raw.username || raw.handle || '').replace(/^@/, '').toLowerCase();
+    const displayName = raw.displayName || raw.nickname || raw.name || '';
+    const uid = raw.uid || raw.userId || null;
+    const accountRoles = Array.isArray(raw.accountRoles) ? raw.accountRoles : (raw.role ? [raw.role] : []);
+    const verified = accountRoles.includes('verified');
+    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor: raw.avatarColor || '', accountRoles, verified };
+}
+
+function addComposerMention(rawUser) {
+    const normalized = normalizeMentionEntry(rawUser);
+    if (!normalized.username) return;
+    if (composerMentions.some(function (m) { return m.username === normalized.username; })) return;
+    composerMentions.push(normalized);
+    renderComposerMentions();
+}
+
+function removeComposerMention(username) {
+    composerMentions = composerMentions.filter(function (m) { return m.username !== username; });
+    renderComposerMentions();
+}
+
+function renderComposerMentions() {
+    const container = document.getElementById('composer-mentions-list');
+    if (!container) return;
+    if (!composerMentions.length) {
+        container.innerHTML = '<div class="empty-chip">No mentions added</div>';
+        return;
+    }
+    container.innerHTML = composerMentions.map(function (mention) {
+        const avatar = renderAvatar({ ...mention, name: mention.displayName || mention.username }, { size: 36, className: 'mention-avatar' });
+        const badge = mention.verified ? '<span class="verified-badge" style="margin-left:4px;">✔</span>' : '';
+        return `<div class="mention-card">${avatar}<div class="mention-meta"><div class="mention-name">${escapeHtml(mention.displayName || mention.username)}${badge}</div><div class="mention-handle">@${escapeHtml(mention.username)}</div></div><button type="button" class="chip-remove" onclick="window.removeComposerMention('${mention.username}')">&times;</button></div>`;
+    }).join('');
+}
+
+async function searchMentionSuggestions(term = '') {
+    const listEl = document.getElementById('mention-suggestions');
+    if (!listEl) return;
+    const cleaned = (term || '').trim().replace(/^@/, '').toLowerCase();
+    if (!cleaned) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    try {
+        const userQuery = query(collection(db, 'users'), orderBy('username'), startAt(cleaned), endAt(cleaned + '\uf8ff'), limit(5));
+        const snap = await getDocs(userQuery);
+        const results = snap.docs.map(function (d) { return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) }; });
+        if (!results.length) {
+            listEl.innerHTML = '';
+            listEl.style.display = 'none';
+            return;
+        }
+        listEl.style.display = 'block';
+        listEl.innerHTML = results.map(function (profile) {
+            const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
+            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({ uid: profile.id || profile.uid, username: profile.username, displayName: profile.name || profile.nickname || profile.displayName || '', accountRoles: profile.accountRoles || [] }).replace(/'/g, "&apos;")})'>${avatar}<div class="mention-suggestion-meta"><div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div><div class="mention-handle">@${escapeHtml(profile.username || '')}</div></div></button>`;
+        }).join('');
+    } catch (err) {
+        console.warn('Mention search failed', err);
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+    }
+}
+
+function handleMentionInput(event) {
+    const value = event.target.value;
+    if (mentionSearchTimer) clearTimeout(mentionSearchTimer);
+    mentionSearchTimer = setTimeout(function () { searchMentionSuggestions(value); }, 200);
+}
+
+window.toggleTagInput = toggleTagInput;
+window.addComposerTag = addComposerTag;
+window.removeComposerTag = removeComposerTag;
+window.handleTagInputKey = handleTagInputKey;
+window.filterTagSuggestions = filterTagSuggestions;
+window.toggleMentionInput = function(show) {
+    const row = document.getElementById('mention-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('mention-input');
+        if (input) input.focus();
+    }
+};
+window.addComposerMention = addComposerMention;
+window.removeComposerMention = removeComposerMention;
+window.handleMentionInput = handleMentionInput;
+window.handlePollOptionInput = handlePollOptionInput;
+window.addPollOption = addPollOption;
+window.removePollOption = removePollOption;
+window.handlePollTitleChange = handlePollTitleChange;
+window.handleScheduleChange = handleScheduleChange;
+window.handleLocationInput = handleLocationInput;
+window.setComposerLocation = setComposerLocation;
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
@@ -1741,9 +2270,32 @@ function renderTagList(tags = []) {
     return `<div style="margin-top:8px;">${tags.map(function(tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
 }
 
+function renderPollBlock(post) {
+    const poll = normalizePollPayload(post?.poll);
+    if (!poll) return '';
+    const votes = poll.votes || {};
+    const counts = poll.options.map(function(_, idx) { return Object.values(votes).filter(function(v) { return Number(v) === idx; }).length; });
+    const total = counts.reduce(function(sum, c) { return sum + c; }, 0) || 1;
+    const userChoice = currentUser ? votes[currentUser.uid] : null;
+    const optionsHtml = poll.options.map(function(opt, idx) {
+        const pct = Math.round((counts[idx] / total) * 100);
+        const selected = Number(userChoice) === idx;
+        return `<button type="button" class="poll-option ${selected ? 'selected' : ''}" onclick="window.voteInPoll('${post.id}', ${idx}, event)"><span>${escapeHtml(opt)}</span><span class="poll-count">${counts[idx]} (${pct}%)</span></button>`;
+    }).join('');
+    const pollTitle = poll.title ? escapeHtml(poll.title) : 'Poll';
+    return `<div class="poll-block"><div class="poll-title">${pollTitle}</div>${optionsHtml}</div>`;
+}
+
+function getMentionHandles(mentions = []) {
+    if (!Array.isArray(mentions)) return [];
+    return mentions.map(function (m) { return typeof m === 'string' ? m : (m.username || m.handle || ''); })
+        .map(function (h) { return (h || '').replace(/^@/, '').toLowerCase(); })
+        .filter(Boolean);
+}
+
 function formatContent(text = '', tags = [], mentions = []) {
     let safe = escapeHtml(cleanText(text));
-    const mentionSet = new Set((mentions || []).map(function(m) { return m.toLowerCase(); }));
+    const mentionSet = new Set(getMentionHandles(mentions));
     mentionSet.forEach(function(handle) {
         const regex = new RegExp('@' + escapeRegex(handle), 'gi');
         safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
@@ -1755,8 +2307,9 @@ function formatContent(text = '', tags = [], mentions = []) {
     return safe;
 }
 
-async function resolveMentionProfiles(handles = []) {
-    const cleaned = Array.from(new Set(handles.map(function(h) { return h.replace(/^@/, '').toLowerCase(); }).filter(Boolean)));
+async function resolveMentionProfiles(mentions = []) {
+    const handles = getMentionHandles(mentions);
+    const cleaned = Array.from(new Set(handles));
     const results = [];
     for (const handle of cleaned) {
         const cached = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === handle; });
@@ -1802,19 +2355,92 @@ function getPostAffinityScore(post) {
     return tags.reduce(function(total, tag) { return total + (affinity[tag] || 0); }, 0);
 }
 
+window.voteInPoll = async function(postId, optionIndex, event) {
+    if (event) event.stopPropagation();
+    if (!requireAuth()) return;
+    const post = allPosts.find(function(p) { return p.id === postId; });
+    if (!post) return;
+    const poll = normalizePollPayload(post.poll || {});
+    if (!poll || optionIndex < 0 || optionIndex >= poll.options.length) return;
+    poll.votes = poll.votes || {};
+    poll.votes[currentUser.uid] = optionIndex;
+    post.poll = poll;
+    refreshSinglePostUI(postId);
+    try {
+        await updateDoc(doc(db, 'posts', postId), { poll: { ...poll, votes: poll.votes } });
+    } catch (e) {
+        console.error('Poll vote failed', e);
+    }
+};
+
+function normalizePollPayload(raw = null) {
+    if (!raw || typeof raw !== 'object') return null;
+    const title = (raw.title || '').toString();
+    const options = Array.isArray(raw.options) ? raw.options.map(function (o) { return (o || '').toString().trim(); }).filter(Boolean) : [];
+    const votes = raw.votes && typeof raw.votes === 'object' ? raw.votes : {};
+    if (options.length < 2) return null;
+    return { title, options: options.slice(0, 5), votes };
+}
+
+function buildPollPayloadFromComposer() {
+    ensurePollOptionSlots();
+    const options = (composerPoll.options || []).map(function (o) { return (o || '').trim(); }).filter(Boolean);
+    if (options.length < 2) return null;
+    return { title: (composerPoll.title || '').trim(), options: options.slice(0, 5), votes: {} };
+}
+
+function parseScheduleValue(value = '') {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return Timestamp.fromDate(parsed);
+}
+
+function formatTimestampForInput(ts) {
+    if (!ts) return '';
+    const date = ts instanceof Timestamp ? ts.toDate() : (typeof ts.seconds === 'number' ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (Number.isNaN(date.getTime())) return '';
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+function isPostScheduledInFuture(post) {
+    const ts = post?.scheduledFor;
+    if (!ts) return false;
+    const date = ts instanceof Timestamp ? ts.toDate() : (typeof ts.seconds === 'number' ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (Number.isNaN(date.getTime())) return false;
+    return date.getTime() > Date.now();
+}
+
+function formatTimestampDisplay(ts) {
+    if (!ts) return '';
+    const date = ts instanceof Timestamp ? ts.toDate() : (typeof ts.seconds === 'number' ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderLocationBadge(location = '') {
+    if (!location) return '';
+    return `<div class="location-chip"><i class="ph ph-map-pin"></i> ${escapeHtml(location)}</div>`;
+}
+
 window.createPost = async function() {
      if (!requireAuth()) return;
      const title = document.getElementById('postTitle').value;
      const content = document.getElementById('postContent').value;
-     const tagsInput = document.getElementById('postTags');
-     const mentionsInput = document.getElementById('postMentions');
-     const tags = parseTagsInput(tagsInput ? tagsInput.value : '');
-     const mentions = parseMentionsInput(mentionsInput ? mentionsInput.value : '');
+     const tagInput = document.getElementById('tag-input');
+     const mentionInput = document.getElementById('mention-input');
+     const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+     const mentions = normalizeMentionsField(composerMentions || []);
      const fileInput = document.getElementById('postFile');
      const btn = document.getElementById('publishBtn');
      setComposerError('');
 
-     let contentType = 'text';
+     const pollPayload = buildPollPayloadFromComposer();
+     const scheduledFor = parseScheduleValue(composerScheduledFor);
+     const locationValue = (composerLocation || '').trim();
+
+     let contentType = currentEditPost?.contentType || 'text';
      if (fileInput.files[0]) {
          const mime = fileInput.files[0].type;
          if (mime.startsWith('video')) contentType = 'video';
@@ -1829,8 +2455,9 @@ window.createPost = async function() {
      btn.textContent = "Uploading...";
 
      try {
-         if (selectedCategoryId && currentUser?.uid) {
-             const joined = await ensureJoinedCategory(selectedCategoryId, currentUser.uid);
+         const targetCategoryId = currentEditPost ? currentEditPost.categoryId : selectedCategoryId;
+         if (targetCategoryId && currentUser?.uid && !currentEditPost) {
+             const joined = await ensureJoinedCategory(targetCategoryId, currentUser.uid);
              if (!joined) {
                  setComposerError('Unable to join this category. Please try again.');
                  return;
@@ -1838,19 +2465,29 @@ window.createPost = async function() {
          }
 
          const mentionProfiles = await resolveMentionProfiles(mentions);
+         const notificationTargets = [];
+         const seenNotify = new Set();
+         mentionProfiles.forEach(function(m) {
+             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push(m); }
+         });
+         mentions.forEach(function(m) {
+             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push({ uid: m.uid, handle: m.username }); }
+         });
+         const mentionUserIds = Array.from(seenNotify);
 
-         let mediaUrl = null;
+         let mediaUrl = currentEditPost?.mediaUrl || null;
          if(fileInput.files[0]) {
              const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
              mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
          }
 
-         const categoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+         const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
+         const resolvedCategoryId = currentEditPost ? currentEditPost.categoryId : (selectedCategoryId || null);
          const visibility = 'public';
          const postPayload = {
              title,
              content,
-             categoryId: selectedCategoryId || null,
+             categoryId: resolvedCategoryId,
              categoryName: categoryDoc ? categoryDoc.name : null,
              categorySlug: categoryDoc ? categoryDoc.slug : null,
              categoryVerified: categoryDoc ? !!categoryDoc.verified : false,
@@ -1863,23 +2500,37 @@ window.createPost = async function() {
              userId: currentUser.uid,
              tags,
              mentions,
-             mentionUserIds: mentionProfiles.map(function(m) { return m.uid; }),
-             likes: 0,
-             likedBy: [],
-             trustScore: 0,
-             timestamp: serverTimestamp()
+             mentionUserIds,
+             poll: pollPayload,
+             scheduledFor,
+             location: locationValue,
+             likes: currentEditPost ? currentEditPost.likes || 0 : 0,
+             likedBy: currentEditPost ? currentEditPost.likedBy || [] : [],
+             dislikes: currentEditPost ? currentEditPost.dislikes || 0 : 0,
+             dislikedBy: currentEditPost ? currentEditPost.dislikedBy || [] : [],
+             trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
+             timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
          };
 
-         const postRef = await addDoc(collection(db, 'posts'), postPayload);
-         if (mentionProfiles.length) await notifyMentionedUsers(mentionProfiles, postRef.id);
+         if (currentEditPost) {
+             await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
+             currentEditPost = null;
+         } else {
+             const postRef = await addDoc(collection(db, 'posts'), postPayload);
+             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+         }
+
+         if (locationValue) {
+             const existing = new Set(recentLocations || []);
+             existing.add(locationValue);
+             recentLocations = Array.from(existing).slice(-10);
+             try { await setDoc(doc(db, 'users', currentUser.uid), { locationHistory: recentLocations }, { merge: true }); } catch (e) { console.warn('Location history save failed', e); }
+         }
 
          // Reset Form
-         document.getElementById('postTitle').value = "";
-         document.getElementById('postContent').value = "";
-         if (tagsInput) tagsInput.value = "";
-         if (mentionsInput) mentionsInput.value = "";
-         fileInput.value = "";
-         window.clearPostImage();
+         resetComposerState();
+         if (tagInput) tagInput.value = "";
+         if (mentionInput) mentionInput.value = "";
          window.toggleCreateModal(false);
          window.navigateTo('feed');
 
@@ -1893,19 +2544,40 @@ window.createPost = async function() {
 }
 
 // --- Settings & Modals ---
+function updateRemovePhotoButtonState() {
+    const btn = document.getElementById('remove-photo-btn');
+    if (!btn) return;
+    const hasPhoto = !!(userProfile.photoURL || (auth.currentUser && auth.currentUser.photoURL));
+    btn.disabled = !hasPhoto;
+    btn.classList.toggle('disabled', !hasPhoto);
+}
+
+async function tryDeleteProfilePhotoFromStorage(photoURL = '', photoPath = '') {
+    if (!photoURL && !photoPath) return { deleted: false, reason: 'no-photo' };
+    try {
+        if (photoPath) {
+            await deleteObject(ref(storage, photoPath));
+            return { deleted: true };
+        }
+        const bucketHint = storage?.app?.options?.storageBucket || '';
+        if (photoURL && bucketHint && photoURL.includes(bucketHint)) {
+            await deleteObject(ref(storage, photoURL));
+            return { deleted: true };
+        }
+    } catch (err) {
+        console.warn('Storage delete failed', err);
+        return { deleted: false, error: err };
+    }
+    return { deleted: false };
+}
+
 function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
     if(!preview) return;
 
-    if(src) {
-        preview.style.backgroundImage = `url('${src}')`;
-        preview.style.backgroundSize = 'cover';
-        preview.textContent = '';
-    } else {
-        preview.style.backgroundImage = 'none';
-        preview.style.backgroundColor = getColorForUser(userProfile.name || 'U');
-        preview.textContent = (userProfile.name || 'U')[0];
-    }
+    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    applyAvatarToElement(preview, tempUser, { size: 72 });
+    updateRemovePhotoButtonState();
 }
 
 function syncThemeRadios(themeValue) {
@@ -1917,20 +2589,21 @@ window.toggleCreateModal = function(show) {
     document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
     if(show && currentUser) {
         const avatarEl = document.getElementById('modal-user-avatar');
-        if(userProfile.photoURL) {
-            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`;
-            avatarEl.textContent = '';
-        } else { 
-            avatarEl.style.backgroundImage = 'none'; 
-            avatarEl.style.backgroundColor = getColorForUser(userProfile.name);
-            avatarEl.textContent = userProfile.name[0];
-            avatarEl.style.color = 'black';
-        }
+        applyAvatarToElement(avatarEl, userProfile, { size: 42 });
         setComposerError('');
         renderDestinationField();
+        renderComposerTags();
+        renderComposerMentions();
+        renderPollOptions();
+        const scheduleInput = document.getElementById('schedule-input');
+        if (scheduleInput) scheduleInput.value = composerScheduledFor || '';
+        setComposerLocation(composerLocation || '');
+        syncComposerMode();
         syncPostButtonState();
     } else if (!show) {
         closeDestinationPicker();
+        currentEditPost = null;
+        syncComposerMode();
     }
 }
 
@@ -1955,6 +2628,7 @@ window.toggleSettingsModal = function(show) {
         }
         syncThemeRadios(userProfile.theme || 'system');
         updateSettingsAvatarPreview(userProfile.photoURL);
+        updateRemovePhotoButtonState();
 
         const uploadInput = document.getElementById('set-pic-file');
         const cameraInput = document.getElementById('set-pic-camera');
@@ -1992,18 +2666,21 @@ window.toggleSettingsModal = function(show) {
          return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
      }
 
-     let photoURL = userProfile.photoURL;
-     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
-     if(newPhoto) {
-         const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
-         photoURL = await uploadFileToStorage(newPhoto, path);
-     } else if(manualPhoto) {
-         photoURL = manualPhoto;
-     }
+    let photoURL = userProfile.photoURL;
+    let photoPath = userProfile.photoPath || '';
+    const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
+    if(newPhoto) {
+        const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
+        photoURL = await uploadFileToStorage(newPhoto, path);
+        photoPath = path;
+    } else if(manualPhoto) {
+        photoURL = manualPhoto;
+        photoPath = '';
+    }
 
-     const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL };
-     userProfile = { ...userProfile, ...updates };
-     userCache[currentUser.uid] = userProfile;
+    const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
+    userProfile = { ...userProfile, ...updates };
+    userCache[currentUser.uid] = userProfile;
 
      try {
          await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
@@ -2023,6 +2700,62 @@ function handleSettingsFileChange(inputEl) {
     const reader = new FileReader();
     reader.onload = function(e) { return updateSettingsAvatarPreview(e.target.result); };
     reader.readAsDataURL(inputEl.files[0]);
+    updateRemovePhotoButtonState();
+}
+
+window.removeProfilePhoto = async function() {
+    if (!currentUser || !auth.currentUser) return toast('You need to be signed in.', 'error');
+    const ok = confirm('Remove your profile photo?');
+    if (!ok) return;
+
+    const existingPhotoURL = userProfile.photoURL || auth.currentUser.photoURL || '';
+    const existingPhotoPath = userProfile.photoPath || '';
+    let deleteResult = { deleted: false };
+
+    try {
+        deleteResult = await tryDeleteProfilePhotoFromStorage(existingPhotoURL, existingPhotoPath);
+    } catch (err) {
+        console.warn('Deletion attempt error', err);
+    }
+
+    try {
+        await updateProfile(auth.currentUser, { photoURL: '' });
+    } catch (err) {
+        console.warn('Auth photo reset failed', err);
+    }
+
+    try {
+        await setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+    } catch (err) {
+        console.error('Failed to clear Firestore photo data', err);
+        toast('Could not update profile photo references', 'error');
+        return;
+    }
+
+    userProfile.photoURL = '';
+    userProfile.photoPath = '';
+    if (userCache[currentUser.uid]) {
+        userCache[currentUser.uid].photoURL = '';
+        userCache[currentUser.uid].photoPath = '';
+    }
+
+    updateSettingsAvatarPreview('');
+    renderProfile();
+    renderFeed();
+    if (activePostId) renderThreadMainPost(activePostId);
+
+    updateRemovePhotoButtonState();
+
+    if (!existingPhotoURL && !existingPhotoPath) {
+        toast('No profile photo to remove', 'info');
+        return;
+    }
+
+    if (deleteResult.deleted) {
+        toast('Profile photo removed', 'info');
+    } else {
+        toast('Could not delete photo from storage, but removed references', 'error');
+    }
 }
 
 // --- Peer Review System ---
@@ -2034,7 +2767,7 @@ window.openPeerReview = function(postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
     const q = query(reviewsRef); 
 
-    trackSnapshot(onSnapshot(q, function(snapshot) {
+    ListenerRegistry.register(`reviews:post:${postId}`, onSnapshot(q, function(snapshot) {
         const container = document.getElementById('review-list');
         container.innerHTML = "";
 
@@ -2182,6 +2915,8 @@ window.removeReview = async function() {
 window.openThread = function(postId) {
     activePostId = postId;
     activeReplyId = null;
+    commentRootDisplayCount[postId] = 20;
+    replyExpansionState = {};
     window.resetInputBox();
     window.navigateTo('thread');
     renderThreadMainPost(postId);
@@ -2197,7 +2932,7 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = trackSnapshot(onSnapshot(q, function(snapshot) {
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function(snapshot) {
         const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
@@ -2214,9 +2949,7 @@ const renderCommentHtml = function(c, isReply) {
   const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
   const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
-  const avatarBg = cAuthor.photoURL
-    ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;`
-    : `background:${getColorForUser(cAuthor.name || 'U')}`;
+  const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
 
   const parentCommentId = c.parentCommentId || c.parentId;
   const replyStyle = (isReply || !!parentCommentId)
@@ -2232,9 +2965,7 @@ const renderCommentHtml = function(c, isReply) {
   return `
     <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
       <div style="display:flex; gap:10px; align-items:flex-start;">
-        <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">
-          ${cAuthor.photoURL ? '' : (cAuthor.name || 'U')[0]}
-        </div>
+        ${avatarHtml}
 
         <div style="flex:1;">
           <div style="font-size:0.9rem; margin-bottom:2px;">
@@ -2285,50 +3016,61 @@ const renderCommentHtml = function(c, isReply) {
     </div>`;
 };
 
-function renderThreadComments(comments) {
+function renderThreadComments(comments = []) {
   const container = document.getElementById('thread-stream');
   if (!container) return;
 
-  // Build parent -> replies map, and root list
-  const byParent = {};
-  const roots = [];
+  currentThreadComments = comments;
+  const grouping = groupCommentsByParent(comments);
+  const roots = grouping.roots.slice().sort(function(a, b) { return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0); });
+  const byParent = grouping.byParent;
 
-  (comments || []).forEach(function(c) {
-    const parentId = c.parentCommentId || c.parentId;
-    if (parentId) {
-      (byParent[parentId] = byParent[parentId] || []).push(c);
-    } else {
-      roots.push(c);
-    }
-  });
+  const postId = activePostId;
+  if (!commentRootDisplayCount[postId]) commentRootDisplayCount[postId] = 20;
+  const rootLimit = commentRootDisplayCount[postId];
+  const visibleRoots = roots.slice(0, rootLimit);
 
-  // Clear + render roots
   container.innerHTML = '';
-  roots.sort(function(a, b) { return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0); });
-  roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+  visibleRoots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
 
   const renderReplies = function(parentId) {
     const replies = (byParent[parentId] || []).slice().sort(function(a, b) {
       return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0);
     });
-
-    replies.forEach(function(reply) {
-      const slot = document.getElementById(`reply-slot-${parentId}`);
-      if (slot) slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+    const slot = document.getElementById(`reply-slot-${parentId}`);
+    if (!slot) return;
+    const expanded = !!replyExpansionState[parentId];
+    const limit = expanded ? replies.length : Math.min(3, replies.length);
+    slot.innerHTML = '';
+    replies.slice(0, limit).forEach(function(reply) {
+      slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
       renderReplies(reply.id);
     });
+    if (replies.length > limit) {
+      const btn = document.createElement('button');
+      btn.className = 'see-more-replies';
+      btn.textContent = 'See more replies';
+      btn.onclick = function() { replyExpansionState[parentId] = true; renderThreadComments(currentThreadComments); };
+      slot.appendChild(btn);
+    }
   };
 
-  roots.forEach(function(c) { renderReplies(c.id); });
+  visibleRoots.forEach(function(c) { renderReplies(c.id); });
 
-  // Re-anchor input area if needed
+  if (roots.length > rootLimit) {
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'load-more-comments';
+    moreBtn.textContent = 'Load More Comments';
+    moreBtn.onclick = function() { commentRootDisplayCount[postId] = rootLimit + 20; renderThreadComments(currentThreadComments); };
+    container.appendChild(moreBtn);
+  }
+
   const inputArea = document.getElementById('thread-input-area');
   const defaultSlot = document.getElementById('thread-input-default-slot');
   if (inputArea && !inputArea.parentElement && defaultSlot) {
     defaultSlot.appendChild(inputArea);
   }
 
-  // Move input under active reply target if set
   if (typeof activeReplyId !== 'undefined' && activeReplyId) {
     const slot = document.getElementById(`reply-slot-${activeReplyId}`);
     if (slot && inputArea && !slot.contains(inputArea)) {
@@ -2356,13 +3098,16 @@ function renderThreadMainPost(postId) {
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
     const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
-    const avatarStyle = authorData.photoURL ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;` : `background: ${getColorForUser(authorData.name)}`;
+    const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
     const authorVerified = userHasRole(authorData, 'verified');
     const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
     const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
     const formattedBody = formatContent(postText, post.tags, post.mentions);
     const tagListHtml = renderTagList(post.tags || []);
+    const pollBlock = renderPollBlock(post);
+    const locationBadge = renderLocationBadge(post.location);
+    const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
@@ -2389,7 +3134,7 @@ function renderThreadMainPost(postId) {
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
                 <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
-                    <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                    ${avatarHtml}
                     <div>
                         <div class="author-line" style="font-size:1rem;"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
                         <div class="post-meta">@${escapeHtml(authorData.username)}</div>
@@ -2406,6 +3151,9 @@ function renderThreadMainPost(postId) {
             <h2 id="thread-view-title" data-post-id="${post.id}" style="font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; line-height: 1.3;">${escapeHtml(post.title)}</h2>
             <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${formattedBody}</p>
             ${tagListHtml}
+            ${locationBadge}
+            ${scheduledChip}
+            ${pollBlock}
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span></div>
             <div class="card-actions" style="border:none; padding: 10px 0; justify-content: space-around;">
@@ -2417,14 +3165,8 @@ function renderThreadMainPost(postId) {
             </div>
         </div>`;
 
-    const myPfp = userProfile.photoURL 
-        ? `background-image: url('${userProfile.photoURL}'); background-size: cover; color: transparent;` 
-        : `background: ${getColorForUser(userProfile.name)}`;
     const inputPfp = document.getElementById('thread-input-pfp');
-    if(inputPfp) {
-        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`;
-        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0];
-    }
+    if(inputPfp) applyAvatarToElement(inputPfp, userProfile, { size: 40 });
 
     const threadReviewBtn = document.getElementById('thread-review-btn');
     applyReviewButtonState(threadReviewBtn, myReview);
@@ -2741,13 +3483,11 @@ window.renderDiscover = async function() {
             matches.forEach(function(user) {
                 const uid = Object.keys(userCache).find(function(key) { return userCache[key] === user; });
                 if(!uid) return;
-                const pfpStyle = user.photoURL 
-                    ? `background-image: url('${user.photoURL}'); background-size: cover; color: transparent;` 
-                    : `background: ${getColorForUser(user.name)}`;
+                const avatarHtml = renderAvatar({ ...user, uid }, { size: 40 });
 
                 container.innerHTML += `
                     <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);" onclick="window.openUserProfile('${uid}')">
-                        <div class="user-avatar" style="width:40px; height:40px; ${pfpStyle}">${user.photoURL?'':user.name[0]}</div>
+                        ${avatarHtml}
                         <div>
                             <div style="font-weight:700;">${escapeHtml(user.name)}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
@@ -2782,6 +3522,10 @@ window.renderDiscover = async function() {
 
     const renderPostsSection = function() {
         let filteredPosts = allPosts;
+        filteredPosts = filteredPosts.filter(function(post) {
+            if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
+            return true;
+        });
         if(discoverSearchTerm) {
             filteredPosts = allPosts.filter(function(p) {
                 const body = typeof p.content === 'string' ? p.content : (p.content?.text || '');
@@ -2800,6 +3544,8 @@ window.renderDiscover = async function() {
             filteredPosts.forEach(function(post) {
                 const author = userCache[post.userId] || {name: post.author};
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
+                const locationBadge = renderLocationBadge(post.location);
+                const pollBlock = renderPollBlock(post);
                 container.innerHTML += `
                     <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'}; cursor:pointer;" onclick="window.openThread('${post.id}')">
                         <div class="card-content" style="padding:1rem;">
@@ -2812,6 +3558,8 @@ window.renderDiscover = async function() {
                             </div>
                             <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                             <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
+                            ${locationBadge}
+                            ${pollBlock}
                         </div>
                     </div>`;
             });
@@ -2940,13 +3688,16 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const normalizedProfile = normalizeUserProfileData(profileData);
     const container = document.getElementById('view-public-profile');
 
-    const pfpStyle = normalizedProfile.photoURL
-        ? `background-image: url('${normalizedProfile.photoURL}'); background-size: cover; color: transparent;`
-        : `background: ${getColorForUser(normalizedProfile.name)}`;
+    const avatarHtml = renderAvatar({ ...normalizedProfile, uid }, { size: 100, className: 'profile-pic' });
 
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
-    const userPosts = allPosts.filter(function(p) { return p.userId === uid && (isSelfView || p.visibility !== 'private'); });
+    const userPosts = allPosts.filter(function(p) {
+        if (p.userId !== uid) return false;
+        if (!isSelfView && p.visibility === 'private') return false;
+        if (!isSelfView && isPostScheduledInFuture(p)) return false;
+        return true;
+    });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
@@ -2969,7 +3720,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(normalizedProfile.username)}</h2>
         </div>
         <div class="profile-header" style="padding-top:1rem;">
-            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${normalizedProfile.photoURL ? '' : normalizedProfile.name[0]}</div>
+            ${avatarHtml}
             <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
             <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
             <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
@@ -3008,6 +3759,9 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                 const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
                 const formattedBody = formatContent(postText, post.tags, post.mentions);
                 const tagListHtml = renderTagList(post.tags || []);
+                const pollBlock = renderPollBlock(post);
+                const locationBadge = renderLocationBadge(post.location);
+                const scheduledChip = isSelfView && isPostScheduledInFuture(post) ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
 
             let mediaContent = '';
             if (post.mediaUrl) {
@@ -3033,6 +3787,9 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                         <p>${formattedBody}</p>
                         ${tagListHtml}
+                        ${locationBadge}
+                        ${scheduledChip}
+                        ${pollBlock}
                         ${mediaContent}
                     </div>
                     <div class="card-actions">
@@ -3051,6 +3808,7 @@ function renderProfile() {
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
     const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -3065,7 +3823,7 @@ function renderProfile() {
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
-            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
+            ${avatarHtml}
             <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
             ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
@@ -3095,6 +3853,9 @@ function renderProfile() {
             const inactive = membership && membership.status !== 'active';
             const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
             const badgeLabel = inactive ? `${post.category} (Not a member anymore)` : post.category;
+            const pollBlock = renderPollBlock(post);
+            const locationBadge = renderLocationBadge(post.location);
+            const scheduledChip = isPostScheduledInFuture(post) ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
 
             feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
@@ -3108,6 +3869,9 @@ function renderProfile() {
                         </div>
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                         <p>${escapeHtml(cleanText(post.content))}</p>
+                        ${locationBadge}
+                        ${scheduledChip}
+                        ${pollBlock}
                     </div>
                 </div>`;
         });
@@ -3152,9 +3916,10 @@ function renderCategoryPills() {
     divider.className = 'category-divider';
     header.appendChild(divider);
 
-    const dynamic = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(10)])).filter(function(name) {
+    const dynamicFull = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(20)])).filter(function(name) {
         return name && !anchors.includes(name);
-    }).slice(0, 10);
+    });
+    const dynamic = dynamicFull.slice(0, categoryVisibleCount);
 
     dynamic.forEach(function(name) {
         const pill = document.createElement('div');
@@ -3163,6 +3928,14 @@ function renderCategoryPills() {
         pill.onclick = function() { window.setCategory(name); };
         header.appendChild(pill);
     });
+
+    if (dynamicFull.length > categoryVisibleCount) {
+        const more = document.createElement('button');
+        more.className = 'category-pill load-more';
+        more.textContent = 'Load More';
+        more.onclick = function() { categoryVisibleCount += 10; renderCategoryPills(); };
+        header.appendChild(more);
+    }
 }
 
 window.setCategory = function(c) {
@@ -3284,7 +4057,9 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
     activeOptionsPost = { id: postId, ownerId, context };
     const dropdown = document.getElementById('post-options-dropdown');
     const deleteBtn = document.getElementById('dropdown-delete-btn');
+    const editBtn = document.getElementById('dropdown-edit-btn');
     if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if(editBtn) editBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
     if (dropdown && event && event.currentTarget) {
         dropdown.style.display = 'block';
         const rect = event.currentTarget.getBoundingClientRect();
@@ -3297,11 +4072,53 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
 };
 
 window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
-window.handlePostOptionSelect = function(action) { closePostOptionsDropdown(); if(action === 'report') return window.openReportModal(); if(action === 'delete') return window.confirmDeletePost(); }
+window.handlePostOptionSelect = function(action) {
+    closePostOptionsDropdown();
+    if(action === 'report') return window.openReportModal();
+    if(action === 'delete') return window.confirmDeletePost();
+    if(action === 'edit') return window.beginEditPost();
+}
 window.openReportModal = function() { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if(opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'flex'; }
 window.closeReportModal = function() { const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'none'; }
 window.submitReport = async function() { if(!requireAuth()) return; if(!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if(!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if(detailEl) detailEl.value = ''; if(categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch(e) { console.error(e); toast('Could not submit report.', 'error'); } }
 window.confirmDeletePost = async function() { if(!activeOptionsPost || !activeOptionsPost.id) return; if(!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if(!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function(p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if(currentViewId === 'profile') renderProfile(); if(currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if(activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if(threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch(e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
+
+window.beginEditPost = function() {
+    if (!activeOptionsPost || !activeOptionsPost.id) return;
+    const post = allPosts.find(function(p) { return p.id === activeOptionsPost.id; });
+    if (!post || !currentUser || post.userId !== currentUser.uid) return toast('You can only edit your own post.', 'error');
+    currentEditPost = post;
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    if (title) title.value = post.title || '';
+    if (content) content.value = typeof post.content === 'object' ? (post.content.text || '') : (post.content || '');
+    composerTags = Array.isArray(post.tags) ? post.tags.map(normalizeTagValue).filter(Boolean) : [];
+    composerMentions = normalizeMentionsField(post.mentions || []);
+    composerPoll = post.poll ? { title: post.poll.title || '', options: (post.poll.options || ['','']).slice(0,5) } : { title: '', options: ['', ''] };
+    composerScheduledFor = formatTimestampForInput(post.scheduledFor);
+    composerLocation = post.location || '';
+    selectedCategoryId = post.categoryId || selectedCategoryId;
+    renderComposerTags();
+    renderComposerMentions();
+    renderPollOptions();
+    const scheduleInput = document.getElementById('schedule-input');
+    if (scheduleInput) scheduleInput.value = composerScheduledFor;
+    setComposerLocation(composerLocation);
+    const tagInput = document.getElementById('tag-input');
+    if (tagInput) tagInput.value = '';
+    const mentionInput = document.getElementById('mention-input');
+    if (mentionInput) mentionInput.value = '';
+    if (post.mediaUrl) {
+        const preview = document.getElementById('img-preview-tag');
+        const previewContainer = document.getElementById('img-preview-container');
+        if (preview && previewContainer) {
+            preview.src = post.mediaUrl;
+            previewContainer.style.display = 'block';
+        }
+    }
+    syncComposerMode();
+    window.toggleCreateModal(true);
+};
 
 // --- Messaging (DMs) ---
 window.toggleNewChatModal = function(show = true) {
@@ -3375,7 +4192,7 @@ function initConversations() {
     if(!requireAuth()) return;
     if(conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = trackSnapshot(onSnapshot(convRef, function(snap) {
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function(snap) {
         conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderConversationList();
     }));
@@ -3392,9 +4209,18 @@ function renderConversationList() {
     conversationsCache.forEach(function(convo) {
         const partnerId = convo.members.find(function(m) { return m !== currentUser.uid; }) || currentUser.uid;
         const display = userCache[partnerId]?.username || 'user';
+        const partnerProfile = userCache[partnerId] || { username: display, name: display, avatarColor: computeAvatarColor(partnerId || display) };
+        const avatarHtml = renderAvatar({ ...partnerProfile, uid: partnerId }, { size: 36 });
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
-        item.innerHTML = `<div><strong>@${display}</strong><div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div></div><span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
+        item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+            ${avatarHtml}
+            <div>
+                <strong>@${display}</strong>
+                <div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div>
+            </div>
+        </div>
+        <span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
         item.onclick = function() { return setActiveConversation(convo.id, convo); };
         listEl.appendChild(item);
     });
@@ -3411,7 +4237,7 @@ function setActiveConversation(convoId, convoData = null) {
 function listenToMessages(convoId) {
     if(messagesUnsubscribe) messagesUnsubscribe();
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = trackSnapshot(onSnapshot(msgRef, function(snap) {
+    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function(snap) {
         const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderMessages(msgs);
     }));
@@ -3504,7 +4330,7 @@ function pauseAllVideos() {
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = trackSnapshot(onSnapshot(refVideos, function(snap) {
+    videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function(snap) {
         videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderVideoFeed(videosCache);
     }));
@@ -3655,7 +4481,7 @@ window.toggleGoLiveModal = function(show = true) { const modal = document.getEle
 function renderLiveSessions() {
     if(liveSessionsUnsubscribe) return;
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
-    liveSessionsUnsubscribe = trackSnapshot(onSnapshot(liveRef, function(snap) {
+    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
         const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const container = document.getElementById('live-grid-container');
         if(!container) return;
@@ -3689,6 +4515,10 @@ window.createLiveSession = async function() {
 };
 
 window.openLiveSession = function(sessionId) {
+    if (activeLiveSessionId && activeLiveSessionId !== sessionId) {
+        ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
+    }
+    activeLiveSessionId = sessionId;
     const container = document.getElementById('live-grid-container');
     if(!container) return;
     const sessionCard = document.createElement('div');
@@ -3700,7 +4530,7 @@ window.openLiveSession = function(sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
-    trackSnapshot(onSnapshot(chatRef, function(snap) {
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function(snap) {
         const chatEl = document.getElementById('live-chat');
         if(!chatEl) return;
         chatEl.innerHTML = '';
@@ -3740,7 +4570,7 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if(staffRequestsUnsub) return;
-    staffRequestsUnsub = trackSnapshot(onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function(snap) {
         const container = document.getElementById('verification-requests');
         if(!container) return;
         container.innerHTML = '';
@@ -3767,7 +4597,7 @@ window.denyVerification = async function(requestId) {
 
 function listenReports() {
     if(staffReportsUnsub) return;
-    staffReportsUnsub = trackSnapshot(onSnapshot(collection(db, 'reports'), function(snap) {
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function(snap) {
         const container = document.getElementById('reports-queue');
         if(!container) return;
         container.innerHTML = '';
@@ -3783,7 +4613,7 @@ function listenReports() {
 
 function listenAdminLogs() {
     if(staffLogsUnsub) return;
-    staffLogsUnsub = trackSnapshot(onSnapshot(collection(db, 'adminLogs'), function(snap) {
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function(snap) {
         const container = document.getElementById('admin-logs');
         if(!container) return;
         container.innerHTML = '';
@@ -3812,4 +4642,5 @@ window.submitVerificationRequest = async function() {
 // See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
 
 // Start App
+refreshBrandLogos();
 initApp();
