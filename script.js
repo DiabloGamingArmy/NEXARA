@@ -2983,7 +2983,7 @@ window.renderDiscover = async function() {
                             <div style="font-weight:700;">${escapeHtml(user.name)}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
                         </div>
-                        <button class="follow-btn" style="margin-left:auto;">View</button>
+                        <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
                     </div>`;
             });
         } else if (discoverFilter === 'Users' && discoverSearchTerm) {
