@@ -497,37 +497,7 @@
         <div id="view-public-profile" class="view-section" style="display:none;"></div>
 
         <div id="view-discover" class="view-section" style="display:none;">
-            <div style="padding: 1rem 1rem 0 1rem;">
-                <h2 style="font-weight:800; font-size:1.5rem; margin-bottom:1rem;">Discover</h2>
-                <input type="text" class="form-input" placeholder="Search users, posts..." oninput="window.handleSearchInput(event)">
-
-                <div class="discover-controls">
-                    <div class="discover-pill-row">
-                        <button class="discover-pill active" data-filter="All Results" onclick="window.setDiscoverFilter('All Results')">All Results</button>
-                        <button class="discover-pill" data-filter="Posts" onclick="window.setDiscoverFilter('Posts')">Posts</button>
-                        <button class="discover-pill" data-filter="Categories" onclick="window.setDiscoverFilter('Categories')">Categories</button>
-                        <button class="discover-pill" data-filter="Users" onclick="window.setDiscoverFilter('Users')">Users</button>
-                        <button class="discover-pill" data-filter="Videos" onclick="window.setDiscoverFilter('Videos')">Videos</button>
-                        <button class="discover-pill" data-filter="Livestreams" onclick="window.setDiscoverFilter('Livestreams')">Livestreams</button>
-                    </div>
-                    <div id="discover-post-sort" class="discover-dropdown" style="display:none;">
-                        <label for="posts-sort-select">Sort:</label>
-                        <select id="posts-sort-select" class="discover-select" onchange="window.handlePostsSortChange(event)">
-                            <option value="recent">Recent</option>
-                            <option value="popular">Popular</option>
-                        </select>
-                    </div>
-                    <div id="discover-category-sort" class="discover-dropdown" style="display:none;">
-                        <label for="categories-sort-select">Categories:</label>
-                        <select id="categories-sort-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
-                            <option value="verified_first">Verified first</option>
-                            <option value="verified_only">Verified only</option>
-                            <option value="community_first">Community first</option>
-                            <option value="community_only">Community only</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
+            <div id="discover-topbar"></div>
             <div id="discover-results" style="padding: 0 1rem 1rem 1rem; max-width:800px; margin:0 auto;">
                 <div class="empty-state"><p>Start typing to search or explore categories.</p></div>
             </div>
@@ -536,8 +506,12 @@
         <div id="view-live" class="view-section" style="padding:1rem; display:none;">
             <div id="live-topbar"></div>
             <div id="live-featured-row" class="live-featured-row"></div>
+            <div id="live-filter-row" class="live-filter-row"></div>
             <hr id="live-divider" class="live-divider">
             <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
+        </div>
+        <div id="view-live-watch" class="view-section" style="display:none; padding:1rem;">
+            <div id="live-player-root" class="live-container"></div>
         </div>
         <div id="view-live-setup" class="view-section" style="display:none;">
             <div class="go-live-setup">
