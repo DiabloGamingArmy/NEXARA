@@ -724,3 +724,19 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .tag-chip:hover { border-color: var(--primary); cursor:pointer; }
 .mention-link { color: var(--primary); font-weight:700; text-decoration:none; }
 .mention-link:hover { text-decoration: underline; }
+.composer-subheader { font-size:0.85rem; color:var(--text-muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; }
+.poll-options { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
+.poll-option-row { display:grid; grid-template-columns:1fr auto; gap:8px; }
+.poll-actions { display:flex; align-items:center; gap:10px; justify-content:space-between; flex-wrap:wrap; }
+.poll-helper { color:var(--text-muted); font-size:0.85rem; }
+.poll-block { margin-top:10px; border:1px solid var(--border); border-radius:10px; padding:10px; background:var(--bg-hover); display:flex; flex-direction:column; gap:8px; }
+.poll-title { font-weight:700; color:var(--text-main); }
+.poll-option { display:flex; align-items:center; justify-content:space-between; width:100%; padding:8px 10px; border:1px solid var(--border); background:transparent; border-radius:8px; color:var(--text-main); cursor:pointer; }
+.poll-option.selected { border-color: var(--primary); box-shadow: 0 0 0 1px rgba(0,242,234,0.4); }
+.poll-option:hover { border-color: var(--primary); }
+.poll-count { color: var(--text-muted); font-size:0.85rem; }
+.location-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; background:var(--bg-hover); border:1px solid var(--border); border-radius:999px; margin-top:6px; font-size:0.85rem; color:var(--text-main); }
+.location-chip i { color: var(--primary); }
+.scheduled-chip { display:inline-block; padding:4px 10px; border:1px dashed var(--border); border-radius:8px; color:var(--text-muted); font-size:0.85rem; margin-top:6px; }
+.see-more-replies, .load-more-comments { background: none; border:1px solid var(--border); color: var(--primary); padding:6px 10px; border-radius:8px; cursor:pointer; margin-top:6px; }
+.see-more-replies:hover, .load-more-comments:hover { border-color: var(--primary); background: rgba(0,242,234,0.08); }

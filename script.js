@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
@@ -36,8 +36,18 @@ let savedFilter = 'All Saved';
 let isInitialLoad = true;
 let composerTags = [];
 let composerMentions = [];
+let composerPoll = { title: '', options: ['', ''] };
+let composerScheduledFor = '';
+let composerLocation = '';
+let recentLocations = [];
+let categoryVisibleCount = 10;
+let commentRootDisplayCount = {};
+let replyExpansionState = {};
+let currentEditPost = null;
 let tagSuggestionPool = [];
 let mentionSearchTimer = null;
+let currentThreadComments = [];
+let scheduledRenderTimer = null;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -203,6 +213,7 @@ function normalizeUserProfileData(data = {}) {
     const profile = { ...data, accountRoles };
     profile.photoPath = data.photoPath || '';
     profile.avatarColor = data.avatarColor || computeAvatarColor(data.username || data.displayName || data.name || 'user');
+    profile.locationHistory = Array.isArray(data.locationHistory) ? data.locationHistory : [];
     return profile;
 }
 
@@ -277,9 +288,7 @@ const ListenerRegistry = (function () {
     const loggedKeys = new Set();
 
     function devLog(message, key) {
-        const shouldLog =
-            window?.location?.hostname === 'localhost' ||
-            window?.__DEV_LISTENER_DEBUG__;
+        const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
         if (shouldLog && !loggedKeys.has(`${key}-replace`)) {
             console.debug(message);
             loggedKeys.add(`${key}-replace`);
@@ -292,15 +301,8 @@ const ListenerRegistry = (function () {
 
             if (listeners.has(key)) {
                 const existing = listeners.get(key);
-                try {
-                    existing();
-                } catch (e) {
-                    console.warn('Listener cleanup failed for', key, e);
-                }
-                devLog(
-                    `ListenerRegistry: replaced existing listener for key "${key}"`,
-                    key
-                );
+                try { existing(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                devLog(`ListenerRegistry: replaced existing listener for key "${key}"`, key);
             }
 
             listeners.set(key, unsubscribeFn);
@@ -308,30 +310,18 @@ const ListenerRegistry = (function () {
                 if (!listeners.has(key)) return;
                 const current = listeners.get(key);
                 listeners.delete(key);
-                try {
-                    current();
-                } catch (e) {
-                    console.warn('Listener cleanup failed for', key, e);
-                }
+                try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             };
         },
         unregister(key) {
             if (!listeners.has(key)) return;
             const unsub = listeners.get(key);
             listeners.delete(key);
-            try {
-                unsub();
-            } catch (e) {
-                console.warn('Listener cleanup failed for', key, e);
-            }
+            try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
         },
         clearAll() {
             listeners.forEach(function (unsub, key) {
-                try {
-                    unsub();
-                } catch (e) {
-                    console.warn('Listener cleanup failed for', key, e);
-                }
+                try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             });
             listeners.clear();
         },
@@ -345,13 +335,8 @@ const ListenerRegistry = (function () {
 })();
 
 window.ListenerRegistry = ListenerRegistry;
-window.debugActiveListeners = function () {
-    return ListenerRegistry.debugPrint();
-};
-window.addEventListener('beforeunload', function () {
-    ListenerRegistry.clearAll();
-});
-
+window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
+window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -522,6 +507,9 @@ function initApp() {
 
                     // Normalize role storage
                     userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
+                    recentLocations = Array.isArray(userProfile.locationHistory) ? userProfile.locationHistory.slice() : [];
+
+                    await backfillAvatarColorIfMissing(user.uid, userProfile);
 
                     await backfillAvatarColorIfMissing(user.uid, userProfile);
 
@@ -543,6 +531,8 @@ function initApp() {
                     const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
                     userProfile.theme = storedTheme;
                     userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
+                    userProfile.locationHistory = [];
+                    recentLocations = [];
                     applyTheme(storedTheme);
                     const staffNav = document.getElementById('nav-staff');
                     if (staffNav) staffNav.style.display = 'none';
@@ -634,6 +624,7 @@ async function ensureUserDocument(user) {
             website: "",
             region: "",
             email: user.email || "",
+            locationHistory: [],
             accountRoles: [],
             tagAffinity: {},
             interests: [],
@@ -795,6 +786,12 @@ function startDataListener() {
         // Sort posts by date (newest first)
         allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
 
+        if (currentUser) {
+            const ownLocs = allPosts.filter(function(p) { return p.userId === currentUser.uid && p.location; }).map(function(p) { return p.location; });
+            const merged = new Set([...(recentLocations || []), ...ownLocs]);
+            recentLocations = Array.from(merged).slice(-10);
+        }
+
         // Fetch profiles for these posts
         fetchMissingProfiles(allPosts);
 
@@ -824,6 +821,13 @@ function startDataListener() {
 
     // Start Live Stream Listener (Mock)
     if (typeof renderLive === 'function') renderLive();
+
+    if (scheduledRenderTimer) clearInterval(scheduledRenderTimer);
+    scheduledRenderTimer = setInterval(function() {
+        if (currentViewId === 'feed') {
+            renderFeed();
+        }
+    }, 60000);
 }
 
 function startCategoryStreams(uid) {
@@ -915,6 +919,12 @@ function normalizePostData(id, data) {
 
     const normalizedTags = Array.isArray(data.tags) ? Array.from(new Set(data.tags.map(normalizeTagValue).filter(Boolean))) : [];
     const normalizedMentions = normalizeMentionsField(data.mentions);
+    const normalizedPoll = normalizePollPayload(data.poll);
+    const scheduledField = data.scheduledFor;
+    const scheduledFor = scheduledField instanceof Timestamp
+        ? scheduledField
+        : (scheduledField && typeof scheduledField.seconds === 'number' ? new Timestamp(scheduledField.seconds, scheduledField.nanoseconds || 0) : null);
+    const location = data.location || '';
 
     const normalized = {
         id,
@@ -930,7 +940,10 @@ function normalizePostData(id, data) {
         tags: normalizedTags,
         mentions: normalizedMentions,
         content,
-        categoryStatus: memberships[categoryId]?.status || 'unknown'
+        categoryStatus: memberships[categoryId]?.status || 'unknown',
+        poll: normalizedPoll,
+        scheduledFor,
+        location
     };
 
     if (!normalized.title && typeof data.title === 'string') normalized.title = data.title;
@@ -1666,6 +1679,9 @@ function getPostHTML(post) {
         const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
         const formattedBody = formatContent(postText, post.tags, post.mentions);
         const tagListHtml = renderTagList(post.tags || []);
+        const pollBlock = renderPollBlock(post);
+        const locationBadge = renderLocationBadge(post.location);
+        const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
 
         let mediaContent = '';
         if (post.mediaUrl) {
@@ -1718,6 +1734,9 @@ function getPostHTML(post) {
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                     <p>${formattedBody}</p>
                     ${tagListHtml}
+                    ${locationBadge}
+                    ${scheduledChip}
+                    ${pollBlock}
                     ${mediaContent}
                     ${commentPreviewHtml}
                     ${savedTagHtml}
@@ -1744,6 +1763,11 @@ function renderFeed(targetId = 'feed-content') {
     container.innerHTML = "";
     let displayPosts = allPosts.filter(function (post) {
         if (post.visibility === 'private') return currentUser && post.userId === currentUser.uid;
+        return true;
+    });
+
+    displayPosts = displayPosts.filter(function(post) {
+        if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
         return true;
     });
 
@@ -1927,6 +1951,112 @@ function normalizeTagValue(tag = '') {
     return tag.trim().replace(/^#/, '').toLowerCase();
 }
 
+function ensurePollOptionSlots() {
+    if (!Array.isArray(composerPoll.options)) composerPoll.options = ['', ''];
+    while (composerPoll.options.length < 2) composerPoll.options.push('');
+    if (composerPoll.options.length > 5) composerPoll.options = composerPoll.options.slice(0, 5);
+}
+
+function renderPollOptions() {
+    ensurePollOptionSlots();
+    const container = document.getElementById('poll-options-container');
+    if (!container) return;
+    container.innerHTML = '';
+    composerPoll.options.forEach(function (opt, idx) {
+        const row = document.createElement('div');
+        row.className = 'poll-option-row';
+        row.innerHTML = `
+            <input type="text" class="form-input" value="${escapeHtml(opt)}" placeholder="Option ${idx + 1}" oninput="window.handlePollOptionInput(${idx}, this.value)">
+            <button type="button" class="icon-pill" ${composerPoll.options.length <= 2 ? 'disabled' : ''} onclick="window.removePollOption(${idx})"><i class="ph ph-x"></i></button>
+        `;
+        container.appendChild(row);
+    });
+}
+
+function handlePollOptionInput(index, value) {
+    ensurePollOptionSlots();
+    if (index < 0 || index >= composerPoll.options.length) return;
+    composerPoll.options[index] = value;
+}
+
+function handlePollTitleChange(value) {
+    composerPoll.title = value;
+}
+
+function addPollOption() {
+    ensurePollOptionSlots();
+    if (composerPoll.options.length >= 5) return toast('Polls can have up to 5 options.', 'info');
+    composerPoll.options.push('');
+    renderPollOptions();
+}
+
+function removePollOption(index) {
+    ensurePollOptionSlots();
+    if (composerPoll.options.length <= 2) return;
+    composerPoll.options.splice(index, 1);
+    renderPollOptions();
+}
+
+function handleScheduleChange(value = '') {
+    composerScheduledFor = value;
+}
+
+function setComposerLocation(value = '') {
+    composerLocation = value;
+    const input = document.getElementById('location-input');
+    if (input) input.value = value;
+    renderLocationSuggestions(value);
+}
+
+function handleLocationInput(value = '') {
+    setComposerLocation(value);
+}
+
+function renderLocationSuggestions(queryText = '') {
+    const listEl = document.getElementById('location-suggestions');
+    if (!listEl) return;
+    const cleaned = (queryText || '').toLowerCase();
+    const source = Array.isArray(recentLocations) ? recentLocations : [];
+    const matches = source.filter(function (loc) { return !cleaned || loc.toLowerCase().includes(cleaned); }).slice(0, 5);
+    if (!matches.length) {
+        listEl.style.display = 'none';
+        listEl.innerHTML = '';
+        return;
+    }
+    listEl.style.display = 'block';
+    listEl.innerHTML = matches.map(function (loc) {
+        return `<button type="button" class="suggestion-chip" onclick="window.setComposerLocation('${escapeHtml(loc)}')"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(loc)}</button>`;
+    }).join('');
+}
+
+function resetComposerState() {
+    composerTags = [];
+    composerMentions = [];
+    composerPoll = { title: '', options: ['', ''] };
+    composerScheduledFor = '';
+    composerLocation = '';
+    currentEditPost = null;
+    renderComposerTags();
+    renderComposerMentions();
+    renderPollOptions();
+    const scheduleInput = document.getElementById('schedule-input');
+    if (scheduleInput) scheduleInput.value = '';
+    setComposerLocation('');
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    if (title) title.value = '';
+    if (content) content.value = '';
+    const fileInput = document.getElementById('postFile');
+    if (fileInput) fileInput.value = '';
+    clearPostImage();
+    syncComposerMode();
+}
+
+function syncComposerMode() {
+    const btn = document.getElementById('publishBtn');
+    if (btn) btn.textContent = currentEditPost ? 'Save Changes' : 'Post';
+}
+
 function getKnownTags() {
     const collected = new Set(tagSuggestionPool);
     allPosts.forEach(function (post) {
@@ -2096,6 +2226,13 @@ window.toggleMentionInput = function(show) {
 window.addComposerMention = addComposerMention;
 window.removeComposerMention = removeComposerMention;
 window.handleMentionInput = handleMentionInput;
+window.handlePollOptionInput = handlePollOptionInput;
+window.addPollOption = addPollOption;
+window.removePollOption = removePollOption;
+window.handlePollTitleChange = handlePollTitleChange;
+window.handleScheduleChange = handleScheduleChange;
+window.handleLocationInput = handleLocationInput;
+window.setComposerLocation = setComposerLocation;
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
@@ -2104,6 +2241,22 @@ function escapeRegex(str = '') {
 function renderTagList(tags = []) {
     if (!tags.length) return '';
     return `<div style="margin-top:8px;">${tags.map(function(tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
+}
+
+function renderPollBlock(post) {
+    const poll = normalizePollPayload(post?.poll);
+    if (!poll) return '';
+    const votes = poll.votes || {};
+    const counts = poll.options.map(function(_, idx) { return Object.values(votes).filter(function(v) { return Number(v) === idx; }).length; });
+    const total = counts.reduce(function(sum, c) { return sum + c; }, 0) || 1;
+    const userChoice = currentUser ? votes[currentUser.uid] : null;
+    const optionsHtml = poll.options.map(function(opt, idx) {
+        const pct = Math.round((counts[idx] / total) * 100);
+        const selected = Number(userChoice) === idx;
+        return `<button type="button" class="poll-option ${selected ? 'selected' : ''}" onclick="window.voteInPoll('${post.id}', ${idx}, event)"><span>${escapeHtml(opt)}</span><span class="poll-count">${counts[idx]} (${pct}%)</span></button>`;
+    }).join('');
+    const pollTitle = poll.title ? escapeHtml(poll.title) : 'Poll';
+    return `<div class="poll-block"><div class="poll-title">${pollTitle}</div>${optionsHtml}</div>`;
 }
 
 function getMentionHandles(mentions = []) {
@@ -2175,6 +2328,75 @@ function getPostAffinityScore(post) {
     return tags.reduce(function(total, tag) { return total + (affinity[tag] || 0); }, 0);
 }
 
+window.voteInPoll = async function(postId, optionIndex, event) {
+    if (event) event.stopPropagation();
+    if (!requireAuth()) return;
+    const post = allPosts.find(function(p) { return p.id === postId; });
+    if (!post) return;
+    const poll = normalizePollPayload(post.poll || {});
+    if (!poll || optionIndex < 0 || optionIndex >= poll.options.length) return;
+    poll.votes = poll.votes || {};
+    poll.votes[currentUser.uid] = optionIndex;
+    post.poll = poll;
+    refreshSinglePostUI(postId);
+    try {
+        await updateDoc(doc(db, 'posts', postId), { poll: { ...poll, votes: poll.votes } });
+    } catch (e) {
+        console.error('Poll vote failed', e);
+    }
+};
+
+function normalizePollPayload(raw = null) {
+    if (!raw || typeof raw !== 'object') return null;
+    const title = (raw.title || '').toString();
+    const options = Array.isArray(raw.options) ? raw.options.map(function (o) { return (o || '').toString().trim(); }).filter(Boolean) : [];
+    const votes = raw.votes && typeof raw.votes === 'object' ? raw.votes : {};
+    if (options.length < 2) return null;
+    return { title, options: options.slice(0, 5), votes };
+}
+
+function buildPollPayloadFromComposer() {
+    ensurePollOptionSlots();
+    const options = (composerPoll.options || []).map(function (o) { return (o || '').trim(); }).filter(Boolean);
+    if (options.length < 2) return null;
+    return { title: (composerPoll.title || '').trim(), options: options.slice(0, 5), votes: {} };
+}
+
+function parseScheduleValue(value = '') {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return Timestamp.fromDate(parsed);
+}
+
+function formatTimestampForInput(ts) {
+    if (!ts) return '';
+    const date = ts instanceof Timestamp ? ts.toDate() : (typeof ts.seconds === 'number' ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (Number.isNaN(date.getTime())) return '';
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+function isPostScheduledInFuture(post) {
+    const ts = post?.scheduledFor;
+    if (!ts) return false;
+    const date = ts instanceof Timestamp ? ts.toDate() : (typeof ts.seconds === 'number' ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (Number.isNaN(date.getTime())) return false;
+    return date.getTime() > Date.now();
+}
+
+function formatTimestampDisplay(ts) {
+    if (!ts) return '';
+    const date = ts instanceof Timestamp ? ts.toDate() : (typeof ts.seconds === 'number' ? new Date(ts.seconds * 1000) : new Date(ts));
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderLocationBadge(location = '') {
+    if (!location) return '';
+    return `<div class="location-chip"><i class="ph ph-map-pin"></i> ${escapeHtml(location)}</div>`;
+}
+
 window.createPost = async function() {
      if (!requireAuth()) return;
      const title = document.getElementById('postTitle').value;
@@ -2187,7 +2409,11 @@ window.createPost = async function() {
      const btn = document.getElementById('publishBtn');
      setComposerError('');
 
-     let contentType = 'text';
+     const pollPayload = buildPollPayloadFromComposer();
+     const scheduledFor = parseScheduleValue(composerScheduledFor);
+     const locationValue = (composerLocation || '').trim();
+
+     let contentType = currentEditPost?.contentType || 'text';
      if (fileInput.files[0]) {
          const mime = fileInput.files[0].type;
          if (mime.startsWith('video')) contentType = 'video';
@@ -2202,8 +2428,9 @@ window.createPost = async function() {
      btn.textContent = "Uploading...";
 
      try {
-         if (selectedCategoryId && currentUser?.uid) {
-             const joined = await ensureJoinedCategory(selectedCategoryId, currentUser.uid);
+         const targetCategoryId = currentEditPost ? currentEditPost.categoryId : selectedCategoryId;
+         if (targetCategoryId && currentUser?.uid && !currentEditPost) {
+             const joined = await ensureJoinedCategory(targetCategoryId, currentUser.uid);
              if (!joined) {
                  setComposerError('Unable to join this category. Please try again.');
                  return;
@@ -2221,18 +2448,19 @@ window.createPost = async function() {
          });
          const mentionUserIds = Array.from(seenNotify);
 
-         let mediaUrl = null;
+         let mediaUrl = currentEditPost?.mediaUrl || null;
          if(fileInput.files[0]) {
              const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
              mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
          }
 
-         const categoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+         const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
+         const resolvedCategoryId = currentEditPost ? currentEditPost.categoryId : (selectedCategoryId || null);
          const visibility = 'public';
          const postPayload = {
              title,
              content,
-             categoryId: selectedCategoryId || null,
+             categoryId: resolvedCategoryId,
              categoryName: categoryDoc ? categoryDoc.name : null,
              categorySlug: categoryDoc ? categoryDoc.slug : null,
              categoryVerified: categoryDoc ? !!categoryDoc.verified : false,
@@ -2246,26 +2474,36 @@ window.createPost = async function() {
              tags,
              mentions,
              mentionUserIds,
-             likes: 0,
-             likedBy: [],
-             trustScore: 0,
-             timestamp: serverTimestamp()
+             poll: pollPayload,
+             scheduledFor,
+             location: locationValue,
+             likes: currentEditPost ? currentEditPost.likes || 0 : 0,
+             likedBy: currentEditPost ? currentEditPost.likedBy || [] : [],
+             dislikes: currentEditPost ? currentEditPost.dislikes || 0 : 0,
+             dislikedBy: currentEditPost ? currentEditPost.dislikedBy || [] : [],
+             trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
+             timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
          };
 
-         const postRef = await addDoc(collection(db, 'posts'), postPayload);
-         if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+         if (currentEditPost) {
+             await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
+             currentEditPost = null;
+         } else {
+             const postRef = await addDoc(collection(db, 'posts'), postPayload);
+             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+         }
+
+         if (locationValue) {
+             const existing = new Set(recentLocations || []);
+             existing.add(locationValue);
+             recentLocations = Array.from(existing).slice(-10);
+             try { await setDoc(doc(db, 'users', currentUser.uid), { locationHistory: recentLocations }, { merge: true }); } catch (e) { console.warn('Location history save failed', e); }
+         }
 
          // Reset Form
-         document.getElementById('postTitle').value = "";
-         document.getElementById('postContent').value = "";
-         composerTags = [];
-         composerMentions = [];
-         renderComposerTags();
-         renderComposerMentions();
+         resetComposerState();
          if (tagInput) tagInput.value = "";
          if (mentionInput) mentionInput.value = "";
-         fileInput.value = "";
-         window.clearPostImage();
          window.toggleCreateModal(false);
          window.navigateTo('feed');
 
@@ -2318,6 +2556,7 @@ function updateSettingsAvatarPreview(src) {
             computeAvatarColor(currentUser?.uid || 'user')
     };
 
+    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
     applyAvatarToElement(preview, tempUser, { size: 72 });
     updateRemovePhotoButtonState();
 }
@@ -2336,9 +2575,16 @@ window.toggleCreateModal = function(show) {
         renderDestinationField();
         renderComposerTags();
         renderComposerMentions();
+        renderPollOptions();
+        const scheduleInput = document.getElementById('schedule-input');
+        if (scheduleInput) scheduleInput.value = composerScheduledFor || '';
+        setComposerLocation(composerLocation || '');
+        syncComposerMode();
         syncPostButtonState();
     } else if (!show) {
         closeDestinationPicker();
+        currentEditPost = null;
+        syncComposerMode();
     }
 }
 
@@ -2650,6 +2896,8 @@ window.removeReview = async function() {
 window.openThread = function(postId) {
     activePostId = postId;
     activeReplyId = null;
+    commentRootDisplayCount[postId] = 20;
+    replyExpansionState = {};
     window.resetInputBox();
     window.navigateTo('thread');
     renderThreadMainPost(postId);
@@ -2749,50 +2997,61 @@ const renderCommentHtml = function(c, isReply) {
     </div>`;
 };
 
-function renderThreadComments(comments) {
+function renderThreadComments(comments = []) {
   const container = document.getElementById('thread-stream');
   if (!container) return;
 
-  // Build parent -> replies map, and root list
-  const byParent = {};
-  const roots = [];
+  currentThreadComments = comments;
+  const grouping = groupCommentsByParent(comments);
+  const roots = grouping.roots.slice().sort(function(a, b) { return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0); });
+  const byParent = grouping.byParent;
 
-  (comments || []).forEach(function(c) {
-    const parentId = c.parentCommentId || c.parentId;
-    if (parentId) {
-      (byParent[parentId] = byParent[parentId] || []).push(c);
-    } else {
-      roots.push(c);
-    }
-  });
+  const postId = activePostId;
+  if (!commentRootDisplayCount[postId]) commentRootDisplayCount[postId] = 20;
+  const rootLimit = commentRootDisplayCount[postId];
+  const visibleRoots = roots.slice(0, rootLimit);
 
-  // Clear + render roots
   container.innerHTML = '';
-  roots.sort(function(a, b) { return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0); });
-  roots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+  visibleRoots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
 
   const renderReplies = function(parentId) {
     const replies = (byParent[parentId] || []).slice().sort(function(a, b) {
       return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0);
     });
-
-    replies.forEach(function(reply) {
-      const slot = document.getElementById(`reply-slot-${parentId}`);
-      if (slot) slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+    const slot = document.getElementById(`reply-slot-${parentId}`);
+    if (!slot) return;
+    const expanded = !!replyExpansionState[parentId];
+    const limit = expanded ? replies.length : Math.min(3, replies.length);
+    slot.innerHTML = '';
+    replies.slice(0, limit).forEach(function(reply) {
+      slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
       renderReplies(reply.id);
     });
+    if (replies.length > limit) {
+      const btn = document.createElement('button');
+      btn.className = 'see-more-replies';
+      btn.textContent = 'See more replies';
+      btn.onclick = function() { replyExpansionState[parentId] = true; renderThreadComments(currentThreadComments); };
+      slot.appendChild(btn);
+    }
   };
 
-  roots.forEach(function(c) { renderReplies(c.id); });
+  visibleRoots.forEach(function(c) { renderReplies(c.id); });
 
-  // Re-anchor input area if needed
+  if (roots.length > rootLimit) {
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'load-more-comments';
+    moreBtn.textContent = 'Load More Comments';
+    moreBtn.onclick = function() { commentRootDisplayCount[postId] = rootLimit + 20; renderThreadComments(currentThreadComments); };
+    container.appendChild(moreBtn);
+  }
+
   const inputArea = document.getElementById('thread-input-area');
   const defaultSlot = document.getElementById('thread-input-default-slot');
   if (inputArea && !inputArea.parentElement && defaultSlot) {
     defaultSlot.appendChild(inputArea);
   }
 
-  // Move input under active reply target if set
   if (typeof activeReplyId !== 'undefined' && activeReplyId) {
     const slot = document.getElementById(`reply-slot-${activeReplyId}`);
     if (slot && inputArea && !slot.contains(inputArea)) {
@@ -2827,6 +3086,9 @@ function renderThreadMainPost(postId) {
     const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
     const formattedBody = formatContent(postText, post.tags, post.mentions);
     const tagListHtml = renderTagList(post.tags || []);
+    const pollBlock = renderPollBlock(post);
+    const locationBadge = renderLocationBadge(post.location);
+    const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
@@ -2870,6 +3132,9 @@ function renderThreadMainPost(postId) {
             <h2 id="thread-view-title" data-post-id="${post.id}" style="font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; line-height: 1.3;">${escapeHtml(post.title)}</h2>
             <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${formattedBody}</p>
             ${tagListHtml}
+            ${locationBadge}
+            ${scheduledChip}
+            ${pollBlock}
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span></div>
             <div class="card-actions" style="border:none; padding: 10px 0; justify-content: space-around;">
@@ -3238,6 +3503,10 @@ window.renderDiscover = async function() {
 
     const renderPostsSection = function() {
         let filteredPosts = allPosts;
+        filteredPosts = filteredPosts.filter(function(post) {
+            if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
+            return true;
+        });
         if(discoverSearchTerm) {
             filteredPosts = allPosts.filter(function(p) {
                 const body = typeof p.content === 'string' ? p.content : (p.content?.text || '');
@@ -3256,6 +3525,8 @@ window.renderDiscover = async function() {
             filteredPosts.forEach(function(post) {
                 const author = userCache[post.userId] || {name: post.author};
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
+                const locationBadge = renderLocationBadge(post.location);
+                const pollBlock = renderPollBlock(post);
                 container.innerHTML += `
                     <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'}; cursor:pointer;" onclick="window.openThread('${post.id}')">
                         <div class="card-content" style="padding:1rem;">
@@ -3268,6 +3539,8 @@ window.renderDiscover = async function() {
                             </div>
                             <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                             <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
+                            ${locationBadge}
+                            ${pollBlock}
                         </div>
                     </div>`;
             });
@@ -3400,7 +3673,12 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
 
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
-    const userPosts = allPosts.filter(function(p) { return p.userId === uid && (isSelfView || p.visibility !== 'private'); });
+    const userPosts = allPosts.filter(function(p) {
+        if (p.userId !== uid) return false;
+        if (!isSelfView && p.visibility === 'private') return false;
+        if (!isSelfView && isPostScheduledInFuture(p)) return false;
+        return true;
+    });
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
@@ -3462,6 +3740,9 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                 const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
                 const formattedBody = formatContent(postText, post.tags, post.mentions);
                 const tagListHtml = renderTagList(post.tags || []);
+                const pollBlock = renderPollBlock(post);
+                const locationBadge = renderLocationBadge(post.location);
+                const scheduledChip = isSelfView && isPostScheduledInFuture(post) ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
 
             let mediaContent = '';
             if (post.mediaUrl) {
@@ -3487,6 +3768,9 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                         <p>${formattedBody}</p>
                         ${tagListHtml}
+                        ${locationBadge}
+                        ${scheduledChip}
+                        ${pollBlock}
                         ${mediaContent}
                     </div>
                     <div class="card-actions">
@@ -3550,6 +3834,9 @@ function renderProfile() {
             const inactive = membership && membership.status !== 'active';
             const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
             const badgeLabel = inactive ? `${post.category} (Not a member anymore)` : post.category;
+            const pollBlock = renderPollBlock(post);
+            const locationBadge = renderLocationBadge(post.location);
+            const scheduledChip = isPostScheduledInFuture(post) ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
 
             feedContainer.innerHTML += `
                 <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
@@ -3563,6 +3850,9 @@ function renderProfile() {
                         </div>
                         <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                         <p>${escapeHtml(cleanText(post.content))}</p>
+                        ${locationBadge}
+                        ${scheduledChip}
+                        ${pollBlock}
                     </div>
                 </div>`;
         });
@@ -3607,9 +3897,10 @@ function renderCategoryPills() {
     divider.className = 'category-divider';
     header.appendChild(divider);
 
-    const dynamic = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(10)])).filter(function(name) {
+    const dynamicFull = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(20)])).filter(function(name) {
         return name && !anchors.includes(name);
-    }).slice(0, 10);
+    });
+    const dynamic = dynamicFull.slice(0, categoryVisibleCount);
 
     dynamic.forEach(function(name) {
         const pill = document.createElement('div');
@@ -3618,6 +3909,14 @@ function renderCategoryPills() {
         pill.onclick = function() { window.setCategory(name); };
         header.appendChild(pill);
     });
+
+    if (dynamicFull.length > categoryVisibleCount) {
+        const more = document.createElement('button');
+        more.className = 'category-pill load-more';
+        more.textContent = 'Load More';
+        more.onclick = function() { categoryVisibleCount += 10; renderCategoryPills(); };
+        header.appendChild(more);
+    }
 }
 
 window.setCategory = function(c) {
@@ -3739,7 +4038,9 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
     activeOptionsPost = { id: postId, ownerId, context };
     const dropdown = document.getElementById('post-options-dropdown');
     const deleteBtn = document.getElementById('dropdown-delete-btn');
+    const editBtn = document.getElementById('dropdown-edit-btn');
     if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if(editBtn) editBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
     if (dropdown && event && event.currentTarget) {
         dropdown.style.display = 'block';
         const rect = event.currentTarget.getBoundingClientRect();
@@ -3752,11 +4053,53 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
 };
 
 window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
-window.handlePostOptionSelect = function(action) { closePostOptionsDropdown(); if(action === 'report') return window.openReportModal(); if(action === 'delete') return window.confirmDeletePost(); }
+window.handlePostOptionSelect = function(action) {
+    closePostOptionsDropdown();
+    if(action === 'report') return window.openReportModal();
+    if(action === 'delete') return window.confirmDeletePost();
+    if(action === 'edit') return window.beginEditPost();
+}
 window.openReportModal = function() { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if(opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'flex'; }
 window.closeReportModal = function() { const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'none'; }
 window.submitReport = async function() { if(!requireAuth()) return; if(!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if(!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if(detailEl) detailEl.value = ''; if(categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch(e) { console.error(e); toast('Could not submit report.', 'error'); } }
 window.confirmDeletePost = async function() { if(!activeOptionsPost || !activeOptionsPost.id) return; if(!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if(!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function(p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if(currentViewId === 'profile') renderProfile(); if(currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if(activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if(threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch(e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
+
+window.beginEditPost = function() {
+    if (!activeOptionsPost || !activeOptionsPost.id) return;
+    const post = allPosts.find(function(p) { return p.id === activeOptionsPost.id; });
+    if (!post || !currentUser || post.userId !== currentUser.uid) return toast('You can only edit your own post.', 'error');
+    currentEditPost = post;
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    if (title) title.value = post.title || '';
+    if (content) content.value = typeof post.content === 'object' ? (post.content.text || '') : (post.content || '');
+    composerTags = Array.isArray(post.tags) ? post.tags.map(normalizeTagValue).filter(Boolean) : [];
+    composerMentions = normalizeMentionsField(post.mentions || []);
+    composerPoll = post.poll ? { title: post.poll.title || '', options: (post.poll.options || ['','']).slice(0,5) } : { title: '', options: ['', ''] };
+    composerScheduledFor = formatTimestampForInput(post.scheduledFor);
+    composerLocation = post.location || '';
+    selectedCategoryId = post.categoryId || selectedCategoryId;
+    renderComposerTags();
+    renderComposerMentions();
+    renderPollOptions();
+    const scheduleInput = document.getElementById('schedule-input');
+    if (scheduleInput) scheduleInput.value = composerScheduledFor;
+    setComposerLocation(composerLocation);
+    const tagInput = document.getElementById('tag-input');
+    if (tagInput) tagInput.value = '';
+    const mentionInput = document.getElementById('mention-input');
+    if (mentionInput) mentionInput.value = '';
+    if (post.mediaUrl) {
+        const preview = document.getElementById('img-preview-tag');
+        const previewContainer = document.getElementById('img-preview-container');
+        if (preview && previewContainer) {
+            preview.src = post.mediaUrl;
+            previewContainer.style.display = 'block';
+        }
+    }
+    syncComposerMode();
+    window.toggleCreateModal(true);
+};
 
 // --- Messaging (DMs) ---
 window.toggleNewChatModal = function(show = true) {
