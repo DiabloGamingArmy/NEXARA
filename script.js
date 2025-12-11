@@ -2548,7 +2548,7 @@ function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
     if (!preview) return;
 
-    const tempUser = {
+    let tempUser = {
         ...userProfile,
         photoURL: src || '',
         avatarColor:
@@ -2556,7 +2556,7 @@ function updateSettingsAvatarPreview(src) {
             computeAvatarColor(currentUser?.uid || 'user')
     };
 
-    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
     applyAvatarToElement(preview, tempUser, { size: 72 });
     updateRemovePhotoButtonState();
 }
