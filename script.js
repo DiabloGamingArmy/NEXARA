@@ -82,6 +82,17 @@ const DEFAULT_DESTINATION_CONFIG = {
 let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
+const MOBILE_SECTION_LABELS = {
+    feed: 'Home',
+    live: 'Live',
+    videos: 'Videos',
+    messages: 'Messages',
+    discover: 'Discover',
+    saved: 'Saved',
+    profile: 'Profile',
+    staff: 'Staff',
+    thread: 'Post'
+};
 
 const BRAND_LOGO_VARIANTS = {
     icon: 'https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6',
@@ -124,6 +135,20 @@ function getReviewDisplay(reviewValue) {
         return { label: 'Misleading/False', className: 'review-misleading' };
     }
     return { label: 'Audit', className: '' };
+}
+
+function getVerificationState(post = {}) {
+    const status = (post.reviewStatus || post.trustStatus || '').toLowerCase();
+    if (status === 'verified' || post.trustScore > 2) {
+        return { label: 'Verified', className: 'verified', bannerText: 'This post is verified by the community.' };
+    }
+    if (status === 'false' || status === 'misleading' || post.trustScore < -1) {
+        return { label: 'False', className: 'false', bannerText: 'This post has been flagged as false by the community.' };
+    }
+    if (status === 'disputed' || status === 'citation') {
+        return { label: 'Disputed', className: 'disputed', bannerText: 'This post is disputed and may require more context.' };
+    }
+    return null;
 }
 
 function getPostOptionsButton(post, context = 'feed', iconSize = '1.1rem') {
@@ -1020,8 +1045,12 @@ function setComposerError(message = '') {
 function syncPostButtonState() {
     const btn = document.getElementById('publishBtn');
     const helper = document.getElementById('destination-helper');
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    const fileInput = document.getElementById('postFile');
     if (!btn) return;
-    btn.disabled = false;
+    const hasContent = (title && title.value.trim()) || (content && content.value.trim()) || (fileInput && fileInput.files && fileInput.files[0]);
+    btn.disabled = !!composerError || !hasContent;
     if (helper) {
         helper.style.display = composerError ? 'flex' : 'none';
         helper.textContent = composerError || '';
@@ -1556,8 +1585,29 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'staff') { renderStaffConsole(); }
 
     currentViewId = viewId;
+    updateMobileNavState(viewId);
     window.scrollTo(0, 0);
 };
+
+function updateMobileNavState(viewId = 'feed') {
+    const label = MOBILE_SECTION_LABELS[viewId] || 'Explore';
+    const labelEl = document.getElementById('mobile-section-label');
+    if (labelEl) labelEl.textContent = label;
+    document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.view === viewId);
+    });
+}
+
+function bindMobileNav() {
+    document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const view = btn.dataset.view;
+            if (view) window.navigateTo(view);
+        });
+    });
+    const fab = document.getElementById('mobile-fab');
+    if (fab) fab.onclick = function() { window.openMobileComposer(); };
+}
 
 window.goBack = function () {
     if (navStack.length === 0) {
@@ -1711,6 +1761,8 @@ function getPostHTML(post) {
         const pollBlock = renderPollBlock(post);
         const locationBadge = renderLocationBadge(post.location);
         const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+        const verification = getVerificationState(post);
+        const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
         let mediaContent = '';
         if (post.mediaUrl) {
@@ -1760,6 +1812,7 @@ function getPostHTML(post) {
                 </div>
                 <div class="card-content" onclick="window.openThread('${post.id}')">
                     <div class="category-badge">${post.category}</div>
+                    ${verificationChip}
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                     <p>${formattedBody}</p>
                     ${tagListHtml}
@@ -3134,6 +3187,9 @@ function renderThreadMainPost(postId) {
     const pollBlock = renderPollBlock(post);
     const locationBadge = renderLocationBadge(post.location);
     const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+    const verification = getVerificationState(post);
+    const verificationBanner = verification && verification.bannerText ? `<div class="verification-banner ${verification.className}"><i class="ph ph-warning"></i><div>${verification.bannerText}</div></div>` : '';
+    const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
     const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
@@ -3174,6 +3230,7 @@ function renderThreadMainPost(postId) {
                     ${trustBadge}
                 </div>
             </div>
+            ${verificationBanner}
             <h2 id="thread-view-title" data-post-id="${post.id}" style="font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; line-height: 1.3;">${escapeHtml(post.title)}</h2>
             <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${formattedBody}</p>
             ${tagListHtml}
@@ -3181,7 +3238,7 @@ function renderThreadMainPost(postId) {
             ${scheduledChip}
             ${pollBlock}
             ${mediaContent}
-            <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span></div>
+            <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}</div>
             <div class="card-actions" style="border:none; padding: 10px 0; justify-content: space-around;">
                 <button id="thread-like-btn" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}; font-size: 1.2rem;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span></button>
                 <button id="thread-dislike-btn" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}; font-size: 1.2rem;"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span style="font-size:1rem; margin-left:5px;">${post.dislikes || 0}</span></button>
@@ -4663,6 +4720,67 @@ window.submitVerificationRequest = async function() {
     await addDoc(collection(db, 'verificationRequests'), { userId: currentUser.uid, category, evidenceLinks: links, notes, status: 'pending', createdAt: serverTimestamp() });
     toggleVerificationModal(false);
 };
+
+// --- Mobile shell helpers ---
+window.toggleDiscoverSearch = function() {
+    window.navigateTo('discover');
+    const discoverInput = document.querySelector('#view-discover input[type="text"]');
+    if (discoverInput) discoverInput.focus();
+    window.closeMobileActionSheet();
+};
+
+window.openMobileActionSheet = function() {
+    const sheet = document.getElementById('mobile-action-sheet');
+    if (sheet) sheet.classList.add('show');
+};
+
+window.closeMobileActionSheet = function() {
+    const sheet = document.getElementById('mobile-action-sheet');
+    if (sheet) sheet.classList.remove('show');
+};
+
+window.openMobileComposer = function() {
+    closeMobileActionSheet();
+    const sheet = document.getElementById('mobile-composer-sheet');
+    const input = document.getElementById('mobile-compose-input');
+    const existingContent = document.getElementById('postContent');
+    if (input && existingContent) input.value = existingContent.value || '';
+    if (sheet) sheet.classList.add('show');
+    syncMobileComposerState();
+    if (input) input.focus();
+};
+
+window.closeMobileComposer = function() {
+    const sheet = document.getElementById('mobile-composer-sheet');
+    if (sheet) sheet.classList.remove('show');
+};
+
+window.syncMobileComposerState = function() {
+    const input = document.getElementById('mobile-compose-input');
+    const submit = document.getElementById('mobile-compose-submit');
+    const hasContent = input && input.value.trim().length > 0;
+    if (submit) submit.disabled = !hasContent;
+};
+
+window.triggerComposerPost = function() {
+    const input = document.getElementById('mobile-compose-input');
+    const content = document.getElementById('postContent');
+    if (!input || !content) return;
+    if (!input.value.trim()) return;
+    content.value = input.value;
+    closeMobileComposer();
+    window.toggleCreateModal(true);
+    syncPostButtonState();
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    bindMobileNav();
+    syncMobileComposerState();
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    if (title) title.addEventListener('input', syncPostButtonState);
+    if (content) content.addEventListener('input', syncPostButtonState);
+});
 
 // --- Security Rules Snippet (reference) ---
 // See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
