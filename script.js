@@ -4,7 +4,7 @@ import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTim
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
-// --- Firebase Configuration ---
+// --- Firebase Configuration --- 
 const firebaseConfig = {
     apiKey: "AIzaSyDg9Duz3xicI3pvvOtLCrV1DJRWDI0NtYA",
     authDomain: "spike-streaming-service.firebaseapp.com",
