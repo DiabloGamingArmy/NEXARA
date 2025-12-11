@@ -124,6 +124,24 @@ function refreshBrandLogos() {
 }
 window.refreshBrandLogos = refreshBrandLogos;
 
+function showSplash() {
+    const splash = document.getElementById('nexera-splash');
+    if (!splash) return;
+    splash.style.display = 'flex';
+    splash.classList.remove('nexera-splash-hidden');
+    splash.style.pointerEvents = 'auto';
+}
+
+function hideSplash() {
+    const splash = document.getElementById('nexera-splash');
+    if (!splash) return;
+    splash.classList.add('nexera-splash-hidden');
+    const TRANSITION_BUFFER = 520;
+    setTimeout(function () {
+        splash.style.display = 'none';
+    }, TRANSITION_BUFFER);
+}
+
 function getReviewDisplay(reviewValue) {
     if (reviewValue === 'verified') {
         return { label: 'Verified', className: 'review-verified' };
@@ -539,82 +557,110 @@ async function ensureOfficialCategories() {
 }
 
 // --- Initialization & Auth Listener ---
-function initApp() {
+function initApp(onReady) {
+    let readyResolver;
+    const readyPromise = new Promise(function (resolve) { readyResolver = resolve; });
+    const markReady = function () {
+        if (markReady.done) return;
+        markReady.done = true;
+        if (typeof onReady === 'function') onReady();
+        if (readyResolver) readyResolver();
+    };
+
     onAuthStateChanged(auth, async function (user) {
         const loadingOverlay = document.getElementById('loading-overlay');
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
 
-        if (user) {
-            currentUser = user;
-            console.log("User logged in:", user.uid);
+        try {
+            if (user) {
+                currentUser = user;
+                console.log("User logged in:", user.uid);
 
-            try {
-                const claimResult = await getClaims();
-                updateAuthClaims(claimResult);
-                const ensuredSnap = await ensureUserDocument(user);
-                const docSnap = ensuredSnap;
+                try {
+                    const claimResult = await getClaims();
+                    updateAuthClaims(claimResult);
+                    const ensuredSnap = await ensureUserDocument(user);
+                    const docSnap = ensuredSnap;
 
-                // Fetch User Profile
-                if (docSnap.exists()) {
-                    userProfile = { ...userProfile, ...normalizeUserProfileData(docSnap.data()) };
-                    userCache[user.uid] = userProfile;
+                    // Fetch User Profile
+                    if (docSnap.exists()) {
+                        userProfile = { ...userProfile, ...normalizeUserProfileData(docSnap.data()) };
+                        userCache[user.uid] = userProfile;
 
-                    // Normalize role storage
-                    userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
-                    recentLocations = Array.isArray(userProfile.locationHistory) ? userProfile.locationHistory.slice() : [];
+                        // Normalize role storage
+                        userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
+                        recentLocations = Array.isArray(userProfile.locationHistory) ? userProfile.locationHistory.slice() : [];
 
-                    await backfillAvatarColorIfMissing(user.uid, userProfile);
+                        await backfillAvatarColorIfMissing(user.uid, userProfile);
 
-                    // Apply stored theme preference
-                    const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
-                    userProfile.theme = savedTheme;
-                    applyTheme(savedTheme);
+                        // Apply stored theme preference
+                        const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
+                        userProfile.theme = savedTheme;
+                        applyTheme(savedTheme);
 
-                    // Restore 'following' state locally
-                    if (userProfile.following) {
-                        userProfile.following.forEach(function (uid) { followedUsers.add(uid); });
+                        // Restore 'following' state locally
+                        if (userProfile.following) {
+                            userProfile.following.forEach(function (uid) { followedUsers.add(uid); });
+                        }
+                        const staffNav = document.getElementById('nav-staff');
+                        if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
+                    } else {
+                        // Create new profile placeholder if it doesn't exist
+                        userProfile.email = user.email || "";
+                        userProfile.name = user.displayName || "Nexera User";
+                        const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
+                        userProfile.theme = storedTheme;
+                        userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
+                        userProfile.locationHistory = [];
+                        recentLocations = [];
+                        applyTheme(storedTheme);
+                        const staffNav = document.getElementById('nav-staff');
+                        if (staffNav) staffNav.style.display = 'none';
                     }
-                    const staffNav = document.getElementById('nav-staff');
-                    if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
-                } else {
-                    // Create new profile placeholder if it doesn't exist
-                    userProfile.email = user.email || "";
-                    userProfile.name = user.displayName || "Nexera User";
-                    const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
-                    userProfile.theme = storedTheme;
-                    userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
-                    userProfile.locationHistory = [];
-                    recentLocations = [];
-                    applyTheme(storedTheme);
-                    const staffNav = document.getElementById('nav-staff');
-                    if (staffNav) staffNav.style.display = 'none';
+                } catch (e) {
+                    console.error("Profile Load Error", e);
                 }
-            } catch (e) {
-                console.error("Profile Load Error", e);
+
+                // UI Transitions
+                if (authScreen) authScreen.style.display = 'none';
+                if (appLayout) appLayout.style.display = 'flex';
+                if (loadingOverlay) loadingOverlay.style.display = 'none';
+
+                // Start Logic
+                await ensureOfficialCategories();
+                startCategoryStreams(user.uid);
+                startDataListener();
+                startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
+                updateTimeCapsule();
+                window.navigateTo('feed', false);
+                renderProfile(); // Pre-render profile
+            } else {
+                currentUser = null;
+                updateAuthClaims({});
+                if (loadingOverlay) loadingOverlay.style.display = 'none';
+                if (appLayout) appLayout.style.display = 'none';
+                if (authScreen) authScreen.style.display = 'flex';
             }
-
-            // UI Transitions
-            if (authScreen) authScreen.style.display = 'none';
-            if (appLayout) appLayout.style.display = 'flex';
-            if (loadingOverlay) loadingOverlay.style.display = 'none';
-
-            // Start Logic
-            await ensureOfficialCategories();
-            startCategoryStreams(user.uid);
-            startDataListener();
-            startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
-            updateTimeCapsule();
-            window.navigateTo('feed', false);
-            renderProfile(); // Pre-render profile
-        } else {
-            currentUser = null;
-            updateAuthClaims({});
-            if (loadingOverlay) loadingOverlay.style.display = 'none';
-            if (appLayout) appLayout.style.display = 'none';
-            if (authScreen) authScreen.style.display = 'flex';
+        } catch (err) {
+            console.error('Initialization error', err);
+        } finally {
+            markReady();
         }
     });
+
+    return readyPromise;
+}
+
+async function initializeNexeraApp() {
+    showSplash();
+    try {
+        refreshBrandLogos();
+        await initApp(hideSplash);
+    } catch (err) {
+        console.error('Failed to initialize Nexera', err);
+        hideSplash();
+    }
 }
 
 function updateTimeCapsule() {
@@ -4780,11 +4826,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
+    initializeNexeraApp();
 });
 
 // --- Security Rules Snippet (reference) ---
 // See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
-
-// Start App
-refreshBrandLogos();
-initApp();
