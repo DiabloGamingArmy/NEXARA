@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
 // --- Firebase Configuration ---
@@ -116,6 +116,7 @@ let userProfile = {
     gender: "Prefer not to say",
     region: "",
     photoURL: "",
+    photoPath: "",
     avatarColor: "",
     theme: "system",
     accountRoles: [],
@@ -196,6 +197,7 @@ function getAccountRoleSet(profile = userProfile) {
 function normalizeUserProfileData(data = {}) {
     const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
     const profile = { ...data, accountRoles };
+    profile.photoPath = data.photoPath || '';
     profile.avatarColor = data.avatarColor || computeAvatarColor(data.username || data.displayName || data.name || 'user');
     return profile;
 }
@@ -271,7 +273,9 @@ const ListenerRegistry = (function () {
     const loggedKeys = new Set();
 
     function devLog(message, key) {
-        const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
+        const shouldLog =
+            window?.location?.hostname === 'localhost' ||
+            window?.__DEV_LISTENER_DEBUG__;
         if (shouldLog && !loggedKeys.has(`${key}-replace`)) {
             console.debug(message);
             loggedKeys.add(`${key}-replace`);
@@ -284,8 +288,15 @@ const ListenerRegistry = (function () {
 
             if (listeners.has(key)) {
                 const existing = listeners.get(key);
-                try { existing(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
-                devLog(`ListenerRegistry: replaced existing listener for key "${key}"`, key);
+                try {
+                    existing();
+                } catch (e) {
+                    console.warn('Listener cleanup failed for', key, e);
+                }
+                devLog(
+                    `ListenerRegistry: replaced existing listener for key "${key}"`,
+                    key
+                );
             }
 
             listeners.set(key, unsubscribeFn);
@@ -293,18 +304,30 @@ const ListenerRegistry = (function () {
                 if (!listeners.has(key)) return;
                 const current = listeners.get(key);
                 listeners.delete(key);
-                try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                try {
+                    current();
+                } catch (e) {
+                    console.warn('Listener cleanup failed for', key, e);
+                }
             };
         },
         unregister(key) {
             if (!listeners.has(key)) return;
             const unsub = listeners.get(key);
             listeners.delete(key);
-            try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            try {
+                unsub();
+            } catch (e) {
+                console.warn('Listener cleanup failed for', key, e);
+            }
         },
         clearAll() {
             listeners.forEach(function (unsub, key) {
-                try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                try {
+                    unsub();
+                } catch (e) {
+                    console.warn('Listener cleanup failed for', key, e);
+                }
             });
             listeners.clear();
         },
@@ -318,8 +341,13 @@ const ListenerRegistry = (function () {
 })();
 
 window.ListenerRegistry = ListenerRegistry;
-window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
-window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
+window.debugActiveListeners = function () {
+    return ListenerRegistry.debugPrint();
+};
+window.addEventListener('beforeunload', function () {
+    ListenerRegistry.clearAll();
+});
+
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -589,12 +617,14 @@ async function ensureUserDocument(user) {
     const ref = doc(db, "users", user.uid);
     const snap = await getDoc(ref);
     const now = serverTimestamp();
+
     if (!snap.exists()) {
         const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
         await setDoc(ref, {
             displayName: user.displayName || "Nexera User",
             username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
             photoURL: user.photoURL || "",
+            photoPath: "",
             avatarColor,
             bio: "",
             website: "",
@@ -608,25 +638,11 @@ async function ensureUserDocument(user) {
         }, { merge: true });
         return await getDoc(ref);
     }
+
     await setDoc(ref, { updatedAt: now }, { merge: true });
     return await getDoc(ref);
 }
 
-async function backfillAvatarColorIfMissing(uid, profile = {}) {
-    if (!uid || avatarColorBackfilled) return;
-    if (!profile.avatarColor) {
-        const color = computeAvatarColor(uid || profile.username || profile.name || 'user');
-        profile.avatarColor = color;
-        try {
-            await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
-            avatarColorBackfilled = true;
-        } catch (e) {
-            console.warn('Unable to backfill avatar color', e);
-        }
-    } else {
-        avatarColorBackfilled = true;
-    }
-}
 
 function shouldRerenderThread(newData, prevData = {}) {
     const fieldsToWatch = ['title', 'content', 'mediaUrl', 'type', 'category', 'trustScore'];
@@ -682,6 +698,7 @@ window.handleSignup = async function (e) {
             followersCount: 0,
             following: [],
             photoURL: "",
+            photoPath: "",
             avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
             bio: "",
             website: "",
@@ -2039,12 +2056,47 @@ window.createPost = async function() {
 }
 
 // --- Settings & Modals ---
+function updateRemovePhotoButtonState() {
+    const btn = document.getElementById('remove-photo-btn');
+    if (!btn) return;
+    const hasPhoto = !!(userProfile.photoURL || (auth.currentUser && auth.currentUser.photoURL));
+    btn.disabled = !hasPhoto;
+    btn.classList.toggle('disabled', !hasPhoto);
+}
+
+async function tryDeleteProfilePhotoFromStorage(photoURL = '', photoPath = '') {
+    if (!photoURL && !photoPath) return { deleted: false, reason: 'no-photo' };
+    try {
+        if (photoPath) {
+            await deleteObject(ref(storage, photoPath));
+            return { deleted: true };
+        }
+        const bucketHint = storage?.app?.options?.storageBucket || '';
+        if (photoURL && bucketHint && photoURL.includes(bucketHint)) {
+            await deleteObject(ref(storage, photoURL));
+            return { deleted: true };
+        }
+    } catch (err) {
+        console.warn('Storage delete failed', err);
+        return { deleted: false, error: err };
+    }
+    return { deleted: false };
+}
+
 function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
-    if(!preview) return;
+    if (!preview) return;
 
-    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    const tempUser = {
+        ...userProfile,
+        photoURL: src || '',
+        avatarColor:
+            userProfile.avatarColor ||
+            computeAvatarColor(currentUser?.uid || 'user')
+    };
+
     applyAvatarToElement(preview, tempUser, { size: 72 });
+    updateRemovePhotoButtonState();
 }
 
 function syncThemeRadios(themeValue) {
@@ -2086,6 +2138,7 @@ window.toggleSettingsModal = function(show) {
         }
         syncThemeRadios(userProfile.theme || 'system');
         updateSettingsAvatarPreview(userProfile.photoURL);
+        updateRemovePhotoButtonState();
 
         const uploadInput = document.getElementById('set-pic-file');
         const cameraInput = document.getElementById('set-pic-camera');
@@ -2123,18 +2176,21 @@ window.toggleSettingsModal = function(show) {
          return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
      }
 
-     let photoURL = userProfile.photoURL;
-     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
-     if(newPhoto) {
-         const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
-         photoURL = await uploadFileToStorage(newPhoto, path);
-     } else if(manualPhoto) {
-         photoURL = manualPhoto;
-     }
+    let photoURL = userProfile.photoURL;
+    let photoPath = userProfile.photoPath || '';
+    const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
+    if(newPhoto) {
+        const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
+        photoURL = await uploadFileToStorage(newPhoto, path);
+        photoPath = path;
+    } else if(manualPhoto) {
+        photoURL = manualPhoto;
+        photoPath = '';
+    }
 
-     const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL };
-     userProfile = { ...userProfile, ...updates };
-     userCache[currentUser.uid] = userProfile;
+    const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
+    userProfile = { ...userProfile, ...updates };
+    userCache[currentUser.uid] = userProfile;
 
      try {
          await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
@@ -2154,6 +2210,62 @@ function handleSettingsFileChange(inputEl) {
     const reader = new FileReader();
     reader.onload = function(e) { return updateSettingsAvatarPreview(e.target.result); };
     reader.readAsDataURL(inputEl.files[0]);
+    updateRemovePhotoButtonState();
+}
+
+window.removeProfilePhoto = async function() {
+    if (!currentUser || !auth.currentUser) return toast('You need to be signed in.', 'error');
+    const ok = confirm('Remove your profile photo?');
+    if (!ok) return;
+
+    const existingPhotoURL = userProfile.photoURL || auth.currentUser.photoURL || '';
+    const existingPhotoPath = userProfile.photoPath || '';
+    let deleteResult = { deleted: false };
+
+    try {
+        deleteResult = await tryDeleteProfilePhotoFromStorage(existingPhotoURL, existingPhotoPath);
+    } catch (err) {
+        console.warn('Deletion attempt error', err);
+    }
+
+    try {
+        await updateProfile(auth.currentUser, { photoURL: '' });
+    } catch (err) {
+        console.warn('Auth photo reset failed', err);
+    }
+
+    try {
+        await setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+    } catch (err) {
+        console.error('Failed to clear Firestore photo data', err);
+        toast('Could not update profile photo references', 'error');
+        return;
+    }
+
+    userProfile.photoURL = '';
+    userProfile.photoPath = '';
+    if (userCache[currentUser.uid]) {
+        userCache[currentUser.uid].photoURL = '';
+        userCache[currentUser.uid].photoPath = '';
+    }
+
+    updateSettingsAvatarPreview('');
+    renderProfile();
+    renderFeed();
+    if (activePostId) renderThreadMainPost(activePostId);
+
+    updateRemovePhotoButtonState();
+
+    if (!existingPhotoURL && !existingPhotoPath) {
+        toast('No profile photo to remove', 'info');
+        return;
+    }
+
+    if (deleteResult.deleted) {
+        toast('Profile photo removed', 'info');
+    } else {
+        toast('Could not delete photo from storage, but removed references', 'error');
+    }
 }
 
 // --- Peer Review System ---

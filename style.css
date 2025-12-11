@@ -342,6 +342,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .icon-pill::after { content: ''; position: absolute; inset: 0; background: linear-gradient(120deg, transparent 10%, rgba(0, 242, 234, 0.18) 40%, transparent 70%); transform: translateX(-130%); }
 .icon-pill:hover { border-color: var(--primary); color: var(--primary); box-shadow: 0 12px 25px rgba(0, 150, 200, 0.18); transform: translateY(-1px); }
 .icon-pill:hover::after { animation: shimmerMove 1.2s ease forwards; }
+.icon-pill.disabled, .icon-pill:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; border-color: var(--border); color: var(--text-muted); }
 .icon-pill:active { transform: translateY(0); }
 .icon-pill:focus-visible { outline: none; border-color: rgba(0, 242, 234, 0.65); box-shadow: 0 0 0 3px rgba(0, 242, 234, 0.18); }
 
