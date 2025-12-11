@@ -84,9 +84,9 @@ let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
 
 const BRAND_LOGO_VARIANTS = {
-    icon: 'https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media',
-    dark: 'https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media',
-    light: 'https://firebasestorage.googleapis.com/v0/b/<your-project-id>.appspot.com/o/apps%2Fnexera%2Fassets%2Ficons%2Fblackicon.png?alt=media'
+    icon: '/icon.png',
+    dark: '/whiteicon.png',
+    light: '/blackicon.png'
 };
 
 function resolveBrandLogoVariant(el) {
@@ -640,6 +640,7 @@ async function ensureUserDocument(user) {
     const ref = doc(db, "users", user.uid);
     const snap = await getDoc(ref);
     const now = serverTimestamp();
+
     if (!snap.exists()) {
         const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
         await setDoc(ref, {
@@ -661,6 +662,7 @@ async function ensureUserDocument(user) {
         }, { merge: true });
         return await getDoc(ref);
     }
+
     await setDoc(ref, { updatedAt: now }, { merge: true });
     return await getDoc(ref);
 }
@@ -2209,9 +2211,17 @@ async function searchMentionSuggestions(term = '') {
         return;
     }
     try {
-        const userQuery = query(collection(db, 'users'), orderBy('username'), startAt(cleaned), endAt(cleaned + '\uf8ff'), limit(5));
+        const userQuery = query(
+            collection(db, 'users'),
+            orderBy('username'),
+            startAt(cleaned),
+            endAt(cleaned + '\uf8ff'),
+            limit(5)
+        );
         const snap = await getDocs(userQuery);
-        const results = snap.docs.map(function (d) { return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) }; });
+        const results = snap.docs.map(function (d) {
+            return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) };
+        });
         if (!results.length) {
             listEl.innerHTML = '';
             listEl.style.display = 'none';
@@ -2220,7 +2230,18 @@ async function searchMentionSuggestions(term = '') {
         listEl.style.display = 'block';
         listEl.innerHTML = results.map(function (profile) {
             const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
-            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({ uid: profile.id || profile.uid, username: profile.username, displayName: profile.name || profile.nickname || profile.displayName || '', accountRoles: profile.accountRoles || [] }).replace(/'/g, "&apos;")})'>${avatar}<div class="mention-suggestion-meta"><div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div><div class="mention-handle">@${escapeHtml(profile.username || '')}</div></div></button>`;
+            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({
+                uid: profile.id || profile.uid,
+                username: profile.username,
+                displayName: profile.name || profile.nickname || profile.displayName || '',
+                accountRoles: profile.accountRoles || []
+            }).replace(/'/g, "&apos;")})'>
+                ${avatar}
+                <div class="mention-suggestion-meta">
+                    <div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div>
+                    <div class="mention-handle">@${escapeHtml(profile.username || '')}</div>
+                </div>
+            </button>`;
         }).join('');
     } catch (err) {
         console.warn('Mention search failed', err);
@@ -2573,9 +2594,14 @@ async function tryDeleteProfilePhotoFromStorage(photoURL = '', photoPath = '') {
 
 function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
-    if(!preview) return;
+    if (!preview) return;
 
-    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    const tempUser = {
+        ...userProfile,
+        photoURL: src || '',
+        avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user')
+    };
+
     applyAvatarToElement(preview, tempUser, { size: 72 });
     updateRemovePhotoButtonState();
 }
@@ -3492,7 +3518,7 @@ window.renderDiscover = async function() {
                             <div style="font-weight:700;">${escapeHtml(user.name)}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
                         </div>
-                        <button class="follow-btn" style="margin-left:auto;">View</button>
+                        <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
                     </div>`;
             });
         } else if (discoverFilter === 'Users' && discoverSearchTerm) {
