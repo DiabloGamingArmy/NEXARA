@@ -83,6 +83,36 @@ let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
 
+const BRAND_LOGO_VARIANTS = {
+    icon: '/icon.png',
+    dark: '/whiteicon.png',
+    light: '/blackicon.png'
+};
+
+function resolveBrandLogoVariant(el) {
+    if (!el) return BRAND_LOGO_VARIANTS.icon;
+    const variant = el.dataset.logoVariant || 'auto';
+    if (variant === 'icon') return BRAND_LOGO_VARIANTS.icon;
+    if (variant === 'dark') return BRAND_LOGO_VARIANTS.dark;
+    if (variant === 'light') return BRAND_LOGO_VARIANTS.light;
+    const background = el.dataset.logoBackground;
+    if (background === 'dark') return BRAND_LOGO_VARIANTS.dark;
+    if (background === 'light') return BRAND_LOGO_VARIANTS.light;
+    const prefersLight = document.body.classList.contains('light-mode');
+    return prefersLight ? BRAND_LOGO_VARIANTS.light : BRAND_LOGO_VARIANTS.dark;
+}
+
+function refreshBrandLogos() {
+    const logoNodes = document.querySelectorAll('[data-logo-variant]');
+    logoNodes.forEach(function (node) {
+        const resolved = resolveBrandLogoVariant(node);
+        if (node.getAttribute('src') !== resolved) {
+            node.setAttribute('src', resolved);
+        }
+    });
+}
+window.refreshBrandLogos = refreshBrandLogos;
+
 function getReviewDisplay(reviewValue) {
     if (reviewValue === 'verified') {
         return { label: 'Verified', className: 'review-verified' };
@@ -511,8 +541,6 @@ function initApp() {
 
                     await backfillAvatarColorIfMissing(user.uid, userProfile);
 
-                    await backfillAvatarColorIfMissing(user.uid, userProfile);
-
                     // Apply stored theme preference
                     const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
                     userProfile.theme = savedTheme;
@@ -591,6 +619,7 @@ function applyTheme(preference = 'system') {
     const resolved = preference === 'system' ? getSystemTheme() : preference;
     document.body.classList.toggle('light-mode', resolved === 'light');
     document.body.dataset.themePreference = preference;
+    refreshBrandLogos();
     try { localStorage.setItem('nexera-theme', preference); }
     catch (e) { console.warn('Theme storage blocked'); }
 }
@@ -2548,15 +2577,12 @@ function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
     if (!preview) return;
 
-    let tempUser = {
+    const tempUser = {
         ...userProfile,
         photoURL: src || '',
-        avatarColor:
-            userProfile.avatarColor ||
-            computeAvatarColor(currentUser?.uid || 'user')
+        avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user')
     };
 
-    tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
     applyAvatarToElement(preview, tempUser, { size: 72 });
     updateRemovePhotoButtonState();
 }
@@ -4623,4 +4649,5 @@ window.submitVerificationRequest = async function() {
 // See firestore.rules for suggested rules ensuring users write their own content and staff-only access.
 
 // Start App
+refreshBrandLogos();
 initApp();

@@ -55,6 +55,13 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     animation: gradientFlow 6s ease infinite;
 }
 
+.brand-logo { display: block; object-fit: contain; }
+.brand-logo-splash { width: 96px; height: 96px; margin-bottom: 1.25rem; }
+.brand-logo-auth { width: 90px; height: 90px; margin-bottom: 1.25rem; filter: drop-shadow(0 10px 25px rgba(0,0,0,0.35)); }
+.brand-logo-nav { width: 36px; height: 36px; border-radius: 12px; }
+.brand-nav { display: flex; align-items: center; gap: 10px; font-size: 1.8rem; font-weight: 900; cursor: pointer; }
+.brand-wordmark { font-size: 1.5rem; font-weight: 900; }
+
 /* Layout & Common */
 .app-layout { display: none; min-height: 100vh; width: 100%; }
 .sidebar-left, .sidebar-right { position: sticky; top: 0; height: 100vh; flex-shrink: 0; padding: 2rem 1.5rem; }

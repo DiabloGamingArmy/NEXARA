@@ -16,15 +16,18 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="/icon.png">
+    <link rel="shortcut icon" href="/icon.png">
+    <link rel="apple-touch-icon" href="/icon.png">
 </head>
 <body>
 
     <!-- Loading -->
-    <div id="loading-overlay"><div class="spike-logo-load nexara-gradient-text">⚡</div><div style="color:var(--text-muted);">Initializing Nexera...</div></div>
+    <div id="loading-overlay"><img class="brand-logo brand-logo-splash" data-logo-variant="auto" alt="Nexera logo" src="/icon.png"><div style="color:var(--text-muted);">Initializing Nexera...</div></div>
 
     <!-- Auth -->
     <div id="auth-screen">
-        <div class="spike-logo-load nexara-gradient-text">⚡</div>
+        <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo" src="/whiteicon.png">
         <div class="auth-box">
             <h2 class="nexara-gradient-text" style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">NEXERA</h2>
             <p style="color:var(--text-muted); margin-bottom: 1.5rem;">Enter the stream.</p>
@@ -407,8 +410,9 @@
     <!-- App Layout -->
     <div id="app-layout" class="app-layout">
         <nav class="sidebar-left glass-panel">
-            <div class="nexara-gradient-text" style="font-size:1.8rem; font-weight:900; margin-bottom:2rem; cursor:pointer; display:flex; align-items:center; gap:10px;" onclick="window.navigateTo('feed')">
-                <i class="ph-fill ph-asterisk-simple"></i> Nexera
+            <div class="brand-nav" style="margin-bottom:2rem;" onclick="window.navigateTo('feed')">
+                <img class="brand-logo brand-logo-nav" data-logo-variant="auto" alt="Nexera" src="/whiteicon.png">
+                <span class="brand-wordmark nexara-gradient-text">Nexera</span>
             </div>
             <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i class="ph-bold ph-house"></i> Home</a>
             <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i> Live</a>
