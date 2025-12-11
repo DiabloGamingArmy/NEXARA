@@ -6,3 +6,4 @@
  * ensures global namespace availability, and triggers initApp sequence.
  * -------------------------------------------------------------------------
  */
+import './scripts/app.js';
