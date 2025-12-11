@@ -3,6 +3,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "../commentUtils.js";
+import { buildTopBar } from "./ui/topBar.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -33,6 +34,12 @@ let discoverPostsSort = 'recent';
 let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
+let videoSearchTerm = '';
+let videoFilter = 'All';
+let videoSortMode = 'recent';
+let liveSearchTerm = '';
+let liveSortMode = 'featured';
+let liveCategoryFilter = 'All';
 let isInitialLoad = true;
 let composerTags = [];
 let composerMentions = [];
@@ -48,6 +55,7 @@ let tagSuggestionPool = [];
 let mentionSearchTimer = null;
 let currentThreadComments = [];
 let scheduledRenderTimer = null;
+let liveSessionsCache = [];
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -91,6 +99,7 @@ const MOBILE_SECTION_LABELS = {
     saved: 'Saved',
     profile: 'Profile',
     staff: 'Staff',
+    'live-setup': 'Live',
     thread: 'Post'
 };
 
@@ -1615,7 +1624,8 @@ window.navigateTo = function (viewId, pushToStack = true) {
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
         document.querySelectorAll('.nav-item').forEach(function (el) { el.classList.remove('active'); });
-        const navEl = document.getElementById('nav-' + viewId);
+        const navTarget = viewId === 'live-setup' ? 'live' : viewId;
+        const navEl = document.getElementById('nav-' + navTarget);
         if (navEl) navEl.classList.add('active');
     }
 
@@ -1630,7 +1640,12 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'messages') { initConversations(); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') { renderLiveSessions(); }
+    if (viewId === 'live-setup') { renderLiveSetup(); }
     if (viewId === 'staff') { renderStaffConsole(); }
+
+    if (viewId !== 'live-setup' && window.location.hash === '#live-setup') {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
 
     currentViewId = viewId;
     updateMobileNavState(viewId);
@@ -3546,7 +3561,59 @@ window.toggleCommentDislike = async function(commentId, event) {
 
 
 // --- Discovery & Search ---
+function renderDiscoverTopBar() {
+    const container = document.getElementById('discover-topbar');
+    if (!container) return;
+    const topBar = buildTopBar({
+        title: 'Discover',
+        searchPlaceholder: 'Search users, posts...',
+        searchValue: discoverSearchTerm,
+        onSearch: function (event) { window.handleSearchInput(event); },
+        filters: [
+            { label: 'All Results', dataset: { filter: 'All Results' }, active: discoverFilter === 'All Results', onClick: function () { window.setDiscoverFilter('All Results'); } },
+            { label: 'Posts', dataset: { filter: 'Posts' }, active: discoverFilter === 'Posts', onClick: function () { window.setDiscoverFilter('Posts'); } },
+            { label: 'Categories', dataset: { filter: 'Categories' }, active: discoverFilter === 'Categories', onClick: function () { window.setDiscoverFilter('Categories'); } },
+            { label: 'Users', dataset: { filter: 'Users' }, active: discoverFilter === 'Users', onClick: function () { window.setDiscoverFilter('Users'); } },
+            { label: 'Videos', dataset: { filter: 'Videos' }, active: discoverFilter === 'Videos', onClick: function () { window.setDiscoverFilter('Videos'); } },
+            { label: 'Livestreams', dataset: { filter: 'Livestreams' }, active: discoverFilter === 'Livestreams', onClick: function () { window.setDiscoverFilter('Livestreams'); } }
+        ],
+        dropdowns: [
+            {
+                id: 'discover-post-sort',
+                className: 'discover-dropdown',
+                forId: 'posts-sort-select',
+                label: 'Sort:',
+                options: [
+                    { value: 'recent', label: 'Recent' },
+                    { value: 'popular', label: 'Popular' }
+                ],
+                selected: discoverPostsSort,
+                onChange: function (event) { window.handlePostsSortChange(event); },
+                show: discoverFilter === 'Posts'
+            },
+            {
+                id: 'discover-category-sort',
+                className: 'discover-dropdown',
+                forId: 'categories-sort-select',
+                label: 'Categories:',
+                options: [
+                    { value: 'verified_first', label: 'Verified first' },
+                    { value: 'verified_only', label: 'Verified only' },
+                    { value: 'community_first', label: 'Community first' },
+                    { value: 'community_only', label: 'Community only' }
+                ],
+                selected: discoverCategoriesMode,
+                onChange: function (event) { window.handleCategoriesModeChange(event); },
+                show: discoverFilter === 'Categories'
+            }
+        ]
+    });
+    container.innerHTML = '';
+    container.appendChild(topBar);
+}
+
 window.renderDiscover = async function() {
+    renderDiscoverTopBar();
     const container = document.getElementById('discover-results');
     container.innerHTML = "";
 
@@ -4077,7 +4144,7 @@ window.setCategory = function(c) {
 }
 
 window.renderLive = function() { 
-    const container = document.getElementById('live-grid-container'); 
+    const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
     if(!container) return; 
     container.innerHTML = ""; 
 
@@ -4458,12 +4525,97 @@ function pauseAllVideos() {
     });
 }
 
+function handleVideoSearchInput(event) {
+    videoSearchTerm = (event.target.value || '').toLowerCase();
+    renderVideosTopBar();
+    refreshVideoFeedWithFilters();
+}
+
+function handleVideoSortChange(event) {
+    videoSortMode = event.target.value;
+    refreshVideoFeedWithFilters();
+}
+
+function setVideoFilter(filter) {
+    videoFilter = filter;
+    refreshVideoFeedWithFilters();
+}
+
+function renderVideosTopBar() {
+    const container = document.getElementById('videos-topbar');
+    if (!container) return;
+
+    const uploadBtn = document.createElement('button');
+    uploadBtn.className = 'create-btn-sidebar';
+    uploadBtn.style.width = 'auto';
+    uploadBtn.innerHTML = '<i class="ph ph-upload-simple"></i> Create Video';
+    uploadBtn.onclick = function () { window.openVideoUploadModal(); };
+
+    const topBar = buildTopBar({
+        title: 'Videos',
+        searchPlaceholder: 'Search videos...',
+        searchValue: videoSearchTerm,
+        onSearch: handleVideoSearchInput,
+        filters: [
+            { label: 'All Videos', className: 'discover-pill video-filter-pill', active: videoFilter === 'All', onClick: function () { setVideoFilter('All'); } },
+            { label: 'Trending', className: 'discover-pill video-filter-pill', active: videoFilter === 'Trending', onClick: function () { setVideoFilter('Trending'); } },
+            { label: 'Shorts', className: 'discover-pill video-filter-pill', active: videoFilter === 'Shorts', onClick: function () { setVideoFilter('Shorts'); } },
+            { label: 'Saved', className: 'discover-pill video-filter-pill', active: videoFilter === 'Saved', onClick: function () { setVideoFilter('Saved'); } }
+        ],
+        dropdowns: [
+            {
+                id: 'video-sort-select',
+                className: 'discover-dropdown',
+                forId: 'video-sort-select',
+                label: 'Sort:',
+                options: [
+                    { value: 'recent', label: 'Recent' },
+                    { value: 'popular', label: 'Most Viewed' }
+                ],
+                selected: videoSortMode,
+                onChange: handleVideoSortChange,
+                show: true
+            }
+        ],
+        actions: [{ element: uploadBtn }]
+    });
+
+    container.innerHTML = '';
+    container.appendChild(topBar);
+}
+
+function refreshVideoFeedWithFilters() {
+    renderVideosTopBar();
+    let filtered = videosCache.slice();
+
+    if (videoSearchTerm) {
+        filtered = filtered.filter(function (video) {
+            const caption = (video.caption || '').toLowerCase();
+            const tags = (video.hashtags || []).map(function (t) { return (`#${t}`).toLowerCase(); });
+            return caption.includes(videoSearchTerm) || tags.some(function (tag) { return tag.includes(videoSearchTerm); });
+        });
+    }
+
+    if (videoFilter === 'Trending') {
+        filtered = filtered.slice().sort(function (a, b) { return (b.stats?.views || 0) - (a.stats?.views || 0); });
+    } else if (videoFilter === 'Shorts') {
+        filtered = filtered.filter(function (video) { return (video.duration || 0) <= 120 || (video.lengthSeconds || 0) <= 120 || !(video.duration || video.lengthSeconds); });
+    }
+
+    if (videoSortMode === 'popular') {
+        filtered = filtered.slice().sort(function (a, b) { return (b.stats?.views || 0) - (a.stats?.views || 0); });
+    }
+
+    renderVideoFeed(filtered);
+}
+
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
+    renderVideosTopBar();
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
     videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function(snap) {
         videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        renderVideoFeed(videosCache);
+        refreshVideoFeedWithFilters();
     }));
 }
 
@@ -4573,7 +4725,7 @@ window.uploadVideo = async function() {
 
         await setDoc(doc(db, 'videos', videoId), docData);
         videosCache = [{ id: videoId, ...docData }, ...videosCache];
-        renderVideoFeed(videosCache);
+        refreshVideoFeedWithFilters();
         toggleVideoUploadModal(false);
     } catch (err) {
         console.error('Video upload failed', err);
@@ -4609,21 +4761,188 @@ async function incrementVideoViews(videoId) {
 // --- Live Sessions ---
 window.toggleGoLiveModal = function(show = true) { const modal = document.getElementById('go-live-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
 
+window.openGoLiveSetupPage = function() {
+    window.location.hash = '#live-setup';
+    window.navigateTo('live-setup');
+};
+
+function parseViewerCount(value) {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+        let normalized = parseFloat(value.replace(/[^0-9.]/g, '')) || 0;
+        if (value.toLowerCase().includes('m')) normalized *= 1_000_000;
+        else if (value.toLowerCase().includes('k')) normalized *= 1_000;
+        return normalized;
+    }
+    return 0;
+}
+
+function handleLiveSearchInput(event) {
+    liveSearchTerm = (event.target.value || '').toLowerCase();
+    renderLiveDirectoryFromCache();
+}
+
+function setLiveSortMode(mode) {
+    liveSortMode = mode;
+    renderLiveDirectoryFromCache();
+}
+
+function setLiveCategoryFilter(category) {
+    liveCategoryFilter = category;
+    renderLiveDirectoryFromCache();
+}
+
+function renderLiveTopBar() {
+    const container = document.getElementById('live-topbar');
+    if (!container) return;
+
+    const goLiveBtn = document.createElement('button');
+    goLiveBtn.className = 'create-btn-sidebar';
+    goLiveBtn.style.width = 'auto';
+    goLiveBtn.innerHTML = '<i class="ph ph-broadcast"></i> Go Live';
+    goLiveBtn.onclick = function () { window.openGoLiveSetupPage(); };
+
+    const topBar = buildTopBar({
+        title: 'Live Network',
+        searchPlaceholder: 'Search live streams...',
+        searchValue: liveSearchTerm,
+        onSearch: handleLiveSearchInput,
+        filters: [
+            { label: 'All Streams', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'All', onClick: function () { setLiveCategoryFilter('All'); } },
+            { label: 'STEM', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'STEM', onClick: function () { setLiveCategoryFilter('STEM'); } },
+            { label: 'Gaming', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'Gaming', onClick: function () { setLiveCategoryFilter('Gaming'); } },
+            { label: 'Music', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'Music', onClick: function () { setLiveCategoryFilter('Music'); } },
+            { label: 'Sports', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'Sports', onClick: function () { setLiveCategoryFilter('Sports'); } }
+        ],
+        dropdowns: [
+            {
+                id: 'live-sort-select',
+                className: 'discover-dropdown',
+                forId: 'live-sort-select',
+                label: 'Sort:',
+                options: [
+                    { value: 'featured', label: 'Featured' },
+                    { value: 'popular', label: 'Most Popular' },
+                    { value: 'most_viewed', label: 'Most Viewed Right Now' },
+                    { value: 'new', label: 'New' }
+                ],
+                selected: liveSortMode,
+                onChange: function (event) { setLiveSortMode(event.target.value); },
+                show: true
+            }
+        ],
+        actions: [{ element: goLiveBtn }]
+    });
+
+    container.innerHTML = '';
+    container.appendChild(topBar);
+}
+
+function renderLiveFeatured(sessions = []) {
+    const container = document.getElementById('live-featured-row');
+    if (!container) return;
+    container.innerHTML = '';
+    if (sessions.length === 0) {
+        container.innerHTML = '<div class="empty-state">No featured livestreams yet.</div>';
+        return;
+    }
+
+    const featured = sessions.slice(0, 3);
+    featured.forEach(function (session) {
+        const card = document.createElement('div');
+        card.className = 'social-card live-featured-card';
+        card.onclick = function () { window.openLiveSession(session.id); };
+        card.innerHTML = `
+            <div class="live-featured-thumb">
+                <div class="live-featured-badge"><i class="ph-fill ph-broadcast"></i> LIVE</div>
+            </div>
+            <div class="live-featured-body">
+                <div class="live-featured-title">${escapeHtml(session.title || 'Live Session')}</div>
+                <div class="live-featured-meta">
+                    <span class="live-streamer">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>
+                    <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${escapeHtml(session.viewerCount || session.stats?.viewerCount || '0')}</span>
+                </div>
+                <div class="live-featured-category">${escapeHtml(session.category || 'Live')}</div>
+            </div>`;
+        container.appendChild(card);
+    });
+}
+
+function renderLiveGrid(sessions = []) {
+    const grid = document.getElementById('live-directory-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    if (sessions.length === 0) {
+        grid.innerHTML = '<div class="empty-state">No active livestreams.</div>';
+        return;
+    }
+
+    sessions.forEach(function (session) {
+        const card = document.createElement('div');
+        card.className = 'social-card live-directory-card';
+        card.onclick = function () { window.openLiveSession(session.id); };
+        const tags = (session.tags || []).join(', ');
+        card.innerHTML = `
+            <div class="live-directory-thumb">
+                <div class="live-directory-badge">LIVE</div>
+            </div>
+            <div class="live-directory-body">
+                <div class="live-directory-title">${escapeHtml(session.title || 'Live Session')}</div>
+                <div class="live-directory-meta">
+                    <span class="live-streamer">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>
+                    <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${escapeHtml(session.viewerCount || session.stats?.viewerCount || '0')}</span>
+                </div>
+                <div class="live-directory-footer">
+                    <span class="live-directory-category">${escapeHtml(session.category || 'Live')}</span>
+                    <span class="live-directory-tags">${escapeHtml(tags)}</span>
+                </div>
+            </div>`;
+        grid.appendChild(card);
+    });
+}
+
+function renderLiveDirectoryFromCache() {
+    renderLiveTopBar();
+    const divider = document.getElementById('live-divider');
+    const sessions = liveSessionsCache.slice();
+
+    let filtered = sessions;
+    if (liveSearchTerm) {
+        filtered = filtered.filter(function (session) {
+            const title = (session.title || '').toLowerCase();
+            const category = (session.category || '').toLowerCase();
+            const host = (session.hostId || session.author || '').toLowerCase();
+            const tags = (session.tags || []).map(function (t) { return (t || '').toLowerCase(); });
+            return title.includes(liveSearchTerm) || category.includes(liveSearchTerm) || host.includes(liveSearchTerm) || tags.some(function (tag) { return tag.includes(liveSearchTerm); });
+        });
+    }
+
+    if (liveCategoryFilter !== 'All') {
+        filtered = filtered.filter(function (session) { return (session.category || '').toLowerCase() === liveCategoryFilter.toLowerCase(); });
+    }
+
+    if (liveSortMode === 'popular' || liveSortMode === 'most_viewed') {
+        filtered = filtered.slice().sort(function (a, b) { return parseViewerCount(b.viewerCount || b.stats?.viewerCount) - parseViewerCount(a.viewerCount || a.stats?.viewerCount); });
+    } else if (liveSortMode === 'new') {
+        filtered = filtered.slice().sort(function (a, b) { return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0); });
+    }
+
+    renderLiveFeatured(filtered);
+    if (divider) divider.style.display = filtered.length ? 'block' : 'none';
+    renderLiveGrid(filtered);
+}
+
+function renderLiveSetup() {
+    const titleInput = document.getElementById('live-setup-title');
+    if (titleInput && !titleInput.value) titleInput.placeholder = 'Give your stream a standout title';
+}
+
 function renderLiveSessions() {
-    if(liveSessionsUnsubscribe) return;
+    if(liveSessionsUnsubscribe) { renderLiveDirectoryFromCache(); return; }
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
     liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
-        const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        const container = document.getElementById('live-grid-container');
-        if(!container) return;
-        container.innerHTML = '';
-        if(sessions.length === 0) { container.innerHTML = '<div class="empty-state">No live sessions.</div>'; return; }
-        sessions.forEach(function(s) {
-            const card = document.createElement('div');
-            card.className = 'live-card';
-            card.innerHTML = `<div class="live-card-title">${escapeHtml(s.title || 'Live Session')}</div><div class="live-card-meta"><span>${escapeHtml(s.category || '')}</span><span>${(s.tags||[]).join(', ')}</span></div><div style="margin-top:10px;"><button class="icon-pill" onclick="window.openLiveSession('${s.id}')"><i class="ph ph-play"></i> Watch</button></div>`;
-            container.appendChild(card);
-        });
+        liveSessionsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        renderLiveDirectoryFromCache();
     }));
 }
 
@@ -4650,7 +4969,7 @@ window.openLiveSession = function(sessionId) {
         ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
     }
     activeLiveSessionId = sessionId;
-    const container = document.getElementById('live-grid-container');
+    const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
     if(!container) return;
     const sessionCard = document.createElement('div');
     sessionCard.className = 'social-card';
@@ -4829,6 +5148,13 @@ document.addEventListener('DOMContentLoaded', function() {
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
     initializeNexeraApp();
+    const initialHash = (window.location.hash || '').replace('#', '');
+    if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
+});
+
+window.addEventListener('hashchange', function() {
+    const hash = (window.location.hash || '').replace('#', '');
+    if (hash === 'live-setup') { window.navigateTo('live-setup', false); }
 });
 
 // --- Security Rules Snippet (reference) ---

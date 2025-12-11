@@ -9,17 +9,18 @@
   <link rel="stylesheet" href="stylemobile.css">
 </head>
 <body style="padding: 3rem; max-width: 960px; margin: 0 auto;">
-  <header style="margin-bottom: 2rem;">
-    <img class="brand-logo" data-logo-variant="auto" alt="Nexera logo" src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6" style="width: 64px; height: 64px;">
-    <h1 style="margin-top: 1rem;">Nexera Experience</h1>
-    <p style="color: var(--text-muted);">Choose a page to explore the app features. Each view loads independently, stepping away from the single-page layout.</p>
+  <header style="margin-bottom: 2rem; text-align:center;">
+    <img class="brand-logo" data-logo-variant="auto" alt="Nexera logo" src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6" style="width: 72px; height: 72px;">
+    <h1 style="margin-top: 1rem;">Nexera</h1>
+    <p style="color: var(--text-muted);">Redirecting you to the home feed. If you're new, the login screen will guide you in.</p>
   </header>
 
-  <nav style="display: grid; gap: 1rem;">
-    <a class="create-btn" href="pages/feed.html" style="text-decoration: none;">Open Feed</a>
-    <a class="create-btn" href="pages/profile.html" style="text-decoration: none;">Open Profile View</a>
-    <a class="create-btn" href="pages/admin.html" style="text-decoration: none;">Open Admin Console</a>
-    <a class="create-btn" href="pages/login.html" style="text-decoration: none;">Go to Login</a>
-  </nav>
+  <div style="display:flex; justify-content:center;">
+    <div class="spinner" aria-hidden="true"></div>
+  </div>
+
+  <script>
+    window.location.replace('pages/feed.html');
+  </script>
 </body>
 </html>

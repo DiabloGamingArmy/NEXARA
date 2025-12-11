@@ -534,17 +534,76 @@
         </div>
 
         <div id="view-live" class="view-section" style="padding:1rem; display:none;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h2><i class="ph-fill ph-broadcast"></i> Live Network</h2>
-                <button class="icon-pill" onclick="window.toggleGoLiveModal(true)"><i class="ph ph-broadcast"></i> Go Live</button>
+            <div id="live-topbar"></div>
+            <div id="live-featured-row" class="live-featured-row"></div>
+            <hr id="live-divider" class="live-divider">
+            <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
+        </div>
+        <div id="view-live-setup" class="view-section" style="display:none;">
+            <div class="go-live-setup">
+                <div class="go-live-setup-header">
+                    <div>
+                        <div class="go-live-title">Go Live Setup</div>
+                        <p class="go-live-subtitle">Prepare your stream with a dedicated page before you go live.</p>
+                    </div>
+                    <button class="icon-pill" type="button" onclick="window.navigateTo('live');"><i class="ph ph-caret-left"></i> Back to Live</button>
+                </div>
+                <div class="go-live-grid">
+                    <div class="glass-panel go-live-card">
+                        <div class="input-group">
+                            <label class="settings-label" for="live-setup-title">Session Title</label>
+                            <input id="live-setup-title" class="form-input" placeholder="Give your stream a standout title">
+                        </div>
+                        <div class="input-group">
+                            <label class="settings-label" for="live-setup-category">Category</label>
+                            <select id="live-setup-category" class="form-input">
+                                <option>STEM</option>
+                                <option>Gaming</option>
+                                <option>Music</option>
+                                <option>Sports</option>
+                                <option>Creative</option>
+                            </select>
+                        </div>
+                        <div class="input-group">
+                            <label class="settings-label" for="live-setup-tags">Tags / Keywords</label>
+                            <input id="live-setup-tags" class="form-input" placeholder="#science, #coding, #askmeanything">
+                            <div class="chip-row">
+                                <span class="chip">Live</span>
+                                <span class="chip">Community</span>
+                                <span class="chip">Q&amp;A</span>
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label class="settings-label" for="live-setup-thumbnail">Thumbnail Upload (optional)</label>
+                            <input id="live-setup-thumbnail" type="file" class="form-input">
+                        </div>
+                        <div class="input-group">
+                            <label class="settings-label" for="live-setup-privacy">Privacy / Visibility</label>
+                            <select id="live-setup-privacy" class="form-input">
+                                <option>Public</option>
+                                <option>Followers</option>
+                                <option>Unlisted</option>
+                            </select>
+                        </div>
+                        <div class="input-group toggle-row">
+                            <div>
+                                <div class="settings-label">Auto-Record</div>
+                                <div class="settings-hint">Save a copy of your stream when ending the session.</div>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" id="live-setup-autorecord" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end;">
+                            <button class="create-btn-sidebar" style="width:auto;">Start Streaming</button>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div id="live-grid-container" class="live-grid"></div>
         </div>
         <div id="view-videos" class="view-section" style="display:none;">
-            <div style="padding: 1rem 1rem 0 1rem; display:flex; justify-content:space-between; align-items:center;">
-                <h2 style="font-weight:800; font-size:1.5rem;">For You Videos</h2>
-                <button class="create-btn-sidebar" style="width:auto;" onclick="window.openVideoUploadModal()"><i class="ph ph-upload-simple"></i> Create Video</button>
-            </div>
+            <div id="videos-topbar"></div>
             <div id="video-feed" class="video-feed"></div>
         </div>
 
@@ -633,7 +692,7 @@
     <div class="mobile-sheet-body">
         <div class="mobile-sheet-handle"></div>
         <button class="sheet-action" onclick="window.openMobileComposer()"><i class="ph ph-pencil"></i> Create Post</button>
-        <button class="sheet-action" onclick="window.closeMobileActionSheet(); window.toggleGoLiveModal(true)"><i class="ph ph-broadcast"></i> Go Live</button>
+        <button class="sheet-action" onclick="window.closeMobileActionSheet(); window.openGoLiveSetupPage()"><i class="ph ph-broadcast"></i> Go Live</button>
         <button class="sheet-action" onclick="window.closeMobileActionSheet(); window.toggleVideoUploadModal(true)"><i class="ph ph-film-strip"></i> Upload Video</button>
     </div>
 </div>
