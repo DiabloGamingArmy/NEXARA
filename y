@@ -1,0 +1,234 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------
+    // Auth helpers
+    // -------------------------
+    function isSignedIn() { return request.auth != null; }
+
+    function hasFounderClaim() {
+      return isSignedIn() && request.auth.token.founder == true;
+    }
+
+    // -------------------------
+    // User roles
+    // -------------------------
+    function getAccountRoles(uid) {
+      return (exists(/databases/$(database)/documents/users/$(uid)) &&
+              (get(/databases/$(database)/documents/users/$(uid)).data.accountRoles is list))
+        ? get(/databases/$(database)/documents/users/$(uid)).data.accountRoles
+        : [];
+    }
+
+    function hasAccountRole(role) {
+      return isSignedIn() && (role in getAccountRoles(request.auth.uid));
+    }
+
+    function accountRolesUnchanged(userId) {
+      return !('accountRoles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/users/$(userId)) &&
+            request.resource.data.accountRoles == [])
+        || (exists(/databases/$(database)/documents/users/$(userId)) &&
+            request.resource.data.accountRoles ==
+              get(/databases/$(database)/documents/users/$(userId)).data.accountRoles);
+    }
+
+    // -------------------------
+    // Category membership + moderation
+    // -------------------------
+    function isCategoryMember(categoryId) {
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.status == 'active'
+      );
+    }
+
+    function isCategoryMod(categoryId) {
+      let memberPath = /databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid);
+      let m = exists(memberPath) ? get(memberPath).data : null;
+
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(memberPath)
+        && (
+          ((m.roles is list) && (('owner' in m.roles) || ('mod' in m.roles)))
+          || (m.role in ['owner','mod'])
+        )
+      );
+    }
+
+    function memberRolesUnchanged(categoryId, uid) {
+      return !('roles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) &&
+            (request.resource.data.roles == ['member'] || request.resource.data.roles == ['owner']))
+        || (exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) &&
+            request.resource.data.roles ==
+              get(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)).data.roles);
+    }
+
+    function isStaffAccount() {
+      return hasFounderClaim() || hasAccountRole('staff') || hasAccountRole('admin');
+    }
+
+    // -------------------------
+    // Users
+    // -------------------------
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if (isSignedIn() && request.auth.uid == userId && accountRolesUnchanged(userId))
+                   || hasFounderClaim();
+    }
+
+    match /users/{userId}/categoryMemberships/{categoryId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // -------------------------
+    // Categories
+    // -------------------------
+    match /categories/{categoryId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+        && (
+          request.resource.data.type == 'community'
+          || (hasFounderClaim() && request.resource.data.type == 'official')
+        );
+
+      allow update: if isSignedIn()
+        && (
+          hasFounderClaim()
+          || (resource.data.type == 'community'
+              && request.resource.data.type == 'community'
+              && isCategoryMod(categoryId))
+        );
+
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && (
+          (uid == request.auth.uid
+            && memberRolesUnchanged(categoryId, uid)
+            && request.resource.data.status in ['active','left'])
+          || isCategoryMod(categoryId)
+        );
+      }
+    }
+
+    // -------------------------
+    // Posts
+    // -------------------------
+    match /posts/{postId} {
+      allow read: if !('visibility' in resource.data)
+                  || resource.data.visibility != 'private'
+                  || (isSignedIn() && request.auth.uid == resource.data.userId);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.userId
+        && (request.resource.data.categoryId == null
+            || isCategoryMember(request.resource.data.categoryId));
+
+      // FIXED: Allow author to update all; allow others to update interactions
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['likes', 'likedBy', 'dislikes', 'dislikedBy', 'trustScore', 'reviewStatus'])
+      );
+     
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+
+      // --- NESTED COMMENTS SECTION ---
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn();
+       
+        // FIXED: Split update to allow liking/replying by others
+        allow update: if isSignedIn() && (
+          request.auth.uid == resource.data.userId ||
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['likes', 'likedBy', 'dislikes', 'dislikedBy', 'replies', 'replyCount'])
+        );
+
+        allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+      }
+
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn();
+      }
+    }
+
+    // -------------------------
+    // Conversations / DMs
+    // -------------------------
+    match /conversations/{cid} {
+      allow create: if isSignedIn()
+        && request.resource.data.members is list
+        && request.resource.data.members.size() == 2
+        && request.auth.uid in request.resource.data.members;
+
+      allow read: if isSignedIn() && request.auth.uid in resource.data.members;
+
+      allow update: if isSignedIn()
+        && request.auth.uid in resource.data.members
+        && request.resource.data.members == resource.data.members;
+
+      allow delete: if isSignedIn() && request.auth.uid in resource.data.members;
+
+      match /messages/{mid} {
+        allow create: if isSignedIn()
+          && request.auth.uid == request.resource.data.senderId
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
+
+        allow read: if isSignedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
+
+        allow update, delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
+      }
+    }
+
+    // -------------------------
+    // Videos
+    // -------------------------
+    match /videos/{vid} {
+      allow read: if true;
+
+      allow write: if isSignedIn()
+        && request.auth.uid == request.resource.data.ownerId;
+
+      match /likes/{uid} { allow read: if true; allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /comments/{cid} { allow read: if true; allow write: if isSignedIn(); }
+    }
+
+    // -------------------------
+    // Live sessions
+    // -------------------------
+    match /liveSessions/{sid} {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.uid == request.resource.data.hostId;
+      match /chat/{mid} { allow read: if true; allow write: if isSignedIn(); }
+    }
+
+    // -------------------------
+    // Verification requests / moderation / admin logs
+    // -------------------------
+    match /verificationRequests/{rid} {
+      allow write: if isSignedIn() && request.auth.uid == request.resource.data.userId;
+      allow read: if isSignedIn() && isStaffAccount();
+    }
+
+    match /reports/{reportId} {
+      allow create: if isSignedIn();
+      allow read, update: if isSignedIn() && isStaffAccount();
+    }
+
+    match /adminLogs/{logId} {
+      allow read, write: if isSignedIn() && isStaffAccount();
+    }
+  }
+}
