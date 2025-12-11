@@ -84,9 +84,9 @@ let activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG };
 const REVIEW_CLASSES = ['review-verified', 'review-citation', 'review-misleading'];
 
 const BRAND_LOGO_VARIANTS = {
-    icon: '/icon.png',
-    dark: '/whiteicon.png',
-    light: '/blackicon.png'
+    icon: 'https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6',
+    dark: 'https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e',
+    light: 'https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fblackicon.png?alt=media&token=52db20ec-c992-4487-9f1c-ee497514e26a'
 };
 
 function resolveBrandLogoVariant(el) {
