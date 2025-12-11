@@ -1206,7 +1206,134 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 }
 
 .live-container {}
-.go-live-interface {}
+.go-live-interface {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#go-live-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 10, 25, 0.82);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    z-index: 9999;
+    color: #fff;
+    backdrop-filter: blur(8px);
+    transition: opacity 0.4s ease;
+}
+
+#go-live-overlay.active {
+    display: flex;
+    opacity: 1;
+}
+
+#go-live-overlay.fade-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+#go-live-overlay .loader {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 6px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #7dd3fc;
+    animation: spin 1s linear infinite;
+    margin-bottom: 18px;
+}
+
+#go-live-overlay .message {
+    font-size: 1.1rem;
+    letter-spacing: 0.01em;
+}
+
+.go-live-interface .preview-area {
+    background: #0c1224;
+    border-radius: 12px;
+    min-height: 320px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+}
+
+.go-live-interface video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #050814;
+}
+
+.go-live-interface .config-area {
+    background: #0c1224;
+    padding: 12px;
+    border-radius: 12px;
+    color: #e6e8ef;
+    display: grid;
+    gap: 10px;
+}
+
+.go-live-interface .config-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.go-live-interface .config-group label {
+    font-size: 0.9rem;
+    color: #aab2cc;
+}
+
+.go-live-interface .config-group input,
+.go-live-interface .config-group select,
+.go-live-interface .config-group textarea {
+    background: #0a0f1f;
+    border: 1px solid #1d2742;
+    color: #e6e8ef;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+.go-live-interface .control-area {
+    grid-column: span 2;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.go-live-interface .control-area button {
+    padding: 12px 18px;
+    border-radius: 12px;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+#start-stream {
+    background: linear-gradient(135deg, #22d3ee, #2563eb);
+    color: #fff;
+}
+
+#end-stream {
+    background: #ef4444;
+    color: #fff;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .live-video-frame {}
 .live-interaction-bar {}
 .live-chat-panel {}
