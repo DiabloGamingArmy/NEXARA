@@ -1204,3 +1204,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .topbar-actions .create-btn-sidebar {
     margin: 0;
 }
+
+.live-container {}
+.go-live-interface {}
+.live-video-frame {}
+.live-interaction-bar {}
+.live-chat-panel {}
