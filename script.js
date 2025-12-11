@@ -277,7 +277,9 @@ const ListenerRegistry = (function () {
     const loggedKeys = new Set();
 
     function devLog(message, key) {
-        const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
+        const shouldLog =
+            window?.location?.hostname === 'localhost' ||
+            window?.__DEV_LISTENER_DEBUG__;
         if (shouldLog && !loggedKeys.has(`${key}-replace`)) {
             console.debug(message);
             loggedKeys.add(`${key}-replace`);
@@ -290,8 +292,15 @@ const ListenerRegistry = (function () {
 
             if (listeners.has(key)) {
                 const existing = listeners.get(key);
-                try { existing(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
-                devLog(`ListenerRegistry: replaced existing listener for key "${key}"`, key);
+                try {
+                    existing();
+                } catch (e) {
+                    console.warn('Listener cleanup failed for', key, e);
+                }
+                devLog(
+                    `ListenerRegistry: replaced existing listener for key "${key}"`,
+                    key
+                );
             }
 
             listeners.set(key, unsubscribeFn);
@@ -299,18 +308,30 @@ const ListenerRegistry = (function () {
                 if (!listeners.has(key)) return;
                 const current = listeners.get(key);
                 listeners.delete(key);
-                try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                try {
+                    current();
+                } catch (e) {
+                    console.warn('Listener cleanup failed for', key, e);
+                }
             };
         },
         unregister(key) {
             if (!listeners.has(key)) return;
             const unsub = listeners.get(key);
             listeners.delete(key);
-            try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            try {
+                unsub();
+            } catch (e) {
+                console.warn('Listener cleanup failed for', key, e);
+            }
         },
         clearAll() {
             listeners.forEach(function (unsub, key) {
-                try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                try {
+                    unsub();
+                } catch (e) {
+                    console.warn('Listener cleanup failed for', key, e);
+                }
             });
             listeners.clear();
         },
@@ -324,8 +345,13 @@ const ListenerRegistry = (function () {
 })();
 
 window.ListenerRegistry = ListenerRegistry;
-window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
-window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
+window.debugActiveListeners = function () {
+    return ListenerRegistry.debugPrint();
+};
+window.addEventListener('beforeunload', function () {
+    ListenerRegistry.clearAll();
+});
+
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -595,6 +621,7 @@ async function ensureUserDocument(user) {
     const ref = doc(db, "users", user.uid);
     const snap = await getDoc(ref);
     const now = serverTimestamp();
+
     if (!snap.exists()) {
         const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
         await setDoc(ref, {
@@ -615,6 +642,7 @@ async function ensureUserDocument(user) {
         }, { merge: true });
         return await getDoc(ref);
     }
+
     await setDoc(ref, { updatedAt: now }, { merge: true });
     return await getDoc(ref);
 }
@@ -2280,9 +2308,16 @@ async function tryDeleteProfilePhotoFromStorage(photoURL = '', photoPath = '') {
 
 function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
-    if(!preview) return;
+    if (!preview) return;
 
-    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    const tempUser = {
+        ...userProfile,
+        photoURL: src || '',
+        avatarColor:
+            userProfile.avatarColor ||
+            computeAvatarColor(currentUser?.uid || 'user')
+    };
+
     applyAvatarToElement(preview, tempUser, { size: 72 });
     updateRemovePhotoButtonState();
 }
@@ -3173,7 +3208,7 @@ window.renderDiscover = async function() {
                             <div style="font-weight:700;">${escapeHtml(user.name)}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
                         </div>
-                        <button class="follow-btn" style="margin-left:auto;">View</button>
+                        <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
                     </div>`;
             });
         } else if (discoverFilter === 'Users' && discoverSearchTerm) {
