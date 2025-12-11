@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
@@ -34,6 +34,10 @@ let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
 let isInitialLoad = true;
+let composerTags = [];
+let composerMentions = [];
+let tagSuggestionPool = [];
+let mentionSearchTimer = null;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -643,6 +647,21 @@ async function ensureUserDocument(user) {
     return await getDoc(ref);
 }
 
+async function backfillAvatarColorIfMissing(uid, profile = {}) {
+    if (!uid || avatarColorBackfilled) return;
+    if (!profile.avatarColor) {
+        const color = computeAvatarColor(uid || profile.username || profile.name || 'user');
+        profile.avatarColor = color;
+        try {
+            await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
+            avatarColorBackfilled = true;
+        } catch (e) {
+            console.warn('Unable to backfill avatar color', e);
+        }
+    } else {
+        avatarColorBackfilled = true;
+    }
+}
 
 function shouldRerenderThread(newData, prevData = {}) {
     const fieldsToWatch = ['title', 'content', 'mediaUrl', 'type', 'category', 'trustScore'];
@@ -861,6 +880,20 @@ function normalizeMembershipData(raw = {}) {
     return { ...raw, roles };
 }
 
+function normalizeMentionsField(raw = []) {
+    if (!Array.isArray(raw)) return [];
+    const mentions = raw.map(function (entry) {
+        if (typeof entry === 'string') return normalizeMentionEntry(entry);
+        return normalizeMentionEntry(entry || {});
+    }).filter(function (m) { return !!m.username; });
+    const seen = new Set();
+    return mentions.filter(function (m) {
+        if (seen.has(m.username)) return false;
+        seen.add(m.username);
+        return true;
+    });
+}
+
 function normalizePostData(id, data) {
     const visibility = data.visibility || (data.isPrivate ? 'private' : 'public');
     const categoryId = data.categoryId || null;
@@ -880,6 +913,9 @@ function normalizePostData(id, data) {
         meta: incomingContent.meta || data.meta || {}
     };
 
+    const normalizedTags = Array.isArray(data.tags) ? Array.from(new Set(data.tags.map(normalizeTagValue).filter(Boolean))) : [];
+    const normalizedMentions = normalizeMentionsField(data.mentions);
+
     const normalized = {
         id,
         ...data,
@@ -891,8 +927,8 @@ function normalizePostData(id, data) {
         categoryType,
         category: categoryName,
         contentType,
-        tags: Array.isArray(data.tags) ? data.tags : [],
-        mentions: Array.isArray(data.mentions) ? data.mentions : [],
+        tags: normalizedTags,
+        mentions: normalizedMentions,
         content,
         categoryStatus: memberships[categoryId]?.status || 'unknown'
     };
@@ -1887,13 +1923,179 @@ async function uploadFileToStorage(file, path) {
     return await getDownloadURL(storageRef);
 }
 
-function parseTagsInput(raw = '') {
-    return raw.split(',').map(function(t) { return t.trim().replace(/^#/, '').toLowerCase(); }).filter(Boolean);
+function normalizeTagValue(tag = '') {
+    return tag.trim().replace(/^#/, '').toLowerCase();
 }
 
-function parseMentionsInput(raw = '') {
-    return raw.split(',').map(function(t) { return t.trim().replace(/^@/, '').toLowerCase(); }).filter(Boolean);
+function getKnownTags() {
+    const collected = new Set(tagSuggestionPool);
+    allPosts.forEach(function (post) {
+        (post.tags || []).forEach(function (tag) { collected.add(normalizeTagValue(tag)); });
+    });
+    return Array.from(collected).filter(Boolean);
 }
+
+function addComposerTag(tag = '') {
+    const normalized = normalizeTagValue(tag);
+    if (!normalized) return;
+    if (composerTags.includes(normalized)) return;
+    composerTags.push(normalized);
+    renderComposerTags();
+}
+
+function removeComposerTag(tag = '') {
+    composerTags = composerTags.filter(function (t) { return t !== tag; });
+    renderComposerTags();
+}
+
+function renderComposerTags() {
+    const container = document.getElementById('composer-tags-list');
+    if (!container) return;
+    if (!composerTags.length) {
+        container.innerHTML = '<div class="empty-chip">No tags added</div>';
+        return;
+    }
+    container.innerHTML = composerTags.map(function (tag) {
+        return `<span class="tag-chip filled">#${escapeHtml(tag)} <button type="button" class="chip-remove" onclick="window.removeComposerTag('${tag}')">&times;</button></span>`;
+    }).join('');
+}
+
+function filterTagSuggestions(queryText = '') {
+    const listEl = document.getElementById('tag-suggestions');
+    if (!listEl) return;
+    const cleaned = normalizeTagValue(queryText);
+    const known = getKnownTags();
+    const matches = cleaned ? known.filter(function (t) { return t.includes(cleaned) && !composerTags.includes(t); }).slice(0, 5) : known.slice(0, 5);
+    if (!matches.length) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    listEl.style.display = 'block';
+    listEl.innerHTML = matches.map(function (tag) {
+        return `<button type="button" class="suggestion-chip" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
+    }).join('');
+}
+
+function toggleTagInput(show) {
+    const row = document.getElementById('tag-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('tag-input');
+        if (input) {
+            input.focus();
+            filterTagSuggestions(input.value);
+        }
+    }
+}
+
+function handleTagInputKey(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        const input = event.target;
+        addComposerTag(input.value || '');
+        input.value = '';
+        filterTagSuggestions('');
+    } else {
+        filterTagSuggestions(event.target.value || '');
+    }
+}
+
+function normalizeMentionEntry(raw = {}) {
+    if (typeof raw === 'string') {
+        return { username: raw.replace(/^@/, '').toLowerCase(), uid: raw.uid || null };
+    }
+    const username = (raw.username || raw.handle || '').replace(/^@/, '').toLowerCase();
+    const displayName = raw.displayName || raw.nickname || raw.name || '';
+    const uid = raw.uid || raw.userId || null;
+    const accountRoles = Array.isArray(raw.accountRoles) ? raw.accountRoles : (raw.role ? [raw.role] : []);
+    const verified = accountRoles.includes('verified');
+    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor: raw.avatarColor || '', accountRoles, verified };
+}
+
+function addComposerMention(rawUser) {
+    const normalized = normalizeMentionEntry(rawUser);
+    if (!normalized.username) return;
+    if (composerMentions.some(function (m) { return m.username === normalized.username; })) return;
+    composerMentions.push(normalized);
+    renderComposerMentions();
+}
+
+function removeComposerMention(username) {
+    composerMentions = composerMentions.filter(function (m) { return m.username !== username; });
+    renderComposerMentions();
+}
+
+function renderComposerMentions() {
+    const container = document.getElementById('composer-mentions-list');
+    if (!container) return;
+    if (!composerMentions.length) {
+        container.innerHTML = '<div class="empty-chip">No mentions added</div>';
+        return;
+    }
+    container.innerHTML = composerMentions.map(function (mention) {
+        const avatar = renderAvatar({ ...mention, name: mention.displayName || mention.username }, { size: 36, className: 'mention-avatar' });
+        const badge = mention.verified ? '<span class="verified-badge" style="margin-left:4px;">✔</span>' : '';
+        return `<div class="mention-card">${avatar}<div class="mention-meta"><div class="mention-name">${escapeHtml(mention.displayName || mention.username)}${badge}</div><div class="mention-handle">@${escapeHtml(mention.username)}</div></div><button type="button" class="chip-remove" onclick="window.removeComposerMention('${mention.username}')">&times;</button></div>`;
+    }).join('');
+}
+
+async function searchMentionSuggestions(term = '') {
+    const listEl = document.getElementById('mention-suggestions');
+    if (!listEl) return;
+    const cleaned = (term || '').trim().replace(/^@/, '').toLowerCase();
+    if (!cleaned) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    try {
+        const userQuery = query(collection(db, 'users'), orderBy('username'), startAt(cleaned), endAt(cleaned + '\uf8ff'), limit(5));
+        const snap = await getDocs(userQuery);
+        const results = snap.docs.map(function (d) { return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) }; });
+        if (!results.length) {
+            listEl.innerHTML = '';
+            listEl.style.display = 'none';
+            return;
+        }
+        listEl.style.display = 'block';
+        listEl.innerHTML = results.map(function (profile) {
+            const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
+            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({ uid: profile.id || profile.uid, username: profile.username, displayName: profile.name || profile.nickname || profile.displayName || '', accountRoles: profile.accountRoles || [] }).replace(/'/g, "&apos;")})'>${avatar}<div class="mention-suggestion-meta"><div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div><div class="mention-handle">@${escapeHtml(profile.username || '')}</div></div></button>`;
+        }).join('');
+    } catch (err) {
+        console.warn('Mention search failed', err);
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+    }
+}
+
+function handleMentionInput(event) {
+    const value = event.target.value;
+    if (mentionSearchTimer) clearTimeout(mentionSearchTimer);
+    mentionSearchTimer = setTimeout(function () { searchMentionSuggestions(value); }, 200);
+}
+
+window.toggleTagInput = toggleTagInput;
+window.addComposerTag = addComposerTag;
+window.removeComposerTag = removeComposerTag;
+window.handleTagInputKey = handleTagInputKey;
+window.filterTagSuggestions = filterTagSuggestions;
+window.toggleMentionInput = function(show) {
+    const row = document.getElementById('mention-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('mention-input');
+        if (input) input.focus();
+    }
+};
+window.addComposerMention = addComposerMention;
+window.removeComposerMention = removeComposerMention;
+window.handleMentionInput = handleMentionInput;
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
@@ -1904,9 +2106,16 @@ function renderTagList(tags = []) {
     return `<div style="margin-top:8px;">${tags.map(function(tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
 }
 
+function getMentionHandles(mentions = []) {
+    if (!Array.isArray(mentions)) return [];
+    return mentions.map(function (m) { return typeof m === 'string' ? m : (m.username || m.handle || ''); })
+        .map(function (h) { return (h || '').replace(/^@/, '').toLowerCase(); })
+        .filter(Boolean);
+}
+
 function formatContent(text = '', tags = [], mentions = []) {
     let safe = escapeHtml(cleanText(text));
-    const mentionSet = new Set((mentions || []).map(function(m) { return m.toLowerCase(); }));
+    const mentionSet = new Set(getMentionHandles(mentions));
     mentionSet.forEach(function(handle) {
         const regex = new RegExp('@' + escapeRegex(handle), 'gi');
         safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
@@ -1918,8 +2127,9 @@ function formatContent(text = '', tags = [], mentions = []) {
     return safe;
 }
 
-async function resolveMentionProfiles(handles = []) {
-    const cleaned = Array.from(new Set(handles.map(function(h) { return h.replace(/^@/, '').toLowerCase(); }).filter(Boolean)));
+async function resolveMentionProfiles(mentions = []) {
+    const handles = getMentionHandles(mentions);
+    const cleaned = Array.from(new Set(handles));
     const results = [];
     for (const handle of cleaned) {
         const cached = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === handle; });
@@ -1969,10 +2179,10 @@ window.createPost = async function() {
      if (!requireAuth()) return;
      const title = document.getElementById('postTitle').value;
      const content = document.getElementById('postContent').value;
-     const tagsInput = document.getElementById('postTags');
-     const mentionsInput = document.getElementById('postMentions');
-     const tags = parseTagsInput(tagsInput ? tagsInput.value : '');
-     const mentions = parseMentionsInput(mentionsInput ? mentionsInput.value : '');
+     const tagInput = document.getElementById('tag-input');
+     const mentionInput = document.getElementById('mention-input');
+     const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+     const mentions = normalizeMentionsField(composerMentions || []);
      const fileInput = document.getElementById('postFile');
      const btn = document.getElementById('publishBtn');
      setComposerError('');
@@ -2001,6 +2211,15 @@ window.createPost = async function() {
          }
 
          const mentionProfiles = await resolveMentionProfiles(mentions);
+         const notificationTargets = [];
+         const seenNotify = new Set();
+         mentionProfiles.forEach(function(m) {
+             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push(m); }
+         });
+         mentions.forEach(function(m) {
+             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push({ uid: m.uid, handle: m.username }); }
+         });
+         const mentionUserIds = Array.from(seenNotify);
 
          let mediaUrl = null;
          if(fileInput.files[0]) {
@@ -2026,7 +2245,7 @@ window.createPost = async function() {
              userId: currentUser.uid,
              tags,
              mentions,
-             mentionUserIds: mentionProfiles.map(function(m) { return m.uid; }),
+             mentionUserIds,
              likes: 0,
              likedBy: [],
              trustScore: 0,
@@ -2034,13 +2253,17 @@ window.createPost = async function() {
          };
 
          const postRef = await addDoc(collection(db, 'posts'), postPayload);
-         if (mentionProfiles.length) await notifyMentionedUsers(mentionProfiles, postRef.id);
+         if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
 
          // Reset Form
          document.getElementById('postTitle').value = "";
          document.getElementById('postContent').value = "";
-         if (tagsInput) tagsInput.value = "";
-         if (mentionsInput) mentionsInput.value = "";
+         composerTags = [];
+         composerMentions = [];
+         renderComposerTags();
+         renderComposerMentions();
+         if (tagInput) tagInput.value = "";
+         if (mentionInput) mentionInput.value = "";
          fileInput.value = "";
          window.clearPostImage();
          window.toggleCreateModal(false);
@@ -2111,6 +2334,8 @@ window.toggleCreateModal = function(show) {
         applyAvatarToElement(avatarEl, userProfile, { size: 42 });
         setComposerError('');
         renderDestinationField();
+        renderComposerTags();
+        renderComposerMentions();
         syncPostButtonState();
     } else if (!show) {
         closeDestinationPicker();
