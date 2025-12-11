@@ -116,12 +116,75 @@ let userProfile = {
     gender: "Prefer not to say",
     region: "",
     photoURL: "",
+    avatarColor: "",
     theme: "system",
     accountRoles: [],
     savedPosts: [],
     following: [],
     followersCount: 0
 };
+
+const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
+const AVATAR_TEXT_COLOR = '#0f172a';
+let avatarColorBackfilled = false;
+
+function computeAvatarColor(seed = 'user') {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        hash = (hash << 5) - hash + seed.charCodeAt(i);
+        hash |= 0;
+    }
+    return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function resolveAvatarInitial(userLike = {}) {
+    const source = userLike.nickname || userLike.displayName || userLike.name || userLike.username || 'U';
+    return (source || 'U').trim().charAt(0).toUpperCase() || 'U';
+}
+
+function ensureAvatarColor(profile = {}, uid = '') {
+    if (profile.avatarColor) return profile.avatarColor;
+    const color = computeAvatarColor(uid || profile.username || profile.displayName || profile.name || 'user');
+    profile.avatarColor = color;
+    return color;
+}
+
+function resolveAvatarData(userLike = {}, uidOverride = '') {
+    const uid = uidOverride || userLike.uid || userLike.id || '';
+    const avatarColor = ensureAvatarColor(userLike, uid);
+    const initial = resolveAvatarInitial(userLike);
+    return { photoURL: userLike.photoURL || '', avatarColor, initial };
+}
+
+function renderAvatar(userLike = {}, options = {}) {
+    const { size = 42, className = '', shape = 'circle' } = options;
+    const data = resolveAvatarData(userLike);
+    const hasPhoto = !!data.photoURL;
+    const background = hasPhoto
+        ? `background-image:url('${data.photoURL}'); background-size:cover; background-position:center; color:transparent;`
+        : `background:${data.avatarColor}; color:${AVATAR_TEXT_COLOR};`;
+    const radius = shape === 'rounded' ? '12px' : '50%';
+    return `<div class="user-avatar ${className}" style="width:${size}px; height:${size}px; border-radius:${radius}; ${background}">${hasPhoto ? '' : data.initial}</div>`;
+}
+
+function applyAvatarToElement(el, userLike = {}, options = {}) {
+    if (!el) return;
+    const { size } = options;
+    const data = resolveAvatarData(userLike);
+    const hasPhoto = !!data.photoURL;
+    el.classList.add('user-avatar');
+    if (size) {
+        el.style.width = `${size}px`;
+        el.style.height = `${size}px`;
+    }
+    el.style.borderRadius = el.classList.contains('profile-pic') ? '50%' : '50%';
+    el.style.backgroundImage = hasPhoto ? `url('${data.photoURL}')` : 'none';
+    el.style.backgroundSize = hasPhoto ? 'cover' : '';
+    el.style.backgroundPosition = hasPhoto ? 'center' : '';
+    el.style.backgroundColor = hasPhoto ? '' : data.avatarColor;
+    el.style.color = hasPhoto ? 'transparent' : AVATAR_TEXT_COLOR;
+    el.textContent = hasPhoto ? '' : data.initial;
+}
 
 function getAccountRoleSet(profile = userProfile) {
     const roles = new Set(profile.accountRoles || []);
@@ -132,7 +195,9 @@ function getAccountRoleSet(profile = userProfile) {
 
 function normalizeUserProfileData(data = {}) {
     const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
-    return { ...data, accountRoles };
+    const profile = { ...data, accountRoles };
+    profile.avatarColor = data.avatarColor || computeAvatarColor(data.username || data.displayName || data.name || 'user');
+    return profile;
 }
 
 function userHasRole(userLike = {}, role = '') {
@@ -199,23 +264,62 @@ let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let postsUnsubscribe = null;
+let activeLiveSessionId = null;
 
-if (!window.__activeUnsubscribes) window.__activeUnsubscribes = [];
-function trackSnapshot(unsub) {
-    if (typeof unsub === 'function') {
-        window.__activeUnsubscribes.push(unsub);
+const ListenerRegistry = (function () {
+    const listeners = new Map();
+    const loggedKeys = new Set();
+
+    function devLog(message, key) {
+        const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
+        if (shouldLog && !loggedKeys.has(`${key}-replace`)) {
+            console.debug(message);
+            loggedKeys.add(`${key}-replace`);
+        }
     }
-    return unsub;
-}
-if (!window.__snapshotCleanupBound) {
-    window.__snapshotCleanupBound = true;
-    window.addEventListener('beforeunload', function() {
-        (window.__activeUnsubscribes || []).forEach(function(unsub) {
-            try { unsub(); } catch (e) {}
-        });
-        window.__activeUnsubscribes = [];
-    });
-}
+
+    return {
+        register(key, unsubscribeFn) {
+            if (!key || typeof unsubscribeFn !== 'function') return unsubscribeFn;
+
+            if (listeners.has(key)) {
+                const existing = listeners.get(key);
+                try { existing(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                devLog(`ListenerRegistry: replaced existing listener for key "${key}"`, key);
+            }
+
+            listeners.set(key, unsubscribeFn);
+            return function deregister() {
+                if (!listeners.has(key)) return;
+                const current = listeners.get(key);
+                listeners.delete(key);
+                try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            };
+        },
+        unregister(key) {
+            if (!listeners.has(key)) return;
+            const unsub = listeners.get(key);
+            listeners.delete(key);
+            try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+        },
+        clearAll() {
+            listeners.forEach(function (unsub, key) {
+                try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            });
+            listeners.clear();
+        },
+        has(key) {
+            return listeners.has(key);
+        },
+        debugPrint() {
+            console.log('Active listeners:', Array.from(listeners.keys()));
+        }
+    };
+})();
+
+window.ListenerRegistry = ListenerRegistry;
+window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
+window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -387,6 +491,8 @@ function initApp() {
                     // Normalize role storage
                     userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
 
+                    await backfillAvatarColorIfMissing(user.uid, userProfile);
+
                     // Apply stored theme preference
                     const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
                     userProfile.theme = savedTheme;
@@ -404,6 +510,7 @@ function initApp() {
                     userProfile.name = user.displayName || "Nexera User";
                     const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
                     userProfile.theme = storedTheme;
+                    userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
                     applyTheme(storedTheme);
                     const staffNav = document.getElementById('nav-staff');
                     if (staffNav) staffNav.style.display = 'none';
@@ -483,10 +590,12 @@ async function ensureUserDocument(user) {
     const snap = await getDoc(ref);
     const now = serverTimestamp();
     if (!snap.exists()) {
+        const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
         await setDoc(ref, {
             displayName: user.displayName || "Nexera User",
             username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
             photoURL: user.photoURL || "",
+            avatarColor,
             bio: "",
             website: "",
             region: "",
@@ -501,6 +610,22 @@ async function ensureUserDocument(user) {
     }
     await setDoc(ref, { updatedAt: now }, { merge: true });
     return await getDoc(ref);
+}
+
+async function backfillAvatarColorIfMissing(uid, profile = {}) {
+    if (!uid || avatarColorBackfilled) return;
+    if (!profile.avatarColor) {
+        const color = computeAvatarColor(uid || profile.username || profile.name || 'user');
+        profile.avatarColor = color;
+        try {
+            await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
+            avatarColorBackfilled = true;
+        } catch (e) {
+            console.warn('Unable to backfill avatar color', e);
+        }
+    } else {
+        avatarColorBackfilled = true;
+    }
 }
 
 function shouldRerenderThread(newData, prevData = {}) {
@@ -557,6 +682,7 @@ window.handleSignup = async function (e) {
             followersCount: 0,
             following: [],
             photoURL: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
             bio: "",
             website: "",
             region: "",
@@ -619,7 +745,7 @@ function startDataListener() {
     const postsRef = collection(db, 'posts');
     const q = query(postsRef);
 
-    postsUnsubscribe = trackSnapshot(onSnapshot(q, function (snapshot) {
+    postsUnsubscribe = ListenerRegistry.register('feed:all', onSnapshot(q, function (snapshot) {
         const previousCache = { ...postSnapshotCache };
         const nextCache = {};
         allPosts = [];
@@ -672,7 +798,7 @@ function startCategoryStreams(uid) {
     destinationPickerError = '';
 
     const categoryRef = collection(db, 'categories');
-    categoryUnsubscribe = trackSnapshot(onSnapshot(categoryRef, function (snapshot) {
+    categoryUnsubscribe = ListenerRegistry.register('categories:all', onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
@@ -692,7 +818,7 @@ function startCategoryStreams(uid) {
     }));
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    membershipUnsubscribe = trackSnapshot(onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = ListenerRegistry.register(`memberships:${uid}`, onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
@@ -1257,7 +1383,7 @@ async function startUserReviewListener(uid) {
         return; // Skip listener when access is not allowed
     }
 
-    trackSnapshot(onSnapshot(q, handleSnapshot, function (error) {
+    ListenerRegistry.register(`reviews:user:${uid}`, onSnapshot(q, handleSnapshot, function (error) {
         if (error.code !== 'permission-denied') {
             console.log("Review listener note:", error.message);
         }
@@ -1266,14 +1392,36 @@ async function startUserReviewListener(uid) {
 
 // --- Navigation Logic ---
 window.navigateTo = function (viewId, pushToStack = true) {
-    // Cleanup previous listeners if leaving thread
-    if (viewId !== 'thread' && threadUnsubscribe) {
-        threadUnsubscribe();
+    // Cleanup previous listeners if leaving specific views
+    if (viewId !== 'thread') {
+        if (threadUnsubscribe) threadUnsubscribe();
+        if (activePostId) ListenerRegistry.unregister(`comments:${activePostId}`);
         threadUnsubscribe = null;
+    }
+
+    if (viewId !== 'messages') {
+        ListenerRegistry.unregister('messages:list');
+        if (activeConversationId) ListenerRegistry.unregister(`messages:thread:${activeConversationId}`);
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
         pauseAllVideos();
+        ListenerRegistry.unregister('videos:feed');
+        videosUnsubscribe = null;
+    }
+
+    if (viewId !== 'live') {
+        ListenerRegistry.unregister('live:sessions');
+        if (activeLiveSessionId) {
+            ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
+            activeLiveSessionId = null;
+        }
+    }
+
+    if (viewId !== 'staff') {
+        ListenerRegistry.unregister('staff:verificationRequests');
+        ListenerRegistry.unregister('staff:reports');
+        ListenerRegistry.unregister('staff:adminLogs');
     }
 
     // Stack Management
@@ -1441,9 +1589,7 @@ function getPostHTML(post) {
         const authorVerified = userHasRole(authorData, 'verified');
         const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
 
-        const avatarStyle = authorData.photoURL
-            ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;`
-            : `background: ${getColorForUser(authorData.name)}`;
+        const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
         const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
         const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
@@ -1500,7 +1646,7 @@ function getPostHTML(post) {
             <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid ${THEMES['For You']};">
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
-                        <div class="user-avatar" style="${avatarStyle}">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                        ${avatarHtml}
                         <div class="header-info">
                             <div class="author-line"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
                             <span class="post-meta">@${escapeHtml(authorData.username)} • ${date}</span>
@@ -1897,15 +2043,8 @@ function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
     if(!preview) return;
 
-    if(src) {
-        preview.style.backgroundImage = `url('${src}')`;
-        preview.style.backgroundSize = 'cover';
-        preview.textContent = '';
-    } else {
-        preview.style.backgroundImage = 'none';
-        preview.style.backgroundColor = getColorForUser(userProfile.name || 'U');
-        preview.textContent = (userProfile.name || 'U')[0];
-    }
+    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    applyAvatarToElement(preview, tempUser, { size: 72 });
 }
 
 function syncThemeRadios(themeValue) {
@@ -1917,15 +2056,7 @@ window.toggleCreateModal = function(show) {
     document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
     if(show && currentUser) {
         const avatarEl = document.getElementById('modal-user-avatar');
-        if(userProfile.photoURL) {
-            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`;
-            avatarEl.textContent = '';
-        } else { 
-            avatarEl.style.backgroundImage = 'none'; 
-            avatarEl.style.backgroundColor = getColorForUser(userProfile.name);
-            avatarEl.textContent = userProfile.name[0];
-            avatarEl.style.color = 'black';
-        }
+        applyAvatarToElement(avatarEl, userProfile, { size: 42 });
         setComposerError('');
         renderDestinationField();
         syncPostButtonState();
@@ -2034,7 +2165,7 @@ window.openPeerReview = function(postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
     const q = query(reviewsRef); 
 
-    trackSnapshot(onSnapshot(q, function(snapshot) {
+    ListenerRegistry.register(`reviews:post:${postId}`, onSnapshot(q, function(snapshot) {
         const container = document.getElementById('review-list');
         container.innerHTML = "";
 
@@ -2197,7 +2328,7 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = trackSnapshot(onSnapshot(q, function(snapshot) {
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function(snapshot) {
         const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
@@ -2214,9 +2345,7 @@ const renderCommentHtml = function(c, isReply) {
   const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
   const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
-  const avatarBg = cAuthor.photoURL
-    ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;`
-    : `background:${getColorForUser(cAuthor.name || 'U')}`;
+  const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
 
   const parentCommentId = c.parentCommentId || c.parentId;
   const replyStyle = (isReply || !!parentCommentId)
@@ -2232,9 +2361,7 @@ const renderCommentHtml = function(c, isReply) {
   return `
     <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
       <div style="display:flex; gap:10px; align-items:flex-start;">
-        <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">
-          ${cAuthor.photoURL ? '' : (cAuthor.name || 'U')[0]}
-        </div>
+        ${avatarHtml}
 
         <div style="flex:1;">
           <div style="font-size:0.9rem; margin-bottom:2px;">
@@ -2356,7 +2483,7 @@ function renderThreadMainPost(postId) {
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
     const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
-    const avatarStyle = authorData.photoURL ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;` : `background: ${getColorForUser(authorData.name)}`;
+    const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
     const authorVerified = userHasRole(authorData, 'verified');
     const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
@@ -2389,7 +2516,7 @@ function renderThreadMainPost(postId) {
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
                 <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
-                    <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                    ${avatarHtml}
                     <div>
                         <div class="author-line" style="font-size:1rem;"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
                         <div class="post-meta">@${escapeHtml(authorData.username)}</div>
@@ -2417,14 +2544,8 @@ function renderThreadMainPost(postId) {
             </div>
         </div>`;
 
-    const myPfp = userProfile.photoURL 
-        ? `background-image: url('${userProfile.photoURL}'); background-size: cover; color: transparent;` 
-        : `background: ${getColorForUser(userProfile.name)}`;
     const inputPfp = document.getElementById('thread-input-pfp');
-    if(inputPfp) {
-        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`;
-        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0];
-    }
+    if(inputPfp) applyAvatarToElement(inputPfp, userProfile, { size: 40 });
 
     const threadReviewBtn = document.getElementById('thread-review-btn');
     applyReviewButtonState(threadReviewBtn, myReview);
@@ -2741,13 +2862,11 @@ window.renderDiscover = async function() {
             matches.forEach(function(user) {
                 const uid = Object.keys(userCache).find(function(key) { return userCache[key] === user; });
                 if(!uid) return;
-                const pfpStyle = user.photoURL 
-                    ? `background-image: url('${user.photoURL}'); background-size: cover; color: transparent;` 
-                    : `background: ${getColorForUser(user.name)}`;
+                const avatarHtml = renderAvatar({ ...user, uid }, { size: 40 });
 
                 container.innerHTML += `
                     <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);" onclick="window.openUserProfile('${uid}')">
-                        <div class="user-avatar" style="width:40px; height:40px; ${pfpStyle}">${user.photoURL?'':user.name[0]}</div>
+                        ${avatarHtml}
                         <div>
                             <div style="font-weight:700;">${escapeHtml(user.name)}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
@@ -2940,9 +3059,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const normalizedProfile = normalizeUserProfileData(profileData);
     const container = document.getElementById('view-public-profile');
 
-    const pfpStyle = normalizedProfile.photoURL
-        ? `background-image: url('${normalizedProfile.photoURL}'); background-size: cover; color: transparent;`
-        : `background: ${getColorForUser(normalizedProfile.name)}`;
+    const avatarHtml = renderAvatar({ ...normalizedProfile, uid }, { size: 100, className: 'profile-pic' });
 
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
@@ -2969,7 +3086,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(normalizedProfile.username)}</h2>
         </div>
         <div class="profile-header" style="padding-top:1rem;">
-            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${normalizedProfile.photoURL ? '' : normalizedProfile.name[0]}</div>
+            ${avatarHtml}
             <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
             <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
             <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
@@ -3051,6 +3168,7 @@ function renderProfile() {
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
     const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -3065,7 +3183,7 @@ function renderProfile() {
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
-            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
+            ${avatarHtml}
             <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
             ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
@@ -3375,7 +3493,7 @@ function initConversations() {
     if(!requireAuth()) return;
     if(conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = trackSnapshot(onSnapshot(convRef, function(snap) {
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function(snap) {
         conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderConversationList();
     }));
@@ -3392,9 +3510,18 @@ function renderConversationList() {
     conversationsCache.forEach(function(convo) {
         const partnerId = convo.members.find(function(m) { return m !== currentUser.uid; }) || currentUser.uid;
         const display = userCache[partnerId]?.username || 'user';
+        const partnerProfile = userCache[partnerId] || { username: display, name: display, avatarColor: computeAvatarColor(partnerId || display) };
+        const avatarHtml = renderAvatar({ ...partnerProfile, uid: partnerId }, { size: 36 });
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
-        item.innerHTML = `<div><strong>@${display}</strong><div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div></div><span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
+        item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+            ${avatarHtml}
+            <div>
+                <strong>@${display}</strong>
+                <div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div>
+            </div>
+        </div>
+        <span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
         item.onclick = function() { return setActiveConversation(convo.id, convo); };
         listEl.appendChild(item);
     });
@@ -3411,7 +3538,7 @@ function setActiveConversation(convoId, convoData = null) {
 function listenToMessages(convoId) {
     if(messagesUnsubscribe) messagesUnsubscribe();
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = trackSnapshot(onSnapshot(msgRef, function(snap) {
+    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function(snap) {
         const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderMessages(msgs);
     }));
@@ -3504,7 +3631,7 @@ function pauseAllVideos() {
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = trackSnapshot(onSnapshot(refVideos, function(snap) {
+    videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function(snap) {
         videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderVideoFeed(videosCache);
     }));
@@ -3655,7 +3782,7 @@ window.toggleGoLiveModal = function(show = true) { const modal = document.getEle
 function renderLiveSessions() {
     if(liveSessionsUnsubscribe) return;
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
-    liveSessionsUnsubscribe = trackSnapshot(onSnapshot(liveRef, function(snap) {
+    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
         const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const container = document.getElementById('live-grid-container');
         if(!container) return;
@@ -3689,6 +3816,10 @@ window.createLiveSession = async function() {
 };
 
 window.openLiveSession = function(sessionId) {
+    if (activeLiveSessionId && activeLiveSessionId !== sessionId) {
+        ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
+    }
+    activeLiveSessionId = sessionId;
     const container = document.getElementById('live-grid-container');
     if(!container) return;
     const sessionCard = document.createElement('div');
@@ -3700,7 +3831,7 @@ window.openLiveSession = function(sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
-    trackSnapshot(onSnapshot(chatRef, function(snap) {
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function(snap) {
         const chatEl = document.getElementById('live-chat');
         if(!chatEl) return;
         chatEl.innerHTML = '';
@@ -3740,7 +3871,7 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if(staffRequestsUnsub) return;
-    staffRequestsUnsub = trackSnapshot(onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function(snap) {
         const container = document.getElementById('verification-requests');
         if(!container) return;
         container.innerHTML = '';
@@ -3767,7 +3898,7 @@ window.denyVerification = async function(requestId) {
 
 function listenReports() {
     if(staffReportsUnsub) return;
-    staffReportsUnsub = trackSnapshot(onSnapshot(collection(db, 'reports'), function(snap) {
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function(snap) {
         const container = document.getElementById('reports-queue');
         if(!container) return;
         container.innerHTML = '';
@@ -3783,7 +3914,7 @@ function listenReports() {
 
 function listenAdminLogs() {
     if(staffLogsUnsub) return;
-    staffLogsUnsub = trackSnapshot(onSnapshot(collection(db, 'adminLogs'), function(snap) {
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function(snap) {
         const container = document.getElementById('admin-logs');
         if(!container) return;
         container.innerHTML = '';
