@@ -77,10 +77,20 @@
                     <input type="text" id="postTitle" class="x-input-title" placeholder="Title (Optional)">
                     <textarea id="postContent" class="x-input-content" placeholder="What is happening?!" rows="3"></textarea>
 
-                    <div class="tag-mention-row">
-                        <input type="text" id="postTags" class="form-input" placeholder="#tags (comma separated)">
-                        <input type="text" id="postMentions" class="form-input" placeholder="@mentions (comma separated)">
+                    <div class="composer-meta-controls">
+                        <button type="button" class="icon-pill" onclick="window.toggleTagInput()"><i class="ph ph-hash"></i> # Tags</button>
+                        <button type="button" class="icon-pill" onclick="window.toggleMentionInput()"><i class="ph ph-at"></i> @ Mentions</button>
                     </div>
+                    <div id="tag-input-row" class="composer-inline" style="display:none;">
+                        <input type="text" id="tag-input" class="form-input" placeholder="Add a tag" onkeydown="window.handleTagInputKey(event)" oninput="window.filterTagSuggestions(this.value)">
+                        <div id="tag-suggestions" class="suggestion-row"></div>
+                    </div>
+                    <div id="composer-tags-list" class="chip-row"></div>
+                    <div id="mention-input-row" class="composer-inline" style="display:none;">
+                        <input type="text" id="mention-input" class="form-input" placeholder="Search usernames" oninput="window.handleMentionInput(event)">
+                        <div id="mention-suggestions" class="suggestion-row"></div>
+                    </div>
+                    <div id="composer-mentions-list" class="mention-row"></div>
 
                     <div id="img-preview-container" class="attachment-preview">
                         <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
@@ -89,18 +99,25 @@
 
                     <div id="extra-options-area" class="extra-options-panel">
                         <div id="post-opt-poll" style="display:none;">
-                            <label style="font-size:0.8rem; color:var(--text-muted);">Poll Options</label>
-                            <input type="text" class="form-input poll-opt" placeholder="Option 1" style="margin:5px 0;">
-                            <input type="text" class="form-input poll-opt" placeholder="Option 2" style="margin-bottom:5px;">
+                            <div class="composer-subheader">Poll</div>
+                            <input type="text" id="poll-title-input" class="form-input" placeholder="Poll title" oninput="window.handlePollTitleChange(this.value)" style="margin-bottom:8px;">
+                            <div id="poll-options-container" class="poll-options"></div>
+                            <div class="poll-actions">
+                                <button type="button" class="icon-pill" onclick="window.addPollOption()"><i class="ph ph-plus"></i> Add option</button>
+                                <span class="poll-helper">2–5 options</span>
+                            </div>
                         </div>
                         <div id="post-opt-gif" style="display:none;">
                             <input type="text" class="form-input" placeholder="Paste GIF URL..." style="margin-bottom:0;">
                         </div>
                          <div id="post-opt-schedule" style="display:none;">
-                            <input type="datetime-local" class="form-input" style="margin-bottom:0;">
+                            <div class="composer-subheader">Scheduled Post</div>
+                            <input type="datetime-local" id="schedule-input" class="form-input" style="margin-bottom:0;" onchange="window.handleScheduleChange(this.value)">
                         </div>
                         <div id="post-opt-location" style="display:none;">
-                            <input type="text" class="form-input" placeholder="Add Location" style="margin-bottom:0;">
+                            <div class="composer-subheader">Location</div>
+                            <input type="text" id="location-input" class="form-input" placeholder="Search locations" style="margin-bottom:6px;" oninput="window.handleLocationInput(this.value)">
+                            <div id="location-suggestions" class="suggestion-row"></div>
                         </div>
                     </div>
                 </div>
@@ -178,6 +195,7 @@
                     <div style="display:flex; flex-direction:column; gap:6px;">
                         <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-file').click()"><i class="ph ph-upload-simple"></i> Upload Photo</button>
                         <button type="button" class="icon-pill" onclick="document.getElementById('set-pic-camera').click()"><i class="ph ph-camera"></i> Take Photo</button>
+                        <button type="button" id="remove-photo-btn" class="icon-pill" onclick="window.removeProfilePhoto()"><i class="ph ph-x-circle"></i> Remove Photo</button>
                     </div>
                 </div>
 
@@ -355,6 +373,7 @@
     </div>
 
     <div id="post-options-dropdown" class="post-options-dropdown">
+        <button id="dropdown-edit-btn" style="display:none;" onclick="window.handlePostOptionSelect('edit')"><i class="ph ph-pencil"></i> Edit Post</button>
         <button onclick="window.handlePostOptionSelect('report')"><i class="ph ph-flag"></i> Report</button>
         <button id="dropdown-delete-btn" onclick="window.handlePostOptionSelect('delete')" style="display:none;"><i class="ph ph-trash"></i> Delete</button>
     </div>
