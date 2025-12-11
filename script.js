@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "./commentUtils.js";
 
 // --- Firebase Configuration ---
@@ -34,6 +34,10 @@ let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
 let isInitialLoad = true;
+let composerTags = [];
+let composerMentions = [];
+let tagSuggestionPool = [];
+let mentionSearchTimer = null;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -116,12 +120,76 @@ let userProfile = {
     gender: "Prefer not to say",
     region: "",
     photoURL: "",
+    photoPath: "",
+    avatarColor: "",
     theme: "system",
     accountRoles: [],
     savedPosts: [],
     following: [],
     followersCount: 0
 };
+
+const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
+const AVATAR_TEXT_COLOR = '#0f172a';
+let avatarColorBackfilled = false;
+
+function computeAvatarColor(seed = 'user') {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+        hash = (hash << 5) - hash + seed.charCodeAt(i);
+        hash |= 0;
+    }
+    return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function resolveAvatarInitial(userLike = {}) {
+    const source = userLike.nickname || userLike.displayName || userLike.name || userLike.username || 'U';
+    return (source || 'U').trim().charAt(0).toUpperCase() || 'U';
+}
+
+function ensureAvatarColor(profile = {}, uid = '') {
+    if (profile.avatarColor) return profile.avatarColor;
+    const color = computeAvatarColor(uid || profile.username || profile.displayName || profile.name || 'user');
+    profile.avatarColor = color;
+    return color;
+}
+
+function resolveAvatarData(userLike = {}, uidOverride = '') {
+    const uid = uidOverride || userLike.uid || userLike.id || '';
+    const avatarColor = ensureAvatarColor(userLike, uid);
+    const initial = resolveAvatarInitial(userLike);
+    return { photoURL: userLike.photoURL || '', avatarColor, initial };
+}
+
+function renderAvatar(userLike = {}, options = {}) {
+    const { size = 42, className = '', shape = 'circle' } = options;
+    const data = resolveAvatarData(userLike);
+    const hasPhoto = !!data.photoURL;
+    const background = hasPhoto
+        ? `background-image:url('${data.photoURL}'); background-size:cover; background-position:center; color:transparent;`
+        : `background:${data.avatarColor}; color:${AVATAR_TEXT_COLOR};`;
+    const radius = shape === 'rounded' ? '12px' : '50%';
+    return `<div class="user-avatar ${className}" style="width:${size}px; height:${size}px; border-radius:${radius}; ${background}">${hasPhoto ? '' : data.initial}</div>`;
+}
+
+function applyAvatarToElement(el, userLike = {}, options = {}) {
+    if (!el) return;
+    const { size } = options;
+    const data = resolveAvatarData(userLike);
+    const hasPhoto = !!data.photoURL;
+    el.classList.add('user-avatar');
+    if (size) {
+        el.style.width = `${size}px`;
+        el.style.height = `${size}px`;
+    }
+    el.style.borderRadius = el.classList.contains('profile-pic') ? '50%' : '50%';
+    el.style.backgroundImage = hasPhoto ? `url('${data.photoURL}')` : 'none';
+    el.style.backgroundSize = hasPhoto ? 'cover' : '';
+    el.style.backgroundPosition = hasPhoto ? 'center' : '';
+    el.style.backgroundColor = hasPhoto ? '' : data.avatarColor;
+    el.style.color = hasPhoto ? 'transparent' : AVATAR_TEXT_COLOR;
+    el.textContent = hasPhoto ? '' : data.initial;
+}
 
 function getAccountRoleSet(profile = userProfile) {
     const roles = new Set(profile.accountRoles || []);
@@ -132,7 +200,10 @@ function getAccountRoleSet(profile = userProfile) {
 
 function normalizeUserProfileData(data = {}) {
     const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
-    return { ...data, accountRoles };
+    const profile = { ...data, accountRoles };
+    profile.photoPath = data.photoPath || '';
+    profile.avatarColor = data.avatarColor || computeAvatarColor(data.username || data.displayName || data.name || 'user');
+    return profile;
 }
 
 function userHasRole(userLike = {}, role = '') {
@@ -199,23 +270,62 @@ let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let postsUnsubscribe = null;
+let activeLiveSessionId = null;
 
-if (!window.__activeUnsubscribes) window.__activeUnsubscribes = [];
-function trackSnapshot(unsub) {
-    if (typeof unsub === 'function') {
-        window.__activeUnsubscribes.push(unsub);
+const ListenerRegistry = (function () {
+    const listeners = new Map();
+    const loggedKeys = new Set();
+
+    function devLog(message, key) {
+        const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
+        if (shouldLog && !loggedKeys.has(`${key}-replace`)) {
+            console.debug(message);
+            loggedKeys.add(`${key}-replace`);
+        }
     }
-    return unsub;
-}
-if (!window.__snapshotCleanupBound) {
-    window.__snapshotCleanupBound = true;
-    window.addEventListener('beforeunload', function() {
-        (window.__activeUnsubscribes || []).forEach(function(unsub) {
-            try { unsub(); } catch (e) {}
-        });
-        window.__activeUnsubscribes = [];
-    });
-}
+
+    return {
+        register(key, unsubscribeFn) {
+            if (!key || typeof unsubscribeFn !== 'function') return unsubscribeFn;
+
+            if (listeners.has(key)) {
+                const existing = listeners.get(key);
+                try { existing(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+                devLog(`ListenerRegistry: replaced existing listener for key "${key}"`, key);
+            }
+
+            listeners.set(key, unsubscribeFn);
+            return function deregister() {
+                if (!listeners.has(key)) return;
+                const current = listeners.get(key);
+                listeners.delete(key);
+                try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            };
+        },
+        unregister(key) {
+            if (!listeners.has(key)) return;
+            const unsub = listeners.get(key);
+            listeners.delete(key);
+            try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+        },
+        clearAll() {
+            listeners.forEach(function (unsub, key) {
+                try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
+            });
+            listeners.clear();
+        },
+        has(key) {
+            return listeners.has(key);
+        },
+        debugPrint() {
+            console.log('Active listeners:', Array.from(listeners.keys()));
+        }
+    };
+})();
+
+window.ListenerRegistry = ListenerRegistry;
+window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
+window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -387,6 +497,8 @@ function initApp() {
                     // Normalize role storage
                     userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
 
+                    await backfillAvatarColorIfMissing(user.uid, userProfile);
+
                     // Apply stored theme preference
                     const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
                     userProfile.theme = savedTheme;
@@ -404,6 +516,7 @@ function initApp() {
                     userProfile.name = user.displayName || "Nexera User";
                     const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
                     userProfile.theme = storedTheme;
+                    userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
                     applyTheme(storedTheme);
                     const staffNav = document.getElementById('nav-staff');
                     if (staffNav) staffNav.style.display = 'none';
@@ -483,10 +596,13 @@ async function ensureUserDocument(user) {
     const snap = await getDoc(ref);
     const now = serverTimestamp();
     if (!snap.exists()) {
+        const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
         await setDoc(ref, {
             displayName: user.displayName || "Nexera User",
             username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
             photoURL: user.photoURL || "",
+            photoPath: "",
+            avatarColor,
             bio: "",
             website: "",
             region: "",
@@ -501,6 +617,22 @@ async function ensureUserDocument(user) {
     }
     await setDoc(ref, { updatedAt: now }, { merge: true });
     return await getDoc(ref);
+}
+
+async function backfillAvatarColorIfMissing(uid, profile = {}) {
+    if (!uid || avatarColorBackfilled) return;
+    if (!profile.avatarColor) {
+        const color = computeAvatarColor(uid || profile.username || profile.name || 'user');
+        profile.avatarColor = color;
+        try {
+            await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
+            avatarColorBackfilled = true;
+        } catch (e) {
+            console.warn('Unable to backfill avatar color', e);
+        }
+    } else {
+        avatarColorBackfilled = true;
+    }
 }
 
 function shouldRerenderThread(newData, prevData = {}) {
@@ -557,6 +689,8 @@ window.handleSignup = async function (e) {
             followersCount: 0,
             following: [],
             photoURL: "",
+            photoPath: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
             bio: "",
             website: "",
             region: "",
@@ -619,7 +753,7 @@ function startDataListener() {
     const postsRef = collection(db, 'posts');
     const q = query(postsRef);
 
-    postsUnsubscribe = trackSnapshot(onSnapshot(q, function (snapshot) {
+    postsUnsubscribe = ListenerRegistry.register('feed:all', onSnapshot(q, function (snapshot) {
         const previousCache = { ...postSnapshotCache };
         const nextCache = {};
         allPosts = [];
@@ -672,7 +806,7 @@ function startCategoryStreams(uid) {
     destinationPickerError = '';
 
     const categoryRef = collection(db, 'categories');
-    categoryUnsubscribe = trackSnapshot(onSnapshot(categoryRef, function (snapshot) {
+    categoryUnsubscribe = ListenerRegistry.register('categories:all', onSnapshot(categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
@@ -692,7 +826,7 @@ function startCategoryStreams(uid) {
     }));
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    membershipUnsubscribe = trackSnapshot(onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = ListenerRegistry.register(`memberships:${uid}`, onSnapshot(membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
@@ -718,6 +852,20 @@ function normalizeMembershipData(raw = {}) {
     return { ...raw, roles };
 }
 
+function normalizeMentionsField(raw = []) {
+    if (!Array.isArray(raw)) return [];
+    const mentions = raw.map(function (entry) {
+        if (typeof entry === 'string') return normalizeMentionEntry(entry);
+        return normalizeMentionEntry(entry || {});
+    }).filter(function (m) { return !!m.username; });
+    const seen = new Set();
+    return mentions.filter(function (m) {
+        if (seen.has(m.username)) return false;
+        seen.add(m.username);
+        return true;
+    });
+}
+
 function normalizePostData(id, data) {
     const visibility = data.visibility || (data.isPrivate ? 'private' : 'public');
     const categoryId = data.categoryId || null;
@@ -737,6 +885,9 @@ function normalizePostData(id, data) {
         meta: incomingContent.meta || data.meta || {}
     };
 
+    const normalizedTags = Array.isArray(data.tags) ? Array.from(new Set(data.tags.map(normalizeTagValue).filter(Boolean))) : [];
+    const normalizedMentions = normalizeMentionsField(data.mentions);
+
     const normalized = {
         id,
         ...data,
@@ -748,8 +899,8 @@ function normalizePostData(id, data) {
         categoryType,
         category: categoryName,
         contentType,
-        tags: Array.isArray(data.tags) ? data.tags : [],
-        mentions: Array.isArray(data.mentions) ? data.mentions : [],
+        tags: normalizedTags,
+        mentions: normalizedMentions,
         content,
         categoryStatus: memberships[categoryId]?.status || 'unknown'
     };
@@ -1257,7 +1408,7 @@ async function startUserReviewListener(uid) {
         return; // Skip listener when access is not allowed
     }
 
-    trackSnapshot(onSnapshot(q, handleSnapshot, function (error) {
+    ListenerRegistry.register(`reviews:user:${uid}`, onSnapshot(q, handleSnapshot, function (error) {
         if (error.code !== 'permission-denied') {
             console.log("Review listener note:", error.message);
         }
@@ -1266,14 +1417,36 @@ async function startUserReviewListener(uid) {
 
 // --- Navigation Logic ---
 window.navigateTo = function (viewId, pushToStack = true) {
-    // Cleanup previous listeners if leaving thread
-    if (viewId !== 'thread' && threadUnsubscribe) {
-        threadUnsubscribe();
+    // Cleanup previous listeners if leaving specific views
+    if (viewId !== 'thread') {
+        if (threadUnsubscribe) threadUnsubscribe();
+        if (activePostId) ListenerRegistry.unregister(`comments:${activePostId}`);
         threadUnsubscribe = null;
+    }
+
+    if (viewId !== 'messages') {
+        ListenerRegistry.unregister('messages:list');
+        if (activeConversationId) ListenerRegistry.unregister(`messages:thread:${activeConversationId}`);
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
         pauseAllVideos();
+        ListenerRegistry.unregister('videos:feed');
+        videosUnsubscribe = null;
+    }
+
+    if (viewId !== 'live') {
+        ListenerRegistry.unregister('live:sessions');
+        if (activeLiveSessionId) {
+            ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
+            activeLiveSessionId = null;
+        }
+    }
+
+    if (viewId !== 'staff') {
+        ListenerRegistry.unregister('staff:verificationRequests');
+        ListenerRegistry.unregister('staff:reports');
+        ListenerRegistry.unregister('staff:adminLogs');
     }
 
     // Stack Management
@@ -1441,9 +1614,7 @@ function getPostHTML(post) {
         const authorVerified = userHasRole(authorData, 'verified');
         const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
 
-        const avatarStyle = authorData.photoURL
-            ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;`
-            : `background: ${getColorForUser(authorData.name)}`;
+        const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
         const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
         const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
@@ -1500,7 +1671,7 @@ function getPostHTML(post) {
             <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid ${THEMES['For You']};">
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
-                        <div class="user-avatar" style="${avatarStyle}">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                        ${avatarHtml}
                         <div class="header-info">
                             <div class="author-line"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
                             <span class="post-meta">@${escapeHtml(authorData.username)} • ${date}</span>
@@ -1724,13 +1895,179 @@ async function uploadFileToStorage(file, path) {
     return await getDownloadURL(storageRef);
 }
 
-function parseTagsInput(raw = '') {
-    return raw.split(',').map(function(t) { return t.trim().replace(/^#/, '').toLowerCase(); }).filter(Boolean);
+function normalizeTagValue(tag = '') {
+    return tag.trim().replace(/^#/, '').toLowerCase();
 }
 
-function parseMentionsInput(raw = '') {
-    return raw.split(',').map(function(t) { return t.trim().replace(/^@/, '').toLowerCase(); }).filter(Boolean);
+function getKnownTags() {
+    const collected = new Set(tagSuggestionPool);
+    allPosts.forEach(function (post) {
+        (post.tags || []).forEach(function (tag) { collected.add(normalizeTagValue(tag)); });
+    });
+    return Array.from(collected).filter(Boolean);
 }
+
+function addComposerTag(tag = '') {
+    const normalized = normalizeTagValue(tag);
+    if (!normalized) return;
+    if (composerTags.includes(normalized)) return;
+    composerTags.push(normalized);
+    renderComposerTags();
+}
+
+function removeComposerTag(tag = '') {
+    composerTags = composerTags.filter(function (t) { return t !== tag; });
+    renderComposerTags();
+}
+
+function renderComposerTags() {
+    const container = document.getElementById('composer-tags-list');
+    if (!container) return;
+    if (!composerTags.length) {
+        container.innerHTML = '<div class="empty-chip">No tags added</div>';
+        return;
+    }
+    container.innerHTML = composerTags.map(function (tag) {
+        return `<span class="tag-chip filled">#${escapeHtml(tag)} <button type="button" class="chip-remove" onclick="window.removeComposerTag('${tag}')">&times;</button></span>`;
+    }).join('');
+}
+
+function filterTagSuggestions(queryText = '') {
+    const listEl = document.getElementById('tag-suggestions');
+    if (!listEl) return;
+    const cleaned = normalizeTagValue(queryText);
+    const known = getKnownTags();
+    const matches = cleaned ? known.filter(function (t) { return t.includes(cleaned) && !composerTags.includes(t); }).slice(0, 5) : known.slice(0, 5);
+    if (!matches.length) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    listEl.style.display = 'block';
+    listEl.innerHTML = matches.map(function (tag) {
+        return `<button type="button" class="suggestion-chip" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
+    }).join('');
+}
+
+function toggleTagInput(show) {
+    const row = document.getElementById('tag-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('tag-input');
+        if (input) {
+            input.focus();
+            filterTagSuggestions(input.value);
+        }
+    }
+}
+
+function handleTagInputKey(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        const input = event.target;
+        addComposerTag(input.value || '');
+        input.value = '';
+        filterTagSuggestions('');
+    } else {
+        filterTagSuggestions(event.target.value || '');
+    }
+}
+
+function normalizeMentionEntry(raw = {}) {
+    if (typeof raw === 'string') {
+        return { username: raw.replace(/^@/, '').toLowerCase(), uid: raw.uid || null };
+    }
+    const username = (raw.username || raw.handle || '').replace(/^@/, '').toLowerCase();
+    const displayName = raw.displayName || raw.nickname || raw.name || '';
+    const uid = raw.uid || raw.userId || null;
+    const accountRoles = Array.isArray(raw.accountRoles) ? raw.accountRoles : (raw.role ? [raw.role] : []);
+    const verified = accountRoles.includes('verified');
+    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor: raw.avatarColor || '', accountRoles, verified };
+}
+
+function addComposerMention(rawUser) {
+    const normalized = normalizeMentionEntry(rawUser);
+    if (!normalized.username) return;
+    if (composerMentions.some(function (m) { return m.username === normalized.username; })) return;
+    composerMentions.push(normalized);
+    renderComposerMentions();
+}
+
+function removeComposerMention(username) {
+    composerMentions = composerMentions.filter(function (m) { return m.username !== username; });
+    renderComposerMentions();
+}
+
+function renderComposerMentions() {
+    const container = document.getElementById('composer-mentions-list');
+    if (!container) return;
+    if (!composerMentions.length) {
+        container.innerHTML = '<div class="empty-chip">No mentions added</div>';
+        return;
+    }
+    container.innerHTML = composerMentions.map(function (mention) {
+        const avatar = renderAvatar({ ...mention, name: mention.displayName || mention.username }, { size: 36, className: 'mention-avatar' });
+        const badge = mention.verified ? '<span class="verified-badge" style="margin-left:4px;">✔</span>' : '';
+        return `<div class="mention-card">${avatar}<div class="mention-meta"><div class="mention-name">${escapeHtml(mention.displayName || mention.username)}${badge}</div><div class="mention-handle">@${escapeHtml(mention.username)}</div></div><button type="button" class="chip-remove" onclick="window.removeComposerMention('${mention.username}')">&times;</button></div>`;
+    }).join('');
+}
+
+async function searchMentionSuggestions(term = '') {
+    const listEl = document.getElementById('mention-suggestions');
+    if (!listEl) return;
+    const cleaned = (term || '').trim().replace(/^@/, '').toLowerCase();
+    if (!cleaned) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    try {
+        const userQuery = query(collection(db, 'users'), orderBy('username'), startAt(cleaned), endAt(cleaned + '\uf8ff'), limit(5));
+        const snap = await getDocs(userQuery);
+        const results = snap.docs.map(function (d) { return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) }; });
+        if (!results.length) {
+            listEl.innerHTML = '';
+            listEl.style.display = 'none';
+            return;
+        }
+        listEl.style.display = 'block';
+        listEl.innerHTML = results.map(function (profile) {
+            const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
+            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({ uid: profile.id || profile.uid, username: profile.username, displayName: profile.name || profile.nickname || profile.displayName || '', accountRoles: profile.accountRoles || [] }).replace(/'/g, "&apos;")})'>${avatar}<div class="mention-suggestion-meta"><div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div><div class="mention-handle">@${escapeHtml(profile.username || '')}</div></div></button>`;
+        }).join('');
+    } catch (err) {
+        console.warn('Mention search failed', err);
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+    }
+}
+
+function handleMentionInput(event) {
+    const value = event.target.value;
+    if (mentionSearchTimer) clearTimeout(mentionSearchTimer);
+    mentionSearchTimer = setTimeout(function () { searchMentionSuggestions(value); }, 200);
+}
+
+window.toggleTagInput = toggleTagInput;
+window.addComposerTag = addComposerTag;
+window.removeComposerTag = removeComposerTag;
+window.handleTagInputKey = handleTagInputKey;
+window.filterTagSuggestions = filterTagSuggestions;
+window.toggleMentionInput = function(show) {
+    const row = document.getElementById('mention-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('mention-input');
+        if (input) input.focus();
+    }
+};
+window.addComposerMention = addComposerMention;
+window.removeComposerMention = removeComposerMention;
+window.handleMentionInput = handleMentionInput;
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
@@ -1741,9 +2078,16 @@ function renderTagList(tags = []) {
     return `<div style="margin-top:8px;">${tags.map(function(tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
 }
 
+function getMentionHandles(mentions = []) {
+    if (!Array.isArray(mentions)) return [];
+    return mentions.map(function (m) { return typeof m === 'string' ? m : (m.username || m.handle || ''); })
+        .map(function (h) { return (h || '').replace(/^@/, '').toLowerCase(); })
+        .filter(Boolean);
+}
+
 function formatContent(text = '', tags = [], mentions = []) {
     let safe = escapeHtml(cleanText(text));
-    const mentionSet = new Set((mentions || []).map(function(m) { return m.toLowerCase(); }));
+    const mentionSet = new Set(getMentionHandles(mentions));
     mentionSet.forEach(function(handle) {
         const regex = new RegExp('@' + escapeRegex(handle), 'gi');
         safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
@@ -1755,8 +2099,9 @@ function formatContent(text = '', tags = [], mentions = []) {
     return safe;
 }
 
-async function resolveMentionProfiles(handles = []) {
-    const cleaned = Array.from(new Set(handles.map(function(h) { return h.replace(/^@/, '').toLowerCase(); }).filter(Boolean)));
+async function resolveMentionProfiles(mentions = []) {
+    const handles = getMentionHandles(mentions);
+    const cleaned = Array.from(new Set(handles));
     const results = [];
     for (const handle of cleaned) {
         const cached = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === handle; });
@@ -1806,10 +2151,10 @@ window.createPost = async function() {
      if (!requireAuth()) return;
      const title = document.getElementById('postTitle').value;
      const content = document.getElementById('postContent').value;
-     const tagsInput = document.getElementById('postTags');
-     const mentionsInput = document.getElementById('postMentions');
-     const tags = parseTagsInput(tagsInput ? tagsInput.value : '');
-     const mentions = parseMentionsInput(mentionsInput ? mentionsInput.value : '');
+     const tagInput = document.getElementById('tag-input');
+     const mentionInput = document.getElementById('mention-input');
+     const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+     const mentions = normalizeMentionsField(composerMentions || []);
      const fileInput = document.getElementById('postFile');
      const btn = document.getElementById('publishBtn');
      setComposerError('');
@@ -1838,6 +2183,15 @@ window.createPost = async function() {
          }
 
          const mentionProfiles = await resolveMentionProfiles(mentions);
+         const notificationTargets = [];
+         const seenNotify = new Set();
+         mentionProfiles.forEach(function(m) {
+             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push(m); }
+         });
+         mentions.forEach(function(m) {
+             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push({ uid: m.uid, handle: m.username }); }
+         });
+         const mentionUserIds = Array.from(seenNotify);
 
          let mediaUrl = null;
          if(fileInput.files[0]) {
@@ -1863,7 +2217,7 @@ window.createPost = async function() {
              userId: currentUser.uid,
              tags,
              mentions,
-             mentionUserIds: mentionProfiles.map(function(m) { return m.uid; }),
+             mentionUserIds,
              likes: 0,
              likedBy: [],
              trustScore: 0,
@@ -1871,13 +2225,17 @@ window.createPost = async function() {
          };
 
          const postRef = await addDoc(collection(db, 'posts'), postPayload);
-         if (mentionProfiles.length) await notifyMentionedUsers(mentionProfiles, postRef.id);
+         if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
 
          // Reset Form
          document.getElementById('postTitle').value = "";
          document.getElementById('postContent').value = "";
-         if (tagsInput) tagsInput.value = "";
-         if (mentionsInput) mentionsInput.value = "";
+         composerTags = [];
+         composerMentions = [];
+         renderComposerTags();
+         renderComposerMentions();
+         if (tagInput) tagInput.value = "";
+         if (mentionInput) mentionInput.value = "";
          fileInput.value = "";
          window.clearPostImage();
          window.toggleCreateModal(false);
@@ -1893,19 +2251,40 @@ window.createPost = async function() {
 }
 
 // --- Settings & Modals ---
+function updateRemovePhotoButtonState() {
+    const btn = document.getElementById('remove-photo-btn');
+    if (!btn) return;
+    const hasPhoto = !!(userProfile.photoURL || (auth.currentUser && auth.currentUser.photoURL));
+    btn.disabled = !hasPhoto;
+    btn.classList.toggle('disabled', !hasPhoto);
+}
+
+async function tryDeleteProfilePhotoFromStorage(photoURL = '', photoPath = '') {
+    if (!photoURL && !photoPath) return { deleted: false, reason: 'no-photo' };
+    try {
+        if (photoPath) {
+            await deleteObject(ref(storage, photoPath));
+            return { deleted: true };
+        }
+        const bucketHint = storage?.app?.options?.storageBucket || '';
+        if (photoURL && bucketHint && photoURL.includes(bucketHint)) {
+            await deleteObject(ref(storage, photoURL));
+            return { deleted: true };
+        }
+    } catch (err) {
+        console.warn('Storage delete failed', err);
+        return { deleted: false, error: err };
+    }
+    return { deleted: false };
+}
+
 function updateSettingsAvatarPreview(src) {
     const preview = document.getElementById('settings-avatar-preview');
     if(!preview) return;
 
-    if(src) {
-        preview.style.backgroundImage = `url('${src}')`;
-        preview.style.backgroundSize = 'cover';
-        preview.textContent = '';
-    } else {
-        preview.style.backgroundImage = 'none';
-        preview.style.backgroundColor = getColorForUser(userProfile.name || 'U');
-        preview.textContent = (userProfile.name || 'U')[0];
-    }
+    const tempUser = { ...userProfile, photoURL: src || '', avatarColor: userProfile.avatarColor || computeAvatarColor(currentUser?.uid || 'user') };
+    applyAvatarToElement(preview, tempUser, { size: 72 });
+    updateRemovePhotoButtonState();
 }
 
 function syncThemeRadios(themeValue) {
@@ -1917,17 +2296,11 @@ window.toggleCreateModal = function(show) {
     document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
     if(show && currentUser) {
         const avatarEl = document.getElementById('modal-user-avatar');
-        if(userProfile.photoURL) {
-            avatarEl.style.backgroundImage = `url('${userProfile.photoURL}')`;
-            avatarEl.textContent = '';
-        } else { 
-            avatarEl.style.backgroundImage = 'none'; 
-            avatarEl.style.backgroundColor = getColorForUser(userProfile.name);
-            avatarEl.textContent = userProfile.name[0];
-            avatarEl.style.color = 'black';
-        }
+        applyAvatarToElement(avatarEl, userProfile, { size: 42 });
         setComposerError('');
         renderDestinationField();
+        renderComposerTags();
+        renderComposerMentions();
         syncPostButtonState();
     } else if (!show) {
         closeDestinationPicker();
@@ -1955,6 +2328,7 @@ window.toggleSettingsModal = function(show) {
         }
         syncThemeRadios(userProfile.theme || 'system');
         updateSettingsAvatarPreview(userProfile.photoURL);
+        updateRemovePhotoButtonState();
 
         const uploadInput = document.getElementById('set-pic-file');
         const cameraInput = document.getElementById('set-pic-camera');
@@ -1992,18 +2366,21 @@ window.toggleSettingsModal = function(show) {
          return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
      }
 
-     let photoURL = userProfile.photoURL;
-     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
-     if(newPhoto) {
-         const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
-         photoURL = await uploadFileToStorage(newPhoto, path);
-     } else if(manualPhoto) {
-         photoURL = manualPhoto;
-     }
+    let photoURL = userProfile.photoURL;
+    let photoPath = userProfile.photoPath || '';
+    const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
+    if(newPhoto) {
+        const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
+        photoURL = await uploadFileToStorage(newPhoto, path);
+        photoPath = path;
+    } else if(manualPhoto) {
+        photoURL = manualPhoto;
+        photoPath = '';
+    }
 
-     const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL };
-     userProfile = { ...userProfile, ...updates };
-     userCache[currentUser.uid] = userProfile;
+    const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
+    userProfile = { ...userProfile, ...updates };
+    userCache[currentUser.uid] = userProfile;
 
      try {
          await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
@@ -2023,6 +2400,62 @@ function handleSettingsFileChange(inputEl) {
     const reader = new FileReader();
     reader.onload = function(e) { return updateSettingsAvatarPreview(e.target.result); };
     reader.readAsDataURL(inputEl.files[0]);
+    updateRemovePhotoButtonState();
+}
+
+window.removeProfilePhoto = async function() {
+    if (!currentUser || !auth.currentUser) return toast('You need to be signed in.', 'error');
+    const ok = confirm('Remove your profile photo?');
+    if (!ok) return;
+
+    const existingPhotoURL = userProfile.photoURL || auth.currentUser.photoURL || '';
+    const existingPhotoPath = userProfile.photoPath || '';
+    let deleteResult = { deleted: false };
+
+    try {
+        deleteResult = await tryDeleteProfilePhotoFromStorage(existingPhotoURL, existingPhotoPath);
+    } catch (err) {
+        console.warn('Deletion attempt error', err);
+    }
+
+    try {
+        await updateProfile(auth.currentUser, { photoURL: '' });
+    } catch (err) {
+        console.warn('Auth photo reset failed', err);
+    }
+
+    try {
+        await setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+    } catch (err) {
+        console.error('Failed to clear Firestore photo data', err);
+        toast('Could not update profile photo references', 'error');
+        return;
+    }
+
+    userProfile.photoURL = '';
+    userProfile.photoPath = '';
+    if (userCache[currentUser.uid]) {
+        userCache[currentUser.uid].photoURL = '';
+        userCache[currentUser.uid].photoPath = '';
+    }
+
+    updateSettingsAvatarPreview('');
+    renderProfile();
+    renderFeed();
+    if (activePostId) renderThreadMainPost(activePostId);
+
+    updateRemovePhotoButtonState();
+
+    if (!existingPhotoURL && !existingPhotoPath) {
+        toast('No profile photo to remove', 'info');
+        return;
+    }
+
+    if (deleteResult.deleted) {
+        toast('Profile photo removed', 'info');
+    } else {
+        toast('Could not delete photo from storage, but removed references', 'error');
+    }
 }
 
 // --- Peer Review System ---
@@ -2034,7 +2467,7 @@ window.openPeerReview = function(postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
     const q = query(reviewsRef); 
 
-    trackSnapshot(onSnapshot(q, function(snapshot) {
+    ListenerRegistry.register(`reviews:post:${postId}`, onSnapshot(q, function(snapshot) {
         const container = document.getElementById('review-list');
         container.innerHTML = "";
 
@@ -2197,7 +2630,7 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = trackSnapshot(onSnapshot(q, function(snapshot) {
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function(snapshot) {
         const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
@@ -2214,9 +2647,7 @@ const renderCommentHtml = function(c, isReply) {
   const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
   const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
-  const avatarBg = cAuthor.photoURL
-    ? `background-image:url('${cAuthor.photoURL}'); background-size:cover; color:transparent;`
-    : `background:${getColorForUser(cAuthor.name || 'U')}`;
+  const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
 
   const parentCommentId = c.parentCommentId || c.parentId;
   const replyStyle = (isReply || !!parentCommentId)
@@ -2232,9 +2663,7 @@ const renderCommentHtml = function(c, isReply) {
   return `
     <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
       <div style="display:flex; gap:10px; align-items:flex-start;">
-        <div class="user-avatar" style="width:36px; height:36px; font-size:0.9rem; ${avatarBg}">
-          ${cAuthor.photoURL ? '' : (cAuthor.name || 'U')[0]}
-        </div>
+        ${avatarHtml}
 
         <div style="flex:1;">
           <div style="font-size:0.9rem; margin-bottom:2px;">
@@ -2356,7 +2785,7 @@ function renderThreadMainPost(postId) {
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
     const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
-    const avatarStyle = authorData.photoURL ? `background-image: url('${authorData.photoURL}'); background-size: cover; color: transparent;` : `background: ${getColorForUser(authorData.name)}`;
+    const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
     const authorVerified = userHasRole(authorData, 'verified');
     const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
@@ -2389,7 +2818,7 @@ function renderThreadMainPost(postId) {
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
                 <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}')">
-                    <div class="user-avatar" style="${avatarStyle}; width:48px; height:48px; font-size:1.2rem;">${authorData.photoURL ? '' : authorData.name[0]}</div>
+                    ${avatarHtml}
                     <div>
                         <div class="author-line" style="font-size:1rem;"><span class="author-name">${escapeHtml(authorData.name)}</span>${verifiedBadge}</div>
                         <div class="post-meta">@${escapeHtml(authorData.username)}</div>
@@ -2417,14 +2846,8 @@ function renderThreadMainPost(postId) {
             </div>
         </div>`;
 
-    const myPfp = userProfile.photoURL 
-        ? `background-image: url('${userProfile.photoURL}'); background-size: cover; color: transparent;` 
-        : `background: ${getColorForUser(userProfile.name)}`;
     const inputPfp = document.getElementById('thread-input-pfp');
-    if(inputPfp) {
-        inputPfp.style.cssText = `width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:bold; ${myPfp}`;
-        inputPfp.innerHTML = userProfile.photoURL ? '' : userProfile.name[0];
-    }
+    if(inputPfp) applyAvatarToElement(inputPfp, userProfile, { size: 40 });
 
     const threadReviewBtn = document.getElementById('thread-review-btn');
     applyReviewButtonState(threadReviewBtn, myReview);
@@ -2741,13 +3164,11 @@ window.renderDiscover = async function() {
             matches.forEach(function(user) {
                 const uid = Object.keys(userCache).find(function(key) { return userCache[key] === user; });
                 if(!uid) return;
-                const pfpStyle = user.photoURL 
-                    ? `background-image: url('${user.photoURL}'); background-size: cover; color: transparent;` 
-                    : `background: ${getColorForUser(user.name)}`;
+                const avatarHtml = renderAvatar({ ...user, uid }, { size: 40 });
 
                 container.innerHTML += `
                     <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);" onclick="window.openUserProfile('${uid}')">
-                        <div class="user-avatar" style="width:40px; height:40px; ${pfpStyle}">${user.photoURL?'':user.name[0]}</div>
+                        ${avatarHtml}
                         <div>
                             <div style="font-weight:700;">${escapeHtml(user.name)}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
@@ -2940,9 +3361,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const normalizedProfile = normalizeUserProfileData(profileData);
     const container = document.getElementById('view-public-profile');
 
-    const pfpStyle = normalizedProfile.photoURL
-        ? `background-image: url('${normalizedProfile.photoURL}'); background-size: cover; color: transparent;`
-        : `background: ${getColorForUser(normalizedProfile.name)}`;
+    const avatarHtml = renderAvatar({ ...normalizedProfile, uid }, { size: 100, className: 'profile-pic' });
 
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
@@ -2969,7 +3388,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(normalizedProfile.username)}</h2>
         </div>
         <div class="profile-header" style="padding-top:1rem;">
-            <div class="profile-pic" style="${pfpStyle}; border: 3px solid var(--bg-card); box-shadow: 0 0 0 2px var(--primary);">${normalizedProfile.photoURL ? '' : normalizedProfile.name[0]}</div>
+            ${avatarHtml}
             <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
             <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
             <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
@@ -3051,6 +3470,7 @@ function renderProfile() {
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
     const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
 
     let linkHtml = '';
     if(userProfile.links) {
@@ -3065,7 +3485,7 @@ function renderProfile() {
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
-            <div class="profile-pic" style="background-image:url('${userProfile.photoURL||''}'); background-size:cover; background-color:var(--primary);">${userProfile.photoURL?'':displayName[0]}</div>
+            ${avatarHtml}
             <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
             ${realNameHtml}
             <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
@@ -3375,7 +3795,7 @@ function initConversations() {
     if(!requireAuth()) return;
     if(conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = trackSnapshot(onSnapshot(convRef, function(snap) {
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function(snap) {
         conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderConversationList();
     }));
@@ -3392,9 +3812,18 @@ function renderConversationList() {
     conversationsCache.forEach(function(convo) {
         const partnerId = convo.members.find(function(m) { return m !== currentUser.uid; }) || currentUser.uid;
         const display = userCache[partnerId]?.username || 'user';
+        const partnerProfile = userCache[partnerId] || { username: display, name: display, avatarColor: computeAvatarColor(partnerId || display) };
+        const avatarHtml = renderAvatar({ ...partnerProfile, uid: partnerId }, { size: 36 });
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
-        item.innerHTML = `<div><strong>@${display}</strong><div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div></div><span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
+        item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
+            ${avatarHtml}
+            <div>
+                <strong>@${display}</strong>
+                <div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div>
+            </div>
+        </div>
+        <span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
         item.onclick = function() { return setActiveConversation(convo.id, convo); };
         listEl.appendChild(item);
     });
@@ -3411,7 +3840,7 @@ function setActiveConversation(convoId, convoData = null) {
 function listenToMessages(convoId) {
     if(messagesUnsubscribe) messagesUnsubscribe();
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = trackSnapshot(onSnapshot(msgRef, function(snap) {
+    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function(snap) {
         const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderMessages(msgs);
     }));
@@ -3504,7 +3933,7 @@ function pauseAllVideos() {
 function initVideoFeed() {
     if(videosUnsubscribe) return; // already live
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = trackSnapshot(onSnapshot(refVideos, function(snap) {
+    videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function(snap) {
         videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         renderVideoFeed(videosCache);
     }));
@@ -3655,7 +4084,7 @@ window.toggleGoLiveModal = function(show = true) { const modal = document.getEle
 function renderLiveSessions() {
     if(liveSessionsUnsubscribe) return;
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
-    liveSessionsUnsubscribe = trackSnapshot(onSnapshot(liveRef, function(snap) {
+    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
         const sessions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const container = document.getElementById('live-grid-container');
         if(!container) return;
@@ -3689,6 +4118,10 @@ window.createLiveSession = async function() {
 };
 
 window.openLiveSession = function(sessionId) {
+    if (activeLiveSessionId && activeLiveSessionId !== sessionId) {
+        ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
+    }
+    activeLiveSessionId = sessionId;
     const container = document.getElementById('live-grid-container');
     if(!container) return;
     const sessionCard = document.createElement('div');
@@ -3700,7 +4133,7 @@ window.openLiveSession = function(sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
-    trackSnapshot(onSnapshot(chatRef, function(snap) {
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function(snap) {
         const chatEl = document.getElementById('live-chat');
         if(!chatEl) return;
         chatEl.innerHTML = '';
@@ -3740,7 +4173,7 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if(staffRequestsUnsub) return;
-    staffRequestsUnsub = trackSnapshot(onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function(snap) {
         const container = document.getElementById('verification-requests');
         if(!container) return;
         container.innerHTML = '';
@@ -3767,7 +4200,7 @@ window.denyVerification = async function(requestId) {
 
 function listenReports() {
     if(staffReportsUnsub) return;
-    staffReportsUnsub = trackSnapshot(onSnapshot(collection(db, 'reports'), function(snap) {
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function(snap) {
         const container = document.getElementById('reports-queue');
         if(!container) return;
         container.innerHTML = '';
@@ -3783,7 +4216,7 @@ function listenReports() {
 
 function listenAdminLogs() {
     if(staffLogsUnsub) return;
-    staffLogsUnsub = trackSnapshot(onSnapshot(collection(db, 'adminLogs'), function(snap) {
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function(snap) {
         const container = document.getElementById('admin-logs');
         if(!container) return;
         container.innerHTML = '';
