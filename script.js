@@ -130,12 +130,14 @@ function showSplash() {
     splash.style.display = 'flex';
     splash.classList.remove('nexera-splash-hidden');
     splash.style.pointerEvents = 'auto';
+    splash.style.visibility = 'visible';
 }
 
 function hideSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
     splash.classList.add('nexera-splash-hidden');
+    splash.style.pointerEvents = 'none';
     const TRANSITION_BUFFER = 520;
     setTimeout(function () {
         splash.style.display = 'none';
