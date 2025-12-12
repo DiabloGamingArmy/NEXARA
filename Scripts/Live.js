@@ -75,42 +75,54 @@ export function initialize(streamId, currentUser) {
 
     const db = getFirestore();
 
-    liveUnsubscribe = onSnapshot(doc(db, "liveStreams", resolvedStreamId), async snap => {
-        if (!snap.exists()) {
+    liveUnsubscribe = onSnapshot(
+        doc(db, "liveStreams", resolvedStreamId),
+        async snap => {
+            try {
+                if (!snap.exists()) {
+                    if (player) player.renderOffline();
+                    toggleOfflineBanner(true);
+                    return;
+                }
+
+                const data = snap.data() || {};
+
+                updateLikeCount(data.likes);
+                activeHostId = data.hostId || data.userId || data.author || data.ownerId || null;
+
+                if (!chatCleanup) {
+                    chatCleanup = initLiveChat(resolvedStreamId, currentUser);
+                }
+
+                bindInteractionButtons(resolvedStreamId, activeHostId, currentUser);
+
+                if (!data.isLive) {
+                    if (player) player.renderOffline();
+                    toggleOfflineBanner(true);
+                    playerLoaded = false;
+                    return;
+                }
+
+                toggleOfflineBanner(false);
+
+                if (!playerLoaded && player) {
+                    await player.load({
+                        playbackUrl: data.playbackUrl,
+                        visibility: data.visibility,
+                        channelArn: data.channelArn,
+                    });
+                    playerLoaded = true;
+                }
+            } catch (err) {
+                console.error("Live stream snapshot handling failed", err);
+            }
+        },
+        error => {
+            console.error("Live stream snapshot error", error);
             if (player) player.renderOffline();
             toggleOfflineBanner(true);
-            return;
         }
-
-        const data = snap.data();
-
-        updateLikeCount(data.likes);
-        activeHostId = data.hostId || data.userId || data.author || data.ownerId || null;
-
-        if (!chatCleanup) {
-            chatCleanup = initLiveChat(resolvedStreamId, currentUser);
-        }
-
-        bindInteractionButtons(resolvedStreamId, activeHostId, currentUser);
-
-        if (!data.isLive) {
-            if (player) player.renderOffline();
-            toggleOfflineBanner(true);
-            playerLoaded = false;
-            return;
-        }
-
-        toggleOfflineBanner(false);
-
-        if (!playerLoaded && player) {
-            await player.load({
-                playbackUrl: data.playbackUrl,
-                visibility: data.visibility,
-                channelArn: data.channelArn,
-            });
-            playerLoaded = true;
-        }
-    });
+    );
 }
 
 export function teardown() {
