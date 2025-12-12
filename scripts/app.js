@@ -4,6 +4,7 @@ import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTim
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "../commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "./ui/topBar.js";
+import { loadLiveStream, unloadLiveStream } from "../Scripts/Live.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -58,6 +59,7 @@ let tagSuggestionPool = [];
 let mentionSearchTimer = null;
 let currentThreadComments = [];
 let liveSessionsCache = [];
+let activeLiveWatchId = null;
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -1783,6 +1785,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
         }
     }
 
+    if (viewId !== 'live-watch' && currentViewId === 'live-watch') {
+        unloadLiveStream();
+    }
+
     if (viewId !== 'staff') {
         ListenerRegistry.unregister('staff:verificationRequests');
         ListenerRegistry.unregister('staff:reports');
@@ -1796,7 +1802,8 @@ window.navigateTo = function (viewId, pushToStack = true) {
             category: currentCategory,
             profileFilter: currentProfileFilter,
             viewingUser: viewingUserId,
-            activePost: activePostId
+            activePost: activePostId,
+            liveWatchId: activeLiveWatchId
         });
     }
 
@@ -1808,7 +1815,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
         document.querySelectorAll('.nav-item').forEach(function (el) { el.classList.remove('active'); });
-        const navTarget = viewId === 'live-setup' ? 'live' : viewId;
+        const navTarget = viewId === 'live-setup' || viewId === 'live-watch' ? 'live' : viewId;
         const navEl = document.getElementById('nav-' + navTarget);
         if (navEl) navEl.classList.add('active');
     }
@@ -1825,10 +1832,15 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'messages') { initConversations(); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') { renderLiveSessions(); }
+    if (viewId === 'live-watch' && activeLiveWatchId) { loadLiveStream(activeLiveWatchId); }
     if (viewId === 'live-setup') { renderLiveSetup(); }
     if (viewId === 'staff') { renderStaffConsole(); }
 
     if (viewId !== 'live-setup' && window.location.hash === '#live-setup') {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+
+    if (viewId !== 'live-watch' && window.location.hash.startsWith('#live/watch/')) {
         history.replaceState(null, '', window.location.pathname + window.location.search);
     }
 
@@ -1869,6 +1881,7 @@ window.goBack = function () {
     if (prevState.view === 'feed') currentCategory = prevState.category;
     if (prevState.view === 'public-profile') viewingUserId = prevState.viewingUser;
     if (prevState.view === 'thread') activePostId = prevState.activePost;
+    if (prevState.view === 'live-watch') activeLiveWatchId = prevState.liveWatchId;
 
     window.navigateTo(prevState.view, false);
 
@@ -1877,6 +1890,15 @@ window.goBack = function () {
     if (prevState.view === 'public-profile' && viewingUserId) {
         window.openUserProfile(viewingUserId, null, false);
     }
+};
+
+window.openLiveWatch = function (streamId, pushToStack = true) {
+    if (!streamId) return;
+    activeLiveWatchId = streamId;
+    if (pushToStack) {
+        window.location.hash = `live/watch/${streamId}`;
+    }
+    window.navigateTo('live-watch', pushToStack);
 };
 
 // --- Follow Logic (Optimistic UI) ---
@@ -6193,6 +6215,21 @@ window.syncMobileComposerState = function() {
     if (submit) submit.disabled = !hasContent;
 };
 
+function handleHashRoute(hashValue) {
+    if (!hashValue) return false;
+    if (hashValue === 'live-setup') {
+        window.navigateTo('live-setup', false);
+        return true;
+    }
+    const liveWatchMatch = hashValue.match(/^live\/watch\/(.+)$/);
+    if (liveWatchMatch) {
+        activeLiveWatchId = liveWatchMatch[1];
+        window.navigateTo('live-watch', false);
+        return true;
+    }
+    return false;
+}
+
 window.triggerComposerPost = function() {
     const input = document.getElementById('mobile-compose-input');
     const content = document.getElementById('postContent');
@@ -6214,12 +6251,12 @@ document.addEventListener('DOMContentLoaded', function() {
     if (content) content.addEventListener('input', syncPostButtonState);
     initializeNexeraApp();
     const initialHash = (window.location.hash || '').replace('#', '');
-    if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
+    if (initialHash) handleHashRoute(initialHash);
 });
 
 window.addEventListener('hashchange', function() {
     const hash = (window.location.hash || '').replace('#', '');
-    if (hash === 'live-setup') { window.navigateTo('live-setup', false); }
+    if (hash) handleHashRoute(hash);
 });
 
 // --- Security Rules Snippet (reference) ---
