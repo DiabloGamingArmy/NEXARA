@@ -343,6 +343,25 @@ function userHasRole(userLike = {}, role = '') {
     return roles.has(role);
 }
 
+function isUserVerified(userLike = {}) {
+    if (typeof userLike === 'boolean') return !!userLike;
+    if (!userLike) return false;
+    if (userLike.isVerified === true || userLike.verified === true) return true;
+    if (typeof userLike.verificationStatus === 'string') {
+        const status = userLike.verificationStatus.toLowerCase();
+        if (status === 'approved' || status === 'verified') return true;
+    }
+    return userHasRole(userLike, 'verified');
+}
+
+function getVerifiedIconSvg() {
+    return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.75a1 1 0 0 1 .8.4l1.86 2.52 3.02-.08a1 1 0 0 1 .84.46l1.64 2.56a1 1 0 0 1-.06 1.14l-1.83 2.43.73 2.95a1 1 0 0 1-.39 1.05l-2.5 1.78a1 1 0 0 1-1.12.02L12 17.85l-3.09 1.18a1 1 0 0 1-1.12-.02l-2.5-1.78a1 1 0 0 1-.39-1.05l.73-2.95-1.83-2.43a1 1 0 0 1-.06-1.14l1.64-2.56a1 1 0 0 1 .84-.46l3.02.08L11.2 3.15a1 1 0 0 1 .8-.4Zm-1.2 11 4.7-4.7-1.4-1.4-3.3 3.3-1.6-1.6-1.4 1.42 3 3Z"></path></svg>';
+}
+
+function renderVerifiedBadge(userLike = {}, extraClass = '') {
+    return isUserVerified(userLike) ? `<span class="verified-badge ${extraClass}">${getVerifiedIconSvg()}</span>` : '';
+}
+
 function hasGlobalRole(role) {
     return getAccountRoleSet().has(role);
 }
@@ -398,6 +417,11 @@ let conversationMappings = [];
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
+let messageThreadCache = {};
+let conversationDetailsUnsubscribe = null;
+let lastDeliveredAtLocal = {};
+let lastReadAtLocal = {};
+let typingStateByConversation = {};
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosUnsubscribe = null;
@@ -525,11 +549,11 @@ const HISTORICAL_EVENTS = {
 };
 
 const timeCapsuleState = {
-    events: [],
+    event: null,
     source: 'fallback',
     dateKey: null,
     dateLabel: '',
-    currentIndex: 0
+    loading: false
 };
 
 const THEMES = {
@@ -724,48 +748,41 @@ async function initializeNexeraApp() {
 
 async function fetchWikipediaEventsForToday() {
     try {
-        const today = new Date();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const day = String(today.getDate()).padStart(2, '0');
-        const endpoint = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
-        const response = await fetch(endpoint);
+        const now = new Date();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const url = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
+
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load Wikipedia events');
         const data = await response.json();
-        if (!data || !Array.isArray(data.events)) return [];
+        const events = Array.isArray(data.events) ? data.events : [];
+        if (!events.length) return null;
 
-        return data.events.map(function (event) {
-            if (!event || !event.text) return null;
-            const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
-            let url = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
-            if (!url && firstPage && firstPage.titles && firstPage.titles.normalized) {
-                const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
-                url = `https://en.wikipedia.org/wiki/${normalized}`;
-            }
+        const event = events[Math.floor(Math.random() * events.length)];
+        if (!event || !event.text) return null;
 
-            return {
-                year: event.year,
-                text: event.text,
-                url: url || null
-            };
-        }).filter(Boolean);
+        const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
+        let wikiUrl = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
+        if (!wikiUrl && firstPage && firstPage.titles && firstPage.titles.normalized) {
+            const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
+            wikiUrl = `https://en.wikipedia.org/wiki/${normalized}`;
+        }
+
+        return {
+            year: event.year,
+            text: event.text,
+            url: wikiUrl || null
+        };
     } catch (err) {
         console.warn('Wikipedia events fetch failed', err);
-        return [];
+        return null;
     }
 }
 
-function getFallbackEventsForDate(key) {
+function getFallbackEventForDate(key) {
     const eventText = HISTORICAL_EVENTS[key] || HISTORICAL_EVENTS["DEFAULT"];
-    return eventText ? [{ year: '', text: eventText, url: null }] : [];
-}
-
-function pickRandomIndex(length, excludeIndex) {
-    if (!length || length <= 1) return 0;
-    let candidate = excludeIndex;
-    while (candidate === excludeIndex) {
-        candidate = Math.floor(Math.random() * length);
-    }
-    return candidate;
+    return eventText ? { year: '', text: eventText, url: null } : null;
 }
 
 function renderTimeCapsule() {
@@ -774,14 +791,14 @@ function renderTimeCapsule() {
     const wikiLink = document.getElementById('otd-wiki-link');
     const refreshBtn = document.getElementById('otd-refresh-btn');
 
-    const currentEvent = timeCapsuleState.events[timeCapsuleState.currentIndex] || null;
+    const currentEvent = timeCapsuleState.event;
     const displayText = currentEvent ? `${currentEvent.year ? currentEvent.year + ' – ' : ''}${currentEvent.text}` : HISTORICAL_EVENTS["DEFAULT"];
 
     if (dateEl) dateEl.textContent = timeCapsuleState.dateLabel || '';
     if (eventEl) eventEl.textContent = displayText;
 
     if (refreshBtn) {
-        refreshBtn.disabled = !(timeCapsuleState.events && timeCapsuleState.events.length > 1);
+        refreshBtn.disabled = !!timeCapsuleState.loading;
         refreshBtn.classList.toggle('disabled', refreshBtn.disabled);
     }
 
@@ -801,33 +818,34 @@ function renderTimeCapsule() {
 async function updateTimeCapsule(forceReload = false) {
     const date = new Date();
     const key = `${date.getMonth() + 1}-${date.getDate()}`;
-    const previousKey = timeCapsuleState.dateKey;
-    timeCapsuleState.dateKey = key;
-    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 
-    if (forceReload || !timeCapsuleState.events.length || timeCapsuleState.source === 'fallback' || previousKey !== key) {
-        const wikiEvents = await fetchWikipediaEventsForToday();
-        if (wikiEvents && wikiEvents.length) {
-            timeCapsuleState.events = wikiEvents;
-            timeCapsuleState.source = 'wikipedia';
-        } else {
-            timeCapsuleState.events = getFallbackEventsForDate(key);
-            timeCapsuleState.source = 'fallback';
-        }
-        timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, -1);
+    if (!forceReload && timeCapsuleState.dateKey === key && timeCapsuleState.event) {
+        renderTimeCapsule();
+        return;
     }
 
+    timeCapsuleState.dateKey = key;
+    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+    timeCapsuleState.loading = true;
+    renderTimeCapsule();
+
+    const wikiEvent = await fetchWikipediaEventsForToday();
+    if (wikiEvent) {
+        timeCapsuleState.event = wikiEvent;
+        timeCapsuleState.source = 'wikipedia';
+    } else {
+        timeCapsuleState.event = getFallbackEventForDate(key);
+        timeCapsuleState.source = 'fallback';
+    }
+
+    timeCapsuleState.loading = false;
     renderTimeCapsule();
 }
 
 function showAnotherTimeCapsuleEvent() {
-    if (!timeCapsuleState.events || !timeCapsuleState.events.length) {
-        updateTimeCapsule(true);
-        return;
-    }
-    timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, timeCapsuleState.currentIndex);
-    renderTimeCapsule();
+    updateTimeCapsule(true);
 }
+
 window.showAnotherTimeCapsuleEvent = showAnotherTimeCapsuleEvent;
 
 function getSystemTheme() {
@@ -1437,7 +1455,7 @@ function renderDestinationResults() {
         if (destination.verified) {
             const badge = document.createElement('span');
             badge.className = 'verified-badge';
-            badge.textContent = '✔';
+            badge.innerHTML = getVerifiedIconSvg();
             title.appendChild(badge);
         }
 
@@ -1767,6 +1785,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId !== 'messages') {
         ListenerRegistry.unregister('messages:list');
         if (activeConversationId) ListenerRegistry.unregister(`messages:thread:${activeConversationId}`);
+        if (activeConversationId) ListenerRegistry.unregister(`conversation:details:${activeConversationId}`);
+        if (activeConversationId) setTypingState(activeConversationId, false);
+        if (conversationDetailsUnsubscribe) { conversationDetailsUnsubscribe(); conversationDetailsUnsubscribe = null; }
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
@@ -1979,8 +2000,7 @@ function getPostHTML(post) {
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
 
-        const authorVerified = userHasRole(authorData, 'verified');
-        const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
+        const verifiedBadge = renderVerifiedBadge(authorData);
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
@@ -2497,7 +2517,7 @@ function renderComposerMentions() {
     }
     container.innerHTML = composerMentions.map(function (mention) {
         const avatar = renderAvatar({ ...mention, name: mention.displayName || mention.username }, { size: 36, className: 'mention-avatar' });
-        const badge = mention.verified ? '<span class="verified-badge" style="margin-left:4px;">✔</span>' : '';
+        const badge = renderVerifiedBadge(mention, 'with-gap');
         return `<div class="mention-card">${avatar}<div class="mention-meta"><div class="mention-name">${escapeHtml(mention.displayName || mention.username)}${badge}</div><div class="mention-handle">@${escapeHtml(mention.username)}</div></div><button type="button" class="chip-remove" onclick="window.removeComposerMention('${mention.username}')">&times;</button></div>`;
     }).join('');
 }
@@ -3427,8 +3447,7 @@ function renderThreadMainPost(postId) {
     const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
     const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
-    const authorVerified = userHasRole(authorData, 'verified');
-    const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
+    const verifiedBadge = renderVerifiedBadge(authorData);
     const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
     const formattedBody = formatContent(postText, post.tags, post.mentions);
     const tagListHtml = renderTagList(post.tags || []);
@@ -3986,7 +4005,7 @@ window.renderDiscover = async function() {
         if (visible.length > 0) {
             container.innerHTML += `<div class="discover-section-header discover-section-row"><span>Categories</span>${categoriesDropdown('section')}</div>`;
             visible.forEach(function(cat) {
-                const verifiedMark = cat.verified ? '<span class="verified-badge">✔</span>' : '';
+                const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
                 const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
                 container.innerHTML += `
@@ -4094,8 +4113,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     }
 
     const followersCount = normalizedProfile.followersCount || 0;
-    const profileRoles = getAccountRoleSet(normalizedProfile);
-    const verifiedBadge = profileRoles.has('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const verifiedBadge = renderVerifiedBadge(normalizedProfile, 'with-gap');
 
     // FIX: Added specific ID to follower count for real-time updates
     container.innerHTML = `
@@ -4190,7 +4208,7 @@ function renderProfile() {
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
-    const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const verifiedBadge = renderVerifiedBadge(userProfile, 'with-gap');
     const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
 
     let linkHtml = '';
@@ -4529,6 +4547,77 @@ function formatMessagePreview(payload = {}) {
     return text.length > 80 ? text.substring(0, 77) + '…' : text;
 }
 
+function toDateSafe(ts) {
+    if (!ts) return null;
+    if (ts instanceof Timestamp) return ts.toDate();
+    if (typeof ts.seconds === 'number') return new Date(ts.seconds * 1000);
+    const date = new Date(ts);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isSameDay(a, b) {
+    return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatChatDateLabel(date) {
+    if (!date) return '';
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 86400000);
+    if (isSameDay(date, now)) return 'Today';
+    if (isSameDay(date, yesterday)) return 'Yesterday';
+    return date.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function formatMessageTimeLabel(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return '';
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function isNearBottom(el, threshold = 80) {
+    if (!el) return false;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+}
+
+function computeConversationTitle(convo = {}, viewerId = currentUser?.uid) {
+    const stored = (convo.title || '').trim();
+    if (stored) return stored;
+
+    const participants = convo.participants || [];
+    const orderedParticipants = viewerId ? participants.filter(function (uid) { return uid !== viewerId; }) : participants.slice();
+    if (!orderedParticipants.length) orderedParticipants.push(...participants);
+
+    const names = orderedParticipants.map(function (uid) {
+        const meta = resolveParticipantDisplay(convo, uid);
+        return meta.displayName || meta.username || 'Participant';
+    }).filter(Boolean);
+
+    if (!names.length) return 'Conversation';
+    if (participants.length === 2) return names[0] || 'Conversation';
+    if (participants.length === 3) return names.slice(0, 2).join(', ') || names[0];
+    if (participants.length >= 4) {
+        const firstTwo = names.slice(0, 2);
+        const remaining = Math.max(0, names.length - firstTwo.length);
+        const suffix = remaining > 0 ? `, +${remaining} more` : '';
+        return `${firstTwo.join(', ')}${suffix}`;
+    }
+
+    return names.join(', ');
+}
+
+function resolveParticipantDisplay(convo = {}, uid = '') {
+    const idx = (convo.participants || []).indexOf(uid);
+    const username = (convo.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
+    const displayName = (convo.participantNames || [])[idx] || userCache[uid]?.displayName || userCache[uid]?.name || username;
+    const avatar = (convo.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
+    return { username, displayName, avatar };
+}
+
+function getMessageTimestampMs(msg = {}) {
+    const date = toDateSafe(msg.createdAt);
+    return date ? date.getTime() : 0;
+}
+
 function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
     if (!listEl) return;
@@ -4553,37 +4642,49 @@ function renderConversationList() {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
-        const name = details.title || mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || 'Conversation';
+        const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+        const otherProfile = otherId ? userCache[otherId] : null;
+        const participantLabels = (details.participantNames || details.participantUsernames || meta.usernames || []).filter(Boolean);
+        const isGroup = (participants || []).length > 2 || details.type === 'group';
+        const mergedConvo = {
+            ...details,
+            participants,
+            participantNames: details.participantNames || details.participantUsernames || participantLabels,
+            participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
+            title: details.title || null
+        };
+        const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
         const avatarUrl = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
         const avatarHtml = renderAvatar({
-            uid: meta.otherIds?.[0] || mapping.otherParticipantIds?.[0] || 'user',
+            uid: otherId || 'user',
             username: name,
             photoURL: avatarUrl,
             avatarColor: computeAvatarColor(name)
-        }, { size: 36 });
+        }, { size: 42 });
 
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
         const unread = mapping.unreadCount || 0;
-        const timeLabel = mapping.lastMessageAt?.toDate ? formatTimestampDisplay(mapping.lastMessageAt) : '';
         const badges = [];
         if (mapping.pinned) badges.push('<i class="ph ph-push-pin"></i>');
         if (mapping.muted) badges.push('<i class="ph ph-bell-slash"></i>');
         if (mapping.archived) badges.push('<i class="ph ph-archive"></i>');
-        item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
-            ${avatarHtml}
-            <div>
-                <strong>${escapeHtml(details.title || name)}</strong>
-                <div style="color:var(--text-muted); font-size:0.8rem; display:flex; align-items:center; gap:6px;">
-                    <span>${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</span>
+        const flagHtml = badges.length || unread > 0
+            ? `<div class="conversation-flags">
                     ${badges.length ? `<span style="display:inline-flex; gap:4px; color:var(--text-muted);">${badges.join('')}</span>` : ''}
+                    ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
+               </div>`
+            : '';
+        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start');
+        const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
+        item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
+            <div class="conversation-body">
+                <div class="conversation-title-row">
+                    <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                    ${flagHtml}
                 </div>
-            </div>
-        </div>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-            ${timeLabel ? `<span style="color:var(--text-muted); font-size:0.75rem;">${timeLabel}</span>` : ''}
-            ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
-        </div>`;
+                <div class="conversation-preview">${previewText}</div>
+            </div>`;
         item.onclick = function () { openConversation(mapping.id); };
         listEl.appendChild(item);
     });
@@ -4594,7 +4695,7 @@ function renderMessageHeader(convo = {}) {
     if (!header) return;
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
-    const label = convo.type === 'group' ? (convo.title || 'Group') : (meta.usernames?.join(', ') || 'Conversation');
+    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
     const avatar = renderAvatar({
         uid: meta.otherIds?.[0] || 'group',
         username: label,
@@ -4602,8 +4703,10 @@ function renderMessageHeader(convo = {}) {
         avatarColor: computeAvatarColor(label)
     }, { size: 36 });
     const cid = convo.id || activeConversationId;
+    const primaryOther = meta.otherIds?.[0] ? userCache[meta.otherIds[0]] : null;
+    const verifiedBadge = (!convo.title && participants.length === 2 && primaryOther) ? renderVerifiedBadge(primaryOther) : '';
     header.innerHTML = `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800;">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
+        <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(label)}${verifiedBadge}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
         <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')"><i class="ph ph-dots-three-outline"></i></button>
     </div>`;
 }
@@ -4611,11 +4714,54 @@ function renderMessageHeader(convo = {}) {
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
     if (!body) return;
+    const shouldStickToBottom = isNearBottom(body);
+    const previousOffset = body.scrollHeight - body.scrollTop;
     body.innerHTML = '';
-    msgs.forEach(function (msg) {
+
+    let lastDateKey = '';
+    let lastSenderId = null;
+    let latestSelfMessage = null;
+    const fragment = document.createDocumentFragment();
+
+    msgs.forEach(function (msg, idx) {
+        const createdDate = toDateSafe(msg.createdAt) || new Date();
+        const dateKey = createdDate.toDateString();
+        if (dateKey !== lastDateKey) {
+            const divider = document.createElement('div');
+            divider.className = 'message-date-divider';
+            divider.textContent = formatChatDateLabel(createdDate);
+            fragment.appendChild(divider);
+            lastSenderId = null;
+            lastDateKey = dateKey;
+        }
+
+        const nextMsg = msgs[idx + 1];
+        const nextDateKey = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()).toDateString() : null;
+        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || (nextDateKey !== dateKey));
+        const isSelf = msg.senderId === currentUser?.uid;
+        const row = document.createElement('div');
+        row.className = 'message-row ' + (isSelf ? 'self' : 'other');
+        if (lastSenderId === msg.senderId) row.classList.add('stacked');
+
+        const avatarSlot = document.createElement('div');
+        avatarSlot.className = 'message-avatar-slot' + (isSelf ? ' placeholder' : '');
+        if (!isSelf) {
+            if (showAvatar) {
+                const senderMeta = resolveParticipantDisplay(convo, msg.senderId);
+                avatarSlot.innerHTML = renderAvatar({
+                    uid: msg.senderId,
+                    username: senderMeta.displayName || senderMeta.username,
+                    photoURL: senderMeta.avatar,
+                    avatarColor: computeAvatarColor(senderMeta.displayName || senderMeta.username)
+                }, { size: 42 });
+            } else {
+                avatarSlot.classList.add('placeholder');
+            }
+        }
+
         const bubble = document.createElement('div');
-        bubble.className = 'message-bubble ' + (msg.senderId === currentUser?.uid ? 'self' : 'other');
-        const senderLabel = msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
+        bubble.className = 'message-bubble ' + (isSelf ? 'self' : 'other');
+        const senderLabel = !isSelf && msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
         let content = escapeHtml(msg.text || '');
         if (msg.type === 'image' && msg.mediaURL) {
             content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
@@ -4625,10 +4771,132 @@ function renderMessages(msgs = [], convo = {}) {
             const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
             content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${escapeHtml(msg.text || '')}</div>${refBtn}</div>`;
         }
-        bubble.innerHTML = `${senderLabel}${content}`;
-        body.appendChild(bubble);
+        bubble.innerHTML = `${senderLabel}${content}<div class="message-time">${formatMessageTimeLabel(msg.createdAt)}</div>`;
+
+        if (isSelf) {
+            row.appendChild(bubble);
+            row.appendChild(avatarSlot);
+            latestSelfMessage = { message: msg, row };
+        } else {
+            row.appendChild(avatarSlot);
+            row.appendChild(bubble);
+        }
+
+        fragment.appendChild(row);
+        lastSenderId = msg.senderId;
     });
-    body.scrollTop = body.scrollHeight;
+
+    if (latestSelfMessage) {
+        const statusText = deriveMessageStatus(convo, latestSelfMessage.message);
+        if (statusText) {
+            const status = document.createElement('div');
+            status.className = 'message-status self';
+            status.textContent = statusText;
+            const nextNode = latestSelfMessage.row.nextSibling;
+            if (nextNode) {
+                fragment.insertBefore(status, nextNode);
+            } else {
+                fragment.appendChild(status);
+            }
+        }
+    }
+
+    body.appendChild(fragment);
+    if (shouldStickToBottom) {
+        body.scrollTop = body.scrollHeight;
+    } else {
+        body.scrollTop = Math.max(0, body.scrollHeight - previousOffset);
+    }
+}
+
+function deriveMessageStatus(convo = {}, message = {}) {
+    if (!currentUser) return '';
+    const others = (convo.participants || []).filter(function (uid) { return uid !== currentUser.uid; });
+    if (others.length === 0) return 'Sent';
+    const msgTs = getMessageTimestampMs(message);
+    const readMap = convo.lastReadAt || {};
+    const deliveredMap = convo.lastDeliveredAt || {};
+
+    const allRead = others.every(function (uid) {
+        const ts = toDateSafe(readMap[uid]);
+        return ts && ts.getTime() >= msgTs;
+    });
+    if (allRead) return 'Read';
+
+    const allDelivered = others.every(function (uid) {
+        const ts = toDateSafe(deliveredMap[uid]);
+        return ts && ts.getTime() >= msgTs;
+    });
+    return allDelivered ? 'Delivered' : 'Sent';
+}
+
+function renderTypingIndicator(convo = {}) {
+    const indicator = document.getElementById('typing-indicator');
+    if (!indicator) return;
+    const typing = convo.typing || {};
+    const active = Object.keys(typing || {}).filter(function (uid) { return uid !== currentUser?.uid && typing[uid]; });
+    if (!active.length) {
+        indicator.style.display = 'none';
+        indicator.innerHTML = '';
+        return;
+    }
+
+    const names = active.map(function (uid) {
+        const meta = resolveParticipantDisplay(convo, uid);
+        return meta.displayName || meta.username || 'Someone';
+    });
+    const label = active.length === 1 ? `${names[0]} is typing...` : 'Several people are typing...';
+    indicator.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div><span>${escapeHtml(label)}</span>`;
+    indicator.style.display = 'flex';
+}
+
+async function setTypingState(conversationId, isTyping) {
+    if (!conversationId || !currentUser) return;
+    if (typingStateByConversation[conversationId] === isTyping) return;
+    typingStateByConversation[conversationId] = isTyping;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`typing.${currentUser.uid}`]: isTyping });
+    } catch (e) {
+        console.warn('Unable to update typing state', e?.message || e);
+    }
+}
+
+function attachMessageInputHandlers(conversationId) {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+    input.oninput = function () {
+        const hasText = (input.value || '').trim().length > 0;
+        setTypingState(conversationId, hasText);
+    };
+    input.onblur = function () { setTypingState(conversationId, false); };
+}
+
+function listenToConversationDetails(convoId) {
+    if (conversationDetailsUnsubscribe) conversationDetailsUnsubscribe();
+    const convoRef = doc(db, 'conversations', convoId);
+    conversationDetailsUnsubscribe = ListenerRegistry.register(`conversation:details:${convoId}`, onSnapshot(convoRef, function (snap) {
+        if (!snap.exists()) return;
+        const data = { id: convoId, ...snap.data() };
+        conversationDetailsCache[convoId] = data;
+        renderMessageHeader(data);
+        renderMessages(messageThreadCache[convoId] || [], data);
+        renderTypingIndicator(data);
+    }));
+}
+
+async function markMessagesDelivered(conversationId, msgs = []) {
+    if (!conversationId || !currentUser) return;
+    const latestOther = msgs.slice().reverse().find(function (msg) { return msg.senderId !== currentUser.uid; });
+    if (!latestOther) return;
+    const tsMs = getMessageTimestampMs(latestOther);
+    if (!tsMs) return;
+    if (lastDeliveredAtLocal[conversationId] && lastDeliveredAtLocal[conversationId] >= tsMs) return;
+    lastDeliveredAtLocal[conversationId] = tsMs;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`lastDeliveredAt.${currentUser.uid}`]: Timestamp.fromMillis(tsMs) });
+    } catch (e) {
+        console.warn('Unable to mark delivered', e?.message || e);
+    }
 }
 
 async function ensureConversation(convoId, participantId) {
@@ -4637,12 +4905,14 @@ async function ensureConversation(convoId, participantId) {
     const participants = [currentUser.uid, participantId].sort();
     const profiles = await Promise.all(participants.map(resolveUserProfile));
     const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
     const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
     if (!existingSnap.exists()) {
         const payload = {
             participants,
             participantUsernames,
+            participantNames,
             participantAvatars,
             type: 'direct',
             title: null,
@@ -4654,7 +4924,8 @@ async function ensureConversation(convoId, participantId) {
             lastMessageAt: serverTimestamp(),
             unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
             mutedBy: [],
-            pinnedBy: []
+            pinnedBy: [],
+            creatorId: currentUser.uid
         };
         await setDoc(convoRef, payload, { merge: true });
         conversationDetailsCache[convoId] = { id: convoId, ...payload };
@@ -4708,14 +4979,20 @@ async function listenToMessages(convoId) {
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
     messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
         const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        messageThreadCache[convoId] = msgs;
         const details = conversationDetailsCache[convoId] || {};
         renderMessages(msgs, details);
+        renderTypingIndicator(details);
+        markMessagesDelivered(convoId, msgs);
         markConversationAsRead(convoId);
     }));
 }
 
 async function openConversation(conversationId) {
     if (!conversationId || !requireAuth()) return;
+    if (activeConversationId && activeConversationId !== conversationId) {
+        setTypingState(activeConversationId, false);
+    }
     activeConversationId = conversationId;
     const body = document.getElementById('message-thread');
     if (body) body.innerHTML = '';
@@ -4725,8 +5002,11 @@ async function openConversation(conversationId) {
     const convo = await fetchConversation(conversationId);
     if (convo) {
         renderMessageHeader(convo);
+        renderTypingIndicator(convo);
     }
-
+    listenToConversationDetails(conversationId);
+    attachMessageInputHandlers(conversationId);
+    setTypingState(conversationId, false);
     await listenToMessages(conversationId);
 }
 
@@ -4815,17 +5095,23 @@ function renderConversationParticipants(convo = {}) {
     listEl.innerHTML = '';
 
     participants.forEach(function (uid, idx) {
-        const name = usernames[idx] || userCache[uid]?.displayName || userCache[uid]?.username || 'Participant';
+        const meta = resolveParticipantDisplay(convo, uid);
+        const name = meta.displayName || 'Participant';
+        const handle = meta.username ? `@${meta.username}` : '';
+        const badge = renderVerifiedBadge(userCache[uid] || {});
         const avatar = renderAvatar({ uid, username: name, photoURL: avatars[idx] || userCache[uid]?.photoURL || '' }, { size: 32 });
         const row = document.createElement('div');
         row.className = 'participant-row';
-        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:700;">${escapeHtml(name)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(uid)}</div></div></div>`;
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'icon-pill';
-        removeBtn.innerHTML = '<i class="ph ph-user-minus"></i>';
-        removeBtn.disabled = participants.length <= 2;
-        removeBtn.onclick = function () { window.removeConversationParticipant(uid); };
-        row.appendChild(removeBtn);
+        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:700; display:flex; align-items:center; gap:6px;">${escapeHtml(name)}${badge}</div><div style="color:var(--text-muted); font-size:0.85rem;">${handle ? escapeHtml(handle) : ''}</div></div></div>`;
+        const isCreator = convo.creatorId && currentUser?.uid === convo.creatorId;
+        const canRemove = isCreator && uid !== currentUser?.uid && uid !== convo.creatorId && participants.length > 2;
+        if (canRemove) {
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'icon-pill';
+            removeBtn.innerHTML = '<i class="ph ph-user-minus"></i>';
+            removeBtn.onclick = function () { window.removeConversationParticipant(uid); };
+            row.appendChild(removeBtn);
+        }
         listEl.appendChild(row);
     });
 
@@ -4842,7 +5128,7 @@ function renderConversationSettings(convo = {}, mapping = {}) {
 
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
-    const label = convo.type === 'group' ? (convo.title || 'Group conversation') : (meta.usernames?.join(', ') || 'Conversation');
+    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
 
     if (titleEl) titleEl.textContent = label;
     if (subtitleEl) subtitleEl.textContent = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
@@ -4856,9 +5142,9 @@ function renderConversationSettings(convo = {}, mapping = {}) {
     }
 
     if (nameInput) {
-        nameInput.disabled = convo.type !== 'group';
-        nameInput.value = convo.type === 'group' ? (convo.title || '') : (convo.title || label);
-        nameInput.placeholder = convo.type === 'group' ? 'Conversation name' : 'Direct chats use participant names';
+        nameInput.disabled = false;
+        nameInput.value = convo.title || '';
+        nameInput.placeholder = label;
     }
 
     renderConversationParticipants(convo);
@@ -4944,6 +5230,7 @@ async function updateConversationParticipants(conversationId, updatedParticipant
 
     const profiles = await Promise.all(unique.map(resolveUserProfile));
     const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
     const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
     const existing = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId)) || {};
@@ -4958,12 +5245,13 @@ async function updateConversationParticipants(conversationId, updatedParticipant
     await updateDoc(convoRef, {
         participants: unique,
         participantUsernames,
+        participantNames,
         participantAvatars,
         unreadCounts,
         mutedBy,
         pinnedBy,
         type: convoType,
-        title: convoType === 'group' ? (existing.title || null) : null,
+        title: existing.title || null,
         updatedAt: serverTimestamp()
     });
 
@@ -4972,7 +5260,7 @@ async function updateConversationParticipants(conversationId, updatedParticipant
         try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationId}`)); } catch (e) { console.warn('Remove mapping failed', e?.message || e); }
     }));
 
-    conversationDetailsCache[conversationId] = { ...existing, id: conversationId, participants: unique, participantUsernames, participantAvatars, unreadCounts, mutedBy, pinnedBy, type: convoType, title: convoType === 'group' ? (existing.title || null) : null };
+    conversationDetailsCache[conversationId] = { ...existing, id: conversationId, participants: unique, participantUsernames, participantNames, participantAvatars, unreadCounts, mutedBy, pinnedBy, type: convoType, title: existing.title || null };
     await Promise.all(unique.map(async function (uid) {
         const meta = deriveOtherParticipantMeta(unique, uid, conversationDetailsCache[conversationId]);
         const mappingRef = doc(db, `users/${uid}/conversations/${conversationId}`);
@@ -5007,11 +5295,11 @@ window.saveConversationName = async function () {
     if (!conversationSettingsId || !requireAuth()) return;
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     if (!convo) return;
-    if (convo.type !== 'group') { toast('Direct chats use participant names.', 'error'); return; }
     const nameInput = document.getElementById('conversation-name-input');
     const title = (nameInput?.value || '').trim();
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { title, updatedAt: serverTimestamp() });
-    conversationDetailsCache[conversationSettingsId] = { ...convo, title };
+    const nextTitle = title || null;
+    await updateDoc(doc(db, 'conversations', conversationSettingsId), { title: nextTitle, updatedAt: serverTimestamp() });
+    conversationDetailsCache[conversationSettingsId] = { ...convo, title: nextTitle };
     if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
     toast('Conversation name updated', 'info');
 };
@@ -5170,6 +5458,7 @@ window.sendMessage = async function (conversationId = activeConversationId) {
     if (!text) return;
     await sendChatPayload(conversationId, { text, type: 'text' });
     if (input) input.value = '';
+    setTypingState(conversationId, false);
 };
 
 window.sendMediaMessage = async function (conversationId = activeConversationId, fileInputElementId = 'message-media', caption = '') {
@@ -5191,12 +5480,23 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
     fileInput.value = '';
     const input = document.getElementById('message-input');
     if (input && caption) input.value = '';
+    setTypingState(conversationId, false);
 };
 
 window.markConversationAsRead = async function (conversationId = activeConversationId) {
     if (!conversationId || !currentUser) return;
+    const messages = messageThreadCache[conversationId] || [];
+    const latestMessage = messages[messages.length - 1];
+    const latestTs = latestMessage ? getMessageTimestampMs(latestMessage) : Date.now();
+    const receiptTs = Timestamp.fromMillis(latestTs || Date.now());
+    lastReadAtLocal[conversationId] = latestTs;
+    lastDeliveredAtLocal[conversationId] = Math.max(lastDeliveredAtLocal[conversationId] || 0, latestTs);
     try {
-        await updateDoc(doc(db, 'conversations', conversationId), { [`unreadCounts.${currentUser.uid}`]: 0 });
+        await updateDoc(doc(db, 'conversations', conversationId), {
+            [`unreadCounts.${currentUser.uid}`]: 0,
+            [`lastReadAt.${currentUser.uid}`]: receiptTs,
+            [`lastDeliveredAt.${currentUser.uid}`]: receiptTs
+        });
     } catch (e) {
         console.warn('Unable to update unread counts', e);
     }
@@ -5320,12 +5620,14 @@ async function createGroupConversation(participantIds = [], title = null) {
     const participants = Array.from(new Set(participantIds.concat([currentUser.uid]))).sort();
     const profiles = await Promise.all(participants.map(resolveUserProfile));
     const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
     const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
     const convoRef = doc(collection(db, 'conversations'));
     const payload = {
         participants,
         participantUsernames,
+        participantNames,
         participantAvatars,
         type: participants.length > 2 ? 'group' : 'direct',
         title: participants.length > 2 ? (title || null) : null,
@@ -5337,7 +5639,8 @@ async function createGroupConversation(participantIds = [], title = null) {
         lastMessageAt: serverTimestamp(),
         unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
         mutedBy: [],
-        pinnedBy: []
+        pinnedBy: [],
+        creatorId: currentUser.uid
     };
 
     await setDoc(convoRef, payload, { merge: true });
