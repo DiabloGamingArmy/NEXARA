@@ -595,8 +595,33 @@
                                 <span class="slider"></span>
                             </label>
                         </div>
-                        <div style="display:flex; justify-content:flex-end;">
-                            <button class="create-btn-sidebar" style="width:auto;">Start Streaming</button>
+                        <div class="input-group">
+                            <label class="settings-label" for="live-video-mode">Video Source</label>
+                            <select id="live-video-mode" class="form-input">
+                                <option value="camera">Camera (webcam)</option>
+                                <option value="screen">Screen share</option>
+                                <option value="external">External software (OBS / RTMP)</option>
+                            </select>
+                            <select id="live-video-device" class="form-input" style="margin-top:8px;"></select>
+                        </div>
+                        <div class="input-group">
+                            <label class="settings-label" for="live-audio-mode">Audio Source</label>
+                            <select id="live-audio-mode" class="form-input">
+                                <option value="mic">Microphone</option>
+                                <option value="system">Use system audio (screen share)</option>
+                                <option value="mixed">Mic + system audio</option>
+                                <option value="external">External / provided by OBS</option>
+                            </select>
+                            <select id="live-audio-device" class="form-input" style="margin-top:8px;"></select>
+                        </div>
+                        <div class="input-group">
+                            <label class="settings-label">Live Preview</label>
+                            <video id="live-preview" class="live-preview" style="width:100%; border-radius:10px; background:#0c0c0f;" muted playsinline autoplay></video>
+                            <div id="live-status-text" class="settings-hint" style="margin-top:6px;">Idle</div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="create-btn-sidebar" id="start-stream" style="width:auto;">Start Streaming</button>
+                            <button class="create-btn-sidebar" id="end-stream" style="width:auto; display:none;">End Stream</button>
                         </div>
                     </div>
                 </div>
