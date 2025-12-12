@@ -75,6 +75,29 @@ service cloud.firestore {
     }
 
     // -------------------------
+    // Conversations
+    // -------------------------
+    function isConversationParticipant(conversationId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/conversations/$(conversationId))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+    }
+
+    // Allow a signed-in user to get a conversation doc even if it doesn't exist yet.
+    // This is needed so ensureConversation() can safely call getDoc() when creating a new convo.
+    function canReadConversation(conversationId) {
+      let path = /databases/$(database)/documents/conversations/$(conversationId);
+
+      return isSignedIn() && (
+        // If the doc does NOT exist, there's nothing to leak, so allow get().
+        !exists(path)
+        ||
+        // If it DOES exist, only allow if the user is a participant.
+        (exists(path) && request.auth.uid in get(path).data.participants)
+      );
+    }
+
+    // -------------------------
     // Users
     // -------------------------
     match /users/{userId} {
@@ -168,31 +191,37 @@ service cloud.firestore {
     // Conversations / DMs
     // -------------------------
     match /conversations/{cid} {
+      // Create: signed-in user, participants list >= 2, and creator is in it.
       allow create: if isSignedIn()
         && request.resource.data.participants is list
         && request.resource.data.participants.size() >= 2
         && request.auth.uid in request.resource.data.participants;
 
-      allow read: if isSignedIn() && request.auth.uid in resource.data.participants;
+      // Allow get() for:
+      // - Non-existent docs (so ensureConversation can probe),
+      // - Existing docs where the user is a participant.
+      allow get: if canReadConversation(cid);
 
-      allow update: if isSignedIn()
-        && request.auth.uid in resource.data.participants
-        && request.resource.data.participants is list
-        && request.resource.data.participants.size() >= 2;
+      // Do not allow listing all conversations directly.
+      allow list: if false;
 
-      allow delete: if isSignedIn() && request.auth.uid in resource.data.participants;
+      // Only participants can mutate an existing conversation doc.
+      allow update, delete: if isConversationParticipant(cid);
 
       match /messages/{mid} {
-        allow create: if isSignedIn()
-          && request.auth.uid == request.resource.data.senderId
-          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+        // Create message: participant sending as themselves
+        allow create: if isConversationParticipant(cid)
+          && request.auth.uid == request.resource.data.senderId;
 
-        allow read: if isSignedIn()
-          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+        // Read messages: any participant
+        allow read: if isConversationParticipant(cid);
 
-        allow update: if isSignedIn() && request.auth.uid == resource.data.senderId;
+        // Update message: only original sender
+        allow update: if isConversationParticipant(cid)
+          && request.auth.uid == resource.data.senderId;
 
-        allow delete: if isSignedIn()
+        // Delete message: sender or any participant (e.g., clearing history)
+        allow delete: if isConversationParticipant(cid)
           && (request.auth.uid == resource.data.senderId
               || request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants);
       }
