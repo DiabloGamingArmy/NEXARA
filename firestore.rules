@@ -101,7 +101,7 @@ service cloud.firestore {
     // Users
     // -------------------------
     match /users/{userId} {
-      allow read: if true;
+      allow read: if isSignedIn();
       allow write: if (isSignedIn() && request.auth.uid == userId && accountRolesUnchanged(userId))
                    || hasFounderClaim();
     }
@@ -245,23 +245,42 @@ service cloud.firestore {
     // Videos
     // -------------------------
     match /videos/{vid} {
-      allow read: if true;
+      allow read: if isSignedIn();
 
       allow write: if isSignedIn()
         && request.auth.uid == request.resource.data.ownerId;
 
-      match /likes/{uid} { allow read: if true; allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /likes/{uid} { allow read: if isSignedIn(); allow write: if isSignedIn() && request.auth.uid == uid; }
       match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
-      match /comments/{cid} { allow read: if true; allow write: if isSignedIn(); }
+      match /comments/{cid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
     }
 
     // -------------------------
     // Live sessions
     // -------------------------
     match /liveSessions/{sid} {
-      allow read: if true;
-      allow write: if isSignedIn() && request.auth.uid == request.resource.data.hostId;
-      match /chat/{mid} { allow read: if true; allow write: if isSignedIn(); }
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+      match /chat/{mid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
+    }
+
+    // ------------------------------------------------
+    // TEMPORARY — DEVELOPMENT ONLY
+    // WILL BE HARDENED BEFORE PRODUCTION
+    // Relaxed live streaming access for development
+    // ------------------------------------------------
+    match /liveStreams/{streamId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+        && (request.auth.uid == resource.data.uid || request.auth.uid == request.resource.data.uid);
+
+      match /chat/{messageId} {
+        allow read, write: if isSignedIn();
+      }
+    }
+
+    match /liveSessions/{sessionId}/chat/{messageId} {
+      allow read, write: if isSignedIn();
     }
 
     // -------------------------

@@ -4299,8 +4299,10 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
             }));
         }
         if (!liveSessionsCache.some(function(session) { return (session.hostId || session.author) === uid; })) {
-            tasks.push(getDocs(query(collection(db, 'liveSessions'), where('hostId', '==', uid), orderBy('createdAt', 'desc'), limit(12))).then(function(snap) {
-                const additions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+            const liveQuery = query(collection(db, 'liveSessions'), where('hostId', '==', uid), limit(12));
+            tasks.push(getDocs(liveQuery).then(function(snap) {
+                const additions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); })
+                    .sort(function(a, b) { return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0); });
                 const existingIds = new Set(liveSessionsCache.map(function(s) { return s.id; }));
                 liveSessionsCache = liveSessionsCache.concat(additions.filter(function(s) { return !existingIds.has(s.id); }));
             }));
@@ -7417,7 +7419,14 @@ function renderLiveSessions() {
     if(liveSessionsUnsubscribe) { renderLiveDirectoryFromCache(); return; }
     const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
     liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
-        liveSessionsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        try {
+            liveSessionsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+            renderLiveDirectoryFromCache();
+        } catch (e) {
+            console.error('Live sessions snapshot failed', e);
+        }
+    }, function(error) {
+        console.error('Live sessions listener error', error);
         renderLiveDirectoryFromCache();
     }));
 }
@@ -7428,16 +7437,20 @@ window.createLiveSession = async function() {
     const category = document.getElementById('live-category').value;
     const tags = (document.getElementById('live-tags').value || '').split(',').map(function(t) { return t.trim(); }).filter(Boolean);
     const streamEmbedURL = document.getElementById('live-url').value;
-    await addDoc(collection(db, 'liveSessions'), {
-        hostId: currentUser.uid,
-        title,
-        category,
-        tags,
-        status: 'live',
-        streamEmbedURL,
-        createdAt: serverTimestamp()
-    });
-    toggleGoLiveModal(false);
+    try {
+        await addDoc(collection(db, 'liveSessions'), {
+            hostId: currentUser.uid,
+            title,
+            category,
+            tags,
+            status: 'live',
+            streamEmbedURL,
+            createdAt: serverTimestamp()
+        });
+        toggleGoLiveModal(false);
+    } catch (e) {
+        console.error('Failed to create live session', e);
+    }
 };
 
 window.openLiveSession = function(sessionId) {
@@ -7447,8 +7460,14 @@ window.openLiveSession = function(sessionId) {
     activeLiveSessionId = sessionId;
     const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
     if(!container) return;
+    const sessionData = liveSessionsCache.find(function(session) { return session.id === sessionId; });
     const sessionCard = document.createElement('div');
     sessionCard.className = 'social-card';
+    if (!sessionData || (!sessionData.streamEmbedURL && !sessionData.streamUrl)) {
+        sessionCard.innerHTML = '<div style="padding:1rem;"><div class="empty-state">Stream is offline or unavailable.</div></div>';
+        container.prepend(sessionCard);
+        return;
+    }
     sessionCard.innerHTML = `<div style="padding:1rem;"><div id="live-player" style="margin-bottom:10px;"></div><div id="live-chat" style="max-height:200px; overflow:auto;"></div><div style="display:flex; gap:8px; margin-top:8px;"><input id="live-chat-input" class="form-input" placeholder="Chat"/><button class="create-btn-sidebar" style="width:auto;" onclick="window.sendLiveChat('${sessionId}')">Send</button></div></div>`;
     container.prepend(sessionCard);
     listenLiveChat(sessionId);
@@ -7457,15 +7476,23 @@ window.openLiveSession = function(sessionId) {
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
     ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function(snap) {
+        try {
+            const chatEl = document.getElementById('live-chat');
+            if(!chatEl) return;
+            chatEl.innerHTML = '';
+            snap.docs.forEach(function(docSnap) {
+                const data = docSnap.data();
+                const row = document.createElement('div');
+                row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
+                chatEl.appendChild(row);
+            });
+        } catch (e) {
+            console.error('Live chat snapshot failed', e);
+        }
+    }, function(error) {
+        console.error('Live chat listener error', error);
         const chatEl = document.getElementById('live-chat');
-        if(!chatEl) return;
-        chatEl.innerHTML = '';
-        snap.docs.forEach(function(docSnap) {
-            const data = docSnap.data();
-            const row = document.createElement('div');
-            row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
-            chatEl.appendChild(row);
-        });
+        if (chatEl) chatEl.innerHTML = '<div class="empty-state">Chat unavailable.</div>';
     }));
 }
 
@@ -7473,8 +7500,12 @@ window.sendLiveChat = async function(sessionId) {
     if(!requireAuth()) return;
     const input = document.getElementById('live-chat-input');
     if(!input || !input.value.trim()) return;
-    await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
-    input.value = '';
+    try {
+        await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
+        input.value = '';
+    } catch (e) {
+        console.error('Failed to send live chat', e);
+    }
 };
 
 // --- Staff Console ---
