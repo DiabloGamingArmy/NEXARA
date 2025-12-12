@@ -7697,6 +7697,11 @@ class GoLiveSetupController {
         if (!this.functions) {
             this.functions = getFunctions(app);
         }
+        if (!auth?.currentUser) {
+            console.error('[GoLive]', 'Cannot start stream without authenticated user');
+            this.setState('error', 'You must be signed in to go live');
+            throw new Error('User not authenticated');
+        }
         const payload = {
             title: config.title,
             category: config.category,
@@ -7710,8 +7715,10 @@ class GoLiveSetupController {
         this.setState('initializing', 'Calling backend to create channel');
         console.info('[GoLive]', 'Calling createEphemeralChannel', payload);
         try {
-            const createChannel = httpsCallable(this.functions, 'createEphemeralChannel');
-            const response = await createChannel(payload);
+            if (!this.createEphemeralChannel) {
+                this.createEphemeralChannel = httpsCallable(this.functions, 'createEphemeralChannel');
+            }
+            const response = await this.createEphemeralChannel(payload);
             this.session = response?.data || null;
             console.info('[GoLive]', 'createEphemeralChannel response', response?.data);
             this.setState('live', 'Ephemeral channel ready');
