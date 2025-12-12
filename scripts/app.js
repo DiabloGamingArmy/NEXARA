@@ -2,6 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebas
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "../commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "./ui/topBar.js";
 import { initializeLiveDiscover } from "../Scripts/LiveDiscover.js";
@@ -58,6 +59,7 @@ let categoryVisibleCount = 10;
 let commentRootDisplayCount = {};
 let replyExpansionState = {};
 let currentEditPost = null;
+let goLiveController = null;
 let tagSuggestionPool = [];
 let mentionSearchTimer = null;
 let currentThreadComments = [];
@@ -7410,9 +7412,337 @@ function renderLiveDirectoryFromCache() {
     renderLiveGrid(filtered);
 }
 
+class GoLiveSetupController {
+    constructor() {
+        this.functions = getFunctions(app);
+        this.state = 'idle';
+        this.session = null;
+        this.stream = null;
+        this.previewEl = null;
+        this.statusEl = null;
+        this.startButton = null;
+        this.endButton = null;
+        this.videoModeSelect = null;
+        this.audioModeSelect = null;
+        this.videoDeviceSelect = null;
+        this.audioDeviceSelect = null;
+        this.bound = false;
+        this.inputMode = 'camera';
+        this.audioMode = 'mic';
+
+        this.onStart = this.onStart.bind(this);
+        this.onEnd = this.onEnd.bind(this);
+        this.handleDeviceChange = this.handleDeviceChange.bind(this);
+
+        console.info('[GoLive]', 'Controller initialized');
+        if (navigator.mediaDevices?.addEventListener) {
+            navigator.mediaDevices.addEventListener('devicechange', this.handleDeviceChange);
+        }
+    }
+
+    bindUI() {
+        const startBtn = document.getElementById('start-stream');
+        const endBtn = document.getElementById('end-stream');
+        const preview = document.getElementById('live-preview');
+        const status = document.getElementById('live-status-text');
+        const videoMode = document.getElementById('live-video-mode');
+        const audioMode = document.getElementById('live-audio-mode');
+        const videoDevice = document.getElementById('live-video-device');
+        const audioDevice = document.getElementById('live-audio-device');
+
+        if (!startBtn || !preview) {
+            console.warn('[GoLive]', 'Go Live UI not ready; waiting for DOM');
+            return;
+        }
+
+        if (this.startButton) {
+            this.startButton.removeEventListener('click', this.onStart);
+        }
+        if (this.endButton) {
+            this.endButton.removeEventListener('click', this.onEnd);
+        }
+
+        this.startButton = startBtn;
+        this.endButton = endBtn;
+        this.previewEl = preview;
+        this.statusEl = status;
+        this.videoModeSelect = videoMode;
+        this.audioModeSelect = audioMode;
+        this.videoDeviceSelect = videoDevice;
+        this.audioDeviceSelect = audioDevice;
+
+        this.startButton.addEventListener('click', this.onStart);
+        if (this.endButton) this.endButton.addEventListener('click', this.onEnd);
+
+        if (this.videoModeSelect) {
+            this.videoModeSelect.addEventListener('change', (e) => {
+                this.inputMode = e.target.value || 'camera';
+                console.info('[GoLive]', 'Video mode changed', { mode: this.inputMode });
+                this.updateStatus('Video input updated');
+            });
+        }
+        if (this.audioModeSelect) {
+            this.audioModeSelect.addEventListener('change', (e) => {
+                this.audioMode = e.target.value || 'mic';
+                console.info('[GoLive]', 'Audio mode changed', { mode: this.audioMode });
+                this.updateStatus('Audio input updated');
+            });
+        }
+
+        this.bound = true;
+        console.info('[GoLive]', 'Go Live UI bound and ready');
+        this.refreshDeviceOptions();
+        this.updateUiState();
+    }
+
+    handleDeviceChange() {
+        console.info('[GoLive]', 'Media devices changed');
+        this.refreshDeviceOptions();
+    }
+
+    setState(nextState, detail = '') {
+        console.info('[GoLive]', 'State change', { from: this.state, to: nextState, detail });
+        this.state = nextState;
+        this.updateStatus(detail);
+        this.updateUiState();
+    }
+
+    updateStatus(detail = '') {
+        if (this.statusEl) {
+            const suffix = detail ? ` – ${detail}` : '';
+            this.statusEl.textContent = `State: ${this.state}${suffix}`;
+        }
+    }
+
+    updateUiState() {
+        if (this.startButton) {
+            this.startButton.disabled = this.state === 'initializing';
+            this.startButton.textContent = this.state === 'initializing' ? 'Starting…' : 'Start Streaming';
+        }
+        if (this.endButton) {
+            this.endButton.style.display = this.state === 'live' || this.state === 'previewing' ? 'inline-flex' : 'none';
+        }
+    }
+
+    async refreshDeviceOptions(requestLabels = false) {
+        if (!navigator.mediaDevices?.enumerateDevices) {
+            console.warn('[GoLive]', 'Media device enumeration not supported');
+            return;
+        }
+        try {
+            console.info('[GoLive]', 'Enumerating media devices');
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            this.populateDeviceSelect(this.videoDeviceSelect, devices.filter((d) => d.kind === 'videoinput'), 'camera');
+            this.populateDeviceSelect(this.audioDeviceSelect, devices.filter((d) => d.kind === 'audioinput'), 'microphone');
+            if (requestLabels && this.videoDeviceSelect && this.videoDeviceSelect.options.length && !this.videoDeviceSelect.options[0].textContent) {
+                this.updateStatus('Device labels refreshed');
+            }
+        } catch (error) {
+            console.error('[GoLive]', 'Device enumeration failed', error);
+            this.setState('error', error?.message || 'Failed to enumerate devices');
+        }
+    }
+
+    populateDeviceSelect(selectEl, devices = [], fallbackLabel = 'device') {
+        if (!selectEl) return;
+        selectEl.innerHTML = '';
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = `Use default ${fallbackLabel}`;
+        selectEl.appendChild(defaultOption);
+        devices.forEach((device) => {
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.textContent = device.label || `${fallbackLabel} ${selectEl.options.length}`;
+            selectEl.appendChild(option);
+        });
+    }
+
+    collectFormValues() {
+        const tagsRaw = (document.getElementById('live-setup-tags')?.value || '').split(',').map((t) => t.trim()).filter(Boolean);
+        const values = {
+            title: document.getElementById('live-setup-title')?.value || '',
+            category: document.getElementById('live-setup-category')?.value || '',
+            tags: tagsRaw,
+            privacy: document.getElementById('live-setup-privacy')?.value || 'Public',
+            autoRecord: Boolean(document.getElementById('live-setup-autorecord')?.checked),
+            videoMode: this.videoModeSelect?.value || 'camera',
+            audioMode: this.audioModeSelect?.value || 'mic',
+            videoDeviceId: this.videoDeviceSelect?.value || '',
+            audioDeviceId: this.audioDeviceSelect?.value || '',
+        };
+        console.info('[GoLive]', 'Form values collected', values);
+        return values;
+    }
+
+    async onStart(event) {
+        if (event) event.preventDefault();
+        console.info('[GoLive]', 'Start Streaming clicked');
+        if (!this.bound) {
+            console.warn('[GoLive]', 'Start ignored; UI not bound');
+            return;
+        }
+        if (this.state === 'initializing') {
+            console.warn('[GoLive]', 'Already initializing; ignoring duplicate start');
+            return;
+        }
+        if (this.state === 'live') {
+            console.warn('[GoLive]', 'Stream already live; ignoring start');
+            return;
+        }
+
+        const config = this.collectFormValues();
+        this.setState('configuring', 'Preparing to request media');
+
+        try {
+            if (config.videoMode !== 'external') {
+                await this.acquireMedia(config);
+            } else {
+                this.setState('previewing', 'External streaming software selected; skipping local capture');
+            }
+            await this.initializeBackend(config);
+        } catch (error) {
+            console.error('[GoLive]', 'Start flow failed', error);
+            this.setState('error', error?.message || 'Failed to start stream');
+        }
+    }
+
+    async onEnd(event) {
+        if (event) event.preventDefault();
+        console.info('[GoLive]', 'End Stream requested');
+        this.stopCurrentStream();
+        this.session = null;
+        this.setState('idle', 'Stream ended or cancelled');
+    }
+
+    stopCurrentStream() {
+        if (this.stream) {
+            console.info('[GoLive]', 'Stopping current media tracks');
+            this.stream.getTracks().forEach((t) => t.stop());
+            this.stream = null;
+        }
+        if (this.previewEl) {
+            this.previewEl.srcObject = null;
+        }
+    }
+
+    async acquireMedia(config) {
+        this.stopCurrentStream();
+        this.setState('initializing', 'Requesting media devices');
+
+        try {
+            const stream = config.videoMode === 'screen'
+                ? await this.buildScreenStream(config)
+                : await this.buildCameraStream(config);
+
+            if (stream) {
+                this.stream = stream;
+                this.attachPreview(stream);
+                this.setState('previewing', 'Media ready');
+                await this.refreshDeviceOptions(true);
+            } else {
+                this.setState('previewing', 'No local media stream provided');
+            }
+            return stream;
+        } catch (error) {
+            console.error('[GoLive]', 'Media request failed', error);
+            this.setState('error', error?.message || 'Unable to access media devices');
+            throw error;
+        }
+    }
+
+    async buildCameraStream(config) {
+        const videoConstraints = config.videoDeviceId ? { deviceId: { exact: config.videoDeviceId } } : true;
+        const wantsAudio = config.audioMode !== 'external';
+        const audioConstraints = wantsAudio ? (config.audioDeviceId ? { deviceId: { exact: config.audioDeviceId }, echoCancellation: true } : { echoCancellation: true }) : false;
+
+        console.info('[GoLive]', 'Requesting camera stream', { videoConstraints, audioConstraints });
+        return navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: audioConstraints });
+    }
+
+    async buildScreenStream(config) {
+        console.info('[GoLive]', 'Requesting screen stream', { audioMode: config.audioMode });
+        const wantsSystemAudio = config.audioMode === 'system' || config.audioMode === 'mixed';
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: wantsSystemAudio });
+        const tracks = [];
+        const displayVideo = displayStream.getVideoTracks()[0];
+        if (displayVideo) tracks.push(displayVideo);
+
+        if (wantsSystemAudio) {
+            const systemAudio = displayStream.getAudioTracks()[0];
+            if (systemAudio) tracks.push(systemAudio);
+        }
+
+        if (config.audioMode === 'mic' || config.audioMode === 'mixed') {
+            const micConstraints = config.audioDeviceId ? { deviceId: { exact: config.audioDeviceId }, echoCancellation: true } : { echoCancellation: true };
+            const micStream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints });
+            const micTrack = micStream.getAudioTracks()[0];
+            if (micTrack) tracks.push(micTrack);
+        }
+
+        return tracks.length ? new MediaStream(tracks) : null;
+    }
+
+    attachPreview(stream) {
+        if (!this.previewEl) return;
+        console.info('[GoLive]', 'Attaching preview stream');
+        this.previewEl.srcObject = stream;
+        const playResult = this.previewEl.play?.();
+        if (playResult?.catch) {
+            playResult.catch((error) => console.warn('[GoLive]', 'Preview play blocked', error));
+        }
+    }
+
+    async initializeBackend(config) {
+        if (!this.functions) {
+            this.functions = getFunctions(app);
+        }
+        if (!auth?.currentUser) {
+            console.error('[GoLive]', 'Cannot start stream without authenticated user');
+            this.setState('error', 'You must be signed in to go live');
+            throw new Error('User not authenticated');
+        }
+        const payload = {
+            title: config.title,
+            category: config.category,
+            tags: config.tags,
+            latencyMode: 'LOW',
+            visibility: (config.privacy || 'Public').toLowerCase(),
+            autoRecord: config.autoRecord,
+            inputMode: config.videoMode,
+            audioMode: config.audioMode,
+        };
+        this.setState('initializing', 'Calling backend to create channel');
+        console.info('[GoLive]', 'Calling createEphemeralChannel', payload);
+        try {
+            if (!this.createEphemeralChannel) {
+                this.createEphemeralChannel = httpsCallable(this.functions, 'createEphemeralChannel');
+            }
+            const response = await this.createEphemeralChannel(payload);
+            this.session = response?.data || null;
+            console.info('[GoLive]', 'createEphemeralChannel response', response?.data);
+            this.setState('live', 'Ephemeral channel ready');
+        } catch (error) {
+            console.error('[GoLive]', 'Backend call failed', error);
+            this.setState('error', error?.message || 'Backend initialization failed');
+            throw error;
+        }
+    }
+}
+
+function ensureGoLiveController() {
+    if (!goLiveController) {
+        goLiveController = new GoLiveSetupController();
+        window.__goLiveSetupController = goLiveController;
+    }
+    return goLiveController;
+}
+
 function renderLiveSetup() {
     const titleInput = document.getElementById('live-setup-title');
     if (titleInput && !titleInput.value) titleInput.placeholder = 'Give your stream a standout title';
+    const controller = ensureGoLiveController();
+    controller.bindUI();
 }
 
 function renderLiveSessions() {
