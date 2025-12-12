@@ -27,7 +27,7 @@ let allPosts = [];
 let userCache = {};
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
-let currentProfileFilter = 'All';
+let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
 let discoverPostsSort = 'recent';
@@ -58,6 +58,7 @@ let tagSuggestionPool = [];
 let mentionSearchTimer = null;
 let currentThreadComments = [];
 let liveSessionsCache = [];
+let profileMediaPrefetching = {};
 
 // Optimistic UI Sets
 let followedCategories = new Set(['STEM', 'Coding']);
@@ -206,12 +207,12 @@ function renderPostActions(post, {
 
     const prefix = idPrefix ? `${idPrefix}-` : '';
 
-    actions.push(`<button id="${prefix}like-btn-${post.id}" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:${iconSize};"></i> ${likeCount}</button>`);
-    actions.push(`<button id="${prefix}dislike-btn-${post.id}" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:${iconSize};"></i> ${dislikeCount}</button>`);
+    actions.push(`<button id="${prefix}like-btn-${post.id}" data-post-id="${post.id}" data-action="like" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:${iconSize};"></i> ${likeCount}</button>`);
+    actions.push(`<button id="${prefix}dislike-btn-${post.id}" data-post-id="${post.id}" data-action="dislike" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:${iconSize};"></i> ${dislikeCount}</button>`);
     const discussionTarget = discussionOnclick || `window.openThread('${post.id}')`;
-    actions.push(`<button class="action-btn" onclick="${discussionTarget}"><i class="ph ph-chat-circle" style="font-size:${iconSize};"></i> ${discussionLabel}</button>`);
-    actions.push(`<button class="action-btn" onclick="event.stopPropagation(); window.sharePost('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:${iconSize};"></i> Share</button>`);
-    actions.push(`<button id="${prefix}save-btn-${post.id}" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:${iconSize};"></i> ${isSaved ? 'Saved' : 'Save'}</button>`);
+    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="discuss" onclick="${discussionTarget}"><i class="ph ph-chat-circle" style="font-size:${iconSize};"></i> ${discussionLabel}</button>`);
+    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="share" onclick="event.stopPropagation(); window.sharePost('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:${iconSize};"></i> Share</button>`);
+    actions.push(`<button id="${prefix}save-btn-${post.id}" data-post-id="${post.id}" data-action="save" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:${iconSize};"></i> ${isSaved ? 'Saved' : 'Save'}</button>`);
 
     if (includeReview) {
         actions.push(`<button id="${prefix}review-btn-${post.id}" class="action-btn review-action ${computedReview.className}" data-post-id="${post.id}" data-icon-size="${iconSize}" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:${iconSize};"></i> ${computedReview.label}</button>`);
@@ -2280,6 +2281,20 @@ function refreshSinglePostUI(postId) {
         applyReviewButtonState(reviewBtn, myReview);
     }
 
+    document.querySelectorAll(`[data-post-id="${postId}"]`).forEach(function(btn) {
+        const action = btn.dataset.action;
+        if(action === 'like') {
+            btn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}`;
+            btn.style.color = isLiked ? '#00f2ea' : 'inherit';
+        } else if(action === 'dislike') {
+            btn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}`;
+            btn.style.color = isDisliked ? '#ff3d3d' : 'inherit';
+        } else if(action === 'save') {
+            btn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}`;
+            btn.style.color = isSaved ? '#00f2ea' : 'inherit';
+        }
+    });
+
     // Update Thread View if active
     const threadLikeBtn = document.getElementById(`thread-like-btn-${postId}`);
     const threadDislikeBtn = document.getElementById(`thread-dislike-btn-${postId}`);
@@ -4142,7 +4157,7 @@ window.openUserProfile = async function(uid, event, pushToStack = true) {
     } 
 
     viewingUserId = uid; 
-    currentProfileFilter = 'All'; 
+    currentProfileFilter = 'All Results';
     window.navigateTo('public-profile', pushToStack); 
 
     let profile = userCache[uid];
@@ -4174,26 +4189,246 @@ window.openUserProfileByHandle = async function(handle) {
     }
 }
 
+const PROFILE_FILTER_OPTIONS = ['All Results', 'Posts', 'Categories', 'Users', 'Videos', 'Livestreams'];
+
+function renderProfileFilterRow(uid, ariaLabel = 'Profile filters') {
+    const buttons = PROFILE_FILTER_OPTIONS.map(function(label) {
+        const active = currentProfileFilter === label;
+        const safeLabel = label.replace(/'/g, "\\'");
+        return `<button class="discover-pill ${active ? 'active' : ''}" role="tab" aria-selected="${active}" onclick="window.setProfileFilter('${safeLabel}', '${uid}')">${label}</button>`;
+    }).join('');
+    return `<div class="discover-pill-row profile-filter-row" role="tablist" aria-label="${ariaLabel}">${buttons}</div>`;
+}
+
+async function primeProfileMedia(uid, profile, isSelfView, containerId) {
+    if (!uid || profileMediaPrefetching[uid] === 'loading' || profileMediaPrefetching[uid] === 'complete') return;
+    profileMediaPrefetching[uid] = 'loading';
+    try {
+        const tasks = [];
+        if (!videosCache.some(function(video) { return video.ownerId === uid; })) {
+            tasks.push(getDocs(query(collection(db, 'videos'), where('ownerId', '==', uid), orderBy('createdAt', 'desc'), limit(12))).then(function(snap) {
+                const newVideos = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+                videosCache = newVideos.concat(videosCache);
+            }));
+        }
+        if (!liveSessionsCache.some(function(session) { return (session.hostId || session.author) === uid; })) {
+            tasks.push(getDocs(query(collection(db, 'liveSessions'), where('hostId', '==', uid), orderBy('createdAt', 'desc'), limit(12))).then(function(snap) {
+                const additions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+                const existingIds = new Set(liveSessionsCache.map(function(s) { return s.id; }));
+                liveSessionsCache = liveSessionsCache.concat(additions.filter(function(s) { return !existingIds.has(s.id); }));
+            }));
+        }
+        await Promise.all(tasks);
+    } catch (e) {
+        console.error('Profile media fetch failed', e);
+    }
+    profileMediaPrefetching[uid] = 'complete';
+    const stillViewing = (currentViewId === 'profile' && currentUser?.uid === uid) || (currentViewId === 'public-profile' && viewingUserId === uid);
+    if (stillViewing) renderProfileContent(uid, profile, isSelfView, containerId);
+}
+
+function getProfileContentSources(uid) {
+    const posts = allPosts
+        .filter(function(p) { return p.userId === uid; })
+        .sort(function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
+    const videos = videosCache.filter(function(video) { return video.ownerId === uid; });
+    const liveSessions = liveSessionsCache.filter(function(session) { return (session.hostId || session.author) === uid; });
+
+    const categoriesForProfile = [];
+    const seenCategories = new Set();
+
+    if (uid === currentUser?.uid) {
+        Object.keys(memberships || {}).forEach(function(catId) {
+            const snapshot = getCategorySnapshot(catId);
+            if (snapshot && !seenCategories.has(catId)) {
+                categoriesForProfile.push({
+                    id: catId,
+                    name: snapshot.name || snapshot.title || snapshot.slug || 'Category',
+                    color: THEMES[snapshot.name] || THEMES[snapshot.slug] || ''
+                });
+                seenCategories.add(catId);
+            }
+        });
+    }
+
+    if (!categoriesForProfile.length) {
+        posts.forEach(function(post) {
+            const cid = post.categoryId || post.category;
+            const label = post.category || post.categoryName || cid;
+            if (cid && label && !seenCategories.has(cid)) {
+                categoriesForProfile.push({ id: cid, name: label, color: THEMES[label] || '' });
+                seenCategories.add(cid);
+            }
+        });
+    }
+
+    return { posts, videos, liveSessions, categories: categoriesForProfile };
+}
+
+function renderProfilePostCard(post, context = 'profile', { compact = false, idPrefix = 'post' } = {}) {
+    const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
+    const isLiked = post.likedBy && post.likedBy.includes(currentUser?.uid);
+    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser?.uid);
+    const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
+    const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
+    const reviewDisplay = getReviewDisplay(myReview);
+    const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
+    const formattedBody = compact ? escapeHtml(cleanText(postText)).slice(0, 160) + (postText.length > 160 ? '…' : '') : formatContent(postText, post.tags, post.mentions);
+    const tagListHtml = compact ? '' : renderTagList(post.tags || []);
+    const pollBlock = compact ? '' : renderPollBlock(post);
+    const locationBadge = renderLocationBadge(post.location);
+    const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+    let mediaContent = '';
+    if (post.mediaUrl && compact) {
+        mediaContent = `<div class="profile-card-media" style="background-image:url('${post.mediaUrl}')"></div>`;
+    } else if (post.mediaUrl) {
+        mediaContent = post.type === 'video'
+            ? `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`
+            : `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
+    }
+
+    const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
+    const bodyPreview = compact ? `<p class="profile-card-body">${formattedBody}</p>` : `<p>${formattedBody}</p>`;
+
+    return `
+        <div class="${cardClass}" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};${compact ? 'min-width:260px;' : ''}">
+            <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <div class="category-badge">${escapeHtml(post.category || '')}</div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
+                        ${getPostOptionsButton(post, context, compact ? '0.95rem' : '1rem')}
+                    </div>
+                </div>
+                <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
+                ${bodyPreview}
+                ${tagListHtml}
+                ${locationBadge}
+                ${scheduledChip}
+                ${pollBlock}
+                ${mediaContent}
+            </div>
+            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: compact ? '0.95rem' : '1rem', idPrefix })}
+        </div>
+    `;
+}
+
+function renderProfileVideoCard(video) {
+    const poster = video.thumbURL || video.videoURL || '';
+    const caption = escapeHtml(video.caption || 'Untitled video');
+    const views = video.stats?.views || 0;
+    return `<div class="social-card profile-collage-card" style="min-width:240px;">
+        <div class="profile-video-thumb" style="background-image:url('${poster}')">
+            <div class="profile-video-meta">${views} views</div>
+        </div>
+        <div class="card-content" style="gap:6px;">
+            <div style="font-weight:700;">${caption}</div>
+            <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(function(t){ return '#' + t; }).join(' ')}</div>
+        </div>
+    </div>`;
+}
+
+function renderProfileLiveCard(session) {
+    const title = escapeHtml(session.title || 'Live session');
+    const status = (session.status || 'live').toUpperCase();
+    const viewers = session.viewerCount || session.stats?.viewerCount || 0;
+    return `<div class="social-card profile-collage-card" style="min-width:220px;">
+        <div class="card-content" style="gap:6px;">
+            <div style="display:flex; align-items:center; gap:8px;">${status === 'LIVE' ? '<span class="live-dot"></span>' : ''}<span style="font-weight:700;">${title}</span></div>
+            <div style="color:var(--text-muted); font-size:0.85rem;">${viewers} watching</div>
+        </div>
+    </div>`;
+}
+
+function renderProfileCategoryChip(category) {
+    return `<div class="category-badge" style="min-width:max-content;">${escapeHtml(category.name || 'Category')}</div>`;
+}
+
+function renderProfileCollageRow(label, items, renderer, seeAllAction) {
+    if (!items || !items.length) return '';
+    const headerAction = seeAllAction ? `<button class="link-btn" onclick="${seeAllAction}">See all</button>` : '';
+    return `
+        <div class="profile-section">
+            <div class="discover-section-row">
+                <span>${label}</span>
+                ${headerAction}
+            </div>
+            <div class="profile-h-scroll">${items.map(renderer).join('')}</div>
+        </div>`;
+}
+
+function renderProfilePostsList(container, posts, context) {
+    if (!container) return;
+    if (!posts.length) { container.innerHTML = `<div class="empty-state"><p>No posts yet.</p></div>`; return; }
+    container.innerHTML = posts.map(function(post) {
+        return renderProfilePostCard(post, context, { compact: false, idPrefix: `${context}-post` });
+    }).join('');
+}
+
+function renderProfileAllResults(container, sources, uid, isSelfView) {
+    if (!container) return;
+    const sections = [];
+    const postContext = isSelfView ? 'profile' : 'public-profile';
+    const postPrefix = isSelfView ? 'my-profile-collage' : 'profile-collage';
+    sections.push(renderProfileCollageRow('Posts', sources.posts.slice(0, 10), function(post) { return renderProfilePostCard(post, postContext, { compact: true, idPrefix: postPrefix }); }, `window.setProfileFilter('Posts', '${uid}')`));
+    sections.push(renderProfileCollageRow('Videos', sources.videos.slice(0, 10), renderProfileVideoCard, `window.setProfileFilter('Videos', '${uid}')`));
+    sections.push(renderProfileCollageRow('Livestreams', sources.liveSessions.slice(0, 10), renderProfileLiveCard, `window.setProfileFilter('Livestreams', '${uid}')`));
+    sections.push(renderProfileCollageRow('Categories', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
+
+    container.innerHTML = sections.filter(Boolean).join('');
+    if (!container.innerHTML) {
+        container.innerHTML = `<div class="empty-state"><p>Nothing to show yet.</p></div>`;
+    }
+}
+
+function renderProfileContent(uid, profile, isSelfView, containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const sources = getProfileContentSources(uid);
+
+    if ((!sources.videos.length || !sources.liveSessions.length) && profileMediaPrefetching[uid] !== 'loading' && profileMediaPrefetching[uid] !== 'complete') {
+        primeProfileMedia(uid, profile, isSelfView, containerId);
+    }
+
+    if (currentProfileFilter === 'All Results') return renderProfileAllResults(container, sources, uid, isSelfView);
+    if (currentProfileFilter === 'Posts') return renderProfilePostsList(container, sources.posts, isSelfView ? 'profile' : 'public-profile');
+    if (currentProfileFilter === 'Videos') {
+        if (!sources.videos.length) return container.innerHTML = `<div class="empty-state"><p>No videos yet.</p></div>`;
+        container.innerHTML = `<div class="profile-h-scroll">${sources.videos.map(renderProfileVideoCard).join('')}</div>`;
+        return;
+    }
+    if (currentProfileFilter === 'Livestreams') {
+        if (!sources.liveSessions.length) return container.innerHTML = `<div class="empty-state"><p>No livestreams yet.</p></div>`;
+        container.innerHTML = `<div class="profile-h-scroll">${sources.liveSessions.map(renderProfileLiveCard).join('')}</div>`;
+        return;
+    }
+    if (currentProfileFilter === 'Categories') {
+        if (!sources.categories.length) return container.innerHTML = `<div class="empty-state"><p>No categories yet.</p></div>`;
+        container.innerHTML = `<div class="profile-h-scroll">${sources.categories.map(renderProfileCategoryChip).join('')}</div>`;
+        return;
+    }
+    if (currentProfileFilter === 'Users') {
+        container.innerHTML = `<div class="empty-state"><p>People results coming soon.</p></div>`;
+    }
+}
+
 function renderPublicProfile(uid, profileData = userCache[uid]) {
     if(!profileData) return;
+    if (!PROFILE_FILTER_OPTIONS.includes(currentProfileFilter)) currentProfileFilter = 'All Results';
     const normalizedProfile = normalizeUserProfileData(profileData);
     const container = document.getElementById('view-public-profile');
+    const sources = getProfileContentSources(uid);
 
     const avatarHtml = renderAvatar({ ...normalizedProfile, uid }, { size: 100, className: 'profile-pic' });
 
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
-    const userPosts = allPosts.filter(function(p) {
-        if (p.userId !== uid) return false;
-        if (!isSelfView && p.visibility === 'private') return false;
-        if (!isSelfView && isPostScheduledInFuture(p)) return false;
-        return true;
-    });
-    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
+    const userPosts = sources.posts;
+    const likesTotal = userPosts.reduce(function(acc, p) { return acc + (p.likes || 0); }, 0);
 
     const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
 
-    let linkHtml = ''; 
+    let linkHtml = '';
     if(normalizedProfile.links) {
         let url = normalizedProfile.links;
         if(!url.startsWith('http')) url = 'https://' + url;
@@ -4203,7 +4438,6 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const followersCount = normalizedProfile.followersCount || 0;
     const verifiedBadge = renderVerifiedBadge(normalizedProfile, 'with-gap');
 
-    // FIX: Added specific ID to follower count for real-time updates
     container.innerHTML = `
         <div class="glass-panel" style="position: sticky; top: 0; z-index: 20; padding: 1rem; display: flex; align-items: center; gap: 15px;">
             <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;"><span>←</span> Back</button>
@@ -4217,7 +4451,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div id="profile-follower-count-${uid}">${followersCount}</div><div>Followers</div></div>
-                <div class="stat-item"><div>${userPosts.reduce(function(acc, p) { return acc + (p.likes||0); }, 0)}</div><div>Likes</div></div>
+                <div class="stat-item"><div>${likesTotal}</div><div>Likes</div></div>
                 <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
             </div>
             <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
@@ -4225,76 +4459,16 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                 ${isSelfView ? '' : `<button class=\"create-btn-sidebar\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);\" onclick=\"window.openOrStartDirectConversationWithUser('${uid}')\">Message</button>`}
             </div>
         </div>
-        <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
-            <select onchange="window.setProfileFilter(this.value, '${uid}')" class="form-select" style="margin-bottom:0; width:auto;">
-                <option value="All">All Posts</option>
-                <option value="STEM">STEM</option>
-                <option value="Coding">Coding</option>
-                <option value="History">History</option>
-                <option value="Gaming">Gaming</option>
-            </select>
-        </div>
-        <div id="public-profile-feed" style="padding: 1rem; max-width: 800px; margin: 0 auto;"></div>`; 
+        <div class="profile-filters-bar">${renderProfileFilterRow(uid, 'Public profile filters')}</div>
+        <div id="public-profile-content" class="profile-content-region"></div>`;
 
-    const feedContainer = document.getElementById('public-profile-feed'); 
-
-    if(filteredPosts.length === 0) { 
-        feedContainer.innerHTML = `<div class="empty-state"><p>No posts found in ${currentProfileFilter}.</p></div>`; 
-    } else { 
-            feedContainer.innerHTML = "";
-            filteredPosts.forEach(function(post) {
-                const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
-                const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-                const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-                const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
-                const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
-                const reviewDisplay = getReviewDisplay(myReview);
-                const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
-                const formattedBody = formatContent(postText, post.tags, post.mentions);
-                const tagListHtml = renderTagList(post.tags || []);
-                const pollBlock = renderPollBlock(post);
-                const locationBadge = renderLocationBadge(post.location);
-                const scheduledChip = isSelfView && isPostScheduledInFuture(post) ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
-
-            let mediaContent = '';
-            if (post.mediaUrl) {
-                if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`;
-                else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
-            } 
-
-                const membership = isSelfView ? memberships[post.categoryId] : null;
-                const inactive = membership && membership.status !== 'active';
-                const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
-                const badgeLabel = inactive ? `${post.category} (Not a member)` : post.category;
-
-                feedContainer.innerHTML += `
-                <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
-                    <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
-                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                            <div class="${badgeClass}">${badgeLabel}</div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
-                                ${getPostOptionsButton(post, 'public-profile', '1rem')}
-                            </div>
-                        </div>
-                        <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                        <p>${formattedBody}</p>
-                        ${tagListHtml}
-                        ${locationBadge}
-                        ${scheduledChip}
-                        ${pollBlock}
-                        ${mediaContent}
-                    </div>
-                    ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem' })}
-                </div>`;
-        });
-    }
+    renderProfileContent(uid, normalizedProfile, isSelfView, 'public-profile-content');
 }
 
 function renderProfile() {
-    const userPosts = allPosts.filter(function(p) { return p.userId === currentUser.uid; });
-    const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
-
+    if (!PROFILE_FILTER_OPTIONS.includes(currentProfileFilter)) currentProfileFilter = 'All Results';
+    const sources = getProfileContentSources(currentUser?.uid);
+    const userPosts = sources.posts;
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
     const verifiedBadge = renderVerifiedBadge(userProfile, 'with-gap');
     const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
@@ -4309,6 +4483,7 @@ function renderProfile() {
     const followersCount = userProfile.followersCount || 0;
     const regionHtml = userProfile.region ? `<div class="real-name-subtext"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(userProfile.region)}</div>` : '';
     const realNameHtml = userProfile.realName ? `<div class="real-name-subtext">${escapeHtml(userProfile.realName)}</div>` : '';
+    const likesTotal = userPosts.reduce(function(acc, p) { return acc + (p.likes || 0); }, 0);
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
@@ -4321,56 +4496,17 @@ function renderProfile() {
             ${linkHtml}
             <div class="stats-row">
                 <div class="stat-item"><div>${followersCount}</div><div>Followers</div></div>
-                <div class="stat-item"><div>${userPosts.reduce(function(acc, p) { return acc + (p.likes||0); }, 0)}</div><div>Likes</div></div>
+                <div class="stat-item"><div>${likesTotal}</div><div>Likes</div></div>
                 <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
             </div>
             <button onclick="window.toggleSettingsModal(true)" class="create-btn-sidebar" style="width:auto; margin-top:1rem; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-gear"></i> Edit Profile & Settings</button>
             <button onclick="window.handleLogout()" class="create-btn-sidebar" style="width:auto; margin-top:10px; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-sign-out"></i> Log Out</button>
         </div>
-        <div style="padding:1rem; border-bottom:1px solid var(--border);"><select onchange="window.setProfileFilter(this.value, 'me')" class="form-select" style="margin-bottom:0; width:auto;"><option value="All">All Posts</option><option value="STEM">STEM</option><option value="Coding">Coding</option><option value="History">History</option><option value="Gaming">Gaming</option></select></div><div id="my-profile-feed" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
-    `; 
+        <div class="profile-filters-bar">${renderProfileFilterRow('me', 'Profile filters')}</div>
+        <div id="my-profile-content" class="profile-content-region"></div>
+    `;
 
-    const feedContainer = document.getElementById('my-profile-feed'); 
-
-    if(filteredPosts.length === 0) {
-        feedContainer.innerHTML = `<div class="empty-state"><p>No posts.</p></div>`; 
-    } else { 
-        feedContainer.innerHTML = "";
-        filteredPosts.forEach(function(post) {
-            const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
-            const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-            const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-            const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
-            const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
-            const reviewDisplay = getReviewDisplay(myReview);
-            const membership = memberships[post.categoryId];
-            const inactive = membership && membership.status !== 'active';
-            const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
-            const badgeLabel = inactive ? `${post.category} (Not a member anymore)` : post.category;
-            const pollBlock = renderPollBlock(post);
-            const locationBadge = renderLocationBadge(post.location);
-            const scheduledChip = isPostScheduledInFuture(post) ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
-
-            feedContainer.innerHTML += `
-                <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};">
-                    <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
-                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                            <div class="${badgeClass}">${badgeLabel}</div>
-                            <div style="display:flex; align-items:center; gap:8px;">
-                                <span style="font-size:0.8rem; color:var(--text-muted);">${date}</span>
-                                ${getPostOptionsButton(post, 'profile', '1rem')}
-                            </div>
-                        </div>
-                        <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                        <p>${escapeHtml(cleanText(post.content))}</p>
-                        ${locationBadge}
-                        ${scheduledChip}
-                        ${pollBlock}
-                        ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem' })}
-                    </div>
-                </div>`;
-        });
-    }
+    renderProfileContent(currentUser.uid, userProfile, true, 'my-profile-content');
 }
 
 // --- Utils & Helpers ---
@@ -4496,7 +4632,11 @@ window.handleSavedSearch = function(e) { savedSearchTerm = e.target.value.toLowe
 window.openFullscreenMedia = function(url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if(!modal || !content) return; modal.style.display = 'flex'; if(type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
 window.closeFullscreenMedia = function() { const modal = document.getElementById('media-modal'); if(modal) modal.style.display = 'none'; const content = document.getElementById('media-modal-content'); if(content) content.innerHTML = ''; }
 window.addTagToSaved = async function(postId) { const tag = prompt("Enter a tag for this saved post (e.g. 'Science', 'Read Later'):"); if(!tag) return; userProfile.savedTags = userProfile.savedTags || {}; userProfile.savedTags[postId] = tag; await setDoc(doc(db, "users", currentUser.uid), { savedTags: userProfile.savedTags }, { merge: true }); renderSaved(); }
-window.setProfileFilter = function(category, uid) { currentProfileFilter = category; if (uid === 'me') renderProfile(); else renderPublicProfile(uid); }
+window.setProfileFilter = function(category, uid) {
+    const next = PROFILE_FILTER_OPTIONS.includes(category) ? category : 'All Results';
+    currentProfileFilter = next;
+    if (uid === 'me') renderProfile(); else renderPublicProfile(uid);
+}
 window.moveInputToComment = function(commentId, authorName) { activeReplyId = commentId; const slot = document.getElementById(`reply-slot-${commentId}`); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (slot && inputArea) { slot.appendChild(inputArea); input.placeholder = `Replying to ${authorName}...`; if(cancelBtn) cancelBtn.style.display = 'inline-block'; input.focus(); } }
 window.resetInputBox = function() { activeReplyId = null; const defaultSlot = document.getElementById('thread-input-default-slot'); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (defaultSlot && inputArea) { defaultSlot.appendChild(inputArea); input.placeholder = "Post your reply"; input.value = ""; if(cancelBtn) cancelBtn.style.display = 'none'; } }
 window.triggerFileSelect = function() { document.getElementById('thread-file').click(); }

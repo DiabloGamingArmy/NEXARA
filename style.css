@@ -294,6 +294,20 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     font-size: 1.1rem; font-weight: 800; margin: 1.5rem 0 0.5rem 0; color: var(--text-muted); border-bottom: 1px solid var(--border); padding-bottom: 5px;
 }
 
+/* Profile collage and filters */
+.profile-filters-bar { padding: 1rem; border-bottom: 1px solid var(--border); }
+.profile-filter-row { overflow-x: auto; padding-bottom: 6px; gap: 10px; flex-wrap: nowrap; }
+.profile-filter-row::-webkit-scrollbar, .profile-h-scroll::-webkit-scrollbar { display: none; }
+.profile-h-scroll { display: flex; gap: 12px; overflow-x: auto; padding: 0.5rem 0 0.25rem; }
+.profile-section { padding: 1rem; border-bottom: 1px solid var(--border); }
+.profile-collage-card { min-height: 100%; }
+.profile-card-media { width: 100%; padding-top: 56%; background-size: cover; background-position: center; border-radius: 12px; margin-top: 8px; }
+.profile-card-body { color: var(--text-muted); margin-top: 4px; }
+.profile-video-thumb { width: 100%; padding-top: 56%; background-size: cover; background-position: center; border-radius: 12px; position: relative; }
+.profile-video-meta { position: absolute; right: 8px; bottom: 6px; background: rgba(0, 0, 0, 0.55); color: white; padding: 4px 8px; border-radius: 8px; font-size: 0.75rem; }
+.profile-content-region { padding: 1rem; max-width: 1000px; margin: 0 auto; }
+.link-btn { background: none; border: none; color: var(--primary); cursor: pointer; font-weight: 700; }
+
 /* Widgets, Modals */
 .trend-box { background: var(--bg-card); border-radius: var(--radius); padding: 1.2rem; border: 1px solid var(--border); margin-bottom: 1.5rem; }
 .trend-title { font-weight: 800; margin-bottom: 1rem; color: var(--text-main); }
