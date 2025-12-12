@@ -5,6 +5,13 @@ rules_version = '2';
 //    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
 service firebase.storage {
   match /b/{bucket}/o {
+    match /conversation_avatars/{cid}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && exists(/databases/(default)/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/(default)/documents/conversations/$(cid)).data.participants;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

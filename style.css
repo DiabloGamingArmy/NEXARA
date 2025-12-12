@@ -526,8 +526,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 
 .extra-options-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: none; background: rgba(255,255,255,0.02); }
 /* Messaging, Videos, Staff */
-#view-messages { display:flex; flex-direction:column; min-height: 100vh; flex:1; padding-bottom:0; }
-.messages-layout { display:grid; grid-template-columns: 320px 1fr; flex:1; min-height: 0; height:100%; }
+#view-messages { display:flex; flex-direction:column; min-height: 100vh; flex:1; padding-bottom:0; height:100%; }
+.messages-layout { display:grid; grid-template-columns: 320px 1fr; flex:1; min-height: 0; height:100%; min-height: calc(100vh - 0px); }
 .messages-sidebar { border-right:1px solid var(--border); padding:1rem; overflow-y:auto; }
 .messages-thread { display:flex; flex-direction:column; min-height:0; height:100%; }
 .message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; }
@@ -541,6 +541,14 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-bubble { padding:10px 12px; border-radius:12px; max-width:70%; }
 .message-bubble.self { background: rgba(0,242,234,0.12); border:1px solid rgba(0,242,234,0.3); margin-left:auto; }
 .message-bubble.other { background: var(--bg-hover); border:1px solid var(--border); margin-right:auto; }
+.messages-settings-shell { display:flex; flex-direction:column; gap:12px; min-height:100%; padding:1rem; }
+.messages-settings-header { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--border); padding-bottom:12px; }
+.messages-settings-meta { display:flex; align-items:center; gap:12px; }
+.messages-settings-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+.messages-settings-card { border:1px solid var(--border); border-radius:16px; padding:1rem; background:var(--bg-card); display:flex; flex-direction:column; gap:10px; }
+.participant-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); }
+.participant-row:last-child { border-bottom:none; }
+.settings-chip-row { display:flex; flex-wrap:wrap; gap:8px; }
 .video-feed { display:flex; flex-direction:column; gap:20px; padding:1rem; }
 .video-card { border:1px solid var(--border); border-radius:16px; overflow:hidden; background:var(--bg-card); }
 .video-card video { width:100%; max-height:70vh; object-fit:cover; }

@@ -396,6 +396,8 @@ let conversationsCache = [];
 let activeMessageUpload = null;
 let conversationMappings = [];
 let conversationDetailsCache = {};
+let conversationSettingsId = null;
+let conversationSettingsSearchResults = [];
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosUnsubscribe = null;
@@ -4434,12 +4436,22 @@ function renderConversationList() {
         return;
     }
 
-    conversationMappings.forEach(function (mapping) {
+    const orderedMappings = conversationMappings
+        .slice()
+        .sort(function (a, b) {
+            if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
+            if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+            const aTs = a.lastMessageAt?.toMillis ? a.lastMessageAt.toMillis() : 0;
+            const bTs = b.lastMessageAt?.toMillis ? b.lastMessageAt.toMillis() : 0;
+            return bTs - aTs;
+        });
+
+    orderedMappings.forEach(function (mapping) {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
-        const name = mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || details.title || 'Conversation';
-        const avatarUrl = mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
+        const name = details.title || mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || 'Conversation';
+        const avatarUrl = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
         const avatarHtml = renderAvatar({
             uid: meta.otherIds?.[0] || mapping.otherParticipantIds?.[0] || 'user',
             username: name,
@@ -4451,11 +4463,18 @@ function renderConversationList() {
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
         const unread = mapping.unreadCount || 0;
         const timeLabel = mapping.lastMessageAt?.toDate ? formatTimestampDisplay(mapping.lastMessageAt) : '';
+        const badges = [];
+        if (mapping.pinned) badges.push('<i class="ph ph-push-pin"></i>');
+        if (mapping.muted) badges.push('<i class="ph ph-bell-slash"></i>');
+        if (mapping.archived) badges.push('<i class="ph ph-archive"></i>');
         item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
             ${avatarHtml}
             <div>
                 <strong>${escapeHtml(details.title || name)}</strong>
-                <div style="color:var(--text-muted); font-size:0.8rem;">${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</div>
+                <div style="color:var(--text-muted); font-size:0.8rem; display:flex; align-items:center; gap:6px;">
+                    <span>${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</span>
+                    ${badges.length ? `<span style="display:inline-flex; gap:4px; color:var(--text-muted);">${badges.join('')}</span>` : ''}
+                </div>
             </div>
         </div>
         <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
@@ -4476,10 +4495,14 @@ function renderMessageHeader(convo = {}) {
     const avatar = renderAvatar({
         uid: meta.otherIds?.[0] || 'group',
         username: label,
-        photoURL: meta.avatars?.[0] || '',
+        photoURL: convo.avatarURL || meta.avatars?.[0] || '',
         avatarColor: computeAvatarColor(label)
     }, { size: 36 });
-    header.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800;">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>`;
+    const cid = convo.id || activeConversationId;
+    header.innerHTML = `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800;">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
+        <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')"><i class="ph ph-dots-three-outline"></i></button>
+    </div>`;
 }
 
 function renderMessages(msgs = [], convo = {}) {
@@ -4520,6 +4543,7 @@ async function ensureConversation(convoId, participantId) {
             participantAvatars,
             type: 'direct',
             title: null,
+            avatarURL: null,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
             lastMessagePreview: '',
@@ -4544,9 +4568,12 @@ async function ensureConversation(convoId, participantId) {
             otherParticipantIds: meta.otherIds,
             otherParticipantUsernames: meta.usernames,
             otherParticipantAvatars: meta.avatars,
-            muted: false,
-            pinned: false
         };
+        if (!existingMap.exists()) {
+            payload.muted = false;
+            payload.pinned = false;
+            payload.archived = false;
+        }
         if (!existingMap.exists()) {
             payload.lastMessagePreview = '';
             payload.lastMessageAt = serverTimestamp();
@@ -4658,10 +4685,352 @@ async function updateConversationUnread(conversationId, participants = [], previ
     }));
 }
 
+function updateConversationMappingState(conversationId, data = {}) {
+    const idx = conversationMappings.findIndex(function (m) { return m.id === conversationId; });
+    if (idx >= 0) {
+        conversationMappings[idx] = { ...conversationMappings[idx], ...data };
+    }
+}
+
+async function fetchConversationMapping(conversationId) {
+    if (!currentUser) return null;
+    const snap = await getDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`));
+    if (snap.exists()) {
+        const mapping = { id: conversationId, ...snap.data() };
+        updateConversationMappingState(conversationId, mapping);
+        return mapping;
+    }
+    return null;
+}
+
+function renderConversationParticipants(convo = {}) {
+    const listEl = document.getElementById('conversation-participant-list');
+    if (!listEl) return;
+    const participants = convo.participants || [];
+    const usernames = convo.participantUsernames || [];
+    const avatars = convo.participantAvatars || [];
+    listEl.innerHTML = '';
+
+    participants.forEach(function (uid, idx) {
+        const name = usernames[idx] || userCache[uid]?.displayName || userCache[uid]?.username || 'Participant';
+        const avatar = renderAvatar({ uid, username: name, photoURL: avatars[idx] || userCache[uid]?.photoURL || '' }, { size: 32 });
+        const row = document.createElement('div');
+        row.className = 'participant-row';
+        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:700;">${escapeHtml(name)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(uid)}</div></div></div>`;
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'icon-pill';
+        removeBtn.innerHTML = '<i class="ph ph-user-minus"></i>';
+        removeBtn.disabled = participants.length <= 2;
+        removeBtn.onclick = function () { window.removeConversationParticipant(uid); };
+        row.appendChild(removeBtn);
+        listEl.appendChild(row);
+    });
+
+    if (participants.length === 0) {
+        listEl.innerHTML = '<div class="empty-state" style="padding:8px 0;">No participants loaded.</div>';
+    }
+}
+
+function renderConversationSettings(convo = {}, mapping = {}) {
+    const titleEl = document.getElementById('conversation-settings-title');
+    const subtitleEl = document.getElementById('conversation-settings-subtitle');
+    const avatarEl = document.getElementById('conversation-settings-avatar');
+    const nameInput = document.getElementById('conversation-name-input');
+
+    const participants = convo.participants || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
+    const label = convo.type === 'group' ? (convo.title || 'Group conversation') : (meta.usernames?.join(', ') || 'Conversation');
+
+    if (titleEl) titleEl.textContent = label;
+    if (subtitleEl) subtitleEl.textContent = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
+    if (avatarEl) {
+        avatarEl.innerHTML = renderAvatar({
+            uid: convo.id || 'conversation',
+            username: label,
+            photoURL: convo.avatarURL || meta.avatars?.[0] || '',
+            avatarColor: computeAvatarColor(label)
+        }, { size: 48 });
+    }
+
+    if (nameInput) {
+        nameInput.disabled = convo.type !== 'group';
+        nameInput.value = convo.type === 'group' ? (convo.title || '') : (convo.title || label);
+        nameInput.placeholder = convo.type === 'group' ? 'Conversation name' : 'Direct chats use participant names';
+    }
+
+    renderConversationParticipants(convo);
+
+    const muteBtn = document.getElementById('conversation-mute-btn');
+    if (muteBtn) {
+        const muted = !!mapping.muted || (convo.mutedBy || []).includes(currentUser?.uid);
+        muteBtn.innerHTML = `<i class="ph ph-${muted ? 'bell-slash' : 'bell'}"></i> ${muted ? 'Unmute chat' : 'Mute chat'}`;
+    }
+    const pinBtn = document.getElementById('conversation-pin-btn');
+    if (pinBtn) {
+        const pinned = !!mapping.pinned;
+        pinBtn.innerHTML = `<i class="ph ph-push-pin"></i> ${pinned ? 'Unpin' : 'Pin'}`;
+    }
+    const archiveBtn = document.getElementById('conversation-archive-btn');
+    if (archiveBtn) {
+        const archived = !!mapping.archived;
+        archiveBtn.innerHTML = `<i class="ph ph-archive"></i> ${archived ? 'Unarchive' : 'Archive'}`;
+    }
+}
+
+async function refreshConversationSettings(conversationId = conversationSettingsId || activeConversationId) {
+    if (!conversationId || !requireAuth()) return;
+    const convo = await fetchConversation(conversationId);
+    conversationSettingsId = conversationId;
+    const mapping = await fetchConversationMapping(conversationId) || {};
+    if (convo) renderConversationSettings(convo, mapping);
+}
+
+window.refreshConversationSettings = refreshConversationSettings;
+
+window.openConversationSettings = async function (conversationId = activeConversationId) {
+    if (!conversationId || !requireAuth()) return;
+    conversationSettingsId = conversationId;
+    await refreshConversationSettings(conversationId);
+    window.navigateTo('conversation-settings');
+};
+
+window.backToConversationFromSettings = function () {
+    window.navigateTo('messages');
+    if (conversationSettingsId) {
+        activeConversationId = conversationSettingsId;
+        openConversation(conversationSettingsId);
+    }
+};
+
+window.searchConversationParticipants = async function (term = '') {
+    const resultsEl = document.getElementById('conversation-add-results');
+    if (!resultsEl) return;
+    const cleaned = term.trim().toLowerCase();
+    if (cleaned.length < 2) {
+        conversationSettingsSearchResults = [];
+        resultsEl.innerHTML = '';
+        return;
+    }
+    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~'), limit(15)));
+    const existing = (conversationDetailsCache[conversationSettingsId] || {}).participants || [];
+    const deduped = new Map();
+    qSnap.forEach(function (docSnap) {
+        if (docSnap.id === currentUser?.uid) return;
+        if (existing.includes(docSnap.id)) return;
+        const data = docSnap.data();
+        deduped.set(docSnap.id, { id: docSnap.id, username: data.username, displayName: data.displayName || data.name, photoURL: data.photoURL || data.avatar || '' });
+    });
+    conversationSettingsSearchResults = Array.from(deduped.values());
+    resultsEl.innerHTML = '';
+    conversationSettingsSearchResults.forEach(function (user) {
+        const row = document.createElement('div');
+        row.className = 'conversation-item';
+        row.innerHTML = `<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || 'Nexera User')}</div></div>`;
+        row.onclick = function () { window.addParticipantToConversation(user.id); };
+        resultsEl.appendChild(row);
+    });
+};
+
+async function updateConversationParticipants(conversationId, updatedParticipants = []) {
+    if (!requireAuth()) return;
+    const unique = Array.from(new Set(updatedParticipants)).sort();
+    if (unique.length < 2) {
+        toast('A conversation needs at least 2 participants.', 'error');
+        return;
+    }
+
+    const profiles = await Promise.all(unique.map(resolveUserProfile));
+    const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
+
+    const existing = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId)) || {};
+    const unreadCounts = { ...(existing.unreadCounts || {}) };
+    unique.forEach(function (uid) { if (!(uid in unreadCounts)) unreadCounts[uid] = 0; });
+    Object.keys(unreadCounts).forEach(function (uid) { if (!unique.includes(uid)) delete unreadCounts[uid]; });
+    const mutedBy = (existing.mutedBy || []).filter(function (uid) { return unique.includes(uid); });
+    const pinnedBy = (existing.pinnedBy || []).filter(function (uid) { return unique.includes(uid); });
+
+    const convoRef = doc(db, 'conversations', conversationId);
+    const convoType = unique.length > 2 ? 'group' : 'direct';
+    await updateDoc(convoRef, {
+        participants: unique,
+        participantUsernames,
+        participantAvatars,
+        unreadCounts,
+        mutedBy,
+        pinnedBy,
+        type: convoType,
+        title: convoType === 'group' ? (existing.title || null) : null,
+        updatedAt: serverTimestamp()
+    });
+
+    const removed = (existing.participants || []).filter(function (uid) { return !unique.includes(uid); });
+    await Promise.all(removed.map(async function (uid) {
+        try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationId}`)); } catch (e) { console.warn('Remove mapping failed', e?.message || e); }
+    }));
+
+    conversationDetailsCache[conversationId] = { ...existing, id: conversationId, participants: unique, participantUsernames, participantAvatars, unreadCounts, mutedBy, pinnedBy, type: convoType, title: convoType === 'group' ? (existing.title || null) : null };
+    await Promise.all(unique.map(async function (uid) {
+        const meta = deriveOtherParticipantMeta(unique, uid, conversationDetailsCache[conversationId]);
+        const mappingRef = doc(db, `users/${uid}/conversations/${conversationId}`);
+        await setDoc(mappingRef, {
+            conversationId,
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars,
+            archived: false
+        }, { merge: true });
+    }));
+
+    await refreshConversationSettings(conversationId);
+    if (activeConversationId === conversationId) renderMessageHeader(conversationDetailsCache[conversationId]);
+}
+
+window.addParticipantToConversation = async function (uid) {
+    if (!conversationSettingsId) return;
+    const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
+    const participants = Array.from(new Set([...(convo?.participants || []), uid]));
+    await updateConversationParticipants(conversationSettingsId, participants);
+};
+
+window.removeConversationParticipant = async function (uid) {
+    if (!conversationSettingsId) return;
+    const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
+    const participants = (convo?.participants || []).filter(function (p) { return p !== uid; });
+    await updateConversationParticipants(conversationSettingsId, participants);
+};
+
+window.saveConversationName = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
+    if (!convo) return;
+    if (convo.type !== 'group') { toast('Direct chats use participant names.', 'error'); return; }
+    const nameInput = document.getElementById('conversation-name-input');
+    const title = (nameInput?.value || '').trim();
+    await updateDoc(doc(db, 'conversations', conversationSettingsId), { title, updatedAt: serverTimestamp() });
+    conversationDetailsCache[conversationSettingsId] = { ...convo, title };
+    if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+    toast('Conversation name updated', 'info');
+};
+
+window.uploadConversationAvatar = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const fileInput = document.getElementById('conversation-avatar-input');
+    if (!fileInput?.files?.length) { toast('Select an image first.', 'error'); return; }
+    const file = fileInput.files[0];
+    const path = `conversation_avatars/${conversationSettingsId}/${Date.now()}_${file.name}`;
+    const uploadRef = ref(storage, path);
+    const snap = await uploadBytes(uploadRef, file);
+    const url = await getDownloadURL(snap.ref);
+    await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
+    conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
+    if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+    await refreshConversationSettings(conversationSettingsId);
+    toast('Conversation image updated', 'info');
+};
+
+window.toggleConversationMute = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const mapping = await fetchConversationMapping(conversationSettingsId) || {};
+    const muted = !!mapping.muted;
+    const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
+    await setDoc(mappingRef, { muted: !muted }, { merge: true });
+    await updateDoc(doc(db, 'conversations', conversationSettingsId), { mutedBy: muted ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid) });
+    updateConversationMappingState(conversationSettingsId, { muted: !muted });
+    await refreshConversationSettings(conversationSettingsId);
+};
+
+window.toggleConversationPin = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const mapping = await fetchConversationMapping(conversationSettingsId) || {};
+    const pinned = !!mapping.pinned;
+    const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
+    await setDoc(mappingRef, { pinned: !pinned }, { merge: true });
+    updateConversationMappingState(conversationSettingsId, { pinned: !pinned });
+    await refreshConversationSettings(conversationSettingsId);
+};
+
+window.toggleConversationArchive = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const mapping = await fetchConversationMapping(conversationSettingsId) || {};
+    const archived = !!mapping.archived;
+    const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
+    await setDoc(mappingRef, { archived: !archived }, { merge: true });
+    updateConversationMappingState(conversationSettingsId, { archived: !archived });
+    await refreshConversationSettings(conversationSettingsId);
+    if (!archived) toast('Conversation archived', 'info');
+};
+
+async function deleteConversationMessages(conversationId) {
+    const msgs = await getDocs(collection(db, 'conversations', conversationId, 'messages'));
+    await Promise.all(msgs.docs.map(function (d) { return deleteDoc(d.ref).catch(function (e) { console.warn('Delete message failed', e?.message || e); }); }));
+}
+
+window.leaveConversation = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
+    if (!convo) return;
+    const participants = convo.participants || [];
+    if (participants.length <= 2) {
+        await deleteConversationMessages(conversationSettingsId);
+        await Promise.all(participants.map(async function (uid) {
+            try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Mapping cleanup', e?.message || e); }
+        }));
+        await deleteDoc(doc(db, 'conversations', conversationSettingsId));
+        delete conversationDetailsCache[conversationSettingsId];
+        activeConversationId = null;
+        conversationSettingsId = null;
+        window.navigateTo('messages');
+        await initConversations();
+        return;
+    }
+
+    const updated = participants.filter(function (uid) { return uid !== currentUser.uid; });
+    await updateConversationParticipants(conversationSettingsId, updated);
+    try { await deleteDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Self mapping cleanup', e?.message || e); }
+    activeConversationId = null;
+    conversationSettingsId = null;
+    window.navigateTo('messages');
+};
+
+window.blockConversationPartner = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
+    if (!convo || (convo.participants || []).length !== 2) { toast('Blocking is available for direct chats only.', 'error'); return; }
+    const otherId = (convo.participants || []).find(function (uid) { return uid !== currentUser.uid; });
+    await setDoc(doc(db, 'users', currentUser.uid), { blockedUserIds: arrayUnion(otherId) }, { merge: true });
+    const blocked = new Set(userProfile.blockedUserIds || []);
+    blocked.add(otherId);
+    userProfile.blockedUserIds = Array.from(blocked);
+    toast('User blocked', 'info');
+};
+
+window.reportConversation = async function () {
+    if (!conversationSettingsId || !requireAuth()) return;
+    const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
+    if (!convo) return;
+    const isGroup = (convo.participants || []).length > 2;
+    const reportedUserId = isGroup ? null : (convo.participants || []).find(function (uid) { return uid !== currentUser.uid; });
+    await addDoc(collection(db, 'reports'), {
+        type: isGroup ? 'conversation' : 'user',
+        conversationId: conversationSettingsId,
+        reportedUserId: reportedUserId || null,
+        reporterUserId: currentUser.uid,
+        createdAt: serverTimestamp(),
+        reason: 'Conversation settings report'
+    });
+    toast('Report submitted', 'info');
+};
+
 async function sendChatPayload(conversationId, payload = {}) {
     if (!conversationId || !requireAuth()) return;
     const convo = await fetchConversation(conversationId) || conversationDetailsCache[conversationId];
     const participants = (convo && convo.participants) || [];
+    const blocked = new Set(userProfile.blockedUserIds || []);
+    if (convo && convo.type === 'direct') {
+        const otherId = participants.find(function (uid) { return uid !== currentUser.uid; });
+        if (otherId && blocked.has(otherId)) { toast('You have blocked this user.', 'error'); return; }
+    }
 
     const message = {
         senderId: currentUser.uid,
@@ -4857,6 +5226,7 @@ async function createGroupConversation(participantIds = [], title = null) {
         participantAvatars,
         type: participants.length > 2 ? 'group' : 'direct',
         title: participants.length > 2 ? (title || null) : null,
+        avatarURL: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         lastMessagePreview: '',
@@ -4880,6 +5250,7 @@ async function createGroupConversation(participantIds = [], title = null) {
             otherParticipantAvatars: meta.avatars,
             muted: false,
             pinned: false,
+            archived: false,
             lastMessagePreview: '',
             lastMessageAt: payload.lastMessageAt,
             unreadCount: 0
@@ -4916,6 +5287,8 @@ window.startChatFromSelection = async function () {
 
 window.openOrStartDirectConversationWithUser = async function (targetUserId, options = {}) {
     if (!requireAuth() || !targetUserId) return null;
+    const blocked = new Set(userProfile.blockedUserIds || []);
+    if (blocked.has(targetUserId)) { toast('You have blocked this user.', 'error'); return null; }
     const convoId = getDirectConversationId(currentUser.uid, targetUserId);
     await ensureConversation(convoId, targetUserId);
     await window.openMessagesPage();
