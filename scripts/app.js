@@ -398,6 +398,11 @@ let conversationMappings = [];
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
+let messageThreadCache = {};
+let conversationDetailsUnsubscribe = null;
+let lastDeliveredAtLocal = {};
+let lastReadAtLocal = {};
+let typingStateByConversation = {};
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosUnsubscribe = null;
@@ -1761,6 +1766,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId !== 'messages') {
         ListenerRegistry.unregister('messages:list');
         if (activeConversationId) ListenerRegistry.unregister(`messages:thread:${activeConversationId}`);
+        if (activeConversationId) ListenerRegistry.unregister(`conversation:details:${activeConversationId}`);
+        if (activeConversationId) setTypingState(activeConversationId, false);
+        if (conversationDetailsUnsubscribe) { conversationDetailsUnsubscribe(); conversationDetailsUnsubscribe = null; }
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
@@ -4523,6 +4531,51 @@ function formatMessagePreview(payload = {}) {
     return text.length > 80 ? text.substring(0, 77) + '…' : text;
 }
 
+function toDateSafe(ts) {
+    if (!ts) return null;
+    if (ts instanceof Timestamp) return ts.toDate();
+    if (typeof ts.seconds === 'number') return new Date(ts.seconds * 1000);
+    const date = new Date(ts);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isSameDay(a, b) {
+    return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatChatDateLabel(date) {
+    if (!date) return '';
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 86400000);
+    if (isSameDay(date, now)) return 'Today';
+    if (isSameDay(date, yesterday)) return 'Yesterday';
+    return date.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function formatMessageTimeLabel(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return '';
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function isNearBottom(el, threshold = 80) {
+    if (!el) return false;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+}
+
+function resolveParticipantDisplay(convo = {}, uid = '') {
+    const idx = (convo.participants || []).indexOf(uid);
+    const username = (convo.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
+    const displayName = userCache[uid]?.displayName || userCache[uid]?.name || username;
+    const avatar = (convo.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
+    return { username, displayName, avatar };
+}
+
+function getMessageTimestampMs(msg = {}) {
+    const date = toDateSafe(msg.createdAt);
+    return date ? date.getTime() : 0;
+}
+
 function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
     if (!listEl) return;
@@ -4547,37 +4600,45 @@ function renderConversationList() {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
-        const name = details.title || mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || 'Conversation';
+        const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+        const otherProfile = otherId ? userCache[otherId] : null;
+        const participantLabels = (details.participantUsernames || meta.usernames || []).filter(Boolean);
+        const isGroup = (participants || []).length > 2 || details.type === 'group';
+        const fallbackGroupName = participantLabels.length ? participantLabels.join(', ') : 'Conversation';
+        const directName = otherProfile?.displayName || otherProfile?.name || mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0];
+        const name = isGroup
+            ? (details.title || fallbackGroupName)
+            : (details.title || directName || 'Conversation');
         const avatarUrl = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
         const avatarHtml = renderAvatar({
-            uid: meta.otherIds?.[0] || mapping.otherParticipantIds?.[0] || 'user',
+            uid: otherId || 'user',
             username: name,
             photoURL: avatarUrl,
             avatarColor: computeAvatarColor(name)
-        }, { size: 36 });
+        }, { size: 42 });
 
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
         const unread = mapping.unreadCount || 0;
-        const timeLabel = mapping.lastMessageAt?.toDate ? formatTimestampDisplay(mapping.lastMessageAt) : '';
         const badges = [];
         if (mapping.pinned) badges.push('<i class="ph ph-push-pin"></i>');
         if (mapping.muted) badges.push('<i class="ph ph-bell-slash"></i>');
         if (mapping.archived) badges.push('<i class="ph ph-archive"></i>');
-        item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
-            ${avatarHtml}
-            <div>
-                <strong>${escapeHtml(details.title || name)}</strong>
-                <div style="color:var(--text-muted); font-size:0.8rem; display:flex; align-items:center; gap:6px;">
-                    <span>${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</span>
+        const flagHtml = badges.length || unread > 0
+            ? `<div class="conversation-flags">
                     ${badges.length ? `<span style="display:inline-flex; gap:4px; color:var(--text-muted);">${badges.join('')}</span>` : ''}
+                    ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
+               </div>`
+            : '';
+        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start');
+        item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
+            <div class="conversation-body">
+                <div class="conversation-title-row">
+                    <div class="conversation-title">${escapeHtml(details.title || name)}</div>
+                    ${flagHtml}
                 </div>
-            </div>
-        </div>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-            ${timeLabel ? `<span style="color:var(--text-muted); font-size:0.75rem;">${timeLabel}</span>` : ''}
-            ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
-        </div>`;
+                <div class="conversation-preview">${previewText}</div>
+            </div>`;
         item.onclick = function () { openConversation(mapping.id); };
         listEl.appendChild(item);
     });
@@ -4605,11 +4666,54 @@ function renderMessageHeader(convo = {}) {
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
     if (!body) return;
+    const shouldStickToBottom = isNearBottom(body);
+    const previousOffset = body.scrollHeight - body.scrollTop;
     body.innerHTML = '';
-    msgs.forEach(function (msg) {
+
+    let lastDateKey = '';
+    let lastSenderId = null;
+    let latestSelfMessage = null;
+    const fragment = document.createDocumentFragment();
+
+    msgs.forEach(function (msg, idx) {
+        const createdDate = toDateSafe(msg.createdAt) || new Date();
+        const dateKey = createdDate.toDateString();
+        if (dateKey !== lastDateKey) {
+            const divider = document.createElement('div');
+            divider.className = 'message-date-divider';
+            divider.textContent = formatChatDateLabel(createdDate);
+            fragment.appendChild(divider);
+            lastSenderId = null;
+            lastDateKey = dateKey;
+        }
+
+        const nextMsg = msgs[idx + 1];
+        const nextDateKey = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()).toDateString() : null;
+        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || (nextDateKey !== dateKey));
+        const isSelf = msg.senderId === currentUser?.uid;
+        const row = document.createElement('div');
+        row.className = 'message-row ' + (isSelf ? 'self' : 'other');
+        if (lastSenderId === msg.senderId) row.classList.add('stacked');
+
+        const avatarSlot = document.createElement('div');
+        avatarSlot.className = 'message-avatar-slot' + (isSelf ? ' placeholder' : '');
+        if (!isSelf) {
+            if (showAvatar) {
+                const senderMeta = resolveParticipantDisplay(convo, msg.senderId);
+                avatarSlot.innerHTML = renderAvatar({
+                    uid: msg.senderId,
+                    username: senderMeta.displayName || senderMeta.username,
+                    photoURL: senderMeta.avatar,
+                    avatarColor: computeAvatarColor(senderMeta.displayName || senderMeta.username)
+                }, { size: 42 });
+            } else {
+                avatarSlot.classList.add('placeholder');
+            }
+        }
+
         const bubble = document.createElement('div');
-        bubble.className = 'message-bubble ' + (msg.senderId === currentUser?.uid ? 'self' : 'other');
-        const senderLabel = msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
+        bubble.className = 'message-bubble ' + (isSelf ? 'self' : 'other');
+        const senderLabel = !isSelf && msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
         let content = escapeHtml(msg.text || '');
         if (msg.type === 'image' && msg.mediaURL) {
             content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
@@ -4619,10 +4723,132 @@ function renderMessages(msgs = [], convo = {}) {
             const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
             content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${escapeHtml(msg.text || '')}</div>${refBtn}</div>`;
         }
-        bubble.innerHTML = `${senderLabel}${content}`;
-        body.appendChild(bubble);
+        bubble.innerHTML = `${senderLabel}${content}<div class="message-time">${formatMessageTimeLabel(msg.createdAt)}</div>`;
+
+        if (isSelf) {
+            row.appendChild(bubble);
+            row.appendChild(avatarSlot);
+            latestSelfMessage = { message: msg, row };
+        } else {
+            row.appendChild(avatarSlot);
+            row.appendChild(bubble);
+        }
+
+        fragment.appendChild(row);
+        lastSenderId = msg.senderId;
     });
-    body.scrollTop = body.scrollHeight;
+
+    if (latestSelfMessage) {
+        const statusText = deriveMessageStatus(convo, latestSelfMessage.message);
+        if (statusText) {
+            const status = document.createElement('div');
+            status.className = 'message-status self';
+            status.textContent = statusText;
+            const nextNode = latestSelfMessage.row.nextSibling;
+            if (nextNode) {
+                fragment.insertBefore(status, nextNode);
+            } else {
+                fragment.appendChild(status);
+            }
+        }
+    }
+
+    body.appendChild(fragment);
+    if (shouldStickToBottom) {
+        body.scrollTop = body.scrollHeight;
+    } else {
+        body.scrollTop = Math.max(0, body.scrollHeight - previousOffset);
+    }
+}
+
+function deriveMessageStatus(convo = {}, message = {}) {
+    if (!currentUser) return '';
+    const others = (convo.participants || []).filter(function (uid) { return uid !== currentUser.uid; });
+    if (others.length === 0) return 'Sent';
+    const msgTs = getMessageTimestampMs(message);
+    const readMap = convo.lastReadAt || {};
+    const deliveredMap = convo.lastDeliveredAt || {};
+
+    const allRead = others.every(function (uid) {
+        const ts = toDateSafe(readMap[uid]);
+        return ts && ts.getTime() >= msgTs;
+    });
+    if (allRead) return 'Read';
+
+    const allDelivered = others.every(function (uid) {
+        const ts = toDateSafe(deliveredMap[uid]);
+        return ts && ts.getTime() >= msgTs;
+    });
+    return allDelivered ? 'Delivered' : 'Sent';
+}
+
+function renderTypingIndicator(convo = {}) {
+    const indicator = document.getElementById('typing-indicator');
+    if (!indicator) return;
+    const typing = convo.typing || {};
+    const active = Object.keys(typing || {}).filter(function (uid) { return uid !== currentUser?.uid && typing[uid]; });
+    if (!active.length) {
+        indicator.style.display = 'none';
+        indicator.innerHTML = '';
+        return;
+    }
+
+    const names = active.map(function (uid) {
+        const meta = resolveParticipantDisplay(convo, uid);
+        return meta.displayName || meta.username || 'Someone';
+    });
+    const label = active.length === 1 ? `${names[0]} is typing...` : 'Several people are typing...';
+    indicator.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div><span>${escapeHtml(label)}</span>`;
+    indicator.style.display = 'flex';
+}
+
+async function setTypingState(conversationId, isTyping) {
+    if (!conversationId || !currentUser) return;
+    if (typingStateByConversation[conversationId] === isTyping) return;
+    typingStateByConversation[conversationId] = isTyping;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`typing.${currentUser.uid}`]: isTyping });
+    } catch (e) {
+        console.warn('Unable to update typing state', e?.message || e);
+    }
+}
+
+function attachMessageInputHandlers(conversationId) {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+    input.oninput = function () {
+        const hasText = (input.value || '').trim().length > 0;
+        setTypingState(conversationId, hasText);
+    };
+    input.onblur = function () { setTypingState(conversationId, false); };
+}
+
+function listenToConversationDetails(convoId) {
+    if (conversationDetailsUnsubscribe) conversationDetailsUnsubscribe();
+    const convoRef = doc(db, 'conversations', convoId);
+    conversationDetailsUnsubscribe = ListenerRegistry.register(`conversation:details:${convoId}`, onSnapshot(convoRef, function (snap) {
+        if (!snap.exists()) return;
+        const data = { id: convoId, ...snap.data() };
+        conversationDetailsCache[convoId] = data;
+        renderMessageHeader(data);
+        renderMessages(messageThreadCache[convoId] || [], data);
+        renderTypingIndicator(data);
+    }));
+}
+
+async function markMessagesDelivered(conversationId, msgs = []) {
+    if (!conversationId || !currentUser) return;
+    const latestOther = msgs.slice().reverse().find(function (msg) { return msg.senderId !== currentUser.uid; });
+    if (!latestOther) return;
+    const tsMs = getMessageTimestampMs(latestOther);
+    if (!tsMs) return;
+    if (lastDeliveredAtLocal[conversationId] && lastDeliveredAtLocal[conversationId] >= tsMs) return;
+    lastDeliveredAtLocal[conversationId] = tsMs;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`lastDeliveredAt.${currentUser.uid}`]: Timestamp.fromMillis(tsMs) });
+    } catch (e) {
+        console.warn('Unable to mark delivered', e?.message || e);
+    }
 }
 
 async function ensureConversation(convoId, participantId) {
@@ -4702,14 +4928,20 @@ async function listenToMessages(convoId) {
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
     messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
         const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        messageThreadCache[convoId] = msgs;
         const details = conversationDetailsCache[convoId] || {};
         renderMessages(msgs, details);
+        renderTypingIndicator(details);
+        markMessagesDelivered(convoId, msgs);
         markConversationAsRead(convoId);
     }));
 }
 
 async function openConversation(conversationId) {
     if (!conversationId || !requireAuth()) return;
+    if (activeConversationId && activeConversationId !== conversationId) {
+        setTypingState(activeConversationId, false);
+    }
     activeConversationId = conversationId;
     const body = document.getElementById('message-thread');
     if (body) body.innerHTML = '';
@@ -4719,8 +4951,11 @@ async function openConversation(conversationId) {
     const convo = await fetchConversation(conversationId);
     if (convo) {
         renderMessageHeader(convo);
+        renderTypingIndicator(convo);
     }
-
+    listenToConversationDetails(conversationId);
+    attachMessageInputHandlers(conversationId);
+    setTypingState(conversationId, false);
     await listenToMessages(conversationId);
 }
 
@@ -5164,6 +5399,7 @@ window.sendMessage = async function (conversationId = activeConversationId) {
     if (!text) return;
     await sendChatPayload(conversationId, { text, type: 'text' });
     if (input) input.value = '';
+    setTypingState(conversationId, false);
 };
 
 window.sendMediaMessage = async function (conversationId = activeConversationId, fileInputElementId = 'message-media', caption = '') {
@@ -5185,12 +5421,23 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
     fileInput.value = '';
     const input = document.getElementById('message-input');
     if (input && caption) input.value = '';
+    setTypingState(conversationId, false);
 };
 
 window.markConversationAsRead = async function (conversationId = activeConversationId) {
     if (!conversationId || !currentUser) return;
+    const messages = messageThreadCache[conversationId] || [];
+    const latestMessage = messages[messages.length - 1];
+    const latestTs = latestMessage ? getMessageTimestampMs(latestMessage) : Date.now();
+    const receiptTs = Timestamp.fromMillis(latestTs || Date.now());
+    lastReadAtLocal[conversationId] = latestTs;
+    lastDeliveredAtLocal[conversationId] = Math.max(lastDeliveredAtLocal[conversationId] || 0, latestTs);
     try {
-        await updateDoc(doc(db, 'conversations', conversationId), { [`unreadCounts.${currentUser.uid}`]: 0 });
+        await updateDoc(doc(db, 'conversations', conversationId), {
+            [`unreadCounts.${currentUser.uid}`]: 0,
+            [`lastReadAt.${currentUser.uid}`]: receiptTs,
+            [`lastDeliveredAt.${currentUser.uid}`]: receiptTs
+        });
     } catch (e) {
         console.warn('Unable to update unread counts', e);
     }
