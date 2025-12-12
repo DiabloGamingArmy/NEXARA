@@ -25,6 +25,8 @@ const storage = getStorage(app);
 let currentUser = null;
 let allPosts = [];
 let userCache = {};
+let userFetchPromises = {};
+const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
 let currentProfileFilter = 'All Results';
@@ -272,14 +274,22 @@ function computeAvatarColor(seed = 'user') {
     return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
+function normalizeUsername(value = '') {
+    return (value || '').toString().trim().replace(/^@/, '');
+}
+
+function resolveDisplayName(userLike = {}) {
+    return userLike.name || userLike.displayName || userLike.fullName || userLike.nickname || '';
+}
+
 function resolveAvatarInitial(userLike = {}) {
-    const source = userLike.nickname || userLike.displayName || userLike.name || userLike.username || 'U';
+    const source = resolveDisplayName(userLike) || userLike.username || 'U';
     return (source || 'U').trim().charAt(0).toUpperCase() || 'U';
 }
 
 function ensureAvatarColor(profile = {}, uid = '') {
     if (profile.avatarColor) return profile.avatarColor;
-    const color = computeAvatarColor(uid || profile.username || profile.displayName || profile.name || 'user');
+    const color = computeAvatarColor(uid || profile.username || resolveDisplayName(profile) || 'user');
     profile.avatarColor = color;
     return color;
 }
@@ -328,13 +338,49 @@ function getAccountRoleSet(profile = userProfile) {
     return roles;
 }
 
-function normalizeUserProfileData(data = {}) {
-    const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : [];
-    const profile = { ...data, accountRoles };
-    profile.photoPath = data.photoPath || '';
-    profile.avatarColor = data.avatarColor || computeAvatarColor(data.username || data.displayName || data.name || 'user');
-    profile.locationHistory = Array.isArray(data.locationHistory) ? data.locationHistory : [];
+function normalizeUserProfileData(data = {}, uid = '') {
+    const accountRoles = Array.isArray(data.accountRoles) ? data.accountRoles : (data.role ? [data.role] : []);
+    const username = normalizeUsername(data.username || data.handle || data.nickname || (data.email ? data.email.split('@')[0] : ''));
+    const name = resolveDisplayName(data) || '';
+    const photoURL = data.photoURL || data.avatar || data.profilePhoto || data.profilePic || data.pfp || data.avatarUrl || '';
+    const avatarColor = data.avatarColor || computeAvatarColor(username || uid || 'user');
+    const locationHistory = Array.isArray(data.locationHistory) ? data.locationHistory : [];
+    const profile = {
+        ...data,
+        uid: data.uid || data.id || uid || '',
+        id: data.id || data.uid || uid || '',
+        username,
+        name: name || '',
+        displayName: name || '',
+        photoURL,
+        avatarColor,
+        accountRoles,
+        verified: isUserVerified({ ...data, accountRoles }),
+        locationHistory,
+        photoPath: data.photoPath || ''
+    };
     return profile;
+}
+
+function storeUserInCache(uid, profile = {}) {
+    if (!uid) return null;
+    const normalized = normalizeUserProfileData(profile, uid);
+    normalized._fetchedAt = Date.now();
+    userCache[uid] = normalized;
+    return normalized;
+}
+
+function isUserCacheStale(entry) {
+    if (!entry) return true;
+    if (!entry._fetchedAt) return true;
+    return Date.now() - entry._fetchedAt > USER_CACHE_TTL_MS;
+}
+
+function getCachedUser(uid, { allowStale = true } = {}) {
+    const entry = userCache[uid];
+    if (!entry) return null;
+    if (!allowStale && isUserCacheStale(entry)) return null;
+    return entry;
 }
 
 function userHasRole(userLike = {}, role = '') {
@@ -431,6 +477,15 @@ let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
+
+function arrayShallowEqual(a = [], b = []) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
 
 const ListenerRegistry = (function () {
     const listeners = new Map();
@@ -755,8 +810,8 @@ function initApp(onReady) {
 
                     // Fetch User Profile
                     if (docSnap.exists()) {
-                        userProfile = { ...userProfile, ...normalizeUserProfileData(docSnap.data()) };
-                        userCache[user.uid] = userProfile;
+                        userProfile = { ...userProfile, ...normalizeUserProfileData(docSnap.data(), docSnap.id) };
+                        storeUserInCache(user.uid, userProfile);
 
                         // Normalize role storage
                         userProfile.accountRoles = Array.isArray(userProfile.accountRoles) ? userProfile.accountRoles : [];
@@ -1077,7 +1132,7 @@ window.handleSignup = async function (e) {
         );
         // Create initial user document
         await setDoc(doc(db, "users", cred.user.uid), {
-            displayName: "New Explorer",
+            displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
             username: cred.user.email.split('@')[0],
             email: cred.user.email,
             createdAt: serverTimestamp(),
@@ -1154,9 +1209,9 @@ async function fetchMissingProfiles(posts) {
         const userDocs = await Promise.all(fetchPromises);
         userDocs.forEach(function (docSnap) {
             if (docSnap.exists()) {
-                userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
+                storeUserInCache(docSnap.id, docSnap.data());
             } else {
-                userCache[docSnap.id] = { name: "Unknown User", username: "unknown" };
+                storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
             }
         });
 
@@ -2381,7 +2436,7 @@ window.toggleSave = async function(postId, event) {
     } else {
         userProfile.savedPosts.push(postId);
     }
-    userCache[currentUser.uid] = userProfile;
+    storeUserInCache(currentUser.uid, userProfile);
 
     refreshSinglePostUI(postId);
 
@@ -2644,7 +2699,7 @@ async function searchMentionSuggestions(term = '') {
         );
         const snap = await getDocs(userQuery);
         const results = snap.docs.map(function (d) {
-            return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data()) };
+            return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data(), d.id) };
         });
         if (!results.length) {
             listEl.innerHTML = '';
@@ -2762,7 +2817,7 @@ async function resolveMentionProfiles(mentions = []) {
         const qSnap = await getDocs(query(collection(db, 'users'), where('username', '==', handle)));
         if (!qSnap.empty) {
             const docSnap = qSnap.docs[0];
-            userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
+            storeUserInCache(docSnap.id, docSnap.data());
             results.push({ uid: docSnap.id, handle });
         }
     }
@@ -2790,7 +2845,7 @@ function recordTagAffinity(tags = [], delta = 0) {
         affinity[tag] = (affinity[tag] || 0) + delta;
     });
     userProfile.tagAffinity = affinity;
-    userCache[currentUser.uid] = userProfile;
+    storeUserInCache(currentUser.uid, userProfile);
     setDoc(doc(db, 'users', currentUser.uid), { tagAffinity: affinity }, { merge: true });
 }
 
@@ -3130,7 +3185,7 @@ window.toggleSettingsModal = function(show) {
 
     const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
     userProfile = { ...userProfile, ...updates };
-    userCache[currentUser.uid] = userProfile;
+    storeUserInCache(currentUser.uid, userProfile);
 
      try {
          await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
@@ -4164,8 +4219,7 @@ window.openUserProfile = async function(uid, event, pushToStack = true) {
     if (!profile) {
         const docSnap = await getDoc(doc(db, "users", uid));
         if (docSnap.exists()) {
-            profile = normalizeUserProfileData(docSnap.data());
-            userCache[uid] = profile;
+            profile = storeUserInCache(uid, docSnap.data());
         } else {
             profile = { name: "Unknown User", username: "unknown" };
         }
@@ -4184,7 +4238,7 @@ window.openUserProfileByHandle = async function(handle) {
     const snap = await getDocs(q);
     if (!snap.empty) {
         const docSnap = snap.docs[0];
-        userCache[docSnap.id] = normalizeUserProfileData(docSnap.data());
+        storeUserInCache(docSnap.id, docSnap.data());
         openUserProfile(docSnap.id, null, true);
     }
 }
@@ -4415,7 +4469,7 @@ function renderProfileContent(uid, profile, isSelfView, containerId) {
 function renderPublicProfile(uid, profileData = userCache[uid]) {
     if(!profileData) return;
     if (!PROFILE_FILTER_OPTIONS.includes(currentProfileFilter)) currentProfileFilter = 'All Results';
-    const normalizedProfile = normalizeUserProfileData(profileData);
+    const normalizedProfile = normalizeUserProfileData(profileData, profileData.uid || profileData.id || currentUser?.uid || '');
     const container = document.getElementById('view-public-profile');
     const sources = getProfileContentSources(uid);
 
@@ -4745,25 +4799,71 @@ function getDirectConversationId(a, b) {
 function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
     const otherIds = participants.filter(function (uid) { return uid !== viewerId; });
     const usernames = otherIds.map(function (uid) {
+        const cached = getCachedUser(uid) || {};
         const idx = participants.indexOf(uid);
-        return (details.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
+        return cached.username || (details.participantUsernames || [])[idx] || (details.participantNames || [])[idx] || 'user';
+    });
+    const names = otherIds.map(function (uid) {
+        const cached = getCachedUser(uid) || {};
+        const idx = participants.indexOf(uid);
+        return resolveDisplayName(cached) || (details.participantNames || [])[idx] || (details.participantUsernames || [])[idx] || '';
     });
     const avatars = otherIds.map(function (uid) {
+        const cached = getCachedUser(uid) || {};
         const idx = participants.indexOf(uid);
-        return (details.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
+        return cached.photoURL || (details.participantAvatars || [])[idx] || '';
     });
-    return { otherIds, usernames, avatars };
+    const colors = otherIds.map(function (uid) {
+        const cached = getCachedUser(uid) || {};
+        return cached.avatarColor || computeAvatarColor(cached.username || uid || 'user');
+    });
+    return { otherIds, usernames, avatars, names, colors };
 }
 
-async function resolveUserProfile(uid) {
-    if (userCache[uid]) return userCache[uid];
-    const snap = await getDoc(doc(db, 'users', uid));
-    if (snap.exists()) {
-        const normalized = normalizeUserProfileData(snap.data());
-        userCache[uid] = normalized;
-        return normalized;
+function buildUnknownUserProfile(uid) {
+    return storeUserInCache(uid, {
+        username: 'user',
+        displayName: 'Unknown user',
+        name: 'Unknown user',
+        photoURL: '',
+        avatarColor: computeAvatarColor(uid || 'user')
+    });
+}
+
+async function resolveUserProfile(uid, options = {}) {
+    if (!uid) return buildUnknownUserProfile('user');
+    const force = options.force === true;
+    const cached = getCachedUser(uid, { allowStale: !force });
+    const shouldRefresh = force || isUserCacheStale(cached);
+    if (cached && !shouldRefresh) return cached;
+
+    if (userFetchPromises[uid]) {
+        try { return await userFetchPromises[uid]; } catch (e) { /* ignore */ }
     }
-    return { username: 'user', name: 'Nexera User' };
+
+    const fetchPromise = (async function () {
+        try {
+            const snap = await getDoc(doc(db, 'users', uid));
+            if (snap.exists()) {
+                return storeUserInCache(uid, snap.data());
+            }
+        } catch (e) {
+            console.warn('User fetch failed', uid, e?.message || e);
+        }
+        return buildUnknownUserProfile(uid);
+    })();
+
+    userFetchPromises[uid] = fetchPromise;
+    const profile = await fetchPromise;
+    delete userFetchPromises[uid];
+    return profile;
+}
+
+async function refreshUserProfiles(userIds = [], options = {}) {
+    const unique = Array.from(new Set(userIds.filter(Boolean)));
+    const promises = unique.map(function (uid) { return resolveUserProfile(uid, options).catch(function () { return null; }); });
+    const results = await Promise.all(promises);
+    return results.filter(Boolean);
 }
 
 function formatMessagePreview(payload = {}) {
@@ -4835,10 +4935,12 @@ function computeConversationTitle(convo = {}, viewerId = currentUser?.uid) {
 
 function resolveParticipantDisplay(convo = {}, uid = '') {
     const idx = (convo.participants || []).indexOf(uid);
-    const username = (convo.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
-    const displayName = (convo.participantNames || [])[idx] || userCache[uid]?.displayName || userCache[uid]?.name || username;
-    const avatar = (convo.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
-    return { username, displayName, avatar };
+    const cached = getCachedUser(uid) || {};
+    const username = cached.username || (convo.participantUsernames || [])[idx] || 'user';
+    const displayName = resolveDisplayName(cached) || (convo.participantNames || [])[idx] || username || 'Unknown user';
+    const avatar = cached.photoURL || (convo.participantAvatars || [])[idx] || '';
+    const avatarColor = cached.avatarColor || computeAvatarColor(username || uid || 'user');
+    return { username, displayName, avatar, avatarColor, profile: cached };
 }
 
 function getMessageTimestampMs(msg = {}) {
@@ -4873,8 +4975,8 @@ function renderConversationList() {
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
         const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
-        const otherProfile = otherId ? userCache[otherId] : null;
-        const participantLabels = (details.participantNames || details.participantUsernames || meta.usernames || []).filter(Boolean);
+        const otherProfile = otherId ? getCachedUser(otherId) : null;
+        const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
         const isGroup = (participants || []).length > 2 || details.type === 'group';
         const mergedConvo = {
             ...details,
@@ -4884,13 +4986,26 @@ function renderConversationList() {
             title: details.title || null
         };
         const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
-        const avatarUrl = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
-        const avatarHtml = renderAvatar({
-            uid: otherId || 'user',
+        let avatarUser = {
+            uid: mapping.id || otherId || 'conversation',
             username: name,
-            photoURL: avatarUrl,
-            avatarColor: otherProfile?.avatarColor || computeAvatarColor(otherProfile?.username || name)
-        }, { size: 42 });
+            displayName: name,
+            photoURL: details.avatarURL || '',
+            avatarColor: computeAvatarColor(name)
+        };
+        if (!isGroup && otherId) {
+            avatarUser = {
+                ...otherProfile,
+                uid: otherId,
+                username: otherProfile?.username || name,
+                displayName: resolveDisplayName(otherProfile) || name,
+                photoURL: otherProfile?.photoURL || details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '',
+                avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
+            };
+        } else if (details.avatarURL || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
+            avatarUser.photoURL = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
+        }
+        const avatarHtml = renderAvatar(avatarUser, { size: 42 });
 
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
@@ -4929,15 +5044,30 @@ function renderMessageHeader(convo = {}) {
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
     const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
-    const avatar = renderAvatar({
-        uid: meta.otherIds?.[0] || 'group',
-        username: label,
-        photoURL: convo.avatarURL || meta.avatars?.[0] || '',
-        avatarColor: computeAvatarColor(label)
-    }, { size: 36 });
     const cid = convo.id || activeConversationId;
-    const primaryOther = meta.otherIds?.[0] ? userCache[meta.otherIds[0]] : null;
-    const verifiedBadge = (!convo.title && participants.length === 2 && primaryOther) ? renderVerifiedBadge(primaryOther) : '';
+    const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
+    let avatarUser = {
+        uid: cid || primaryOtherId || 'conversation',
+        username: label,
+        displayName: label,
+        photoURL: convo.avatarURL || meta.avatars?.[0] || '',
+        avatarColor: convo.avatarColor || computeAvatarColor(label)
+    };
+
+    if (primaryOtherId && !convo.avatarURL) {
+        const otherMeta = resolveParticipantDisplay(convo, primaryOtherId);
+        avatarUser = {
+            ...otherMeta.profile,
+            uid: primaryOtherId,
+            username: otherMeta.username || label,
+            displayName: otherMeta.displayName || label,
+            photoURL: otherMeta.avatar,
+            avatarColor: otherMeta.avatarColor
+        };
+    }
+
+    const avatar = renderAvatar(avatarUser, { size: 36 });
+    const verifiedBadge = (!convo.title && participants.length === 2) ? renderVerifiedBadge(avatarUser) : '';
     header.innerHTML = `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
         <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(label)}${verifiedBadge}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
         <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')"><i class="ph ph-dots-three-outline"></i></button>
@@ -4985,7 +5115,7 @@ function renderMessages(msgs = [], convo = {}) {
                     uid: msg.senderId,
                     username: senderMeta.displayName || senderMeta.username,
                     photoURL: senderMeta.avatar,
-                    avatarColor: computeAvatarColor(senderMeta.displayName || senderMeta.username)
+                    avatarColor: senderMeta.avatarColor || computeAvatarColor(senderMeta.username || senderMeta.displayName || msg.senderId)
                 }, { size: 42 });
             } else {
                 avatarSlot.classList.add('placeholder');
@@ -5128,6 +5258,7 @@ function listenToConversationDetails(convoId) {
         const data = { id: convoId, ...snap.data() };
         if (!(data.participants || []).includes(currentUser?.uid)) { handleConversationAccessLoss(convoId); return; }
         conversationDetailsCache[convoId] = data;
+        refreshConversationUsers(data, { updateUI: true });
         renderMessageHeader(data);
         renderMessages(messageThreadCache[convoId] || [], data);
         renderTypingIndicator(data);
@@ -5297,6 +5428,7 @@ async function openConversation(conversationId) {
         return;
     }
 
+    refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
     renderTypingIndicator(convo);
     listenToConversationDetails(conversationId);
@@ -5323,9 +5455,16 @@ async function initConversations(autoOpen = true) {
         const userIds = new Set();
         conversationMappings.forEach(function (mapping) {
             const details = conversationDetailsCache[mapping.id] || {};
-            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) { if (!userCache[uid]) userIds.add(uid); });
+            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
+                const cached = getCachedUser(uid, { allowStale: true });
+                if (!cached || isUserCacheStale(cached)) userIds.add(uid);
+            });
         });
-        await Promise.all(Array.from(userIds).map(function (uid) { return resolveUserProfile(uid).catch(function () {}); }));
+        await refreshUserProfiles(Array.from(userIds), { force: true });
+
+        await Promise.all(conversationMappings.map(function (mapping) {
+            return reconcileConversationMapping(mapping).catch(function () {});
+        }));
 
         renderConversationList();
 
@@ -5448,6 +5587,38 @@ function bindConversationAvatarInput(convo = {}) {
     };
 }
 
+async function reconcileConversationMapping(mapping = {}) {
+    if (!mapping?.id || !currentUser) return;
+    const details = conversationDetailsCache[mapping.id] || {};
+    const participants = details.participants || mapping.otherParticipantIds || [];
+    const otherIds = participants.filter(function (uid) { return uid !== currentUser.uid; });
+    if (!otherIds.length) return;
+
+    await refreshUserProfiles(otherIds, { force: true });
+
+    const names = otherIds.map(function (uid) {
+        const cached = getCachedUser(uid) || {};
+        return resolveDisplayName(cached) || cached.username || 'Unknown user';
+    });
+    const usernames = otherIds.map(function (uid) { return (getCachedUser(uid) || {}).username || 'user'; });
+    const avatars = otherIds.map(function (uid) { return (getCachedUser(uid) || {}).photoURL || ''; });
+    const colors = otherIds.map(function (uid) {
+        const cached = getCachedUser(uid) || {};
+        return cached.avatarColor || computeAvatarColor(cached.username || uid || 'user');
+    });
+
+    const update = {};
+    if (!arrayShallowEqual(mapping.otherParticipantNames || [], names)) update.otherParticipantNames = names;
+    if (!arrayShallowEqual(mapping.otherParticipantUsernames || [], usernames)) update.otherParticipantUsernames = usernames;
+    if (!arrayShallowEqual(mapping.otherParticipantAvatars || [], avatars)) update.otherParticipantAvatars = avatars;
+    if (!arrayShallowEqual(mapping.otherParticipantColors || [], colors)) update.otherParticipantColors = colors;
+
+    if (Object.keys(update).length > 0) {
+        await setDoc(doc(db, `users/${currentUser.uid}/conversations/${mapping.id}`), update, { merge: true });
+        updateConversationMappingState(mapping.id, update);
+    }
+}
+
 async function fetchConversationMapping(conversationId) {
     if (!currentUser) return null;
     const snap = await getDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`));
@@ -5463,18 +5634,42 @@ async function fetchConversationMapping(conversationId) {
     return null;
 }
 
+function refreshConversationUsers(convo = {}, options = {}) {
+    const participants = convo.participants || [];
+    if (!participants.length) return Promise.resolve([]);
+    return refreshUserProfiles(participants, { force: options.force === true }).then(function (profiles) {
+        if (options.updateUI) {
+            renderConversationList();
+            if (activeConversationId === (convo.id || activeConversationId)) {
+                renderMessageHeader(convo);
+                renderConversationParticipants(convo);
+            }
+        }
+        return profiles;
+    });
+}
+
 function renderConversationParticipants(convo = {}) {
     const listEl = document.getElementById('conversation-participant-list');
     if (!listEl) return;
     const participants = convo.participants || [];
     listEl.innerHTML = '';
 
-    participants.forEach(function (uid, idx) {
+    participants.forEach(function (uid) {
         const meta = resolveParticipantDisplay(convo, uid);
-        const name = meta.displayName || 'Participant';
-        const handle = meta.username ? `@${meta.username}` : '';
-        const badge = renderVerifiedBadge(userCache[uid] || {});
-        const avatar = renderAvatar({ uid, username: name, photoURL: meta.avatar || userCache[uid]?.photoURL || '' }, { size: 32 });
+        const profile = getCachedUser(uid) || {};
+        const name = resolveDisplayName(profile) || meta.displayName || meta.username || 'Unknown user';
+        const handleValue = profile.username || meta.username;
+        const handle = handleValue ? `@${handleValue}` : '';
+        const badge = renderVerifiedBadge(profile);
+        const avatar = renderAvatar({
+            ...profile,
+            uid,
+            username: handleValue || name,
+            displayName: name,
+            photoURL: profile.photoURL || meta.avatar,
+            avatarColor: profile.avatarColor || meta.avatarColor
+        }, { size: 32 });
         const row = document.createElement('div');
         row.className = 'participant-row';
         const nameLine = document.createElement('div');
@@ -5604,7 +5799,10 @@ async function refreshConversationSettings(conversationId = conversationSettings
     const convo = await fetchConversation(conversationId);
     conversationSettingsId = conversationId;
     const mapping = await fetchConversationMapping(conversationId) || {};
-    if (convo) renderConversationSettings(convo, mapping);
+    if (convo) {
+        await refreshConversationUsers(convo, { force: true });
+        renderConversationSettings(convo, mapping);
+    }
 }
 
 window.refreshConversationSettings = refreshConversationSettings;
@@ -5639,15 +5837,17 @@ window.searchConversationParticipants = async function (term = '') {
     qSnap.forEach(function (docSnap) {
         if (docSnap.id === currentUser?.uid) return;
         if (existing.includes(docSnap.id)) return;
-        const data = docSnap.data();
-        deduped.set(docSnap.id, { id: docSnap.id, username: data.username, displayName: data.displayName || data.name, photoURL: data.photoURL || data.avatar || '' });
+        const profile = normalizeUserProfileData(docSnap.data(), docSnap.id);
+        storeUserInCache(docSnap.id, profile);
+        deduped.set(docSnap.id, { id: docSnap.id, ...profile });
     });
     conversationSettingsSearchResults = Array.from(deduped.values());
     resultsEl.innerHTML = '';
     conversationSettingsSearchResults.forEach(function (user) {
         const row = document.createElement('div');
         row.className = 'conversation-item';
-        row.innerHTML = `<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || 'Nexera User')}</div></div>`;
+        const avatar = renderAvatar({ uid: user.id, username: user.username || user.displayName || 'user', displayName: user.displayName, photoURL: user.photoURL, avatarColor: user.avatarColor }, { size: 32 });
+        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || 'Nexera User')}</div></div></div>`;
         row.onclick = function () { window.addParticipantToConversation(user.id); };
         resultsEl.appendChild(row);
     });
@@ -6112,7 +6312,8 @@ function renderChatSearchResults(users = []) {
     users.forEach(function (user) {
         const row = document.createElement('div');
         row.className = 'conversation-item' + (newChatSelections.some(function (u) { return u.id === user.id; }) ? ' active' : '');
-        row.innerHTML = `<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || user.name || 'Nexera User')}</div></div>`;
+        const avatar = renderAvatar({ uid: user.id, username: user.username || user.displayName || 'user', displayName: user.displayName, photoURL: user.photoURL, avatarColor: user.avatarColor }, { size: 32 });
+        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || user.name || 'Nexera User')}</div></div></div>`;
         row.onclick = function () { window.toggleChatUserSelection(user.id); };
         resultsEl.appendChild(row);
     });
@@ -6170,7 +6371,9 @@ window.searchChatUsers = async function (term = '') {
     qSnap.forEach(function (docSnap) {
         const data = docSnap.data();
         if (docSnap.id === currentUser?.uid) return;
-        deduped.set(docSnap.id, { id: docSnap.id, username: data.username, displayName: data.displayName || data.name, photoURL: data.photoURL || data.avatar || '' });
+        const profile = normalizeUserProfileData(data, docSnap.id);
+        storeUserInCache(docSnap.id, profile);
+        deduped.set(docSnap.id, { id: docSnap.id, ...profile });
     });
     chatSearchResults = Array.from(deduped.values());
     renderChatSearchResults(chatSearchResults);
