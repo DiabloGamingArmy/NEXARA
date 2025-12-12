@@ -1,3 +1,5 @@
+// --- NOTE: These rules are made for FIREBASE DATABASE, NOT FIREBASE STORAGE
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
