@@ -524,6 +524,14 @@ const HISTORICAL_EVENTS = {
     "DEFAULT": "Did you know? On this day in history, something amazing likely happened!"
 };
 
+const timeCapsuleState = {
+    events: [],
+    source: 'fallback',
+    dateKey: null,
+    dateLabel: '',
+    currentIndex: 0
+};
+
 const THEMES = {
     'For You': '#00f2ea', 'Following': '#ffffff', 'STEM': '#00f2ea',
     'History': '#ffd700', 'Coding': '#00ff41', 'Art': '#ff0050',
@@ -714,18 +722,113 @@ async function initializeNexeraApp() {
     }
 }
 
-function updateTimeCapsule() {
-    const date = new Date();
-    const key = `${date.getMonth() + 1}-${date.getDate()}`;
-    const eventText = HISTORICAL_EVENTS[key] || HISTORICAL_EVENTS["DEFAULT"];
-    const dateString = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+async function fetchWikipediaEventsForToday() {
+    try {
+        const today = new Date();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        const endpoint = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
+        const response = await fetch(endpoint);
+        if (!response.ok) throw new Error('Failed to load Wikipedia events');
+        const data = await response.json();
+        if (!data || !Array.isArray(data.events)) return [];
 
+        return data.events.map(function (event) {
+            if (!event || !event.text) return null;
+            const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
+            let url = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
+            if (!url && firstPage && firstPage.titles && firstPage.titles.normalized) {
+                const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
+                url = `https://en.wikipedia.org/wiki/${normalized}`;
+            }
+
+            return {
+                year: event.year,
+                text: event.text,
+                url: url || null
+            };
+        }).filter(Boolean);
+    } catch (err) {
+        console.warn('Wikipedia events fetch failed', err);
+        return [];
+    }
+}
+
+function getFallbackEventsForDate(key) {
+    const eventText = HISTORICAL_EVENTS[key] || HISTORICAL_EVENTS["DEFAULT"];
+    return eventText ? [{ year: '', text: eventText, url: null }] : [];
+}
+
+function pickRandomIndex(length, excludeIndex) {
+    if (!length || length <= 1) return 0;
+    let candidate = excludeIndex;
+    while (candidate === excludeIndex) {
+        candidate = Math.floor(Math.random() * length);
+    }
+    return candidate;
+}
+
+function renderTimeCapsule() {
     const dateEl = document.getElementById('otd-date-display');
     const eventEl = document.getElementById('otd-event-display');
+    const wikiLink = document.getElementById('otd-wiki-link');
+    const refreshBtn = document.getElementById('otd-refresh-btn');
 
-    if (dateEl) dateEl.textContent = dateString;
-    if (eventEl) eventEl.textContent = eventText;
+    const currentEvent = timeCapsuleState.events[timeCapsuleState.currentIndex] || null;
+    const displayText = currentEvent ? `${currentEvent.year ? currentEvent.year + ' – ' : ''}${currentEvent.text}` : HISTORICAL_EVENTS["DEFAULT"];
+
+    if (dateEl) dateEl.textContent = timeCapsuleState.dateLabel || '';
+    if (eventEl) eventEl.textContent = displayText;
+
+    if (refreshBtn) {
+        refreshBtn.disabled = !(timeCapsuleState.events && timeCapsuleState.events.length > 1);
+        refreshBtn.classList.toggle('disabled', refreshBtn.disabled);
+    }
+
+    if (wikiLink) {
+        if (timeCapsuleState.source === 'wikipedia' && currentEvent && currentEvent.url) {
+            wikiLink.style.display = 'inline-flex';
+            wikiLink.href = currentEvent.url;
+            wikiLink.setAttribute('target', '_blank');
+            wikiLink.setAttribute('rel', 'noopener noreferrer');
+        } else {
+            wikiLink.style.display = 'none';
+            wikiLink.removeAttribute('href');
+        }
+    }
 }
+
+async function updateTimeCapsule(forceReload = false) {
+    const date = new Date();
+    const key = `${date.getMonth() + 1}-${date.getDate()}`;
+    const previousKey = timeCapsuleState.dateKey;
+    timeCapsuleState.dateKey = key;
+    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+
+    if (forceReload || !timeCapsuleState.events.length || timeCapsuleState.source === 'fallback' || previousKey !== key) {
+        const wikiEvents = await fetchWikipediaEventsForToday();
+        if (wikiEvents && wikiEvents.length) {
+            timeCapsuleState.events = wikiEvents;
+            timeCapsuleState.source = 'wikipedia';
+        } else {
+            timeCapsuleState.events = getFallbackEventsForDate(key);
+            timeCapsuleState.source = 'fallback';
+        }
+        timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, -1);
+    }
+
+    renderTimeCapsule();
+}
+
+function showAnotherTimeCapsuleEvent() {
+    if (!timeCapsuleState.events || !timeCapsuleState.events.length) {
+        updateTimeCapsule(true);
+        return;
+    }
+    timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, timeCapsuleState.currentIndex);
+    renderTimeCapsule();
+}
+window.showAnotherTimeCapsuleEvent = showAnotherTimeCapsuleEvent;
 
 function getSystemTheme() {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
