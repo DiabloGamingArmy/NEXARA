@@ -194,7 +194,17 @@ service cloud.firestore {
     }
 
     match /users/{userId}/conversations/{conversationId} {
-      allow read, write: if isSignedIn() && request.auth.uid == userId;
+      function convoParticipants() {
+        return exists(/databases/$(database)/documents/conversations/$(conversationId))
+          ? get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          : [];
+      }
+
+      allow read: if isSignedIn() && (request.auth.uid == userId);
+
+      allow write: if isSignedIn()
+        && (request.auth.uid == userId
+            || (request.auth.uid in convoParticipants() && userId in convoParticipants()));
     }
 
     // -------------------------
