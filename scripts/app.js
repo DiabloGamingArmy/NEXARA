@@ -186,6 +186,39 @@ function getPostOptionsButton(post, context = 'feed', iconSize = '1.1rem') {
     return `<button class="post-options-btn" onclick="event.stopPropagation(); window.openPostOptions(event, '${post.id}', '${ownerId}', '${context}')" aria-label="Post options"><i class="ph ph-dots-three" style="font-size:${iconSize};"></i></button>`;
 }
 
+function renderPostActions(post, {
+    isLiked = false,
+    isDisliked = false,
+    isSaved = false,
+    reviewDisplay = null,
+    iconSize = '1.1rem',
+    discussionLabel = 'Discuss',
+    discussionOnclick = null,
+    includeReview = true,
+    extraClass = '',
+    idPrefix = 'post'
+} = {}) {
+    const actions = [];
+    const likeCount = post.likes || 0;
+    const dislikeCount = post.dislikes || 0;
+    const computedReview = reviewDisplay || getReviewDisplay(window.myReviewCache ? window.myReviewCache[post.id] : null);
+
+    const prefix = idPrefix ? `${idPrefix}-` : '';
+
+    actions.push(`<button id="${prefix}like-btn-${post.id}" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:${iconSize};"></i> ${likeCount}</button>`);
+    actions.push(`<button id="${prefix}dislike-btn-${post.id}" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:${iconSize};"></i> ${dislikeCount}</button>`);
+    const discussionTarget = discussionOnclick || `window.openThread('${post.id}')`;
+    actions.push(`<button class="action-btn" onclick="${discussionTarget}"><i class="ph ph-chat-circle" style="font-size:${iconSize};"></i> ${discussionLabel}</button>`);
+    actions.push(`<button class="action-btn" onclick="event.stopPropagation(); window.sharePost('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:${iconSize};"></i> Share</button>`);
+    actions.push(`<button id="${prefix}save-btn-${post.id}" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:${iconSize};"></i> ${isSaved ? 'Saved' : 'Save'}</button>`);
+
+    if (includeReview) {
+        actions.push(`<button id="${prefix}review-btn-${post.id}" class="action-btn review-action ${computedReview.className}" data-post-id="${post.id}" data-icon-size="${iconSize}" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:${iconSize};"></i> ${computedReview.label}</button>`);
+    }
+
+    return `<div class="card-actions${extraClass ? ' ' + extraClass : ''}">${actions.join('')}</div>`;
+}
+
 function applyReviewButtonState(buttonEl, reviewValue) {
     if (!buttonEl) return;
     const { label, className } = getReviewDisplay(reviewValue);
@@ -360,6 +393,10 @@ let messagesUnsubscribe = null;
 let activeConversationId = null;
 let conversationsCache = [];
 let activeMessageUpload = null;
+let conversationMappings = [];
+let conversationDetailsCache = {};
+let newChatSelections = [];
+let chatSearchResults = [];
 let videosUnsubscribe = null;
 let videosCache = [];
 let videoObserver = null;
@@ -931,8 +968,8 @@ function startDataListener() {
         postSnapshotCache = nextCache;
     }));
 
-    // Start Live Stream Listener (Mock)
-    if (typeof renderLive === 'function') renderLive();
+    // Prime Live Directory layout
+    if (typeof renderLiveDirectoryFromCache === 'function') renderLiveDirectoryFromCache();
 
     if (scheduledRenderTimer) clearInterval(scheduledRenderTimer);
     scheduledRenderTimer = setInterval(function() {
@@ -1887,13 +1924,7 @@ function getPostHTML(post) {
                     ${commentPreviewHtml}
                     ${savedTagHtml}
                 </div>
-                <div class="card-actions">
-                    <button id="post-like-btn-${post.id}" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
-                    <button id="post-dislike-btn-${post.id}" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}</button>
-                    <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
-                    <button id="post-save-btn-${post.id}" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
-                    <button class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
-                </div>
+                ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay })}
             </div>`;
     } catch (e) {
         console.error("Error generating post HTML", e);
@@ -1989,11 +2020,11 @@ function refreshSinglePostUI(postId) {
     }
 
     // Update Thread View if active
-    const threadLikeBtn = document.getElementById('thread-like-btn');
-    const threadDislikeBtn = document.getElementById('thread-dislike-btn');
-    const threadSaveBtn = document.getElementById('thread-save-btn');
+    const threadLikeBtn = document.getElementById(`thread-like-btn-${postId}`);
+    const threadDislikeBtn = document.getElementById(`thread-dislike-btn-${postId}`);
+    const threadSaveBtn = document.getElementById(`thread-save-btn-${postId}`);
     const threadTitle = document.getElementById('thread-view-title');
-    const threadReviewBtn = document.getElementById('thread-review-btn');
+    const threadReviewBtn = document.getElementById(`thread-review-btn-${postId}`);
 
     if(threadTitle && threadTitle.dataset.postId === postId) {
         if(threadLikeBtn) {
@@ -3303,19 +3334,14 @@ function renderThreadMainPost(postId) {
             ${pollBlock}
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}</div>
-            <div class="card-actions" style="border:none; padding: 10px 0; justify-content: space-around;">
-                <button id="thread-like-btn" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}; font-size: 1.2rem;"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span></button>
-                <button id="thread-dislike-btn" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}; font-size: 1.2rem;"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span style="font-size:1rem; margin-left:5px;">${post.dislikes || 0}</span></button>
-                <button class="action-btn" onclick="document.getElementById('thread-input').focus()" style="color: var(--primary); font-size: 1.2rem;"><i class="ph ph-chat-circle"></i> <span style="font-size:1rem; margin-left:5px;">Comment</span></button>
-                <button id="thread-save-btn" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="font-size: 1.2rem; color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span></button>
-                <button id="thread-review-btn" class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.2rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')" style="font-size: 1.2rem;"><i class="ph ph-scales"></i> <span style="font-size:1rem; margin-left:5px;">${reviewDisplay.label}</span></button>
-            </div>
+                        ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1.2rem', discussionLabel: 'Comment', discussionOnclick: "document.getElementById('thread-input').focus()", extraClass: 'thread-action-row', idPrefix: 'thread' })}
+</div>
         </div>`;
 
     const inputPfp = document.getElementById('thread-input-pfp');
     if(inputPfp) applyAvatarToElement(inputPfp, userProfile, { size: 40 });
 
-    const threadReviewBtn = document.getElementById('thread-review-btn');
+    const threadReviewBtn = document.getElementById(`thread-review-btn-${post.id}`);
     applyReviewButtonState(threadReviewBtn, myReview);
     applyMyReviewStylesToDOM();
 }
@@ -3743,6 +3769,11 @@ window.renderDiscover = async function() {
             filteredPosts.forEach(function(post) {
                 const author = userCache[post.userId] || {name: post.author};
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
+                const isLiked = post.likedBy && currentUser && post.likedBy.includes(currentUser.uid);
+                const isDisliked = post.dislikedBy && currentUser && post.dislikedBy.includes(currentUser.uid);
+                const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
+                const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
+                const reviewDisplay = getReviewDisplay(myReview);
                 const locationBadge = renderLocationBadge(post.location);
                 const pollBlock = renderPollBlock(post);
                 container.innerHTML += `
@@ -3759,6 +3790,7 @@ window.renderDiscover = async function() {
                             <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
                             ${locationBadge}
                             ${pollBlock}
+                            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem' })}
                         </div>
                     </div>`;
             });
@@ -3931,7 +3963,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             </div>
             <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
                 ${followCta}
-                ${isSelfView ? '' : '<button class="create-btn-sidebar" style="width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);">Message</button>'}
+                ${isSelfView ? '' : `<button class=\"create-btn-sidebar\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);\" onclick=\"window.openOrStartDirectConversationWithUser('${uid}')\">Message</button>`}
             </div>
         </div>
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
@@ -3954,7 +3986,10 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             filteredPosts.forEach(function(post) {
                 const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
                 const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+                const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
                 const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
+                const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
+                const reviewDisplay = getReviewDisplay(myReview);
                 const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
                 const formattedBody = formatContent(postText, post.tags, post.mentions);
                 const tagListHtml = renderTagList(post.tags || []);
@@ -3991,11 +4026,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                         ${pollBlock}
                         ${mediaContent}
                     </div>
-                    <div class="card-actions">
-                        <button class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><span>${isLiked ? '👍' : '👍'}</span> ${post.likes || 0}</button>
-                        <button class="action-btn" onclick="window.openThread('${post.id}')"><span>💬</span> Discuss</button>
-                        <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><span>${isSaved ? '🔖' : '🔖'}</span> ${isSaved ? 'Saved' : 'Save'}</button>
-                    </div>
+                    ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem' })}
                 </div>`;
         });
     }
@@ -4048,6 +4079,11 @@ function renderProfile() {
         feedContainer.innerHTML = "";
         filteredPosts.forEach(function(post) {
             const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
+            const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
+            const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
+            const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
+            const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
+            const reviewDisplay = getReviewDisplay(myReview);
             const membership = memberships[post.categoryId];
             const inactive = membership && membership.status !== 'active';
             const badgeClass = inactive ? 'category-badge inactive' : 'category-badge';
@@ -4071,6 +4107,7 @@ function renderProfile() {
                         ${locationBadge}
                         ${scheduledChip}
                         ${pollBlock}
+                        ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem' })}
                     </div>
                 </div>`;
         });
@@ -4144,34 +4181,10 @@ window.setCategory = function(c) {
     renderFeed();
 }
 
-window.renderLive = function() { 
+window.renderLive = function() {
     const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
-    if(!container) return; 
-    container.innerHTML = ""; 
-
-    if(MOCK_LIVESTREAMS.length === 0) { 
-        container.innerHTML = `<div class="empty-state">No active livestreams.</div>`; 
-        return; 
-    } 
-
-    container.style.display = "grid"; 
-    container.style.gridTemplateColumns = "repeat(auto-fill, minmax(280px, 1fr))"; 
-    container.style.gap = "20px"; 
-
-    MOCK_LIVESTREAMS.forEach(function(stream) { 
-        container.innerHTML += `
-            <div class="social-card" style="border-top: 4px solid ${stream.color}; cursor:pointer; transition:0.2s; overflow:hidden;">
-                <div style="height:150px; background:${stream.color}; opacity:0.8; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
-                <div style="padding:1rem;">
-                    <h3 style="font-weight:700; font-size:1.1rem; margin-bottom:5px; color:var(--text-main);">${stream.title}</h3>
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div style="font-size:0.9rem; color:var(--text-muted);">@${stream.author}</div>
-                        <div style="color:#ff3d3d; font-weight:bold; font-size:0.8rem; display:flex; align-items:center; gap:4px;"><i class="ph-fill ph-circle"></i> ${stream.viewerCount}</div>
-                    </div>
-                    <div class="category-badge" style="margin-top:10px;">${stream.category}</div>
-                </div>
-            </div>`; 
-    }); 
+    if(container) container.innerHTML = "";
+    renderLiveDirectoryFromCache();
 }
 
 // Helper Utils
@@ -4257,8 +4270,12 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
     const dropdown = document.getElementById('post-options-dropdown');
     const deleteBtn = document.getElementById('dropdown-delete-btn');
     const editBtn = document.getElementById('dropdown-edit-btn');
+    const shareBtn = document.getElementById('dropdown-share-btn');
+    const messageBtn = document.getElementById('dropdown-message-btn');
     if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
     if(editBtn) editBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if(shareBtn) shareBtn.style.display = 'flex';
+    if(messageBtn) messageBtn.style.display = currentUser && ownerId !== currentUser.uid ? 'flex' : 'none';
     if (dropdown && event && event.currentTarget) {
         dropdown.style.display = 'block';
         const rect = event.currentTarget.getBoundingClientRect();
@@ -4273,6 +4290,8 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
 window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
 window.handlePostOptionSelect = function(action) {
     closePostOptionsDropdown();
+    if(action === 'share' && activeOptionsPost?.id) return window.sharePost(activeOptionsPost.id);
+    if(action === 'message' && activeOptionsPost?.id) return window.messageAuthor(activeOptionsPost.id);
     if(action === 'report') return window.openReportModal();
     if(action === 'delete') return window.confirmDeletePost();
     if(action === 'edit') return window.beginEditPost();
@@ -4320,178 +4339,583 @@ window.beginEditPost = function() {
 };
 
 // --- Messaging (DMs) ---
-window.toggleNewChatModal = function(show = true) {
-    const modal = document.getElementById('new-chat-modal');
-    if(modal) modal.style.display = show ? 'flex' : 'none';
-};
-window.openNewChatModal = function() { return window.toggleNewChatModal(true); };
-
-window.searchChatUsers = async function(term = '') {
-    const resultsEl = document.getElementById('chat-search-results');
-    if(!resultsEl) return;
-    resultsEl.innerHTML = '';
-    const cleaned = term.trim().toLowerCase();
-    if(cleaned.length < 2) return;
-    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
-    qSnap.forEach(function(docSnap) {
-        const data = docSnap.data();
-        const row = document.createElement('div');
-        row.className = 'conversation-item';
-        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexera User'}</div></div>`;
-        row.onclick = function() { return createConversationWithUser(docSnap.id, data); };
-        resultsEl.appendChild(row);
-    });
-};
-
-async function createConversationWithUser(targetUid, targetData = {}) {
-    if(!requireAuth()) return;
-    try {
-        const sortedMembers = [currentUser.uid, targetUid].sort();
-        const existing = conversationsCache.find(function(c) {
-            const members = c.members || [];
-            return members.length === 2 && sortedMembers.every(function(id) { return members.includes(id); });
-        });
-        if(existing) {
-            setActiveConversation(existing.id, existing);
-            toggleNewChatModal(false);
-            return;
-        }
-
-        const convoId = `${sortedMembers[0]}_${sortedMembers[1]}`;
-        const convoRef = doc(db, 'conversations', convoId);
-        const existingSnap = await getDoc(convoRef);
-        if(existingSnap.exists()) {
-            const data = existingSnap.data();
-            conversationsCache.push({ id: convoId, ...data });
-            toggleNewChatModal(false);
-            setActiveConversation(convoId, data);
-            return;
-        }
-
-        const payload = {
-            members: sortedMembers,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            lastMessageText: '',
-            lastMessageAt: serverTimestamp(),
-            requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
-        };
-
-        await setDoc(convoRef, payload, { merge: true });
-        conversationsCache.push({ id: convoId, ...payload });
-        toggleNewChatModal(false);
-        setActiveConversation(convoId, payload);
-    } catch(err) {
-        console.error('Conversation create error', err);
-        toast('Unable to start chat. Please try again.', 'error');
-    }
+function getDirectConversationId(a, b) {
+    return [a, b].sort().join('_');
 }
 
-function initConversations() {
-    if(!requireAuth()) return;
-    if(conversationsUnsubscribe) conversationsUnsubscribe();
-    const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function(snap) {
-        conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        renderConversationList();
-    }));
+function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
+    const otherIds = participants.filter(function (uid) { return uid !== viewerId; });
+    const usernames = otherIds.map(function (uid) {
+        const idx = participants.indexOf(uid);
+        return (details.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
+    });
+    const avatars = otherIds.map(function (uid) {
+        const idx = participants.indexOf(uid);
+        return (details.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
+    });
+    return { otherIds, usernames, avatars };
+}
+
+async function resolveUserProfile(uid) {
+    if (userCache[uid]) return userCache[uid];
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+        const normalized = normalizeUserProfileData(snap.data());
+        userCache[uid] = normalized;
+        return normalized;
+    }
+    return { username: 'user', name: 'Nexera User' };
+}
+
+function formatMessagePreview(payload = {}) {
+    if (payload.type === 'image') return '[image]';
+    if (payload.type === 'video') return '[video]';
+    if (payload.type === 'post_ref') return '[post]';
+    const text = (payload.text || '').trim();
+    if (!text) return '[message]';
+    return text.length > 80 ? text.substring(0, 77) + '…' : text;
 }
 
 function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
-    if(!listEl) return;
+    if (!listEl) return;
     listEl.innerHTML = '';
-    if(conversationsCache.length === 0) {
+
+    if (conversationMappings.length === 0) {
         listEl.innerHTML = '<div class="empty-state">No conversations yet.</div>';
         return;
     }
-    conversationsCache.forEach(function(convo) {
-        const partnerId = convo.members.find(function(m) { return m !== currentUser.uid; }) || currentUser.uid;
-        const display = userCache[partnerId]?.username || 'user';
-        const partnerProfile = userCache[partnerId] || { username: display, name: display, avatarColor: computeAvatarColor(partnerId || display) };
-        const avatarHtml = renderAvatar({ ...partnerProfile, uid: partnerId }, { size: 36 });
+
+    conversationMappings.forEach(function (mapping) {
+        const details = conversationDetailsCache[mapping.id] || {};
+        const participants = details.participants || mapping.otherParticipantIds || [];
+        const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
+        const name = mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || details.title || 'Conversation';
+        const avatarUrl = mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
+        const avatarHtml = renderAvatar({
+            uid: meta.otherIds?.[0] || mapping.otherParticipantIds?.[0] || 'user',
+            username: name,
+            photoURL: avatarUrl,
+            avatarColor: computeAvatarColor(name)
+        }, { size: 36 });
+
         const item = document.createElement('div');
-        item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
+        item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
+        const unread = mapping.unreadCount || 0;
+        const timeLabel = mapping.lastMessageAt?.toDate ? formatTimestampDisplay(mapping.lastMessageAt) : '';
         item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
             ${avatarHtml}
             <div>
-                <strong>@${display}</strong>
-                <div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div>
+                <strong>${escapeHtml(details.title || name)}</strong>
+                <div style="color:var(--text-muted); font-size:0.8rem;">${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</div>
             </div>
         </div>
-        <span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
-        item.onclick = function() { return setActiveConversation(convo.id, convo); };
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            ${timeLabel ? `<span style="color:var(--text-muted); font-size:0.75rem;">${timeLabel}</span>` : ''}
+            ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
+        </div>`;
+        item.onclick = function () { openConversation(mapping.id); };
         listEl.appendChild(item);
     });
 }
 
-function setActiveConversation(convoId, convoData = null) {
-    activeConversationId = convoId;
+function renderMessageHeader(convo = {}) {
     const header = document.getElementById('message-header');
-    const partnerId = (convoData || conversationsCache.find(function(c) { return c.id === convoId; }) || {}).members?.find(function(m) { return m !== currentUser.uid; });
-    if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
-    listenToMessages(convoId);
+    if (!header) return;
+    const participants = convo.participants || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
+    const label = convo.type === 'group' ? (convo.title || 'Group') : (meta.usernames?.join(', ') || 'Conversation');
+    const avatar = renderAvatar({
+        uid: meta.otherIds?.[0] || 'group',
+        username: label,
+        photoURL: meta.avatars?.[0] || '',
+        avatarColor: computeAvatarColor(label)
+    }, { size: 36 });
+    header.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800;">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>`;
 }
 
-function listenToMessages(convoId) {
-    if(messagesUnsubscribe) messagesUnsubscribe();
-    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function(snap) {
-        const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        renderMessages(msgs);
-    }));
-}
-
-function renderMessages(msgs = []) {
+function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
-    if(!body) return;
+    if (!body) return;
     body.innerHTML = '';
-    msgs.forEach(function(msg) {
+    msgs.forEach(function (msg) {
         const bubble = document.createElement('div');
-        bubble.className = 'message-bubble ' + (msg.senderId === currentUser.uid ? 'self' : 'other');
-        bubble.innerHTML = msg.type === 'image' ? `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">` : escapeHtml(msg.text || '');
+        bubble.className = 'message-bubble ' + (msg.senderId === currentUser?.uid ? 'self' : 'other');
+        const senderLabel = msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
+        let content = escapeHtml(msg.text || '');
+        if (msg.type === 'image' && msg.mediaURL) {
+            content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
+        } else if (msg.type === 'video' && msg.mediaURL) {
+            content = `<video src="${msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
+        } else if (msg.type === 'post_ref') {
+            const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
+            content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${escapeHtml(msg.text || '')}</div>${refBtn}</div>`;
+        }
+        bubble.innerHTML = `${senderLabel}${content}`;
         body.appendChild(bubble);
     });
     body.scrollTop = body.scrollHeight;
 }
 
-window.sendMessage = async function() {
-    if(!activeConversationId || !requireAuth()) return;
-    const input = document.getElementById('message-input');
-    const fileInput = document.getElementById('message-media');
-    const text = (input?.value || '').trim();
-    if(!text && !fileInput?.files?.length) return;
+async function ensureConversation(convoId, participantId) {
+    const convoRef = doc(db, 'conversations', convoId);
+    const existingSnap = await getDoc(convoRef);
+    const participants = [currentUser.uid, participantId].sort();
+    const profiles = await Promise.all(participants.map(resolveUserProfile));
+    const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
-    const msgRef = collection(db, 'conversations', activeConversationId, 'messages');
-    let mediaURL = null;
-
-    if(fileInput && fileInput.files && fileInput.files[0]) {
-        const file = fileInput.files[0];
-        const storageRef = ref(storage, `dm_media/${activeConversationId}/${Date.now()}_${file.name}`);
-        await uploadBytes(storageRef, file);
-        mediaURL = await getDownloadURL(storageRef);
+    if (!existingSnap.exists()) {
+        const payload = {
+            participants,
+            participantUsernames,
+            participantAvatars,
+            type: 'direct',
+            title: null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            lastMessagePreview: '',
+            lastMessageSenderId: '',
+            lastMessageAt: serverTimestamp(),
+            unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
+            mutedBy: [],
+            pinnedBy: []
+        };
+        await setDoc(convoRef, payload, { merge: true });
+        conversationDetailsCache[convoId] = { id: convoId, ...payload };
+    } else {
+        conversationDetailsCache[convoId] = { id: convoId, ...existingSnap.data() };
     }
 
-    await addDoc(msgRef, {
-        senderId: currentUser.uid,
-        type: mediaURL ? 'image' : 'text',
-        text: mediaURL ? '' : text,
-        mediaURL: mediaURL || '',
-        createdAt: serverTimestamp()
+    await Promise.all(participants.map(async function (uid) {
+        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
+        const mappingRef = doc(db, `users/${uid}/conversations/${convoId}`);
+        const existingMap = await getDoc(mappingRef);
+        const payload = {
+            conversationId: convoId,
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars,
+            muted: false,
+            pinned: false
+        };
+        if (!existingMap.exists()) {
+            payload.lastMessagePreview = '';
+            payload.lastMessageAt = serverTimestamp();
+            payload.unreadCount = 0;
+        }
+        await setDoc(mappingRef, payload, { merge: true });
+    }));
+
+    return conversationDetailsCache[convoId];
+}
+
+async function fetchConversation(conversationId) {
+    if (conversationDetailsCache[conversationId]) return conversationDetailsCache[conversationId];
+    const snap = await getDoc(doc(db, 'conversations', conversationId));
+    if (snap.exists()) {
+        conversationDetailsCache[conversationId] = { id: conversationId, ...snap.data() };
+        return conversationDetailsCache[conversationId];
+    }
+    return null;
+}
+
+async function listenToMessages(convoId) {
+    if (messagesUnsubscribe) messagesUnsubscribe();
+    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
+        const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const details = conversationDetailsCache[convoId] || {};
+        renderMessages(msgs, details);
+        markConversationAsRead(convoId);
+    }));
+}
+
+async function openConversation(conversationId) {
+    if (!conversationId || !requireAuth()) return;
+    activeConversationId = conversationId;
+    const body = document.getElementById('message-thread');
+    if (body) body.innerHTML = '';
+    const header = document.getElementById('message-header');
+    if (header) header.textContent = 'Loading conversation...';
+
+    const convo = await fetchConversation(conversationId);
+    if (convo) {
+        renderMessageHeader(convo);
+    }
+
+    await listenToMessages(conversationId);
+}
+
+async function initConversations(autoOpen = true) {
+    if (!requireAuth()) return;
+    if (conversationsUnsubscribe) conversationsUnsubscribe();
+    const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function (snap) {
+        conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        renderConversationList();
+        if (autoOpen && !activeConversationId && conversationMappings.length > 0) {
+            openConversation(conversationMappings[0].id);
+        }
+    }));
+}
+
+async function updateConversationUnread(conversationId, participants = [], previewPayload = {}) {
+    const convoRef = doc(db, 'conversations', conversationId);
+    const preview = formatMessagePreview(previewPayload);
+    const unreadCounts = {};
+    const cachedCounts = (conversationDetailsCache[conversationId] || {}).unreadCounts || {};
+    participants.forEach(function (uid) {
+        unreadCounts[uid] = uid === currentUser.uid ? 0 : (cachedCounts[uid] || 0) + 1;
     });
 
-    // updateDoc does not accept { merge: true }; use a nested field update for requestState
-    await updateDoc(doc(db, 'conversations', activeConversationId), {
-        lastMessageText: mediaURL ? '📷 Photo' : text,
+    await updateDoc(convoRef, {
+        lastMessagePreview: preview,
+        lastMessageSenderId: currentUser.uid,
         lastMessageAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        [`requestState.${currentUser.uid}`]: 'inbox'
+        unreadCounts
     });
 
-    if(input) input.value = '';
-    if(fileInput) fileInput.value = '';
+    conversationDetailsCache[conversationId] = {
+        ...(conversationDetailsCache[conversationId] || {}),
+        lastMessagePreview: preview,
+        lastMessageSenderId: currentUser.uid,
+        unreadCounts
+    };
+
+    await Promise.all(participants.map(async function (uid) {
+        const details = conversationDetailsCache[conversationId] || { participants };
+        const meta = deriveOtherParticipantMeta(participants, uid, details);
+        const mappingRef = doc(db, `users/${uid}/conversations/${conversationId}`);
+        const update = {
+            conversationId,
+            lastMessagePreview: preview,
+            lastMessageAt: serverTimestamp(),
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars
+        };
+        if (uid === currentUser.uid) {
+            update.unreadCount = 0;
+        } else {
+            update.unreadCount = increment(1);
+        }
+        await setDoc(mappingRef, update, { merge: true });
+    }));
+}
+
+async function sendChatPayload(conversationId, payload = {}) {
+    if (!conversationId || !requireAuth()) return;
+    const convo = await fetchConversation(conversationId) || conversationDetailsCache[conversationId];
+    const participants = (convo && convo.participants) || [];
+
+    const message = {
+        senderId: currentUser.uid,
+        senderUsername: userProfile.username || currentUser.displayName || 'Nexera user',
+        text: payload.text || '',
+        type: payload.type || 'text',
+        mediaURL: payload.mediaURL || null,
+        mediaType: payload.mediaType || null,
+        postId: payload.postId || null,
+        threadId: payload.threadId || null,
+        createdAt: serverTimestamp(),
+        editedAt: null,
+        deletedAt: null,
+        readBy: [currentUser.uid],
+        reported: false,
+        reportCount: 0,
+        systemPayload: payload.systemPayload || null
+    };
+
+    await addDoc(collection(db, 'conversations', conversationId, 'messages'), message);
+    await updateConversationUnread(conversationId, participants, payload);
+}
+
+window.sendMessage = async function (conversationId = activeConversationId) {
+    if (!conversationId || !requireAuth()) return;
+    const input = document.getElementById('message-input');
+    const text = (input?.value || '').trim();
+    const fileInput = document.getElementById('message-media');
+    if (fileInput?.files?.length) {
+        await window.sendMediaMessage(conversationId, 'message-media', text);
+        if (input) input.value = '';
+        return;
+    }
+    if (!text) return;
+    await sendChatPayload(conversationId, { text, type: 'text' });
+    if (input) input.value = '';
 };
 
+window.sendMediaMessage = async function (conversationId = activeConversationId, fileInputElementId = 'message-media', caption = '') {
+    if (!conversationId || !requireAuth()) return;
+    const fileInput = document.getElementById(fileInputElementId);
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+    const storageRef = ref(storage, `dm_media/${conversationId}/${Date.now()}_${file.name}`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+    await uploadTask;
+    const mediaURL = await getDownloadURL(uploadTask.snapshot.ref);
+    const type = file.type.startsWith('video') ? 'video' : 'image';
+    await sendChatPayload(conversationId, {
+        text: caption,
+        type,
+        mediaURL,
+        mediaType: file.type
+    });
+    fileInput.value = '';
+    const input = document.getElementById('message-input');
+    if (input && caption) input.value = '';
+};
+
+window.markConversationAsRead = async function (conversationId = activeConversationId) {
+    if (!conversationId || !currentUser) return;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`unreadCounts.${currentUser.uid}`]: 0 });
+    } catch (e) {
+        console.warn('Unable to update unread counts', e);
+    }
+    try {
+        await setDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`), { unreadCount: 0 }, { merge: true });
+    } catch (e) {
+        console.warn('Unable to update mapping unread', e);
+    }
+};
+
+function updateChatStartControls() {
+    const startBtn = document.getElementById('start-chat-btn');
+    const groupNameRow = document.getElementById('chat-group-name-row');
+    if (startBtn) {
+        startBtn.disabled = newChatSelections.length === 0;
+        startBtn.textContent = newChatSelections.length > 1 ? 'Create group chat' : 'Start chat';
+    }
+    if (groupNameRow) {
+        groupNameRow.style.display = newChatSelections.length > 1 ? 'block' : 'none';
+        if (newChatSelections.length <= 1) {
+            const nameInput = document.getElementById('chat-group-name');
+            if (nameInput) nameInput.value = '';
+        }
+    }
+}
+
+function renderSelectedUsers() {
+    const listEl = document.getElementById('selected-chat-users');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (newChatSelections.length === 0) {
+        listEl.innerHTML = '<div class="empty-state" style="padding:8px 0;">Select users to start a conversation.</div>';
+        updateChatStartControls();
+        return;
+    }
+
+    newChatSelections.forEach(function (user) {
+        const row = document.createElement('div');
+        row.className = 'conversation-item';
+        row.style.alignItems = 'center';
+        const avatar = renderAvatar({ uid: user.id, username: user.username || user.displayName || 'user', photoURL: user.photoURL || '' }, { size: 32 });
+        row.innerHTML = `<div style="display:flex; align-items:center; gap:8px;">${avatar}<div><div style="font-weight:700;">${escapeHtml(user.displayName || user.name || user.username || 'User')}</div><div style="color:var(--text-muted); font-size:0.85rem;">@${escapeHtml(user.username || 'user')}</div></div></div><button class="icon-pill" style="padding:6px 10px;" onclick="window.removeSelectedChatUser('${user.id}')"><i class="ph ph-x"></i></button>`;
+        listEl.appendChild(row);
+    });
+    updateChatStartControls();
+}
+
+function renderChatSearchResults(users = []) {
+    const resultsEl = document.getElementById('chat-search-results');
+    if (!resultsEl) return;
+    resultsEl.innerHTML = '';
+    users.forEach(function (user) {
+        const row = document.createElement('div');
+        row.className = 'conversation-item' + (newChatSelections.some(function (u) { return u.id === user.id; }) ? ' active' : '');
+        row.innerHTML = `<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || user.name || 'Nexera User')}</div></div>`;
+        row.onclick = function () { window.toggleChatUserSelection(user.id); };
+        resultsEl.appendChild(row);
+    });
+}
+
+window.removeSelectedChatUser = function (userId) {
+    newChatSelections = newChatSelections.filter(function (u) { return u.id !== userId; });
+    renderSelectedUsers();
+    renderChatSearchResults(chatSearchResults);
+};
+
+window.toggleChatUserSelection = function (userId) {
+    const existing = newChatSelections.find(function (u) { return u.id === userId; });
+    if (existing) {
+        window.removeSelectedChatUser(userId);
+        return;
+    }
+    const found = chatSearchResults.find(function (u) { return u.id === userId; });
+    if (found) {
+        newChatSelections.push(found);
+        renderSelectedUsers();
+        renderChatSearchResults(chatSearchResults);
+    }
+};
+
+function resetNewChatModalState() {
+    newChatSelections = [];
+    chatSearchResults = [];
+    const searchInput = document.getElementById('chat-search');
+    if (searchInput) searchInput.value = '';
+    const resultsEl = document.getElementById('chat-search-results');
+    if (resultsEl) resultsEl.innerHTML = '';
+    renderSelectedUsers();
+    updateChatStartControls();
+}
+
+window.toggleNewChatModal = function (show = true) {
+    const modal = document.getElementById('new-chat-modal');
+    if (show) resetNewChatModalState();
+    if (modal) modal.style.display = show ? 'flex' : 'none';
+};
+window.openNewChatModal = function () { if (!requireAuth()) return; return window.toggleNewChatModal(true); };
+
+window.searchChatUsers = async function (term = '') {
+    const resultsEl = document.getElementById('chat-search-results');
+    if (!resultsEl) return;
+    const cleaned = term.trim().toLowerCase();
+    if (cleaned.length < 2) {
+        chatSearchResults = [];
+        renderChatSearchResults(chatSearchResults);
+        return;
+    }
+    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
+    const deduped = new Map();
+    qSnap.forEach(function (docSnap) {
+        const data = docSnap.data();
+        if (docSnap.id === currentUser?.uid) return;
+        deduped.set(docSnap.id, { id: docSnap.id, username: data.username, displayName: data.displayName || data.name, photoURL: data.photoURL || data.avatar || '' });
+    });
+    chatSearchResults = Array.from(deduped.values());
+    renderChatSearchResults(chatSearchResults);
+};
+
+async function createGroupConversation(participantIds = [], title = null) {
+    if (!requireAuth()) return null;
+    const participants = Array.from(new Set(participantIds.concat([currentUser.uid]))).sort();
+    const profiles = await Promise.all(participants.map(resolveUserProfile));
+    const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
+
+    const convoRef = doc(collection(db, 'conversations'));
+    const payload = {
+        participants,
+        participantUsernames,
+        participantAvatars,
+        type: participants.length > 2 ? 'group' : 'direct',
+        title: participants.length > 2 ? (title || null) : null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastMessagePreview: '',
+        lastMessageSenderId: '',
+        lastMessageAt: serverTimestamp(),
+        unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
+        mutedBy: [],
+        pinnedBy: []
+    };
+
+    await setDoc(convoRef, payload, { merge: true });
+    conversationDetailsCache[convoRef.id] = { id: convoRef.id, ...payload };
+
+    await Promise.all(participants.map(async function (uid) {
+        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoRef.id]);
+        const mappingRef = doc(db, `users/${uid}/conversations/${convoRef.id}`);
+        const mappingPayload = {
+            conversationId: convoRef.id,
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars,
+            muted: false,
+            pinned: false,
+            lastMessagePreview: '',
+            lastMessageAt: payload.lastMessageAt,
+            unreadCount: 0
+        };
+        await setDoc(mappingRef, mappingPayload, { merge: true });
+    }));
+
+    return conversationDetailsCache[convoRef.id];
+}
+
+window.startChatFromSelection = async function () {
+    if (!requireAuth() || newChatSelections.length === 0) return;
+    const participantIds = newChatSelections.map(function (u) { return u.id; });
+    toggleNewChatModal(false);
+
+    if (participantIds.length === 1) {
+        await window.openOrStartDirectConversationWithUser(participantIds[0]);
+        return;
+    }
+
+    const nameInput = document.getElementById('chat-group-name');
+    const title = (nameInput?.value || '').trim();
+    const convo = await createGroupConversation(participantIds, title || null);
+    if (convo) {
+        await window.openMessagesPage();
+        await openConversation(convo.id);
+    }
+};
+
+window.openOrStartDirectConversationWithUser = async function (targetUserId, options = {}) {
+    if (!requireAuth() || !targetUserId) return null;
+    const convoId = getDirectConversationId(currentUser.uid, targetUserId);
+    await ensureConversation(convoId, targetUserId);
+    await window.openMessagesPage();
+    await openConversation(convoId);
+
+    if (options.postId) {
+        await sendChatPayload(convoId, {
+            type: 'post_ref',
+            postId: options.postId,
+            threadId: options.threadId || null,
+            text: options.initialText || 'Check out this post'
+        });
+    }
+    return convoId;
+};
+
+window.openConversation = openConversation;
+
+window.openMessagesPage = async function () {
+    if (!requireAuth()) return;
+    window.navigateTo('messages');
+    await initConversations();
+};
+
+window.sharePost = async function(postId, event) {
+    if (event) event.stopPropagation();
+    const base = window.location.href.split('#')[0];
+    const url = `${base}#thread-${postId}`;
+
+    try {
+        if (navigator.share) {
+            await navigator.share({ title: 'Check out this Nexera post', url });
+            return;
+        }
+    } catch (e) {
+        console.warn('Native share failed', e);
+    }
+
+    try {
+        await navigator.clipboard.writeText(url);
+        toast('Post link copied', 'info');
+    } catch (err) {
+        console.error('Copy failed', err);
+        toast('Unable to copy link', 'error');
+    }
+};
+
+window.messageAuthor = async function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!requireAuth() || !postId) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post || !post.userId) return;
+    await openOrStartDirectConversationWithUser(post.userId, {
+        postId: post.id,
+        threadId: post.threadId || null,
+        initialText: post.title ? `Regarding: ${post.title}` : 'Shared from your post'
+    });
+};
 // --- Videos ---
 window.openVideoUploadModal = function() { return window.toggleVideoUploadModal(true); };
 window.toggleVideoUploadModal = function(show = true) {

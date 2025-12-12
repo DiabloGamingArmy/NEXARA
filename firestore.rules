@@ -120,28 +120,32 @@ service cloud.firestore {
     // -------------------------
     match /conversations/{cid} {
       allow create: if isSignedIn()
-        && request.resource.data.members is list
-        && request.resource.data.members.size() == 2
-        && request.auth.uid in request.resource.data.members;
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 2
+        && request.auth.uid in request.resource.data.participants;
 
-      allow read: if isSignedIn() && request.auth.uid in resource.data.members;
+      allow read: if isSignedIn() && request.auth.uid in resource.data.participants;
 
       allow update: if isSignedIn()
-        && request.auth.uid in resource.data.members
-        && request.resource.data.members == resource.data.members;
+        && request.auth.uid in resource.data.participants
+        && request.resource.data.participants == resource.data.participants;
 
-      allow delete: if isSignedIn() && request.auth.uid in resource.data.members;
+      allow delete: if isSignedIn() && request.auth.uid in resource.data.participants;
 
       match /messages/{mid} {
         allow create: if isSignedIn()
           && request.auth.uid == request.resource.data.senderId
-          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
 
         allow read: if isSignedIn()
-          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.members;
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
 
         allow update, delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
       }
+    }
+
+    match /users/{userId}/conversations/{conversationId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
     // -------------------------
