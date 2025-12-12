@@ -386,8 +386,10 @@
     </div>
 </div>
 
-<div id="post-options-dropdown" class="post-options-dropdown">
+        <div id="post-options-dropdown" class="post-options-dropdown">
     <button id="dropdown-edit-btn" style="display:none;" onclick="window.handlePostOptionSelect('edit')"><i class="ph ph-pencil"></i> Edit Post</button>
+    <button id="dropdown-share-btn" onclick="window.handlePostOptionSelect('share')"><i class="ph ph-paper-plane-tilt"></i> Share</button>
+    <button id="dropdown-message-btn" onclick="window.handlePostOptionSelect('message')"><i class="ph ph-chats"></i> Message author</button>
     <button onclick="window.handlePostOptionSelect('report')"><i class="ph ph-flag"></i> Report</button>
     <button id="dropdown-delete-btn" onclick="window.handlePostOptionSelect('delete')" style="display:none;"><i class="ph ph-trash"></i> Delete</button>
 </div>
@@ -512,12 +514,14 @@
             </div>
         </div>
 
-        <div id="view-live" class="view-section" style="padding:1rem; display:none;">
-            <div id="live-topbar"></div>
-            <div id="live-featured-row" class="live-featured-row"></div>
-            <div id="live-filter-row" class="live-filter-row"></div>
-            <hr id="live-divider" class="live-divider">
-            <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
+        <div id="view-live" class="view-section live-view" style="display:none;">
+            <div class="live-view-shell">
+                <div id="live-topbar"></div>
+                <div id="live-featured-row" class="live-featured-row"></div>
+                <div id="live-filter-row" class="live-filter-row"></div>
+                <hr id="live-divider" class="live-divider">
+                <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
+            </div>
         </div>
         <div id="view-live-setup" class="view-section" style="display:none;">
             <div class="go-live-setup">
