@@ -5166,23 +5166,34 @@ async function ensureConversation(convoId, participantId) {
     await Promise.all(participants.map(async function (uid) {
         const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
         const mappingRef = doc(db, `users/${uid}/conversations/${convoId}`);
-        const existingMap = await getDoc(mappingRef);
+
+        let existingMapExists = false;
+        if (uid === currentUser.uid) {
+            try {
+                const existingMapSnap = await getDoc(mappingRef);
+                existingMapExists = existingMapSnap.exists();
+            } catch (e) {
+                // We must be able to read our own mapping; fail fast if not.
+                throw e;
+            }
+        }
+
         const payload = {
             conversationId: convoId,
             otherParticipantIds: meta.otherIds,
             otherParticipantUsernames: meta.usernames,
             otherParticipantAvatars: meta.avatars,
         };
-        if (!existingMap.exists()) {
+
+        if (uid === currentUser.uid && !existingMapExists) {
             payload.muted = false;
             payload.pinned = false;
             payload.archived = false;
-        }
-        if (!existingMap.exists()) {
             payload.lastMessagePreview = '';
             payload.lastMessageAt = serverTimestamp();
             payload.unreadCount = 0;
         }
+
         try {
             await setDoc(mappingRef, payload, { merge: true });
         } catch (e) {
@@ -6150,17 +6161,22 @@ window.startChatFromSelection = async function () {
     const participantIds = newChatSelections.map(function (u) { return u.id; });
     toggleNewChatModal(false);
 
-    if (participantIds.length === 1) {
-        await window.openOrStartDirectConversationWithUser(participantIds[0]);
-        return;
-    }
+    try {
+        if (participantIds.length === 1) {
+            await window.openOrStartDirectConversationWithUser(participantIds[0]);
+            return;
+        }
 
-    const nameInput = document.getElementById('chat-group-name');
-    const title = (nameInput?.value || '').trim();
-    const convo = await createGroupConversation(participantIds, title || null);
-    if (convo) {
-        await window.openMessagesPage();
-        await openConversation(convo.id);
+        const nameInput = document.getElementById('chat-group-name');
+        const title = (nameInput?.value || '').trim();
+        const convo = await createGroupConversation(participantIds, title || null);
+        if (convo) {
+            await window.openMessagesPage();
+            await openConversation(convo.id);
+        }
+    } catch (e) {
+        console.warn('Unable to start chat from selection', e?.message || e);
+        toast('Unable to start chat. Please try again.', 'error');
     }
 };
 
@@ -6169,19 +6185,25 @@ window.openOrStartDirectConversationWithUser = async function (targetUserId, opt
     const blocked = new Set(userProfile.blockedUserIds || []);
     if (blocked.has(targetUserId)) { toast('You have blocked this user.', 'error'); return null; }
     const convoId = getDirectConversationId(currentUser.uid, targetUserId);
-    await ensureConversation(convoId, targetUserId);
-    await window.openMessagesPage();
-    await openConversation(convoId);
+    try {
+        await ensureConversation(convoId, targetUserId);
+        await window.openMessagesPage();
+        await openConversation(convoId);
 
-    if (options.postId) {
-        await sendChatPayload(convoId, {
-            type: 'post_ref',
-            postId: options.postId,
-            threadId: options.threadId || null,
-            text: options.initialText || 'Check out this post'
-        });
+        if (options.postId) {
+            await sendChatPayload(convoId, {
+                type: 'post_ref',
+                postId: options.postId,
+                threadId: options.threadId || null,
+                text: options.initialText || 'Check out this post'
+            });
+        }
+        return convoId;
+    } catch (e) {
+        console.warn('Unable to open or start direct conversation', e?.message || e);
+        toast('Unable to start chat. Please try again.', 'error');
+        return null;
     }
-    return convoId;
 };
 
 window.openConversation = openConversation;
