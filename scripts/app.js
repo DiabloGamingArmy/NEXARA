@@ -4,6 +4,7 @@ import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTim
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "../commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "./ui/topBar.js";
+import { initializeLiveDiscover } from "../Scripts/LiveDiscover.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -43,6 +44,7 @@ let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
+let liveDiscoverInitialized = false;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
@@ -1994,7 +1996,14 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'discover') { renderDiscover(); }
     if (viewId === 'messages') { initConversations(); }
     if (viewId === 'videos') { initVideoFeed(); }
-    if (viewId === 'live') { renderLiveSessions(); }
+    if (viewId === 'live') {
+        ensureLiveDiscoverRoot();
+        if (!liveDiscoverInitialized) {
+            initializeLiveDiscover();
+            liveDiscoverInitialized = true;
+        }
+        renderLiveSessions();
+    }
     if (viewId === 'live-setup') { renderLiveSetup(); }
     if (viewId === 'staff') { renderStaffConsole(); }
 
@@ -2008,6 +2017,23 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     if (!lockScroll) window.scrollTo(0, 0);
 };
+
+function ensureLiveDiscoverRoot() {
+    let root = document.getElementById('live-discover-root');
+    if (!root) {
+        const liveView = document.getElementById('view-live');
+        root = document.createElement('div');
+        root.id = 'live-discover-root';
+        root.className = 'live-container';
+        if (liveView) {
+            liveView.prepend(root);
+        } else {
+            document.body.appendChild(root);
+        }
+    }
+    root.style.display = 'block';
+    return root;
+}
 
 function updateMobileNavState(viewId = 'feed') {
     const label = MOBILE_SECTION_LABELS[viewId] || 'Explore';
