@@ -42,6 +42,8 @@ let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
 let isInitialLoad = true;
+let feedLoading = false;
+let feedHydrationPromise = null;
 let composerTags = [];
 let composerMentions = [];
 let composerPoll = { title: '', options: ['', ''] };
@@ -55,7 +57,6 @@ let currentEditPost = null;
 let tagSuggestionPool = [];
 let mentionSearchTimer = null;
 let currentThreadComments = [];
-let scheduledRenderTimer = null;
 let liveSessionsCache = [];
 
 // Optimistic UI Sets
@@ -402,7 +403,6 @@ let videosCache = [];
 let videoObserver = null;
 const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
-let postsUnsubscribe = null;
 let activeLiveSessionId = null;
 
 const ListenerRegistry = (function () {
@@ -679,7 +679,7 @@ function initApp(onReady) {
                 // Start Logic
                 await ensureOfficialCategories();
                 startCategoryStreams(user.uid);
-                startDataListener();
+                await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 updateTimeCapsule();
                 window.navigateTo('feed', false);
@@ -808,10 +808,24 @@ function shouldRerenderThread(newData, prevData = {}) {
     return fieldsToWatch.some(function (key) { return newData[key] !== prevData[key]; });
 }
 
+function setButtonLoadingState(btn, isLoading, labelText) {
+    if (!btn) return;
+    if (isLoading) {
+        btn.dataset.originalLabel = btn.dataset.originalLabel || btn.textContent;
+        btn.innerHTML = '<span class="button-spinner" aria-hidden="true"></span>';
+        btn.disabled = true;
+    } else {
+        const finalLabel = labelText || btn.dataset.originalLabel || btn.textContent || '';
+        btn.textContent = finalLabel;
+        btn.disabled = false;
+    }
+}
+
 // --- Auth Functions ---
 window.handleLogin = async function (e) {
     if (e && typeof e.preventDefault === "function") e.preventDefault();
 
+    const loginBtn = document.getElementById('login-submit');
     try {
         var emailEl = document.getElementById('email');
         var passEl = document.getElementById('password');
@@ -826,6 +840,7 @@ window.handleLogin = async function (e) {
             return;
         }
 
+        setButtonLoadingState(loginBtn, true, 'Log In');
         var cred = await signInWithEmailAndPassword(auth, email, pass);
 
         if (typeof ensureUserDocument === 'function') {
@@ -835,12 +850,16 @@ window.handleLogin = async function (e) {
         var errEl2 = document.getElementById('auth-error');
         if (errEl2) errEl2.textContent = err.message;
         console.error(err);
+    } finally {
+        setButtonLoadingState(loginBtn, false, 'Log In');
     }
 };
 
 window.handleSignup = async function (e) {
     e.preventDefault();
+    const signupBtn = document.getElementById('signup-submit');
     try {
+        setButtonLoadingState(signupBtn, true, 'Sign Up');
         const cred = await createUserWithEmailAndPassword(
             auth,
             document.getElementById('email').value,
@@ -868,6 +887,8 @@ window.handleSignup = async function (e) {
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
+    } finally {
+        setButtonLoadingState(signupBtn, false, 'Sign Up');
     }
 };
 
@@ -878,6 +899,27 @@ window.handleAnon = async function () {
         console.error(e);
     }
 };
+
+function bindAuthFormShortcuts() {
+    const emailInput = document.getElementById('email');
+    const passwordInput = document.getElementById('password');
+    if (emailInput) {
+        emailInput.addEventListener('keydown', function (evt) {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                if (passwordInput) passwordInput.focus();
+            }
+        });
+    }
+    if (passwordInput) {
+        passwordInput.addEventListener('keydown', function (evt) {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                window.handleLogin(evt);
+            }
+        });
+    }
+}
 
 window.handleLogout = function () {
     signOut(auth);
@@ -916,23 +958,41 @@ async function fetchMissingProfiles(posts) {
     }
 }
 
-function startDataListener() {
-    if (postsUnsubscribe) postsUnsubscribe();
-    const postsRef = collection(db, 'posts');
-    const q = query(postsRef);
+async function waitForFeedMedia(targetId = 'feed-content') {
+    const container = document.getElementById(targetId);
+    if (!container) return;
+    const nodes = Array.from(container.querySelectorAll('img, video'));
+    if (nodes.length === 0) return;
+    await Promise.all(nodes.map(function (node) {
+        if ((node.tagName === 'IMG' && node.complete) || (node.tagName === 'VIDEO' && node.readyState >= 3)) return Promise.resolve();
+        return new Promise(function (resolve) {
+            node.addEventListener('load', resolve, { once: true });
+            node.addEventListener('error', resolve, { once: true });
+            if (node.tagName === 'VIDEO') {
+                node.addEventListener('loadeddata', resolve, { once: true });
+            }
+        });
+    }));
+}
 
-    postsUnsubscribe = ListenerRegistry.register('feed:all', onSnapshot(q, function (snapshot) {
-        const previousCache = { ...postSnapshotCache };
+async function loadFeedData({ showSplashDuringLoad = false } = {}) {
+    if (feedLoading && feedHydrationPromise) return feedHydrationPromise;
+
+    feedLoading = true;
+    feedHydrationPromise = (async function () {
+        if (showSplashDuringLoad) showSplash();
+        const postsRef = collection(db, 'posts');
+        const q = query(postsRef);
+        const snapshot = await getDocs(q);
         const nextCache = {};
         allPosts = [];
-        snapshot.forEach(function (doc) {
-            const data = doc.data();
-            const normalized = normalizePostData(doc.id, data);
+        snapshot.forEach(function (docSnap) {
+            const data = docSnap.data();
+            const normalized = normalizePostData(docSnap.id, data);
             allPosts.push(normalized);
-            nextCache[doc.id] = data;
+            nextCache[docSnap.id] = data;
         });
 
-        // Sort posts by date (newest first)
         allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
 
         if (currentUser) {
@@ -941,43 +1001,24 @@ function startDataListener() {
             recentLocations = Array.from(merged).slice(-10);
         }
 
-        // Fetch profiles for these posts
         fetchMissingProfiles(allPosts);
-
-        // Initial Render
-        if (isInitialLoad) {
-            renderFeed();
-            isInitialLoad = false;
-        }
-
-        // Live updates for specific interactions
-        snapshot.docChanges().forEach(function (change) {
-            if (change.type === "modified") {
-                refreshSinglePostUI(change.doc.id);
-
-                if (activePostId === change.doc.id && document.getElementById('view-thread').style.display === 'block') {
-                    const prevData = previousCache[change.doc.id] || {};
-                    const newData = change.doc.data();
-                    if (shouldRerenderThread(newData, prevData)) {
-                        renderThreadMainPost(activePostId);
-                    }
-                }
-            }
-        });
-
+        feedLoading = false;
+        renderFeed();
+        await waitForFeedMedia();
         postSnapshotCache = nextCache;
-    }));
+        isInitialLoad = false;
+    })().catch(function (error) {
+        console.error('Feed load failed', error);
+    }).finally(function () {
+        feedLoading = false;
+        if (showSplashDuringLoad) hideSplash();
+    });
 
-    // Prime Live Directory layout
-    if (typeof renderLiveDirectoryFromCache === 'function') renderLiveDirectoryFromCache();
-
-    if (scheduledRenderTimer) clearInterval(scheduledRenderTimer);
-    scheduledRenderTimer = setInterval(function() {
-        if (currentViewId === 'feed') {
-            renderFeed();
-        }
-    }, 60000);
+    return feedHydrationPromise;
 }
+
+// Prime Live Directory layout
+if (typeof renderLiveDirectoryFromCache === 'function') renderLiveDirectoryFromCache();
 
 function startCategoryStreams(uid) {
     if (categoryUnsubscribe) categoryUnsubscribe();
@@ -1668,9 +1709,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     }
 
     // View Specific Logic
-    if (viewId === 'feed' && pushToStack) {
+    if (viewId === 'feed') {
         currentCategory = 'For You';
         renderFeed();
+        loadFeedData();
     }
     if (viewId === 'saved') { renderSaved(); }
     if (viewId === 'profile') renderProfile();
@@ -1938,6 +1980,11 @@ function renderFeed(targetId = 'feed-content') {
 
     renderCategoryPills();
     container.innerHTML = "";
+
+    if (feedLoading && allPosts.length === 0) {
+        container.innerHTML = `<div class="empty-state"><p>Loading Posts...</p></div>`;
+        return;
+    }
     let displayPosts = allPosts.filter(function (post) {
         if (post.visibility === 'private') return currentUser && post.userId === currentUser.uid;
         return true;
@@ -1970,7 +2017,8 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     if (displayPosts.length === 0) {
-        container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>No posts found.</p></div>`;
+        const emptyLabel = feedLoading ? 'Loading Posts...' : 'No posts found.';
+        container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>${emptyLabel}</p></div>`;
         return;
     }
 
@@ -2087,9 +2135,9 @@ window.toggleLike = async function(postId, event) {
             await updateDoc(postRef, updatePayload);
         }
     } catch(e) {
-        console.error("Like error:", e); 
-        // Revert on error would go here, or just let snapshot fix it
-        startDataListener(); 
+        console.error("Like error:", e);
+        // Revert on error would go here, or just reload on demand
+        loadFeedData();
     }
 }
 
@@ -4504,7 +4552,12 @@ async function ensureConversation(convoId, participantId) {
             payload.lastMessageAt = serverTimestamp();
             payload.unreadCount = 0;
         }
-        await setDoc(mappingRef, payload, { merge: true });
+        try {
+            await setDoc(mappingRef, payload, { merge: true });
+        } catch (e) {
+            if (uid === currentUser.uid) throw e;
+            console.warn('Skipping mapping write for participant', uid, e?.message || e);
+        }
     }));
 
     return conversationDetailsCache[convoId];
@@ -4831,7 +4884,12 @@ async function createGroupConversation(participantIds = [], title = null) {
             lastMessageAt: payload.lastMessageAt,
             unreadCount: 0
         };
-        await setDoc(mappingRef, mappingPayload, { merge: true });
+        try {
+            await setDoc(mappingRef, mappingPayload, { merge: true });
+        } catch (e) {
+            if (uid === currentUser.uid) throw e;
+            console.warn('Skipping participant mapping write', uid, e?.message || e);
+        }
     }));
 
     return conversationDetailsCache[convoRef.id];
@@ -5673,6 +5731,7 @@ window.triggerComposerPost = function() {
 document.addEventListener('DOMContentLoaded', function() {
     bindMobileNav();
     syncMobileComposerState();
+    bindAuthFormShortcuts();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
