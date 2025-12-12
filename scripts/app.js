@@ -343,6 +343,25 @@ function userHasRole(userLike = {}, role = '') {
     return roles.has(role);
 }
 
+function isUserVerified(userLike = {}) {
+    if (typeof userLike === 'boolean') return !!userLike;
+    if (!userLike) return false;
+    if (userLike.isVerified === true || userLike.verified === true) return true;
+    if (typeof userLike.verificationStatus === 'string') {
+        const status = userLike.verificationStatus.toLowerCase();
+        if (status === 'approved' || status === 'verified') return true;
+    }
+    return userHasRole(userLike, 'verified');
+}
+
+function getVerifiedIconSvg() {
+    return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.75a1 1 0 0 1 .8.4l1.86 2.52 3.02-.08a1 1 0 0 1 .84.46l1.64 2.56a1 1 0 0 1-.06 1.14l-1.83 2.43.73 2.95a1 1 0 0 1-.39 1.05l-2.5 1.78a1 1 0 0 1-1.12.02L12 17.85l-3.09 1.18a1 1 0 0 1-1.12-.02l-2.5-1.78a1 1 0 0 1-.39-1.05l.73-2.95-1.83-2.43a1 1 0 0 1-.06-1.14l1.64-2.56a1 1 0 0 1 .84-.46l3.02.08L11.2 3.15a1 1 0 0 1 .8-.4Zm-1.2 11 4.7-4.7-1.4-1.4-3.3 3.3-1.6-1.6-1.4 1.42 3 3Z"></path></svg>';
+}
+
+function renderVerifiedBadge(userLike = {}, extraClass = '') {
+    return isUserVerified(userLike) ? `<span class="verified-badge ${extraClass}">${getVerifiedIconSvg()}</span>` : '';
+}
+
 function hasGlobalRole(role) {
     return getAccountRoleSet().has(role);
 }
@@ -398,6 +417,11 @@ let conversationMappings = [];
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
+let messageThreadCache = {};
+let conversationDetailsUnsubscribe = null;
+let lastDeliveredAtLocal = {};
+let lastReadAtLocal = {};
+let typingStateByConversation = {};
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosUnsubscribe = null;
@@ -525,11 +549,11 @@ const HISTORICAL_EVENTS = {
 };
 
 const timeCapsuleState = {
-    events: [],
+    event: null,
     source: 'fallback',
     dateKey: null,
     dateLabel: '',
-    currentIndex: 0
+    loading: false
 };
 
 const THEMES = {
@@ -584,6 +608,92 @@ window.toast = function (msg, type = 'info') {
     document.body.appendChild(overlay);
     setTimeout(() => overlay.remove(), 2500);
 };
+
+const confirmModalState = { onConfirm: null, getData: null, previousFocus: null, keyHandler: null, busy: false };
+
+function closeConfirmModal() {
+    const modal = document.getElementById('confirm-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    confirmModalState.busy = false;
+    const submitBtn = document.getElementById('confirm-submit-btn');
+    const label = document.getElementById('confirm-submit-label');
+    if (submitBtn) submitBtn.disabled = false;
+    if (label) label.textContent = label?.dataset?.defaultText || label?.textContent || 'Confirm';
+    if (confirmModalState.keyHandler) document.removeEventListener('keydown', confirmModalState.keyHandler, true);
+    if (confirmModalState.previousFocus) confirmModalState.previousFocus.focus();
+    confirmModalState.onConfirm = null;
+    confirmModalState.getData = null;
+    confirmModalState.previousFocus = null;
+    confirmModalState.keyHandler = null;
+}
+
+window.cancelConfirmModal = closeConfirmModal;
+
+function trapConfirmFocus(modal) {
+    const focusable = modal.querySelectorAll('button, [href], input, select, textarea');
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    confirmModalState.keyHandler = function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); closeConfirmModal(); return; }
+        if (e.key !== 'Tab') return;
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', confirmModalState.keyHandler, true);
+    first.focus();
+}
+
+async function openConfirmModal(options = {}) {
+    const modal = document.getElementById('confirm-modal');
+    const body = document.getElementById('confirm-body');
+    const helper = document.getElementById('confirm-helper');
+    const extra = document.getElementById('confirm-extra');
+    const submitBtn = document.getElementById('confirm-submit-btn');
+    const submitLabel = document.getElementById('confirm-submit-label');
+    const cancelBtn = document.getElementById('confirm-cancel-btn');
+    const title = document.getElementById('confirm-title');
+    if (!modal || !body || !helper || !extra || !submitBtn || !submitLabel || !cancelBtn) return false;
+
+    modal.style.display = 'flex';
+    if (title) title.textContent = options.title || 'Confirm';
+    body.textContent = options.message || '';
+    helper.textContent = options.helperText || '';
+    extra.innerHTML = '';
+    submitLabel.dataset.defaultText = options.confirmText || 'Confirm';
+    submitLabel.textContent = options.confirmText || 'Confirm';
+    const cancelIcon = options.cancelIcon || '<i class="ph ph-x"></i>';
+    cancelBtn.innerHTML = `${cancelIcon} ${options.cancelText || 'Cancel'}`;
+
+    confirmModalState.previousFocus = document.activeElement;
+    confirmModalState.onConfirm = options.onConfirm || null;
+    confirmModalState.getData = typeof options.buildContent === 'function' ? options.buildContent(extra) || function () { return {}; } : function () { return {}; };
+
+    submitBtn.onclick = async function () {
+        if (confirmModalState.busy) return;
+        confirmModalState.busy = true;
+        submitBtn.disabled = true;
+        submitLabel.innerHTML = `<span class="button-spinner"></span> ${options.confirmText || 'Confirm'}`;
+        try {
+            if (confirmModalState.onConfirm) {
+                await confirmModalState.onConfirm(confirmModalState.getData());
+            }
+            closeConfirmModal();
+        } catch (e) {
+            console.error(e);
+            toast(options.errorText || 'Action failed', 'error');
+        } finally {
+            confirmModalState.busy = false;
+            submitBtn.disabled = false;
+            submitLabel.textContent = options.confirmText || 'Confirm';
+        }
+    };
+
+    cancelBtn.onclick = function () { closeConfirmModal(); };
+    trapConfirmFocus(modal);
+    return true;
+}
 
 function slugifyCategory(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 80);
@@ -724,48 +834,41 @@ async function initializeNexeraApp() {
 
 async function fetchWikipediaEventsForToday() {
     try {
-        const today = new Date();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const day = String(today.getDate()).padStart(2, '0');
-        const endpoint = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
-        const response = await fetch(endpoint);
+        const now = new Date();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const url = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
+
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load Wikipedia events');
         const data = await response.json();
-        if (!data || !Array.isArray(data.events)) return [];
+        const events = Array.isArray(data.events) ? data.events : [];
+        if (!events.length) return null;
 
-        return data.events.map(function (event) {
-            if (!event || !event.text) return null;
-            const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
-            let url = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
-            if (!url && firstPage && firstPage.titles && firstPage.titles.normalized) {
-                const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
-                url = `https://en.wikipedia.org/wiki/${normalized}`;
-            }
+        const event = events[Math.floor(Math.random() * events.length)];
+        if (!event || !event.text) return null;
 
-            return {
-                year: event.year,
-                text: event.text,
-                url: url || null
-            };
-        }).filter(Boolean);
+        const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
+        let wikiUrl = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
+        if (!wikiUrl && firstPage && firstPage.titles && firstPage.titles.normalized) {
+            const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
+            wikiUrl = `https://en.wikipedia.org/wiki/${normalized}`;
+        }
+
+        return {
+            year: event.year,
+            text: event.text,
+            url: wikiUrl || null
+        };
     } catch (err) {
         console.warn('Wikipedia events fetch failed', err);
-        return [];
+        return null;
     }
 }
 
-function getFallbackEventsForDate(key) {
+function getFallbackEventForDate(key) {
     const eventText = HISTORICAL_EVENTS[key] || HISTORICAL_EVENTS["DEFAULT"];
-    return eventText ? [{ year: '', text: eventText, url: null }] : [];
-}
-
-function pickRandomIndex(length, excludeIndex) {
-    if (!length || length <= 1) return 0;
-    let candidate = excludeIndex;
-    while (candidate === excludeIndex) {
-        candidate = Math.floor(Math.random() * length);
-    }
-    return candidate;
+    return eventText ? { year: '', text: eventText, url: null } : null;
 }
 
 function renderTimeCapsule() {
@@ -774,14 +877,14 @@ function renderTimeCapsule() {
     const wikiLink = document.getElementById('otd-wiki-link');
     const refreshBtn = document.getElementById('otd-refresh-btn');
 
-    const currentEvent = timeCapsuleState.events[timeCapsuleState.currentIndex] || null;
+    const currentEvent = timeCapsuleState.event;
     const displayText = currentEvent ? `${currentEvent.year ? currentEvent.year + ' – ' : ''}${currentEvent.text}` : HISTORICAL_EVENTS["DEFAULT"];
 
     if (dateEl) dateEl.textContent = timeCapsuleState.dateLabel || '';
     if (eventEl) eventEl.textContent = displayText;
 
     if (refreshBtn) {
-        refreshBtn.disabled = !(timeCapsuleState.events && timeCapsuleState.events.length > 1);
+        refreshBtn.disabled = !!timeCapsuleState.loading;
         refreshBtn.classList.toggle('disabled', refreshBtn.disabled);
     }
 
@@ -801,33 +904,34 @@ function renderTimeCapsule() {
 async function updateTimeCapsule(forceReload = false) {
     const date = new Date();
     const key = `${date.getMonth() + 1}-${date.getDate()}`;
-    const previousKey = timeCapsuleState.dateKey;
-    timeCapsuleState.dateKey = key;
-    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 
-    if (forceReload || !timeCapsuleState.events.length || timeCapsuleState.source === 'fallback' || previousKey !== key) {
-        const wikiEvents = await fetchWikipediaEventsForToday();
-        if (wikiEvents && wikiEvents.length) {
-            timeCapsuleState.events = wikiEvents;
-            timeCapsuleState.source = 'wikipedia';
-        } else {
-            timeCapsuleState.events = getFallbackEventsForDate(key);
-            timeCapsuleState.source = 'fallback';
-        }
-        timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, -1);
+    if (!forceReload && timeCapsuleState.dateKey === key && timeCapsuleState.event) {
+        renderTimeCapsule();
+        return;
     }
 
+    timeCapsuleState.dateKey = key;
+    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+    timeCapsuleState.loading = true;
+    renderTimeCapsule();
+
+    const wikiEvent = await fetchWikipediaEventsForToday();
+    if (wikiEvent) {
+        timeCapsuleState.event = wikiEvent;
+        timeCapsuleState.source = 'wikipedia';
+    } else {
+        timeCapsuleState.event = getFallbackEventForDate(key);
+        timeCapsuleState.source = 'fallback';
+    }
+
+    timeCapsuleState.loading = false;
     renderTimeCapsule();
 }
 
 function showAnotherTimeCapsuleEvent() {
-    if (!timeCapsuleState.events || !timeCapsuleState.events.length) {
-        updateTimeCapsule(true);
-        return;
-    }
-    timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, timeCapsuleState.currentIndex);
-    renderTimeCapsule();
+    updateTimeCapsule(true);
 }
+
 window.showAnotherTimeCapsuleEvent = showAnotherTimeCapsuleEvent;
 
 function getSystemTheme() {
@@ -1437,7 +1541,7 @@ function renderDestinationResults() {
         if (destination.verified) {
             const badge = document.createElement('span');
             badge.className = 'verified-badge';
-            badge.textContent = '✔';
+            badge.innerHTML = getVerifiedIconSvg();
             title.appendChild(badge);
         }
 
@@ -1767,6 +1871,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId !== 'messages') {
         ListenerRegistry.unregister('messages:list');
         if (activeConversationId) ListenerRegistry.unregister(`messages:thread:${activeConversationId}`);
+        if (activeConversationId) ListenerRegistry.unregister(`conversation:details:${activeConversationId}`);
+        if (activeConversationId) setTypingState(activeConversationId, false);
+        if (conversationDetailsUnsubscribe) { conversationDetailsUnsubscribe(); conversationDetailsUnsubscribe = null; }
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
@@ -1834,7 +1941,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
 
     currentViewId = viewId;
     updateMobileNavState(viewId);
-    window.scrollTo(0, 0);
+    const lockScroll = viewId === 'messages' || viewId === 'conversation-settings';
+    document.body.classList.toggle('messages-scroll-lock', lockScroll);
+    if (!lockScroll) window.scrollTo(0, 0);
 };
 
 function updateMobileNavState(viewId = 'feed') {
@@ -1979,8 +2088,7 @@ function getPostHTML(post) {
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
 
-        const authorVerified = userHasRole(authorData, 'verified');
-        const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
+        const verifiedBadge = renderVerifiedBadge(authorData);
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
@@ -2497,7 +2605,7 @@ function renderComposerMentions() {
     }
     container.innerHTML = composerMentions.map(function (mention) {
         const avatar = renderAvatar({ ...mention, name: mention.displayName || mention.username }, { size: 36, className: 'mention-avatar' });
-        const badge = mention.verified ? '<span class="verified-badge" style="margin-left:4px;">✔</span>' : '';
+        const badge = renderVerifiedBadge(mention, 'with-gap');
         return `<div class="mention-card">${avatar}<div class="mention-meta"><div class="mention-name">${escapeHtml(mention.displayName || mention.username)}${badge}</div><div class="mention-handle">@${escapeHtml(mention.username)}</div></div><button type="button" class="chip-remove" onclick="window.removeComposerMention('${mention.username}')">&times;</button></div>`;
     }).join('');
 }
@@ -3427,8 +3535,7 @@ function renderThreadMainPost(postId) {
     const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
     const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
-    const authorVerified = userHasRole(authorData, 'verified');
-    const verifiedBadge = authorVerified ? '<span class="verified-badge" aria-label="Verified account">✔</span>' : '';
+    const verifiedBadge = renderVerifiedBadge(authorData);
     const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
     const formattedBody = formatContent(postText, post.tags, post.mentions);
     const tagListHtml = renderTagList(post.tags || []);
@@ -3986,7 +4093,7 @@ window.renderDiscover = async function() {
         if (visible.length > 0) {
             container.innerHTML += `<div class="discover-section-header discover-section-row"><span>Categories</span>${categoriesDropdown('section')}</div>`;
             visible.forEach(function(cat) {
-                const verifiedMark = cat.verified ? '<span class="verified-badge">✔</span>' : '';
+                const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
                 const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
                 container.innerHTML += `
@@ -4094,8 +4201,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     }
 
     const followersCount = normalizedProfile.followersCount || 0;
-    const profileRoles = getAccountRoleSet(normalizedProfile);
-    const verifiedBadge = profileRoles.has('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const verifiedBadge = renderVerifiedBadge(normalizedProfile, 'with-gap');
 
     // FIX: Added specific ID to follower count for real-time updates
     container.innerHTML = `
@@ -4190,7 +4296,7 @@ function renderProfile() {
     const filteredPosts = currentProfileFilter === 'All' ? userPosts : userPosts.filter(function(p) { return p.category === currentProfileFilter; });
 
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
-    const verifiedBadge = hasGlobalRole('verified') ? '<span class="verified-badge" style="margin-left:6px;">✔</span>' : '';
+    const verifiedBadge = renderVerifiedBadge(userProfile, 'with-gap');
     const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
 
     let linkHtml = '';
@@ -4529,6 +4635,77 @@ function formatMessagePreview(payload = {}) {
     return text.length > 80 ? text.substring(0, 77) + '…' : text;
 }
 
+function toDateSafe(ts) {
+    if (!ts) return null;
+    if (ts instanceof Timestamp) return ts.toDate();
+    if (typeof ts.seconds === 'number') return new Date(ts.seconds * 1000);
+    const date = new Date(ts);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isSameDay(a, b) {
+    return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatChatDateLabel(date) {
+    if (!date) return '';
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 86400000);
+    if (isSameDay(date, now)) return 'Today';
+    if (isSameDay(date, yesterday)) return 'Yesterday';
+    return date.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function formatMessageTimeLabel(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return '';
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function isNearBottom(el, threshold = 80) {
+    if (!el) return false;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+}
+
+function computeConversationTitle(convo = {}, viewerId = currentUser?.uid) {
+    const stored = (convo.title || '').trim();
+    if (stored) return stored;
+
+    const participants = convo.participants || [];
+    const orderedParticipants = viewerId ? participants.filter(function (uid) { return uid !== viewerId; }) : participants.slice();
+    if (!orderedParticipants.length) orderedParticipants.push(...participants);
+
+    const names = orderedParticipants.map(function (uid) {
+        const meta = resolveParticipantDisplay(convo, uid);
+        return meta.displayName || meta.username || 'Participant';
+    }).filter(Boolean);
+
+    if (!names.length) return 'Conversation';
+    if (participants.length === 2) return names[0] || 'Conversation';
+    if (participants.length === 3) return names.slice(0, 2).join(', ') || names[0];
+    if (participants.length >= 4) {
+        const firstTwo = names.slice(0, 2);
+        const remaining = Math.max(0, names.length - firstTwo.length);
+        const suffix = remaining > 0 ? `, +${remaining} more` : '';
+        return `${firstTwo.join(', ')}${suffix}`;
+    }
+
+    return names.join(', ');
+}
+
+function resolveParticipantDisplay(convo = {}, uid = '') {
+    const idx = (convo.participants || []).indexOf(uid);
+    const username = (convo.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
+    const displayName = (convo.participantNames || [])[idx] || userCache[uid]?.displayName || userCache[uid]?.name || username;
+    const avatar = (convo.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
+    return { username, displayName, avatar };
+}
+
+function getMessageTimestampMs(msg = {}) {
+    const date = toDateSafe(msg.createdAt);
+    return date ? date.getTime() : 0;
+}
+
 function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
     if (!listEl) return;
@@ -4553,37 +4730,52 @@ function renderConversationList() {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
-        const name = details.title || mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || 'Conversation';
+        const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+        const otherProfile = otherId ? userCache[otherId] : null;
+        const participantLabels = (details.participantNames || details.participantUsernames || meta.usernames || []).filter(Boolean);
+        const isGroup = (participants || []).length > 2 || details.type === 'group';
+        const mergedConvo = {
+            ...details,
+            participants,
+            participantNames: details.participantNames || details.participantUsernames || participantLabels,
+            participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
+            title: details.title || null
+        };
+        const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
         const avatarUrl = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
         const avatarHtml = renderAvatar({
-            uid: meta.otherIds?.[0] || mapping.otherParticipantIds?.[0] || 'user',
+            uid: otherId || 'user',
             username: name,
             photoURL: avatarUrl,
             avatarColor: computeAvatarColor(name)
-        }, { size: 36 });
+        }, { size: 42 });
 
         const item = document.createElement('div');
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
         const unread = mapping.unreadCount || 0;
-        const timeLabel = mapping.lastMessageAt?.toDate ? formatTimestampDisplay(mapping.lastMessageAt) : '';
         const badges = [];
+        const muteState = resolveMuteState(mapping.id, mapping);
+        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUser.uid);
+        updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
         if (mapping.pinned) badges.push('<i class="ph ph-push-pin"></i>');
-        if (mapping.muted) badges.push('<i class="ph ph-bell-slash"></i>');
+        if (isMuted) badges.push('<i class="ph ph-bell-slash"></i>');
         if (mapping.archived) badges.push('<i class="ph ph-archive"></i>');
-        item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
-            ${avatarHtml}
-            <div>
-                <strong>${escapeHtml(details.title || name)}</strong>
-                <div style="color:var(--text-muted); font-size:0.8rem; display:flex; align-items:center; gap:6px;">
-                    <span>${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</span>
+        const flagHtml = badges.length || unread > 0
+            ? `<div class="conversation-flags">
                     ${badges.length ? `<span style="display:inline-flex; gap:4px; color:var(--text-muted);">${badges.join('')}</span>` : ''}
+                    ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
+               </div>`
+            : '';
+        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start');
+        const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
+        item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
+            <div class="conversation-body">
+                <div class="conversation-title-row">
+                    <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                    ${flagHtml}
                 </div>
-            </div>
-        </div>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
-            ${timeLabel ? `<span style="color:var(--text-muted); font-size:0.75rem;">${timeLabel}</span>` : ''}
-            ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
-        </div>`;
+                <div class="conversation-preview">${previewText}</div>
+            </div>`;
         item.onclick = function () { openConversation(mapping.id); };
         listEl.appendChild(item);
     });
@@ -4594,7 +4786,7 @@ function renderMessageHeader(convo = {}) {
     if (!header) return;
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
-    const label = convo.type === 'group' ? (convo.title || 'Group') : (meta.usernames?.join(', ') || 'Conversation');
+    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
     const avatar = renderAvatar({
         uid: meta.otherIds?.[0] || 'group',
         username: label,
@@ -4602,8 +4794,10 @@ function renderMessageHeader(convo = {}) {
         avatarColor: computeAvatarColor(label)
     }, { size: 36 });
     const cid = convo.id || activeConversationId;
+    const primaryOther = meta.otherIds?.[0] ? userCache[meta.otherIds[0]] : null;
+    const verifiedBadge = (!convo.title && participants.length === 2 && primaryOther) ? renderVerifiedBadge(primaryOther) : '';
     header.innerHTML = `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800;">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
+        <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(label)}${verifiedBadge}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
         <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')"><i class="ph ph-dots-three-outline"></i></button>
     </div>`;
 }
@@ -4611,11 +4805,54 @@ function renderMessageHeader(convo = {}) {
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
     if (!body) return;
+    const shouldStickToBottom = isNearBottom(body);
+    const previousOffset = body.scrollHeight - body.scrollTop;
     body.innerHTML = '';
-    msgs.forEach(function (msg) {
+
+    let lastDateKey = '';
+    let lastSenderId = null;
+    let latestSelfMessage = null;
+    const fragment = document.createDocumentFragment();
+
+    msgs.forEach(function (msg, idx) {
+        const createdDate = toDateSafe(msg.createdAt) || new Date();
+        const dateKey = createdDate.toDateString();
+        if (dateKey !== lastDateKey) {
+            const divider = document.createElement('div');
+            divider.className = 'message-date-divider';
+            divider.textContent = formatChatDateLabel(createdDate);
+            fragment.appendChild(divider);
+            lastSenderId = null;
+            lastDateKey = dateKey;
+        }
+
+        const nextMsg = msgs[idx + 1];
+        const nextDateKey = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()).toDateString() : null;
+        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || (nextDateKey !== dateKey));
+        const isSelf = msg.senderId === currentUser?.uid;
+        const row = document.createElement('div');
+        row.className = 'message-row ' + (isSelf ? 'self' : 'other');
+        if (lastSenderId === msg.senderId) row.classList.add('stacked');
+
+        const avatarSlot = isSelf ? null : document.createElement('div');
+        if (avatarSlot) {
+            avatarSlot.className = 'message-avatar-slot' + (showAvatar ? '' : ' placeholder');
+            if (showAvatar) {
+                const senderMeta = resolveParticipantDisplay(convo, msg.senderId);
+                avatarSlot.innerHTML = renderAvatar({
+                    uid: msg.senderId,
+                    username: senderMeta.displayName || senderMeta.username,
+                    photoURL: senderMeta.avatar,
+                    avatarColor: computeAvatarColor(senderMeta.displayName || senderMeta.username)
+                }, { size: 42 });
+            } else {
+                avatarSlot.classList.add('placeholder');
+            }
+        }
+
         const bubble = document.createElement('div');
-        bubble.className = 'message-bubble ' + (msg.senderId === currentUser?.uid ? 'self' : 'other');
-        const senderLabel = msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
+        bubble.className = 'message-bubble ' + (isSelf ? 'self' : 'other');
+        const senderLabel = !isSelf && msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
         let content = escapeHtml(msg.text || '');
         if (msg.type === 'image' && msg.mediaURL) {
             content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
@@ -4625,10 +4862,131 @@ function renderMessages(msgs = [], convo = {}) {
             const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
             content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${escapeHtml(msg.text || '')}</div>${refBtn}</div>`;
         }
-        bubble.innerHTML = `${senderLabel}${content}`;
-        body.appendChild(bubble);
+        bubble.innerHTML = `${senderLabel}${content}<div class="message-time">${formatMessageTimeLabel(msg.createdAt)}</div>`;
+
+        if (isSelf) {
+            row.appendChild(bubble);
+            latestSelfMessage = { message: msg, row };
+        } else {
+            if (avatarSlot) row.appendChild(avatarSlot);
+            row.appendChild(bubble);
+        }
+
+        fragment.appendChild(row);
+        lastSenderId = msg.senderId;
     });
-    body.scrollTop = body.scrollHeight;
+
+    if (latestSelfMessage) {
+        const statusText = deriveMessageStatus(convo, latestSelfMessage.message);
+        if (statusText) {
+            const status = document.createElement('div');
+            status.className = 'message-status self';
+            status.textContent = statusText;
+            const nextNode = latestSelfMessage.row.nextSibling;
+            if (nextNode) {
+                fragment.insertBefore(status, nextNode);
+            } else {
+                fragment.appendChild(status);
+            }
+        }
+    }
+
+    body.appendChild(fragment);
+    if (shouldStickToBottom) {
+        body.scrollTop = body.scrollHeight;
+    } else {
+        body.scrollTop = Math.max(0, body.scrollHeight - previousOffset);
+    }
+}
+
+function deriveMessageStatus(convo = {}, message = {}) {
+    if (!currentUser) return '';
+    const others = (convo.participants || []).filter(function (uid) { return uid !== currentUser.uid; });
+    if (others.length === 0) return 'Sent';
+    const msgTs = getMessageTimestampMs(message);
+    const readMap = convo.lastReadAt || {};
+    const deliveredMap = convo.lastDeliveredAt || {};
+
+    const allRead = others.every(function (uid) {
+        const ts = toDateSafe(readMap[uid]);
+        return ts && ts.getTime() >= msgTs;
+    });
+    if (allRead) return 'Read';
+
+    const allDelivered = others.every(function (uid) {
+        const ts = toDateSafe(deliveredMap[uid]);
+        return ts && ts.getTime() >= msgTs;
+    });
+    return allDelivered ? 'Delivered' : 'Sent';
+}
+
+function renderTypingIndicator(convo = {}) {
+    const indicator = document.getElementById('typing-indicator');
+    if (!indicator) return;
+    const typing = convo.typing || {};
+    const active = Object.keys(typing || {}).filter(function (uid) { return uid !== currentUser?.uid && typing[uid]; });
+    if (!active.length) {
+        indicator.style.display = 'none';
+        indicator.innerHTML = '';
+        return;
+    }
+
+    const names = active.map(function (uid) {
+        const meta = resolveParticipantDisplay(convo, uid);
+        return meta.displayName || meta.username || 'Someone';
+    });
+    const label = active.length === 1 ? `${names[0]} is typing...` : 'Several people are typing...';
+    indicator.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div><span>${escapeHtml(label)}</span>`;
+    indicator.style.display = 'flex';
+}
+
+async function setTypingState(conversationId, isTyping) {
+    if (!conversationId || !currentUser) return;
+    if (typingStateByConversation[conversationId] === isTyping) return;
+    typingStateByConversation[conversationId] = isTyping;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`typing.${currentUser.uid}`]: isTyping });
+    } catch (e) {
+        console.warn('Unable to update typing state', e?.message || e);
+    }
+}
+
+function attachMessageInputHandlers(conversationId) {
+    const input = document.getElementById('message-input');
+    if (!input) return;
+    input.oninput = function () {
+        const hasText = (input.value || '').trim().length > 0;
+        setTypingState(conversationId, hasText);
+    };
+    input.onblur = function () { setTypingState(conversationId, false); };
+}
+
+function listenToConversationDetails(convoId) {
+    if (conversationDetailsUnsubscribe) conversationDetailsUnsubscribe();
+    const convoRef = doc(db, 'conversations', convoId);
+    conversationDetailsUnsubscribe = ListenerRegistry.register(`conversation:details:${convoId}`, onSnapshot(convoRef, function (snap) {
+        if (!snap.exists()) return;
+        const data = { id: convoId, ...snap.data() };
+        conversationDetailsCache[convoId] = data;
+        renderMessageHeader(data);
+        renderMessages(messageThreadCache[convoId] || [], data);
+        renderTypingIndicator(data);
+    }));
+}
+
+async function markMessagesDelivered(conversationId, msgs = []) {
+    if (!conversationId || !currentUser) return;
+    const latestOther = msgs.slice().reverse().find(function (msg) { return msg.senderId !== currentUser.uid; });
+    if (!latestOther) return;
+    const tsMs = getMessageTimestampMs(latestOther);
+    if (!tsMs) return;
+    if (lastDeliveredAtLocal[conversationId] && lastDeliveredAtLocal[conversationId] >= tsMs) return;
+    lastDeliveredAtLocal[conversationId] = tsMs;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`lastDeliveredAt.${currentUser.uid}`]: Timestamp.fromMillis(tsMs) });
+    } catch (e) {
+        console.warn('Unable to mark delivered', e?.message || e);
+    }
 }
 
 async function ensureConversation(convoId, participantId) {
@@ -4637,12 +4995,14 @@ async function ensureConversation(convoId, participantId) {
     const participants = [currentUser.uid, participantId].sort();
     const profiles = await Promise.all(participants.map(resolveUserProfile));
     const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
     const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
     if (!existingSnap.exists()) {
         const payload = {
             participants,
             participantUsernames,
+            participantNames,
             participantAvatars,
             type: 'direct',
             title: null,
@@ -4654,7 +5014,8 @@ async function ensureConversation(convoId, participantId) {
             lastMessageAt: serverTimestamp(),
             unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
             mutedBy: [],
-            pinnedBy: []
+            pinnedBy: [],
+            creatorId: currentUser.uid
         };
         await setDoc(convoRef, payload, { merge: true });
         conversationDetailsCache[convoId] = { id: convoId, ...payload };
@@ -4708,14 +5069,20 @@ async function listenToMessages(convoId) {
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
     messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
         const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        messageThreadCache[convoId] = msgs;
         const details = conversationDetailsCache[convoId] || {};
         renderMessages(msgs, details);
+        renderTypingIndicator(details);
+        markMessagesDelivered(convoId, msgs);
         markConversationAsRead(convoId);
     }));
 }
 
 async function openConversation(conversationId) {
     if (!conversationId || !requireAuth()) return;
+    if (activeConversationId && activeConversationId !== conversationId) {
+        setTypingState(activeConversationId, false);
+    }
     activeConversationId = conversationId;
     const body = document.getElementById('message-thread');
     if (body) body.innerHTML = '';
@@ -4725,8 +5092,11 @@ async function openConversation(conversationId) {
     const convo = await fetchConversation(conversationId);
     if (convo) {
         renderMessageHeader(convo);
+        renderTypingIndicator(convo);
     }
-
+    listenToConversationDetails(conversationId);
+    attachMessageInputHandlers(conversationId);
+    setTypingState(conversationId, false);
     await listenToMessages(conversationId);
 }
 
@@ -4795,11 +5165,70 @@ function updateConversationMappingState(conversationId, data = {}) {
     }
 }
 
+function resolveMuteState(conversationId, mapping = {}) {
+    const until = toDateSafe(mapping.muteUntil);
+    const now = Date.now();
+    const expired = mapping.muted && until && until.getTime() <= now;
+    const active = !!mapping.muted && !expired && (!until || until.getTime() > now);
+    return { active, until, expired };
+}
+
+async function clearMuteState(conversationId) {
+    if (!currentUser || !conversationId) return;
+    try {
+        await setDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`), { muted: false, muteUntil: null }, { merge: true });
+    } catch (e) {
+        console.warn('Unable to clear mute state', e?.message || e);
+    }
+    updateConversationMappingState(conversationId, { muted: false, muteUntil: null });
+}
+
+function renderConversationAvatarPreview(convo = {}, previewUrl = '', filename = '') {
+    const preview = document.getElementById('conversation-avatar-preview');
+    if (!preview) return;
+    const meta = deriveOtherParticipantMeta(convo.participants || [], currentUser?.uid, convo);
+    const src = previewUrl || convo.avatarURL || meta.avatars?.[0] || '';
+    if (src) {
+        preview.innerHTML = `<img src="${src}" alt="Conversation avatar">${filename ? `<div class="participant-hint">${escapeHtml(filename)}</div>` : ''}`;
+    } else {
+        preview.innerHTML = '<div class="placeholder">No image</div>';
+    }
+}
+
+function updateConversationNameHelper(convo = {}, fallbackLabel = '') {
+    const hint = document.getElementById('conversation-name-hint');
+    if (!hint) return;
+    hint.textContent = convo.title
+        ? 'Custom name visible to all participants.'
+        : `If left blank, this chat will display as "${fallbackLabel || 'Conversation'}".`;
+}
+
+function bindConversationAvatarInput(convo = {}) {
+    const fileInput = document.getElementById('conversation-avatar-input');
+    if (!fileInput) return;
+    fileInput.onchange = function () {
+        const file = fileInput.files?.[0];
+        if (!file) {
+            renderConversationAvatarPreview(convo);
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            renderConversationAvatarPreview(convo, e.target?.result || '', file.name);
+        };
+        reader.readAsDataURL(file);
+    };
+}
+
 async function fetchConversationMapping(conversationId) {
     if (!currentUser) return null;
     const snap = await getDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`));
     if (snap.exists()) {
         const mapping = { id: conversationId, ...snap.data() };
+        const muteState = resolveMuteState(conversationId, mapping);
+        mapping.muted = muteState.active;
+        mapping.muteUntil = muteState.active ? mapping.muteUntil || null : null;
+        if (muteState.expired) await clearMuteState(conversationId);
         updateConversationMappingState(conversationId, mapping);
         return mapping;
     }
@@ -4810,22 +5239,68 @@ function renderConversationParticipants(convo = {}) {
     const listEl = document.getElementById('conversation-participant-list');
     if (!listEl) return;
     const participants = convo.participants || [];
-    const usernames = convo.participantUsernames || [];
-    const avatars = convo.participantAvatars || [];
     listEl.innerHTML = '';
 
     participants.forEach(function (uid, idx) {
-        const name = usernames[idx] || userCache[uid]?.displayName || userCache[uid]?.username || 'Participant';
-        const avatar = renderAvatar({ uid, username: name, photoURL: avatars[idx] || userCache[uid]?.photoURL || '' }, { size: 32 });
+        const meta = resolveParticipantDisplay(convo, uid);
+        const name = meta.displayName || 'Participant';
+        const handle = meta.username ? `@${meta.username}` : '';
+        const badge = renderVerifiedBadge(userCache[uid] || {});
+        const avatar = renderAvatar({ uid, username: name, photoURL: meta.avatar || userCache[uid]?.photoURL || '' }, { size: 32 });
         const row = document.createElement('div');
         row.className = 'participant-row';
-        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:700;">${escapeHtml(name)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(uid)}</div></div></div>`;
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'icon-pill';
-        removeBtn.innerHTML = '<i class="ph ph-user-minus"></i>';
-        removeBtn.disabled = participants.length <= 2;
-        removeBtn.onclick = function () { window.removeConversationParticipant(uid); };
-        row.appendChild(removeBtn);
+        const nameLine = document.createElement('div');
+        nameLine.style.display = 'flex';
+        nameLine.style.alignItems = 'center';
+        nameLine.style.gap = '6px';
+        nameLine.style.fontWeight = '700';
+        nameLine.innerHTML = `${escapeHtml(name)}${badge}`;
+
+        const labelWrap = document.createElement('div');
+        labelWrap.className = 'participant-labels';
+        if (uid === currentUser?.uid) {
+            const you = document.createElement('span');
+            you.className = 'badge';
+            you.textContent = 'You';
+            labelWrap.appendChild(you);
+        }
+        if (uid === convo.creatorId) {
+            const owner = document.createElement('span');
+            owner.className = 'badge';
+            owner.textContent = 'Owner';
+            labelWrap.appendChild(owner);
+        }
+        if (labelWrap.childElementCount) nameLine.appendChild(labelWrap);
+
+        const handleLine = document.createElement('div');
+        handleLine.className = 'participant-hint';
+        handleLine.textContent = handle || '';
+        if (!handle) handleLine.style.display = 'none';
+
+        const infoCol = document.createElement('div');
+        infoCol.appendChild(nameLine);
+        infoCol.appendChild(handleLine);
+
+        const left = document.createElement('div');
+        left.style.display = 'flex';
+        left.style.alignItems = 'center';
+        left.style.gap = '10px';
+        const avatarWrapper = document.createElement('div');
+        avatarWrapper.innerHTML = avatar;
+        if (avatarWrapper.firstChild) left.appendChild(avatarWrapper.firstChild);
+        left.appendChild(infoCol);
+
+        row.appendChild(left);
+
+        const isCreator = convo.creatorId && currentUser?.uid === convo.creatorId;
+        const canRemove = isCreator && uid !== currentUser?.uid && uid !== convo.creatorId && participants.length > 2;
+        if (canRemove) {
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'icon-pill';
+            removeBtn.innerHTML = '<i class="ph ph-user-minus"></i>';
+            removeBtn.onclick = function () { window.removeConversationParticipant(uid); };
+            row.appendChild(removeBtn);
+        }
         listEl.appendChild(row);
     });
 
@@ -4839,13 +5314,18 @@ function renderConversationSettings(convo = {}, mapping = {}) {
     const subtitleEl = document.getElementById('conversation-settings-subtitle');
     const avatarEl = document.getElementById('conversation-settings-avatar');
     const nameInput = document.getElementById('conversation-name-input');
+    const createdByEl = document.getElementById('conversation-created-by');
 
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
-    const label = convo.type === 'group' ? (convo.title || 'Group conversation') : (meta.usernames?.join(', ') || 'Conversation');
+    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
 
     if (titleEl) titleEl.textContent = label;
     if (subtitleEl) subtitleEl.textContent = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
+    if (createdByEl) {
+        const creatorMeta = convo.creatorId ? resolveParticipantDisplay(convo, convo.creatorId) : null;
+        createdByEl.textContent = convo.creatorId ? `Created by ${creatorMeta.displayName || creatorMeta.username || 'User'}` : '';
+    }
     if (avatarEl) {
         avatarEl.innerHTML = renderAvatar({
             uid: convo.id || 'conversation',
@@ -4856,17 +5336,28 @@ function renderConversationSettings(convo = {}, mapping = {}) {
     }
 
     if (nameInput) {
-        nameInput.disabled = convo.type !== 'group';
-        nameInput.value = convo.type === 'group' ? (convo.title || '') : (convo.title || label);
-        nameInput.placeholder = convo.type === 'group' ? 'Conversation name' : 'Direct chats use participant names';
+        nameInput.disabled = false;
+        nameInput.value = convo.title || '';
+        nameInput.placeholder = label;
+        nameInput.maxLength = 80;
     }
 
     renderConversationParticipants(convo);
+    renderConversationAvatarPreview(convo);
+    bindConversationAvatarInput(convo);
+    updateConversationNameHelper(convo, label);
 
     const muteBtn = document.getElementById('conversation-mute-btn');
     if (muteBtn) {
-        const muted = !!mapping.muted || (convo.mutedBy || []).includes(currentUser?.uid);
+        const muteState = resolveMuteState(convo.id || conversationSettingsId, mapping);
+        const muted = muteState.active || (convo.mutedBy || []).includes(currentUser?.uid);
+        if (muteState.expired) clearMuteState(convo.id || conversationSettingsId);
         muteBtn.innerHTML = `<i class="ph ph-${muted ? 'bell-slash' : 'bell'}"></i> ${muted ? 'Unmute chat' : 'Mute chat'}`;
+        if (muted && muteState.until) {
+            muteBtn.title = `Muted until ${muteState.until.toLocaleString()}`;
+        } else {
+            muteBtn.removeAttribute('title');
+        }
     }
     const pinBtn = document.getElementById('conversation-pin-btn');
     if (pinBtn) {
@@ -4944,6 +5435,7 @@ async function updateConversationParticipants(conversationId, updatedParticipant
 
     const profiles = await Promise.all(unique.map(resolveUserProfile));
     const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
     const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
     const existing = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId)) || {};
@@ -4958,12 +5450,13 @@ async function updateConversationParticipants(conversationId, updatedParticipant
     await updateDoc(convoRef, {
         participants: unique,
         participantUsernames,
+        participantNames,
         participantAvatars,
         unreadCounts,
         mutedBy,
         pinnedBy,
         type: convoType,
-        title: convoType === 'group' ? (existing.title || null) : null,
+        title: existing.title || null,
         updatedAt: serverTimestamp()
     });
 
@@ -4972,7 +5465,7 @@ async function updateConversationParticipants(conversationId, updatedParticipant
         try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationId}`)); } catch (e) { console.warn('Remove mapping failed', e?.message || e); }
     }));
 
-    conversationDetailsCache[conversationId] = { ...existing, id: conversationId, participants: unique, participantUsernames, participantAvatars, unreadCounts, mutedBy, pinnedBy, type: convoType, title: convoType === 'group' ? (existing.title || null) : null };
+    conversationDetailsCache[conversationId] = { ...existing, id: conversationId, participants: unique, participantUsernames, participantNames, participantAvatars, unreadCounts, mutedBy, pinnedBy, type: convoType, title: existing.title || null };
     await Promise.all(unique.map(async function (uid) {
         const meta = deriveOtherParticipantMeta(unique, uid, conversationDetailsCache[conversationId]);
         const mappingRef = doc(db, `users/${uid}/conversations/${conversationId}`);
@@ -5000,20 +5493,39 @@ window.removeConversationParticipant = async function (uid) {
     if (!conversationSettingsId) return;
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     const participants = (convo?.participants || []).filter(function (p) { return p !== uid; });
-    await updateConversationParticipants(conversationSettingsId, participants);
+    const target = resolveParticipantDisplay(convo, uid);
+    await openConfirmModal({
+        title: 'Remove participant?',
+        message: `Remove ${target.displayName || target.username || 'this participant'} from the conversation?`,
+        helperText: 'They will lose access to future messages.',
+        confirmText: 'Remove',
+        onConfirm: async function () {
+            await updateConversationParticipants(conversationSettingsId, participants);
+        }
+    });
 };
 
 window.saveConversationName = async function () {
     if (!conversationSettingsId || !requireAuth()) return;
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     if (!convo) return;
-    if (convo.type !== 'group') { toast('Direct chats use participant names.', 'error'); return; }
     const nameInput = document.getElementById('conversation-name-input');
     const title = (nameInput?.value || '').trim();
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { title, updatedAt: serverTimestamp() });
-    conversationDetailsCache[conversationSettingsId] = { ...convo, title };
-    if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
-    toast('Conversation name updated', 'info');
+    if (title.length > 80) { toast('Conversation name must be 80 characters or fewer.', 'error'); return; }
+    const nextTitle = title || null;
+    const fallback = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    await openConfirmModal({
+        title: 'Save conversation name',
+        message: title ? `Save conversation as "${title}"?` : 'Clear the custom name and use the default participant title?',
+        helperText: title ? 'All participants will see this name.' : `It will revert to "${fallback}" until renamed.`,
+        confirmText: 'Save',
+        onConfirm: async function () {
+            await updateDoc(doc(db, 'conversations', conversationSettingsId), { title: nextTitle, updatedAt: serverTimestamp() });
+            conversationDetailsCache[conversationSettingsId] = { ...convo, title: nextTitle };
+            if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+            toast('Conversation name updated', 'info');
+        }
+    });
 };
 
 window.uploadConversationAvatar = async function () {
@@ -5022,25 +5534,83 @@ window.uploadConversationAvatar = async function () {
     if (!fileInput?.files?.length) { toast('Select an image first.', 'error'); return; }
     const file = fileInput.files[0];
     const path = `conversation_avatars/${conversationSettingsId}/${Date.now()}_${file.name}`;
-    const uploadRef = ref(storage, path);
-    const snap = await uploadBytes(uploadRef, file);
-    const url = await getDownloadURL(snap.ref);
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
-    conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
-    if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
-    await refreshConversationSettings(conversationSettingsId);
-    toast('Conversation image updated', 'info');
+    await openConfirmModal({
+        title: 'Replace conversation image?',
+        message: `Upload ${file.name}?`,
+        helperText: 'This updates the chat image for all participants.',
+        confirmText: 'Upload',
+        onConfirm: async function () {
+            const uploadRef = ref(storage, path);
+            const snap = await uploadBytes(uploadRef, file);
+            const url = await getDownloadURL(snap.ref);
+            await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
+            conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
+            if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+            await refreshConversationSettings(conversationSettingsId);
+            toast('Conversation image updated', 'info');
+        }
+    });
 };
 
 window.toggleConversationMute = async function () {
     if (!conversationSettingsId || !requireAuth()) return;
     const mapping = await fetchConversationMapping(conversationSettingsId) || {};
-    const muted = !!mapping.muted;
+    const muteState = resolveMuteState(conversationSettingsId, mapping);
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
-    await setDoc(mappingRef, { muted: !muted }, { merge: true });
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { mutedBy: muted ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid) });
-    updateConversationMappingState(conversationSettingsId, { muted: !muted });
-    await refreshConversationSettings(conversationSettingsId);
+    const convoRef = doc(db, 'conversations', conversationSettingsId);
+    const isMuted = muteState.active || (conversationDetailsCache[conversationSettingsId]?.mutedBy || []).includes(currentUser.uid);
+
+    if (isMuted) {
+        await openConfirmModal({
+            title: 'Unmute chat?',
+            message: 'Resume notifications for this conversation?',
+            confirmText: 'Unmute',
+            onConfirm: async function () {
+                await setDoc(mappingRef, { muted: false, muteUntil: null }, { merge: true });
+                await updateDoc(convoRef, { mutedBy: arrayRemove(currentUser.uid) });
+                updateConversationMappingState(conversationSettingsId, { muted: false, muteUntil: null });
+                await refreshConversationSettings(conversationSettingsId);
+            }
+        });
+        return;
+    }
+
+    const muteOptions = [
+        { label: '15 minutes', duration: 15 * 60 * 1000 },
+        { label: '1 hour', duration: 60 * 60 * 1000 },
+        { label: '8 hours', duration: 8 * 60 * 60 * 1000 },
+        { label: '1 day', duration: 24 * 60 * 60 * 1000 },
+        { label: '7 days', duration: 7 * 24 * 60 * 60 * 1000 },
+        { label: 'Permanently', duration: null }
+    ];
+    await openConfirmModal({
+        title: 'Mute chat',
+        message: 'Choose how long to mute notifications.',
+        helperText: 'Mute applies only to you.',
+        confirmText: 'Mute',
+        buildContent: function (container) {
+            let selected = muteOptions[1];
+            const group = document.createElement('div');
+            group.className = 'confirm-options';
+            muteOptions.forEach(function (opt, idx) {
+                const row = document.createElement('label');
+                row.className = 'confirm-option';
+                row.innerHTML = `<input type="radio" name="mute-duration" value="${idx}" ${idx === 1 ? 'checked' : ''}> <span>${opt.label}</span>`;
+                row.querySelector('input').onchange = function () { selected = opt; };
+                group.appendChild(row);
+            });
+            container.appendChild(group);
+            return function () { return { option: selected }; };
+        },
+        onConfirm: async function (data) {
+            const option = data?.option || muteOptions[1];
+            const untilDate = option.duration ? Timestamp.fromMillis(Date.now() + option.duration) : null;
+            await setDoc(mappingRef, { muted: true, muteUntil: untilDate }, { merge: true });
+            await updateDoc(convoRef, { mutedBy: arrayUnion(currentUser.uid) });
+            updateConversationMappingState(conversationSettingsId, { muted: true, muteUntil: untilDate });
+            await refreshConversationSettings(conversationSettingsId);
+        }
+    });
 };
 
 window.toggleConversationPin = async function () {
@@ -5048,9 +5618,16 @@ window.toggleConversationPin = async function () {
     const mapping = await fetchConversationMapping(conversationSettingsId) || {};
     const pinned = !!mapping.pinned;
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
-    await setDoc(mappingRef, { pinned: !pinned }, { merge: true });
-    updateConversationMappingState(conversationSettingsId, { pinned: !pinned });
-    await refreshConversationSettings(conversationSettingsId);
+    await openConfirmModal({
+        title: pinned ? 'Unpin conversation?' : 'Pin conversation?',
+        message: pinned ? 'Remove this chat from your pinned list?' : 'Keep this chat at the top of your list?',
+        confirmText: pinned ? 'Unpin' : 'Pin',
+        onConfirm: async function () {
+            await setDoc(mappingRef, { pinned: !pinned }, { merge: true });
+            updateConversationMappingState(conversationSettingsId, { pinned: !pinned });
+            await refreshConversationSettings(conversationSettingsId);
+        }
+    });
 };
 
 window.toggleConversationArchive = async function () {
@@ -5058,10 +5635,17 @@ window.toggleConversationArchive = async function () {
     const mapping = await fetchConversationMapping(conversationSettingsId) || {};
     const archived = !!mapping.archived;
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
-    await setDoc(mappingRef, { archived: !archived }, { merge: true });
-    updateConversationMappingState(conversationSettingsId, { archived: !archived });
-    await refreshConversationSettings(conversationSettingsId);
-    if (!archived) toast('Conversation archived', 'info');
+    await openConfirmModal({
+        title: archived ? 'Unarchive chat?' : 'Archive chat?',
+        message: archived ? 'Return this chat to your main list?' : 'Move this chat out of your main list?',
+        confirmText: archived ? 'Unarchive' : 'Archive',
+        onConfirm: async function () {
+            await setDoc(mappingRef, { archived: !archived }, { merge: true });
+            updateConversationMappingState(conversationSettingsId, { archived: !archived });
+            await refreshConversationSettings(conversationSettingsId);
+            if (!archived) toast('Conversation archived', 'info');
+        }
+    });
 };
 
 async function deleteConversationMessages(conversationId) {
@@ -5074,26 +5658,37 @@ window.leaveConversation = async function () {
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     if (!convo) return;
     const participants = convo.participants || [];
-    if (participants.length <= 2) {
-        await deleteConversationMessages(conversationSettingsId);
-        await Promise.all(participants.map(async function (uid) {
-            try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Mapping cleanup', e?.message || e); }
-        }));
-        await deleteDoc(doc(db, 'conversations', conversationSettingsId));
-        delete conversationDetailsCache[conversationSettingsId];
-        activeConversationId = null;
-        conversationSettingsId = null;
-        window.navigateTo('messages');
-        await initConversations();
-        return;
-    }
+    const isDirect = participants.length <= 2;
+    const title = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    const helper = isDirect
+        ? 'Leaving deletes this direct chat and its history for both participants.'
+        : 'You will be removed from the group and stop receiving messages.';
 
-    const updated = participants.filter(function (uid) { return uid !== currentUser.uid; });
-    await updateConversationParticipants(conversationSettingsId, updated);
-    try { await deleteDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Self mapping cleanup', e?.message || e); }
-    activeConversationId = null;
-    conversationSettingsId = null;
-    window.navigateTo('messages');
+    await openConfirmModal({
+        title: 'Leave chat?',
+        message: `Leave "${title}"?`,
+        helperText: helper,
+        confirmText: 'Leave chat',
+        onConfirm: async function () {
+            if (isDirect) {
+                await deleteConversationMessages(conversationSettingsId);
+                await Promise.all(participants.map(async function (uid) {
+                    try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Mapping cleanup', e?.message || e); }
+                }));
+                await deleteDoc(doc(db, 'conversations', conversationSettingsId));
+                delete conversationDetailsCache[conversationSettingsId];
+            } else {
+                const updated = participants.filter(function (uid) { return uid !== currentUser.uid; });
+                await updateConversationParticipants(conversationSettingsId, updated);
+                try { await deleteDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Self mapping cleanup', e?.message || e); }
+            }
+
+            activeConversationId = null;
+            conversationSettingsId = null;
+            window.navigateTo('messages');
+            await initConversations();
+        }
+    });
 };
 
 window.blockConversationPartner = async function () {
@@ -5101,11 +5696,20 @@ window.blockConversationPartner = async function () {
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     if (!convo || (convo.participants || []).length !== 2) { toast('Blocking is available for direct chats only.', 'error'); return; }
     const otherId = (convo.participants || []).find(function (uid) { return uid !== currentUser.uid; });
-    await setDoc(doc(db, 'users', currentUser.uid), { blockedUserIds: arrayUnion(otherId) }, { merge: true });
-    const blocked = new Set(userProfile.blockedUserIds || []);
-    blocked.add(otherId);
-    userProfile.blockedUserIds = Array.from(blocked);
-    toast('User blocked', 'info');
+    const otherMeta = resolveParticipantDisplay(convo, otherId);
+    await openConfirmModal({
+        title: 'Block user?',
+        message: `Block ${otherMeta.displayName || otherMeta.username || 'this user'}?`,
+        helperText: 'They will not be able to message you and this chat may be hidden.',
+        confirmText: 'Block',
+        onConfirm: async function () {
+            await setDoc(doc(db, 'users', currentUser.uid), { blockedUserIds: arrayUnion(otherId) }, { merge: true });
+            const blocked = new Set(userProfile.blockedUserIds || []);
+            blocked.add(otherId);
+            userProfile.blockedUserIds = Array.from(blocked);
+            toast('User blocked', 'info');
+        }
+    });
 };
 
 window.reportConversation = async function () {
@@ -5114,15 +5718,32 @@ window.reportConversation = async function () {
     if (!convo) return;
     const isGroup = (convo.participants || []).length > 2;
     const reportedUserId = isGroup ? null : (convo.participants || []).find(function (uid) { return uid !== currentUser.uid; });
-    await addDoc(collection(db, 'reports'), {
-        type: isGroup ? 'conversation' : 'user',
-        conversationId: conversationSettingsId,
-        reportedUserId: reportedUserId || null,
-        reporterUserId: currentUser.uid,
-        createdAt: serverTimestamp(),
-        reason: 'Conversation settings report'
+    const title = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    await openConfirmModal({
+        title: 'Report conversation?',
+        message: `Submit a report for "${title}"?`,
+        helperText: 'Provide a brief reason so our team can review.',
+        confirmText: 'Submit report',
+        buildContent: function (container) {
+            const input = document.createElement('textarea');
+            input.className = 'form-input';
+            input.rows = 3;
+            input.placeholder = 'Reason (optional)';
+            container.appendChild(input);
+            return function () { return { reason: input.value.trim() }; };
+        },
+        onConfirm: async function (data) {
+            await addDoc(collection(db, 'reports'), {
+                type: isGroup ? 'conversation' : 'user',
+                conversationId: conversationSettingsId,
+                reportedUserId: reportedUserId || null,
+                reporterUserId: currentUser.uid,
+                createdAt: serverTimestamp(),
+                reason: data?.reason || 'Conversation settings report'
+            });
+            toast('Report submitted', 'info');
+        }
     });
-    toast('Report submitted', 'info');
 };
 
 async function sendChatPayload(conversationId, payload = {}) {
@@ -5170,6 +5791,7 @@ window.sendMessage = async function (conversationId = activeConversationId) {
     if (!text) return;
     await sendChatPayload(conversationId, { text, type: 'text' });
     if (input) input.value = '';
+    setTypingState(conversationId, false);
 };
 
 window.sendMediaMessage = async function (conversationId = activeConversationId, fileInputElementId = 'message-media', caption = '') {
@@ -5191,12 +5813,23 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
     fileInput.value = '';
     const input = document.getElementById('message-input');
     if (input && caption) input.value = '';
+    setTypingState(conversationId, false);
 };
 
 window.markConversationAsRead = async function (conversationId = activeConversationId) {
     if (!conversationId || !currentUser) return;
+    const messages = messageThreadCache[conversationId] || [];
+    const latestMessage = messages[messages.length - 1];
+    const latestTs = latestMessage ? getMessageTimestampMs(latestMessage) : Date.now();
+    const receiptTs = Timestamp.fromMillis(latestTs || Date.now());
+    lastReadAtLocal[conversationId] = latestTs;
+    lastDeliveredAtLocal[conversationId] = Math.max(lastDeliveredAtLocal[conversationId] || 0, latestTs);
     try {
-        await updateDoc(doc(db, 'conversations', conversationId), { [`unreadCounts.${currentUser.uid}`]: 0 });
+        await updateDoc(doc(db, 'conversations', conversationId), {
+            [`unreadCounts.${currentUser.uid}`]: 0,
+            [`lastReadAt.${currentUser.uid}`]: receiptTs,
+            [`lastDeliveredAt.${currentUser.uid}`]: receiptTs
+        });
     } catch (e) {
         console.warn('Unable to update unread counts', e);
     }
@@ -5320,12 +5953,14 @@ async function createGroupConversation(participantIds = [], title = null) {
     const participants = Array.from(new Set(participantIds.concat([currentUser.uid]))).sort();
     const profiles = await Promise.all(participants.map(resolveUserProfile));
     const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
     const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
     const convoRef = doc(collection(db, 'conversations'));
     const payload = {
         participants,
         participantUsernames,
+        participantNames,
         participantAvatars,
         type: participants.length > 2 ? 'group' : 'direct',
         title: participants.length > 2 ? (title || null) : null,
@@ -5337,7 +5972,8 @@ async function createGroupConversation(participantIds = [], title = null) {
         lastMessageAt: serverTimestamp(),
         unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
         mutedBy: [],
-        pinnedBy: []
+        pinnedBy: [],
+        creatorId: currentUser.uid
     };
 
     await setDoc(convoRef, payload, { merge: true });
