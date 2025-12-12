@@ -609,6 +609,92 @@ window.toast = function (msg, type = 'info') {
     setTimeout(() => overlay.remove(), 2500);
 };
 
+const confirmModalState = { onConfirm: null, getData: null, previousFocus: null, keyHandler: null, busy: false };
+
+function closeConfirmModal() {
+    const modal = document.getElementById('confirm-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    confirmModalState.busy = false;
+    const submitBtn = document.getElementById('confirm-submit-btn');
+    const label = document.getElementById('confirm-submit-label');
+    if (submitBtn) submitBtn.disabled = false;
+    if (label) label.textContent = label?.dataset?.defaultText || label?.textContent || 'Confirm';
+    if (confirmModalState.keyHandler) document.removeEventListener('keydown', confirmModalState.keyHandler, true);
+    if (confirmModalState.previousFocus) confirmModalState.previousFocus.focus();
+    confirmModalState.onConfirm = null;
+    confirmModalState.getData = null;
+    confirmModalState.previousFocus = null;
+    confirmModalState.keyHandler = null;
+}
+
+window.cancelConfirmModal = closeConfirmModal;
+
+function trapConfirmFocus(modal) {
+    const focusable = modal.querySelectorAll('button, [href], input, select, textarea');
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    confirmModalState.keyHandler = function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); closeConfirmModal(); return; }
+        if (e.key !== 'Tab') return;
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', confirmModalState.keyHandler, true);
+    first.focus();
+}
+
+async function openConfirmModal(options = {}) {
+    const modal = document.getElementById('confirm-modal');
+    const body = document.getElementById('confirm-body');
+    const helper = document.getElementById('confirm-helper');
+    const extra = document.getElementById('confirm-extra');
+    const submitBtn = document.getElementById('confirm-submit-btn');
+    const submitLabel = document.getElementById('confirm-submit-label');
+    const cancelBtn = document.getElementById('confirm-cancel-btn');
+    const title = document.getElementById('confirm-title');
+    if (!modal || !body || !helper || !extra || !submitBtn || !submitLabel || !cancelBtn) return false;
+
+    modal.style.display = 'flex';
+    if (title) title.textContent = options.title || 'Confirm';
+    body.textContent = options.message || '';
+    helper.textContent = options.helperText || '';
+    extra.innerHTML = '';
+    submitLabel.dataset.defaultText = options.confirmText || 'Confirm';
+    submitLabel.textContent = options.confirmText || 'Confirm';
+    const cancelIcon = options.cancelIcon || '<i class="ph ph-x"></i>';
+    cancelBtn.innerHTML = `${cancelIcon} ${options.cancelText || 'Cancel'}`;
+
+    confirmModalState.previousFocus = document.activeElement;
+    confirmModalState.onConfirm = options.onConfirm || null;
+    confirmModalState.getData = typeof options.buildContent === 'function' ? options.buildContent(extra) || function () { return {}; } : function () { return {}; };
+
+    submitBtn.onclick = async function () {
+        if (confirmModalState.busy) return;
+        confirmModalState.busy = true;
+        submitBtn.disabled = true;
+        submitLabel.innerHTML = `<span class="button-spinner"></span> ${options.confirmText || 'Confirm'}`;
+        try {
+            if (confirmModalState.onConfirm) {
+                await confirmModalState.onConfirm(confirmModalState.getData());
+            }
+            closeConfirmModal();
+        } catch (e) {
+            console.error(e);
+            toast(options.errorText || 'Action failed', 'error');
+        } finally {
+            confirmModalState.busy = false;
+            submitBtn.disabled = false;
+            submitLabel.textContent = options.confirmText || 'Confirm';
+        }
+    };
+
+    cancelBtn.onclick = function () { closeConfirmModal(); };
+    trapConfirmFocus(modal);
+    return true;
+}
+
 function slugifyCategory(name) {
     return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 80);
 }
@@ -1855,7 +1941,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
 
     currentViewId = viewId;
     updateMobileNavState(viewId);
-    window.scrollTo(0, 0);
+    const lockScroll = viewId === 'messages' || viewId === 'conversation-settings';
+    document.body.classList.toggle('messages-scroll-lock', lockScroll);
+    if (!lockScroll) window.scrollTo(0, 0);
 };
 
 function updateMobileNavState(viewId = 'feed') {
@@ -4666,8 +4754,11 @@ function renderConversationList() {
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
         const unread = mapping.unreadCount || 0;
         const badges = [];
+        const muteState = resolveMuteState(mapping.id, mapping);
+        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUser.uid);
+        updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
         if (mapping.pinned) badges.push('<i class="ph ph-push-pin"></i>');
-        if (mapping.muted) badges.push('<i class="ph ph-bell-slash"></i>');
+        if (isMuted) badges.push('<i class="ph ph-bell-slash"></i>');
         if (mapping.archived) badges.push('<i class="ph ph-archive"></i>');
         const flagHtml = badges.length || unread > 0
             ? `<div class="conversation-flags">
@@ -4743,9 +4834,9 @@ function renderMessages(msgs = [], convo = {}) {
         row.className = 'message-row ' + (isSelf ? 'self' : 'other');
         if (lastSenderId === msg.senderId) row.classList.add('stacked');
 
-        const avatarSlot = document.createElement('div');
-        avatarSlot.className = 'message-avatar-slot' + (isSelf ? ' placeholder' : '');
-        if (!isSelf) {
+        const avatarSlot = isSelf ? null : document.createElement('div');
+        if (avatarSlot) {
+            avatarSlot.className = 'message-avatar-slot' + (showAvatar ? '' : ' placeholder');
             if (showAvatar) {
                 const senderMeta = resolveParticipantDisplay(convo, msg.senderId);
                 avatarSlot.innerHTML = renderAvatar({
@@ -4775,10 +4866,9 @@ function renderMessages(msgs = [], convo = {}) {
 
         if (isSelf) {
             row.appendChild(bubble);
-            row.appendChild(avatarSlot);
             latestSelfMessage = { message: msg, row };
         } else {
-            row.appendChild(avatarSlot);
+            if (avatarSlot) row.appendChild(avatarSlot);
             row.appendChild(bubble);
         }
 
@@ -5075,11 +5165,70 @@ function updateConversationMappingState(conversationId, data = {}) {
     }
 }
 
+function resolveMuteState(conversationId, mapping = {}) {
+    const until = toDateSafe(mapping.muteUntil);
+    const now = Date.now();
+    const expired = mapping.muted && until && until.getTime() <= now;
+    const active = !!mapping.muted && !expired && (!until || until.getTime() > now);
+    return { active, until, expired };
+}
+
+async function clearMuteState(conversationId) {
+    if (!currentUser || !conversationId) return;
+    try {
+        await setDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`), { muted: false, muteUntil: null }, { merge: true });
+    } catch (e) {
+        console.warn('Unable to clear mute state', e?.message || e);
+    }
+    updateConversationMappingState(conversationId, { muted: false, muteUntil: null });
+}
+
+function renderConversationAvatarPreview(convo = {}, previewUrl = '', filename = '') {
+    const preview = document.getElementById('conversation-avatar-preview');
+    if (!preview) return;
+    const meta = deriveOtherParticipantMeta(convo.participants || [], currentUser?.uid, convo);
+    const src = previewUrl || convo.avatarURL || meta.avatars?.[0] || '';
+    if (src) {
+        preview.innerHTML = `<img src="${src}" alt="Conversation avatar">${filename ? `<div class="participant-hint">${escapeHtml(filename)}</div>` : ''}`;
+    } else {
+        preview.innerHTML = '<div class="placeholder">No image</div>';
+    }
+}
+
+function updateConversationNameHelper(convo = {}, fallbackLabel = '') {
+    const hint = document.getElementById('conversation-name-hint');
+    if (!hint) return;
+    hint.textContent = convo.title
+        ? 'Custom name visible to all participants.'
+        : `If left blank, this chat will display as "${fallbackLabel || 'Conversation'}".`;
+}
+
+function bindConversationAvatarInput(convo = {}) {
+    const fileInput = document.getElementById('conversation-avatar-input');
+    if (!fileInput) return;
+    fileInput.onchange = function () {
+        const file = fileInput.files?.[0];
+        if (!file) {
+            renderConversationAvatarPreview(convo);
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            renderConversationAvatarPreview(convo, e.target?.result || '', file.name);
+        };
+        reader.readAsDataURL(file);
+    };
+}
+
 async function fetchConversationMapping(conversationId) {
     if (!currentUser) return null;
     const snap = await getDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`));
     if (snap.exists()) {
         const mapping = { id: conversationId, ...snap.data() };
+        const muteState = resolveMuteState(conversationId, mapping);
+        mapping.muted = muteState.active;
+        mapping.muteUntil = muteState.active ? mapping.muteUntil || null : null;
+        if (muteState.expired) await clearMuteState(conversationId);
         updateConversationMappingState(conversationId, mapping);
         return mapping;
     }
@@ -5090,8 +5239,6 @@ function renderConversationParticipants(convo = {}) {
     const listEl = document.getElementById('conversation-participant-list');
     if (!listEl) return;
     const participants = convo.participants || [];
-    const usernames = convo.participantUsernames || [];
-    const avatars = convo.participantAvatars || [];
     listEl.innerHTML = '';
 
     participants.forEach(function (uid, idx) {
@@ -5099,10 +5246,52 @@ function renderConversationParticipants(convo = {}) {
         const name = meta.displayName || 'Participant';
         const handle = meta.username ? `@${meta.username}` : '';
         const badge = renderVerifiedBadge(userCache[uid] || {});
-        const avatar = renderAvatar({ uid, username: name, photoURL: avatars[idx] || userCache[uid]?.photoURL || '' }, { size: 32 });
+        const avatar = renderAvatar({ uid, username: name, photoURL: meta.avatar || userCache[uid]?.photoURL || '' }, { size: 32 });
         const row = document.createElement('div');
         row.className = 'participant-row';
-        row.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:700; display:flex; align-items:center; gap:6px;">${escapeHtml(name)}${badge}</div><div style="color:var(--text-muted); font-size:0.85rem;">${handle ? escapeHtml(handle) : ''}</div></div></div>`;
+        const nameLine = document.createElement('div');
+        nameLine.style.display = 'flex';
+        nameLine.style.alignItems = 'center';
+        nameLine.style.gap = '6px';
+        nameLine.style.fontWeight = '700';
+        nameLine.innerHTML = `${escapeHtml(name)}${badge}`;
+
+        const labelWrap = document.createElement('div');
+        labelWrap.className = 'participant-labels';
+        if (uid === currentUser?.uid) {
+            const you = document.createElement('span');
+            you.className = 'badge';
+            you.textContent = 'You';
+            labelWrap.appendChild(you);
+        }
+        if (uid === convo.creatorId) {
+            const owner = document.createElement('span');
+            owner.className = 'badge';
+            owner.textContent = 'Owner';
+            labelWrap.appendChild(owner);
+        }
+        if (labelWrap.childElementCount) nameLine.appendChild(labelWrap);
+
+        const handleLine = document.createElement('div');
+        handleLine.className = 'participant-hint';
+        handleLine.textContent = handle || '';
+        if (!handle) handleLine.style.display = 'none';
+
+        const infoCol = document.createElement('div');
+        infoCol.appendChild(nameLine);
+        infoCol.appendChild(handleLine);
+
+        const left = document.createElement('div');
+        left.style.display = 'flex';
+        left.style.alignItems = 'center';
+        left.style.gap = '10px';
+        const avatarWrapper = document.createElement('div');
+        avatarWrapper.innerHTML = avatar;
+        if (avatarWrapper.firstChild) left.appendChild(avatarWrapper.firstChild);
+        left.appendChild(infoCol);
+
+        row.appendChild(left);
+
         const isCreator = convo.creatorId && currentUser?.uid === convo.creatorId;
         const canRemove = isCreator && uid !== currentUser?.uid && uid !== convo.creatorId && participants.length > 2;
         if (canRemove) {
@@ -5125,6 +5314,7 @@ function renderConversationSettings(convo = {}, mapping = {}) {
     const subtitleEl = document.getElementById('conversation-settings-subtitle');
     const avatarEl = document.getElementById('conversation-settings-avatar');
     const nameInput = document.getElementById('conversation-name-input');
+    const createdByEl = document.getElementById('conversation-created-by');
 
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
@@ -5132,6 +5322,10 @@ function renderConversationSettings(convo = {}, mapping = {}) {
 
     if (titleEl) titleEl.textContent = label;
     if (subtitleEl) subtitleEl.textContent = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
+    if (createdByEl) {
+        const creatorMeta = convo.creatorId ? resolveParticipantDisplay(convo, convo.creatorId) : null;
+        createdByEl.textContent = convo.creatorId ? `Created by ${creatorMeta.displayName || creatorMeta.username || 'User'}` : '';
+    }
     if (avatarEl) {
         avatarEl.innerHTML = renderAvatar({
             uid: convo.id || 'conversation',
@@ -5145,14 +5339,25 @@ function renderConversationSettings(convo = {}, mapping = {}) {
         nameInput.disabled = false;
         nameInput.value = convo.title || '';
         nameInput.placeholder = label;
+        nameInput.maxLength = 80;
     }
 
     renderConversationParticipants(convo);
+    renderConversationAvatarPreview(convo);
+    bindConversationAvatarInput(convo);
+    updateConversationNameHelper(convo, label);
 
     const muteBtn = document.getElementById('conversation-mute-btn');
     if (muteBtn) {
-        const muted = !!mapping.muted || (convo.mutedBy || []).includes(currentUser?.uid);
+        const muteState = resolveMuteState(convo.id || conversationSettingsId, mapping);
+        const muted = muteState.active || (convo.mutedBy || []).includes(currentUser?.uid);
+        if (muteState.expired) clearMuteState(convo.id || conversationSettingsId);
         muteBtn.innerHTML = `<i class="ph ph-${muted ? 'bell-slash' : 'bell'}"></i> ${muted ? 'Unmute chat' : 'Mute chat'}`;
+        if (muted && muteState.until) {
+            muteBtn.title = `Muted until ${muteState.until.toLocaleString()}`;
+        } else {
+            muteBtn.removeAttribute('title');
+        }
     }
     const pinBtn = document.getElementById('conversation-pin-btn');
     if (pinBtn) {
@@ -5288,7 +5493,16 @@ window.removeConversationParticipant = async function (uid) {
     if (!conversationSettingsId) return;
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     const participants = (convo?.participants || []).filter(function (p) { return p !== uid; });
-    await updateConversationParticipants(conversationSettingsId, participants);
+    const target = resolveParticipantDisplay(convo, uid);
+    await openConfirmModal({
+        title: 'Remove participant?',
+        message: `Remove ${target.displayName || target.username || 'this participant'} from the conversation?`,
+        helperText: 'They will lose access to future messages.',
+        confirmText: 'Remove',
+        onConfirm: async function () {
+            await updateConversationParticipants(conversationSettingsId, participants);
+        }
+    });
 };
 
 window.saveConversationName = async function () {
@@ -5297,11 +5511,21 @@ window.saveConversationName = async function () {
     if (!convo) return;
     const nameInput = document.getElementById('conversation-name-input');
     const title = (nameInput?.value || '').trim();
+    if (title.length > 80) { toast('Conversation name must be 80 characters or fewer.', 'error'); return; }
     const nextTitle = title || null;
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { title: nextTitle, updatedAt: serverTimestamp() });
-    conversationDetailsCache[conversationSettingsId] = { ...convo, title: nextTitle };
-    if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
-    toast('Conversation name updated', 'info');
+    const fallback = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    await openConfirmModal({
+        title: 'Save conversation name',
+        message: title ? `Save conversation as "${title}"?` : 'Clear the custom name and use the default participant title?',
+        helperText: title ? 'All participants will see this name.' : `It will revert to "${fallback}" until renamed.`,
+        confirmText: 'Save',
+        onConfirm: async function () {
+            await updateDoc(doc(db, 'conversations', conversationSettingsId), { title: nextTitle, updatedAt: serverTimestamp() });
+            conversationDetailsCache[conversationSettingsId] = { ...convo, title: nextTitle };
+            if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+            toast('Conversation name updated', 'info');
+        }
+    });
 };
 
 window.uploadConversationAvatar = async function () {
@@ -5310,25 +5534,83 @@ window.uploadConversationAvatar = async function () {
     if (!fileInput?.files?.length) { toast('Select an image first.', 'error'); return; }
     const file = fileInput.files[0];
     const path = `conversation_avatars/${conversationSettingsId}/${Date.now()}_${file.name}`;
-    const uploadRef = ref(storage, path);
-    const snap = await uploadBytes(uploadRef, file);
-    const url = await getDownloadURL(snap.ref);
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
-    conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
-    if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
-    await refreshConversationSettings(conversationSettingsId);
-    toast('Conversation image updated', 'info');
+    await openConfirmModal({
+        title: 'Replace conversation image?',
+        message: `Upload ${file.name}?`,
+        helperText: 'This updates the chat image for all participants.',
+        confirmText: 'Upload',
+        onConfirm: async function () {
+            const uploadRef = ref(storage, path);
+            const snap = await uploadBytes(uploadRef, file);
+            const url = await getDownloadURL(snap.ref);
+            await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
+            conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
+            if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+            await refreshConversationSettings(conversationSettingsId);
+            toast('Conversation image updated', 'info');
+        }
+    });
 };
 
 window.toggleConversationMute = async function () {
     if (!conversationSettingsId || !requireAuth()) return;
     const mapping = await fetchConversationMapping(conversationSettingsId) || {};
-    const muted = !!mapping.muted;
+    const muteState = resolveMuteState(conversationSettingsId, mapping);
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
-    await setDoc(mappingRef, { muted: !muted }, { merge: true });
-    await updateDoc(doc(db, 'conversations', conversationSettingsId), { mutedBy: muted ? arrayRemove(currentUser.uid) : arrayUnion(currentUser.uid) });
-    updateConversationMappingState(conversationSettingsId, { muted: !muted });
-    await refreshConversationSettings(conversationSettingsId);
+    const convoRef = doc(db, 'conversations', conversationSettingsId);
+    const isMuted = muteState.active || (conversationDetailsCache[conversationSettingsId]?.mutedBy || []).includes(currentUser.uid);
+
+    if (isMuted) {
+        await openConfirmModal({
+            title: 'Unmute chat?',
+            message: 'Resume notifications for this conversation?',
+            confirmText: 'Unmute',
+            onConfirm: async function () {
+                await setDoc(mappingRef, { muted: false, muteUntil: null }, { merge: true });
+                await updateDoc(convoRef, { mutedBy: arrayRemove(currentUser.uid) });
+                updateConversationMappingState(conversationSettingsId, { muted: false, muteUntil: null });
+                await refreshConversationSettings(conversationSettingsId);
+            }
+        });
+        return;
+    }
+
+    const muteOptions = [
+        { label: '15 minutes', duration: 15 * 60 * 1000 },
+        { label: '1 hour', duration: 60 * 60 * 1000 },
+        { label: '8 hours', duration: 8 * 60 * 60 * 1000 },
+        { label: '1 day', duration: 24 * 60 * 60 * 1000 },
+        { label: '7 days', duration: 7 * 24 * 60 * 60 * 1000 },
+        { label: 'Permanently', duration: null }
+    ];
+    await openConfirmModal({
+        title: 'Mute chat',
+        message: 'Choose how long to mute notifications.',
+        helperText: 'Mute applies only to you.',
+        confirmText: 'Mute',
+        buildContent: function (container) {
+            let selected = muteOptions[1];
+            const group = document.createElement('div');
+            group.className = 'confirm-options';
+            muteOptions.forEach(function (opt, idx) {
+                const row = document.createElement('label');
+                row.className = 'confirm-option';
+                row.innerHTML = `<input type="radio" name="mute-duration" value="${idx}" ${idx === 1 ? 'checked' : ''}> <span>${opt.label}</span>`;
+                row.querySelector('input').onchange = function () { selected = opt; };
+                group.appendChild(row);
+            });
+            container.appendChild(group);
+            return function () { return { option: selected }; };
+        },
+        onConfirm: async function (data) {
+            const option = data?.option || muteOptions[1];
+            const untilDate = option.duration ? Timestamp.fromMillis(Date.now() + option.duration) : null;
+            await setDoc(mappingRef, { muted: true, muteUntil: untilDate }, { merge: true });
+            await updateDoc(convoRef, { mutedBy: arrayUnion(currentUser.uid) });
+            updateConversationMappingState(conversationSettingsId, { muted: true, muteUntil: untilDate });
+            await refreshConversationSettings(conversationSettingsId);
+        }
+    });
 };
 
 window.toggleConversationPin = async function () {
@@ -5336,9 +5618,16 @@ window.toggleConversationPin = async function () {
     const mapping = await fetchConversationMapping(conversationSettingsId) || {};
     const pinned = !!mapping.pinned;
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
-    await setDoc(mappingRef, { pinned: !pinned }, { merge: true });
-    updateConversationMappingState(conversationSettingsId, { pinned: !pinned });
-    await refreshConversationSettings(conversationSettingsId);
+    await openConfirmModal({
+        title: pinned ? 'Unpin conversation?' : 'Pin conversation?',
+        message: pinned ? 'Remove this chat from your pinned list?' : 'Keep this chat at the top of your list?',
+        confirmText: pinned ? 'Unpin' : 'Pin',
+        onConfirm: async function () {
+            await setDoc(mappingRef, { pinned: !pinned }, { merge: true });
+            updateConversationMappingState(conversationSettingsId, { pinned: !pinned });
+            await refreshConversationSettings(conversationSettingsId);
+        }
+    });
 };
 
 window.toggleConversationArchive = async function () {
@@ -5346,10 +5635,17 @@ window.toggleConversationArchive = async function () {
     const mapping = await fetchConversationMapping(conversationSettingsId) || {};
     const archived = !!mapping.archived;
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`);
-    await setDoc(mappingRef, { archived: !archived }, { merge: true });
-    updateConversationMappingState(conversationSettingsId, { archived: !archived });
-    await refreshConversationSettings(conversationSettingsId);
-    if (!archived) toast('Conversation archived', 'info');
+    await openConfirmModal({
+        title: archived ? 'Unarchive chat?' : 'Archive chat?',
+        message: archived ? 'Return this chat to your main list?' : 'Move this chat out of your main list?',
+        confirmText: archived ? 'Unarchive' : 'Archive',
+        onConfirm: async function () {
+            await setDoc(mappingRef, { archived: !archived }, { merge: true });
+            updateConversationMappingState(conversationSettingsId, { archived: !archived });
+            await refreshConversationSettings(conversationSettingsId);
+            if (!archived) toast('Conversation archived', 'info');
+        }
+    });
 };
 
 async function deleteConversationMessages(conversationId) {
@@ -5362,26 +5658,37 @@ window.leaveConversation = async function () {
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     if (!convo) return;
     const participants = convo.participants || [];
-    if (participants.length <= 2) {
-        await deleteConversationMessages(conversationSettingsId);
-        await Promise.all(participants.map(async function (uid) {
-            try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Mapping cleanup', e?.message || e); }
-        }));
-        await deleteDoc(doc(db, 'conversations', conversationSettingsId));
-        delete conversationDetailsCache[conversationSettingsId];
-        activeConversationId = null;
-        conversationSettingsId = null;
-        window.navigateTo('messages');
-        await initConversations();
-        return;
-    }
+    const isDirect = participants.length <= 2;
+    const title = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    const helper = isDirect
+        ? 'Leaving deletes this direct chat and its history for both participants.'
+        : 'You will be removed from the group and stop receiving messages.';
 
-    const updated = participants.filter(function (uid) { return uid !== currentUser.uid; });
-    await updateConversationParticipants(conversationSettingsId, updated);
-    try { await deleteDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Self mapping cleanup', e?.message || e); }
-    activeConversationId = null;
-    conversationSettingsId = null;
-    window.navigateTo('messages');
+    await openConfirmModal({
+        title: 'Leave chat?',
+        message: `Leave "${title}"?`,
+        helperText: helper,
+        confirmText: 'Leave chat',
+        onConfirm: async function () {
+            if (isDirect) {
+                await deleteConversationMessages(conversationSettingsId);
+                await Promise.all(participants.map(async function (uid) {
+                    try { await deleteDoc(doc(db, `users/${uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Mapping cleanup', e?.message || e); }
+                }));
+                await deleteDoc(doc(db, 'conversations', conversationSettingsId));
+                delete conversationDetailsCache[conversationSettingsId];
+            } else {
+                const updated = participants.filter(function (uid) { return uid !== currentUser.uid; });
+                await updateConversationParticipants(conversationSettingsId, updated);
+                try { await deleteDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationSettingsId}`)); } catch (e) { console.warn('Self mapping cleanup', e?.message || e); }
+            }
+
+            activeConversationId = null;
+            conversationSettingsId = null;
+            window.navigateTo('messages');
+            await initConversations();
+        }
+    });
 };
 
 window.blockConversationPartner = async function () {
@@ -5389,11 +5696,20 @@ window.blockConversationPartner = async function () {
     const convo = conversationDetailsCache[conversationSettingsId] || (await fetchConversation(conversationSettingsId));
     if (!convo || (convo.participants || []).length !== 2) { toast('Blocking is available for direct chats only.', 'error'); return; }
     const otherId = (convo.participants || []).find(function (uid) { return uid !== currentUser.uid; });
-    await setDoc(doc(db, 'users', currentUser.uid), { blockedUserIds: arrayUnion(otherId) }, { merge: true });
-    const blocked = new Set(userProfile.blockedUserIds || []);
-    blocked.add(otherId);
-    userProfile.blockedUserIds = Array.from(blocked);
-    toast('User blocked', 'info');
+    const otherMeta = resolveParticipantDisplay(convo, otherId);
+    await openConfirmModal({
+        title: 'Block user?',
+        message: `Block ${otherMeta.displayName || otherMeta.username || 'this user'}?`,
+        helperText: 'They will not be able to message you and this chat may be hidden.',
+        confirmText: 'Block',
+        onConfirm: async function () {
+            await setDoc(doc(db, 'users', currentUser.uid), { blockedUserIds: arrayUnion(otherId) }, { merge: true });
+            const blocked = new Set(userProfile.blockedUserIds || []);
+            blocked.add(otherId);
+            userProfile.blockedUserIds = Array.from(blocked);
+            toast('User blocked', 'info');
+        }
+    });
 };
 
 window.reportConversation = async function () {
@@ -5402,15 +5718,32 @@ window.reportConversation = async function () {
     if (!convo) return;
     const isGroup = (convo.participants || []).length > 2;
     const reportedUserId = isGroup ? null : (convo.participants || []).find(function (uid) { return uid !== currentUser.uid; });
-    await addDoc(collection(db, 'reports'), {
-        type: isGroup ? 'conversation' : 'user',
-        conversationId: conversationSettingsId,
-        reportedUserId: reportedUserId || null,
-        reporterUserId: currentUser.uid,
-        createdAt: serverTimestamp(),
-        reason: 'Conversation settings report'
+    const title = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    await openConfirmModal({
+        title: 'Report conversation?',
+        message: `Submit a report for "${title}"?`,
+        helperText: 'Provide a brief reason so our team can review.',
+        confirmText: 'Submit report',
+        buildContent: function (container) {
+            const input = document.createElement('textarea');
+            input.className = 'form-input';
+            input.rows = 3;
+            input.placeholder = 'Reason (optional)';
+            container.appendChild(input);
+            return function () { return { reason: input.value.trim() }; };
+        },
+        onConfirm: async function (data) {
+            await addDoc(collection(db, 'reports'), {
+                type: isGroup ? 'conversation' : 'user',
+                conversationId: conversationSettingsId,
+                reportedUserId: reportedUserId || null,
+                reporterUserId: currentUser.uid,
+                createdAt: serverTimestamp(),
+                reason: data?.reason || 'Conversation settings report'
+            });
+            toast('Report submitted', 'info');
+        }
     });
-    toast('Report submitted', 'info');
 };
 
 async function sendChatPayload(conversationId, payload = {}) {

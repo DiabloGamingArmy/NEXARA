@@ -420,6 +420,22 @@
     </div>
 </div>
 
+<div id="confirm-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-content compact">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+            <h3 id="confirm-title" style="margin:0; font-weight:800;">Confirm</h3>
+            <button class="x-close-btn" onclick="window.cancelConfirmModal()">&times;</button>
+        </div>
+        <div id="confirm-body" class="confirm-message"></div>
+        <div id="confirm-helper" class="confirm-helper"></div>
+        <div id="confirm-extra"></div>
+        <div class="confirm-actions">
+            <button id="confirm-cancel-btn" class="icon-pill" onclick="window.cancelConfirmModal()"><i class="ph ph-x"></i> Cancel</button>
+            <button id="confirm-submit-btn" class="create-btn-sidebar" style="width:auto;"><span id="confirm-submit-label">Confirm</span></button>
+        </div>
+    </div>
+</div>
+
 <!-- App Layout -->
 <header class="mobile-app-bar">
     <div class="mobile-app-bar__left" onclick="window.navigateTo('feed')">
@@ -641,13 +657,16 @@
 
                     <div class="messages-settings-card">
                         <div class="panel-title">Conversation details</div>
+                        <div id="conversation-created-by" class="conversation-created-by"></div>
                         <label class="settings-label" for="conversation-name-input">Name</label>
                         <input id="conversation-name-input" class="form-input" placeholder="Conversation name">
+                        <div id="conversation-name-hint" class="settings-hint"></div>
                         <button class="create-btn-sidebar" style="width:auto;" onclick="window.saveConversationName()">Save name</button>
                         <div class="input-group" style="margin-top:10px;">
                             <label class="settings-label" for="conversation-avatar-input">Conversation image</label>
                             <input id="conversation-avatar-input" type="file" accept="image/*" class="form-input">
                         </div>
+                        <div id="conversation-avatar-preview" class="conversation-avatar-preview"></div>
                         <button class="icon-pill" onclick="window.uploadConversationAvatar()"><i class="ph ph-upload"></i> Upload image</button>
                         <div class="settings-chip-row" id="conversation-preferences-row">
                             <button class="icon-pill" id="conversation-mute-btn" onclick="window.toggleConversationMute()"><i class="ph ph-bell-slash"></i> Mute chat</button>
