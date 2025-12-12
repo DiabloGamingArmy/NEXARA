@@ -278,7 +278,16 @@
             <button class="x-close-btn" onclick="window.toggleNewChatModal(false)">&times;</button>
         </div>
         <input id="chat-search" class="form-input" placeholder="Search by username" oninput="window.searchChatUsers(this.value)">
+        <div id="selected-chat-users" style="margin-top:10px;"></div>
+        <div id="chat-group-name-row" style="margin-top:10px; display:none;">
+            <label class="settings-label" for="chat-group-name">Chat name (optional)</label>
+            <input id="chat-group-name" class="form-input" placeholder="Group chat name">
+        </div>
         <div id="chat-search-results" style="max-height:200px; overflow:auto; margin-top:10px;"></div>
+        <div class="modal-actions">
+            <button class="icon-pill" onclick="window.toggleNewChatModal(false)"><i class="ph ph-x"></i> Cancel</button>
+            <button id="start-chat-btn" class="create-btn-sidebar" onclick="window.startChatFromSelection()" disabled>Start chat</button>
+        </div>
     </div>
 </div>
 
@@ -377,8 +386,10 @@
     </div>
 </div>
 
-<div id="post-options-dropdown" class="post-options-dropdown">
+        <div id="post-options-dropdown" class="post-options-dropdown">
     <button id="dropdown-edit-btn" style="display:none;" onclick="window.handlePostOptionSelect('edit')"><i class="ph ph-pencil"></i> Edit Post</button>
+    <button id="dropdown-share-btn" onclick="window.handlePostOptionSelect('share')"><i class="ph ph-paper-plane-tilt"></i> Share</button>
+    <button id="dropdown-message-btn" onclick="window.handlePostOptionSelect('message')"><i class="ph ph-chats"></i> Message author</button>
     <button onclick="window.handlePostOptionSelect('report')"><i class="ph ph-flag"></i> Report</button>
     <button id="dropdown-delete-btn" onclick="window.handlePostOptionSelect('delete')" style="display:none;"><i class="ph ph-trash"></i> Delete</button>
 </div>
@@ -434,7 +445,7 @@
         <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i class="ph-bold ph-house"></i> Home</a>
         <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i> Live</a>
         <a onclick="window.navigateTo('videos')" id="nav-videos" class="nav-item"><i class="ph-bold ph-film-strip"></i> Videos</a>
-        <a onclick="window.navigateTo('messages')" id="nav-messages" class="nav-item"><i class="ph-bold ph-chats"></i> Messages</a>
+        <a onclick="window.openMessagesPage()" id="nav-messages" class="nav-item"><i class="ph-bold ph-chats"></i> Messages</a>
         <a onclick="window.navigateTo('discover')" id="nav-discover" class="nav-item"><i class="ph-bold ph-compass"></i> Discover</a>
         <a onclick="window.navigateTo('saved')" id="nav-saved" class="nav-item"><i class="ph-bold ph-bookmark"></i> Saved</a>
         <a onclick="window.navigateTo('profile')" id="nav-profile" class="nav-item"><i class="ph-bold ph-user"></i> Profile</a>
@@ -503,12 +514,14 @@
             </div>
         </div>
 
-        <div id="view-live" class="view-section" style="padding:1rem; display:none;">
-            <div id="live-topbar"></div>
-            <div id="live-featured-row" class="live-featured-row"></div>
-            <div id="live-filter-row" class="live-filter-row"></div>
-            <hr id="live-divider" class="live-divider">
-            <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
+        <div id="view-live" class="view-section live-view" style="display:none;">
+            <div class="live-view-shell">
+                <div id="live-topbar"></div>
+                <div id="live-featured-row" class="live-featured-row"></div>
+                <div id="live-filter-row" class="live-filter-row"></div>
+                <hr id="live-divider" class="live-divider">
+                <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
+            </div>
         </div>
         <div id="view-live-setup" class="view-section" style="display:none;">
             <div class="go-live-setup">
