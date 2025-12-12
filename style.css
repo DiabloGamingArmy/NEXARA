@@ -824,7 +824,26 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 }
 
 .checkbox-row { font-size: 0.9rem; color: var(--text-muted); display:flex; gap:6px; align-items:center; }
-.verified-badge { color: #00f2ea; font-size: 0.85rem; }
+.verified-badge {
+    color: #00f2ea;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    vertical-align: middle;
+    line-height: 1;
+    width: 16px;
+    height: 16px;
+}
+
+.verified-badge.with-gap {
+    margin-left: 4px;
+}
+
+.verified-badge svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
 .category-helper { margin: 8px auto 0; font-size: 0.85rem; color: var(--text-muted); display: none; justify-content: center; }
 .category-helper.error { color: #ff3d3d; background: rgba(255, 61, 61, 0.1); border: 1px solid rgba(255, 61, 61, 0.35); padding: 8px 12px; border-radius: 10px; max-width: 720px; width: calc(100% - 24px); }
 .category-helper:not(.error) { background: transparent; border: none; padding: 0; }
