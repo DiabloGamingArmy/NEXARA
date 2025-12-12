@@ -704,14 +704,18 @@
         <div class="trend-box">
             <div class="trend-title time-capsule-header">
                 <span><i class="ph-fill ph-hourglass"></i> Time Capsule</span>
-                <button class="icon-pill" id="otd-refresh-btn" onclick="window.showAnotherTimeCapsuleEvent()" aria-label="Load another event">
-                    <i class="ph ph-arrows-clockwise"></i> New one
-                </button>
             </div>
             <div class="otd-widget">
                 <div class="otd-date" id="otd-date-display">...</div>
                 <div class="otd-event" id="otd-event-display">Loading history...</div>
-                <a id="otd-wiki-link" class="otd-source" style="display:none;">Powered by Wikipedia</a>
+                <div class="otd-actions">
+                    <button class="icon-pill" id="otd-refresh-btn" onclick="window.showAnotherTimeCapsuleEvent()" aria-label="Load another event">
+                        <i class="ph ph-arrows-clockwise"></i> New one
+                    </button>
+                    <a id="otd-wiki-link" class="icon-pill otd-source" style="display:none;" aria-label="Learn more about this event">
+                        <i class="ph ph-book-open"></i> Learn More
+                    </a>
+                </div>
             </div>
         </div>
 

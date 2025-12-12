@@ -525,11 +525,11 @@ const HISTORICAL_EVENTS = {
 };
 
 const timeCapsuleState = {
-    events: [],
+    event: null,
     source: 'fallback',
     dateKey: null,
     dateLabel: '',
-    currentIndex: 0
+    loading: false
 };
 
 const THEMES = {
@@ -724,48 +724,41 @@ async function initializeNexeraApp() {
 
 async function fetchWikipediaEventsForToday() {
     try {
-        const today = new Date();
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const day = String(today.getDate()).padStart(2, '0');
-        const endpoint = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
-        const response = await fetch(endpoint);
+        const now = new Date();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const url = `https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/${month}/${day}`;
+
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load Wikipedia events');
         const data = await response.json();
-        if (!data || !Array.isArray(data.events)) return [];
+        const events = Array.isArray(data.events) ? data.events : [];
+        if (!events.length) return null;
 
-        return data.events.map(function (event) {
-            if (!event || !event.text) return null;
-            const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
-            let url = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
-            if (!url && firstPage && firstPage.titles && firstPage.titles.normalized) {
-                const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
-                url = `https://en.wikipedia.org/wiki/${normalized}`;
-            }
+        const event = events[Math.floor(Math.random() * events.length)];
+        if (!event || !event.text) return null;
 
-            return {
-                year: event.year,
-                text: event.text,
-                url: url || null
-            };
-        }).filter(Boolean);
+        const firstPage = Array.isArray(event.pages) && event.pages.length ? event.pages[0] : null;
+        let wikiUrl = firstPage && firstPage.content_urls && firstPage.content_urls.desktop && firstPage.content_urls.desktop.page;
+        if (!wikiUrl && firstPage && firstPage.titles && firstPage.titles.normalized) {
+            const normalized = encodeURIComponent(firstPage.titles.normalized.replace(/ /g, '_'));
+            wikiUrl = `https://en.wikipedia.org/wiki/${normalized}`;
+        }
+
+        return {
+            year: event.year,
+            text: event.text,
+            url: wikiUrl || null
+        };
     } catch (err) {
         console.warn('Wikipedia events fetch failed', err);
-        return [];
+        return null;
     }
 }
 
-function getFallbackEventsForDate(key) {
+function getFallbackEventForDate(key) {
     const eventText = HISTORICAL_EVENTS[key] || HISTORICAL_EVENTS["DEFAULT"];
-    return eventText ? [{ year: '', text: eventText, url: null }] : [];
-}
-
-function pickRandomIndex(length, excludeIndex) {
-    if (!length || length <= 1) return 0;
-    let candidate = excludeIndex;
-    while (candidate === excludeIndex) {
-        candidate = Math.floor(Math.random() * length);
-    }
-    return candidate;
+    return eventText ? { year: '', text: eventText, url: null } : null;
 }
 
 function renderTimeCapsule() {
@@ -774,14 +767,14 @@ function renderTimeCapsule() {
     const wikiLink = document.getElementById('otd-wiki-link');
     const refreshBtn = document.getElementById('otd-refresh-btn');
 
-    const currentEvent = timeCapsuleState.events[timeCapsuleState.currentIndex] || null;
+    const currentEvent = timeCapsuleState.event;
     const displayText = currentEvent ? `${currentEvent.year ? currentEvent.year + ' – ' : ''}${currentEvent.text}` : HISTORICAL_EVENTS["DEFAULT"];
 
     if (dateEl) dateEl.textContent = timeCapsuleState.dateLabel || '';
     if (eventEl) eventEl.textContent = displayText;
 
     if (refreshBtn) {
-        refreshBtn.disabled = !(timeCapsuleState.events && timeCapsuleState.events.length > 1);
+        refreshBtn.disabled = !!timeCapsuleState.loading;
         refreshBtn.classList.toggle('disabled', refreshBtn.disabled);
     }
 
@@ -801,33 +794,34 @@ function renderTimeCapsule() {
 async function updateTimeCapsule(forceReload = false) {
     const date = new Date();
     const key = `${date.getMonth() + 1}-${date.getDate()}`;
-    const previousKey = timeCapsuleState.dateKey;
-    timeCapsuleState.dateKey = key;
-    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
 
-    if (forceReload || !timeCapsuleState.events.length || timeCapsuleState.source === 'fallback' || previousKey !== key) {
-        const wikiEvents = await fetchWikipediaEventsForToday();
-        if (wikiEvents && wikiEvents.length) {
-            timeCapsuleState.events = wikiEvents;
-            timeCapsuleState.source = 'wikipedia';
-        } else {
-            timeCapsuleState.events = getFallbackEventsForDate(key);
-            timeCapsuleState.source = 'fallback';
-        }
-        timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, -1);
+    if (!forceReload && timeCapsuleState.dateKey === key && timeCapsuleState.event) {
+        renderTimeCapsule();
+        return;
     }
 
+    timeCapsuleState.dateKey = key;
+    timeCapsuleState.dateLabel = date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+    timeCapsuleState.loading = true;
+    renderTimeCapsule();
+
+    const wikiEvent = await fetchWikipediaEventsForToday();
+    if (wikiEvent) {
+        timeCapsuleState.event = wikiEvent;
+        timeCapsuleState.source = 'wikipedia';
+    } else {
+        timeCapsuleState.event = getFallbackEventForDate(key);
+        timeCapsuleState.source = 'fallback';
+    }
+
+    timeCapsuleState.loading = false;
     renderTimeCapsule();
 }
 
 function showAnotherTimeCapsuleEvent() {
-    if (!timeCapsuleState.events || !timeCapsuleState.events.length) {
-        updateTimeCapsule(true);
-        return;
-    }
-    timeCapsuleState.currentIndex = pickRandomIndex(timeCapsuleState.events.length, timeCapsuleState.currentIndex);
-    renderTimeCapsule();
+    updateTimeCapsule(true);
 }
+
 window.showAnotherTimeCapsuleEvent = showAnotherTimeCapsuleEvent;
 
 function getSystemTheme() {
