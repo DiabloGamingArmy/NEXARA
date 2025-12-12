@@ -5163,44 +5163,59 @@ async function ensureConversation(convoId, participantId) {
         conversationDetailsCache[convoId] = { id: convoId, ...existingSnap.data() };
     }
 
-    await Promise.all(participants.map(async function (uid) {
-        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
-        const mappingRef = doc(db, `users/${uid}/conversations/${convoId}`);
+    const participantMeta = participants.reduce(function (acc, uid) {
+        acc[uid] = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
+        return acc;
+    }, {});
 
-        let existingMapExists = false;
-        if (uid === currentUser.uid) {
+    const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${convoId}`);
+    let existingMapExists = false;
+    try {
+        const existingMapSnap = await getDoc(mappingRef);
+        existingMapExists = existingMapSnap.exists();
+    } catch (e) {
+        // We must be able to read our own mapping; fail fast if not.
+        throw e;
+    }
+
+    const currentPayload = {
+        conversationId: convoId,
+        otherParticipantIds: participantMeta[currentUser.uid].otherIds,
+        otherParticipantUsernames: participantMeta[currentUser.uid].usernames,
+        otherParticipantAvatars: participantMeta[currentUser.uid].avatars,
+    };
+
+    if (!existingMapExists) {
+        currentPayload.muted = false;
+        currentPayload.pinned = false;
+        currentPayload.archived = false;
+        currentPayload.lastMessagePreview = '';
+        currentPayload.lastMessageAt = serverTimestamp();
+        currentPayload.unreadCount = 0;
+    }
+
+    await setDoc(mappingRef, currentPayload, { merge: true });
+
+    const otherParticipants = participants.filter(function (uid) { return uid !== currentUser.uid; });
+    const writeTasks = otherParticipants.map(function (uid) {
+        return (async function () {
+            const meta = participantMeta[uid];
+            const otherRef = doc(db, `users/${uid}/conversations/${convoId}`);
+            const payload = {
+                conversationId: convoId,
+                otherParticipantIds: meta.otherIds,
+                otherParticipantUsernames: meta.usernames,
+                otherParticipantAvatars: meta.avatars,
+            };
             try {
-                const existingMapSnap = await getDoc(mappingRef);
-                existingMapExists = existingMapSnap.exists();
+                await setDoc(otherRef, payload, { merge: true });
             } catch (e) {
-                // We must be able to read our own mapping; fail fast if not.
-                throw e;
+                console.warn('Skipping mapping write for participant', uid, e?.message || e);
             }
-        }
+        })();
+    });
 
-        const payload = {
-            conversationId: convoId,
-            otherParticipantIds: meta.otherIds,
-            otherParticipantUsernames: meta.usernames,
-            otherParticipantAvatars: meta.avatars,
-        };
-
-        if (uid === currentUser.uid && !existingMapExists) {
-            payload.muted = false;
-            payload.pinned = false;
-            payload.archived = false;
-            payload.lastMessagePreview = '';
-            payload.lastMessageAt = serverTimestamp();
-            payload.unreadCount = 0;
-        }
-
-        try {
-            await setDoc(mappingRef, payload, { merge: true });
-        } catch (e) {
-            if (uid === currentUser.uid) throw e;
-            console.warn('Skipping mapping write for participant', uid, e?.message || e);
-        }
-    }));
+    await Promise.allSettled(writeTasks);
 
     return conversationDetailsCache[convoId];
 }
@@ -6130,28 +6145,46 @@ async function createGroupConversation(participantIds = [], title = null) {
     await setDoc(convoRef, payload, { merge: true });
     conversationDetailsCache[convoRef.id] = { id: convoRef.id, ...payload };
 
-    await Promise.all(participants.map(async function (uid) {
-        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoRef.id]);
-        const mappingRef = doc(db, `users/${uid}/conversations/${convoRef.id}`);
-        const mappingPayload = {
-            conversationId: convoRef.id,
-            otherParticipantIds: meta.otherIds,
-            otherParticipantUsernames: meta.usernames,
-            otherParticipantAvatars: meta.avatars,
-            muted: false,
-            pinned: false,
-            archived: false,
-            lastMessagePreview: '',
-            lastMessageAt: payload.lastMessageAt,
-            unreadCount: 0
-        };
-        try {
-            await setDoc(mappingRef, mappingPayload, { merge: true });
-        } catch (e) {
-            if (uid === currentUser.uid) throw e;
-            console.warn('Skipping participant mapping write', uid, e?.message || e);
-        }
-    }));
+    const participantMeta = participants.reduce(function (acc, uid) {
+        acc[uid] = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoRef.id]);
+        return acc;
+    }, {});
+
+    const currentRef = doc(db, `users/${currentUser.uid}/conversations/${convoRef.id}`);
+    const currentPayload = {
+        conversationId: convoRef.id,
+        otherParticipantIds: participantMeta[currentUser.uid].otherIds,
+        otherParticipantUsernames: participantMeta[currentUser.uid].usernames,
+        otherParticipantAvatars: participantMeta[currentUser.uid].avatars,
+        muted: false,
+        pinned: false,
+        archived: false,
+        lastMessagePreview: '',
+        lastMessageAt: payload.lastMessageAt,
+        unreadCount: 0
+    };
+    await setDoc(currentRef, currentPayload, { merge: true });
+
+    const otherParticipants = participants.filter(function (uid) { return uid !== currentUser.uid; });
+    const otherTasks = otherParticipants.map(function (uid) {
+        return (async function () {
+            const meta = participantMeta[uid];
+            const mappingRef = doc(db, `users/${uid}/conversations/${convoRef.id}`);
+            const mappingPayload = {
+                conversationId: convoRef.id,
+                otherParticipantIds: meta.otherIds,
+                otherParticipantUsernames: meta.usernames,
+                otherParticipantAvatars: meta.avatars,
+            };
+            try {
+                await setDoc(mappingRef, mappingPayload, { merge: true });
+            } catch (e) {
+                console.warn('Skipping participant mapping write', uid, e?.message || e);
+            }
+        })();
+    });
+
+    await Promise.allSettled(otherTasks);
 
     return conversationDetailsCache[convoRef.id];
 }
