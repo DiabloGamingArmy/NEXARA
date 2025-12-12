@@ -3,6 +3,7 @@
 
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { updateDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // --------------------------------------------------
 // Load IVS Web Broadcast SDK
@@ -155,6 +156,16 @@ export class NexeraGoLiveController {
 
         await this.client.startBroadcast(this.session.streamKey, this.session.channelArn);
 
+        await updateDoc(
+  doc(this.db, "liveStreams", this.session.sessionId),
+  {
+    isLive: true,
+    startedAt: serverTimestamp(),
+    endedAt: null
+  }
+);
+
+
         this.state = "live";
         document.getElementById("end-stream").disabled = false;
     }
@@ -200,6 +211,15 @@ export class NexeraGoLiveController {
             this.unsubscribeLiveDoc();
             this.unsubscribeLiveDoc = null;
         }
+
+        await updateDoc(
+  doc(this.db, "liveStreams", this.session.sessionId),
+  {
+    isLive: false,
+    endedAt: serverTimestamp()
+  }
+);
+
 
         this.state = "idle";
         document.getElementById("end-stream").disabled = true;
