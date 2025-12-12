@@ -613,6 +613,60 @@
             </div>
         </div>
 
+        <div id="view-conversation-settings" class="view-section" style="display:none;">
+            <div class="messages-settings-shell">
+                <div class="messages-settings-header">
+                    <button class="icon-pill" onclick="window.backToConversationFromSettings()"><i class="ph ph-arrow-left"></i> Back</button>
+                    <div class="messages-settings-meta">
+                        <div id="conversation-settings-avatar"></div>
+                        <div>
+                            <div id="conversation-settings-title" style="font-weight:800;">Conversation Settings</div>
+                            <div id="conversation-settings-subtitle" style="color:var(--text-muted); font-size:0.9rem;">Update participants, name, and preferences</div>
+                        </div>
+                    </div>
+                    <button class="icon-pill" onclick="window.refreshConversationSettings()"><i class="ph ph-arrow-clockwise"></i></button>
+                </div>
+
+                <div class="messages-settings-grid">
+                    <div class="messages-settings-card">
+                        <div class="panel-title">Participants</div>
+                        <div id="conversation-participant-list"></div>
+                        <div class="input-group">
+                            <label class="settings-label" for="conversation-add-search">Add participants</label>
+                            <input id="conversation-add-search" class="form-input" placeholder="Search by username" oninput="window.searchConversationParticipants(this.value)">
+                        </div>
+                        <div id="conversation-add-results" style="max-height:200px; overflow:auto;"></div>
+                    </div>
+
+                    <div class="messages-settings-card">
+                        <div class="panel-title">Conversation details</div>
+                        <label class="settings-label" for="conversation-name-input">Name</label>
+                        <input id="conversation-name-input" class="form-input" placeholder="Conversation name">
+                        <button class="create-btn-sidebar" style="width:auto;" onclick="window.saveConversationName()">Save name</button>
+                        <div class="input-group" style="margin-top:10px;">
+                            <label class="settings-label" for="conversation-avatar-input">Conversation image</label>
+                            <input id="conversation-avatar-input" type="file" accept="image/*" class="form-input">
+                        </div>
+                        <button class="icon-pill" onclick="window.uploadConversationAvatar()"><i class="ph ph-upload"></i> Upload image</button>
+                        <div class="settings-chip-row" id="conversation-preferences-row">
+                            <button class="icon-pill" id="conversation-mute-btn" onclick="window.toggleConversationMute()"><i class="ph ph-bell-slash"></i> Mute chat</button>
+                            <button class="icon-pill" id="conversation-pin-btn" onclick="window.toggleConversationPin()"><i class="ph ph-push-pin"></i> Pin</button>
+                            <button class="icon-pill" id="conversation-archive-btn" onclick="window.toggleConversationArchive()"><i class="ph ph-archive"></i> Archive</button>
+                        </div>
+                    </div>
+
+                    <div class="messages-settings-card">
+                        <div class="panel-title">Controls</div>
+                        <div style="display:flex; flex-direction:column; gap:8px;">
+                            <button class="icon-pill" onclick="window.blockConversationPartner()"><i class="ph ph-user-x"></i> Block user</button>
+                            <button class="icon-pill" onclick="window.reportConversation()"><i class="ph ph-flag"></i> Report conversation</button>
+                            <button class="icon-pill" onclick="window.leaveConversation()"><i class="ph ph-door"></i> Leave chat</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="view-staff" class="view-section" style="display:none;">
             <div style="padding:1rem;">
                 <h2 style="font-weight:800; font-size:1.5rem; display:flex; align-items:center; gap:8px;">
@@ -648,10 +702,16 @@
         </div>
 
         <div class="trend-box">
-            <div class="trend-title"><i class="ph-fill ph-hourglass"></i> Time Capsule</div>
+            <div class="trend-title time-capsule-header">
+                <span><i class="ph-fill ph-hourglass"></i> Time Capsule</span>
+                <button class="icon-pill" id="otd-refresh-btn" onclick="window.showAnotherTimeCapsuleEvent()" aria-label="Load another event">
+                    <i class="ph ph-arrows-clockwise"></i> New one
+                </button>
+            </div>
             <div class="otd-widget">
                 <div class="otd-date" id="otd-date-display">...</div>
                 <div class="otd-event" id="otd-event-display">Loading history...</div>
+                <a id="otd-wiki-link" class="otd-source" style="display:none;">Powered by Wikipedia</a>
             </div>
         </div>
 

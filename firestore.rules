@@ -177,7 +177,8 @@ service cloud.firestore {
 
       allow update: if isSignedIn()
         && request.auth.uid in resource.data.participants
-        && request.resource.data.participants == resource.data.participants;
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 2;
 
       allow delete: if isSignedIn() && request.auth.uid in resource.data.participants;
 
@@ -189,7 +190,11 @@ service cloud.firestore {
         allow read: if isSignedIn()
           && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
 
-        allow update, delete: if isSignedIn() && request.auth.uid == resource.data.senderId;
+        allow update: if isSignedIn() && request.auth.uid == resource.data.senderId;
+
+        allow delete: if isSignedIn()
+          && (request.auth.uid == resource.data.senderId
+              || request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants);
       }
     }
 
@@ -202,7 +207,7 @@ service cloud.firestore {
 
       allow read: if isSignedIn() && (request.auth.uid == userId);
 
-      allow write: if isSignedIn()
+      allow create, update, delete: if isSignedIn()
         && (request.auth.uid == userId
             || (request.auth.uid in convoParticipants() && userId in convoParticipants()));
     }
