@@ -362,8 +362,6 @@ let conversationsCache = [];
 let activeMessageUpload = null;
 let conversationMappings = [];
 let conversationDetailsCache = {};
-let newChatSelections = [];
-let chatSearchResults = [];
 let videosUnsubscribe = null;
 let videosCache = [];
 let videoObserver = null;
@@ -4669,178 +4667,27 @@ window.markConversationAsRead = async function (conversationId = activeConversat
     }
 };
 
-function updateChatStartControls() {
-    const startBtn = document.getElementById('start-chat-btn');
-    const groupNameRow = document.getElementById('chat-group-name-row');
-    if (startBtn) {
-        startBtn.disabled = newChatSelections.length === 0;
-        startBtn.textContent = newChatSelections.length > 1 ? 'Create group chat' : 'Start chat';
-    }
-    if (groupNameRow) {
-        groupNameRow.style.display = newChatSelections.length > 1 ? 'block' : 'none';
-        if (newChatSelections.length <= 1) {
-            const nameInput = document.getElementById('chat-group-name');
-            if (nameInput) nameInput.value = '';
-        }
-    }
-}
-
-function renderSelectedUsers() {
-    const listEl = document.getElementById('selected-chat-users');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    if (newChatSelections.length === 0) {
-        listEl.innerHTML = '<div class="empty-state" style="padding:8px 0;">Select users to start a conversation.</div>';
-        updateChatStartControls();
-        return;
-    }
-
-    newChatSelections.forEach(function (user) {
-        const row = document.createElement('div');
-        row.className = 'conversation-item';
-        row.style.alignItems = 'center';
-        const avatar = renderAvatar({ uid: user.id, username: user.username || user.displayName || 'user', photoURL: user.photoURL || '' }, { size: 32 });
-        row.innerHTML = `<div style="display:flex; align-items:center; gap:8px;">${avatar}<div><div style="font-weight:700;">${escapeHtml(user.displayName || user.name || user.username || 'User')}</div><div style="color:var(--text-muted); font-size:0.85rem;">@${escapeHtml(user.username || 'user')}</div></div></div><button class="icon-pill" style="padding:6px 10px;" onclick="window.removeSelectedChatUser('${user.id}')"><i class="ph ph-x"></i></button>`;
-        listEl.appendChild(row);
-    });
-    updateChatStartControls();
-}
-
-function renderChatSearchResults(users = []) {
-    const resultsEl = document.getElementById('chat-search-results');
-    if (!resultsEl) return;
-    resultsEl.innerHTML = '';
-    users.forEach(function (user) {
-        const row = document.createElement('div');
-        row.className = 'conversation-item' + (newChatSelections.some(function (u) { return u.id === user.id; }) ? ' active' : '');
-        row.innerHTML = `<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || user.name || 'Nexera User')}</div></div>`;
-        row.onclick = function () { window.toggleChatUserSelection(user.id); };
-        resultsEl.appendChild(row);
-    });
-}
-
-window.removeSelectedChatUser = function (userId) {
-    newChatSelections = newChatSelections.filter(function (u) { return u.id !== userId; });
-    renderSelectedUsers();
-    renderChatSearchResults(chatSearchResults);
-};
-
-window.toggleChatUserSelection = function (userId) {
-    const existing = newChatSelections.find(function (u) { return u.id === userId; });
-    if (existing) {
-        window.removeSelectedChatUser(userId);
-        return;
-    }
-    const found = chatSearchResults.find(function (u) { return u.id === userId; });
-    if (found) {
-        newChatSelections.push(found);
-        renderSelectedUsers();
-        renderChatSearchResults(chatSearchResults);
-    }
-};
-
-function resetNewChatModalState() {
-    newChatSelections = [];
-    chatSearchResults = [];
-    const searchInput = document.getElementById('chat-search');
-    if (searchInput) searchInput.value = '';
-    const resultsEl = document.getElementById('chat-search-results');
-    if (resultsEl) resultsEl.innerHTML = '';
-    renderSelectedUsers();
-    updateChatStartControls();
-}
-
 window.toggleNewChatModal = function (show = true) {
     const modal = document.getElementById('new-chat-modal');
-    if (show) resetNewChatModalState();
     if (modal) modal.style.display = show ? 'flex' : 'none';
 };
-window.openNewChatModal = function () { if (!requireAuth()) return; return window.toggleNewChatModal(true); };
+window.openNewChatModal = function () { return window.toggleNewChatModal(true); };
 
 window.searchChatUsers = async function (term = '') {
     const resultsEl = document.getElementById('chat-search-results');
     if (!resultsEl) return;
+    resultsEl.innerHTML = '';
     const cleaned = term.trim().toLowerCase();
-    if (cleaned.length < 2) {
-        chatSearchResults = [];
-        renderChatSearchResults(chatSearchResults);
-        return;
-    }
+    if (cleaned.length < 2) return;
     const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
-    const deduped = new Map();
     qSnap.forEach(function (docSnap) {
         const data = docSnap.data();
-        if (docSnap.id === currentUser?.uid) return;
-        deduped.set(docSnap.id, { id: docSnap.id, username: data.username, displayName: data.displayName || data.name, photoURL: data.photoURL || data.avatar || '' });
+        const row = document.createElement('div');
+        row.className = 'conversation-item';
+        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexera User'}</div></div>`;
+        row.onclick = function () { window.openOrStartDirectConversationWithUser(docSnap.id); toggleNewChatModal(false); };
+        resultsEl.appendChild(row);
     });
-    chatSearchResults = Array.from(deduped.values());
-    renderChatSearchResults(chatSearchResults);
-};
-
-async function createGroupConversation(participantIds = [], title = null) {
-    if (!requireAuth()) return null;
-    const participants = Array.from(new Set(participantIds.concat([currentUser.uid]))).sort();
-    const profiles = await Promise.all(participants.map(resolveUserProfile));
-    const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
-    const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
-
-    const convoRef = doc(collection(db, 'conversations'));
-    const payload = {
-        participants,
-        participantUsernames,
-        participantAvatars,
-        type: participants.length > 2 ? 'group' : 'direct',
-        title: participants.length > 2 ? (title || null) : null,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        lastMessagePreview: '',
-        lastMessageSenderId: '',
-        lastMessageAt: serverTimestamp(),
-        unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
-        mutedBy: [],
-        pinnedBy: []
-    };
-
-    await setDoc(convoRef, payload, { merge: true });
-    conversationDetailsCache[convoRef.id] = { id: convoRef.id, ...payload };
-
-    await Promise.all(participants.map(async function (uid) {
-        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoRef.id]);
-        const mappingRef = doc(db, `users/${uid}/conversations/${convoRef.id}`);
-        const mappingPayload = {
-            conversationId: convoRef.id,
-            otherParticipantIds: meta.otherIds,
-            otherParticipantUsernames: meta.usernames,
-            otherParticipantAvatars: meta.avatars,
-            muted: false,
-            pinned: false,
-            lastMessagePreview: '',
-            lastMessageAt: payload.lastMessageAt,
-            unreadCount: 0
-        };
-        await setDoc(mappingRef, mappingPayload, { merge: true });
-    }));
-
-    return conversationDetailsCache[convoRef.id];
-}
-
-window.startChatFromSelection = async function () {
-    if (!requireAuth() || newChatSelections.length === 0) return;
-    const participantIds = newChatSelections.map(function (u) { return u.id; });
-    toggleNewChatModal(false);
-
-    if (participantIds.length === 1) {
-        await window.openOrStartDirectConversationWithUser(participantIds[0]);
-        return;
-    }
-
-    const nameInput = document.getElementById('chat-group-name');
-    const title = (nameInput?.value || '').trim();
-    const convo = await createGroupConversation(participantIds, title || null);
-    if (convo) {
-        await window.openMessagesPage();
-        await openConversation(convo.id);
-    }
 };
 
 window.openOrStartDirectConversationWithUser = async function (targetUserId, options = {}) {
