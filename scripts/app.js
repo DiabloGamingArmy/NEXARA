@@ -4861,8 +4861,10 @@ function renderConversationList() {
         .sort(function (a, b) {
             if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
             if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-            const aTs = a.lastMessageAt?.toMillis ? a.lastMessageAt.toMillis() : 0;
-            const bTs = b.lastMessageAt?.toMillis ? b.lastMessageAt.toMillis() : 0;
+            const aTsSource = a.lastMessageAt || a.createdAt;
+            const bTsSource = b.lastMessageAt || b.createdAt;
+            const aTs = aTsSource?.toMillis ? aTsSource.toMillis() : aTsSource?.seconds ? aTsSource.seconds * 1000 : 0;
+            const bTs = bTsSource?.toMillis ? bTsSource.toMillis() : bTsSource?.seconds ? bTsSource.seconds * 1000 : 0;
             return bTs - aTs;
         });
 
@@ -4887,7 +4889,7 @@ function renderConversationList() {
             uid: otherId || 'user',
             username: name,
             photoURL: avatarUrl,
-            avatarColor: computeAvatarColor(name)
+            avatarColor: otherProfile?.avatarColor || computeAvatarColor(otherProfile?.username || name)
         }, { size: 42 });
 
         const item = document.createElement('div');
@@ -4906,7 +4908,7 @@ function renderConversationList() {
                     ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
                </div>`
             : '';
-        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start');
+        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
         const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
         item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
             <div class="conversation-body">
@@ -5080,6 +5082,23 @@ function renderTypingIndicator(convo = {}) {
     indicator.style.display = 'flex';
 }
 
+function renderConversationUnavailable(message = 'You no longer have access to this conversation.') {
+    const header = document.getElementById('message-header');
+    const body = document.getElementById('message-thread');
+    if (header) header.textContent = message;
+    if (body) body.innerHTML = `<div class="empty-state" style="padding:16px;">${escapeHtml(message)}</div>`;
+}
+
+function handleConversationAccessLoss(conversationId, message = 'You no longer have access to this conversation.') {
+    if (messagesUnsubscribe) { messagesUnsubscribe(); messagesUnsubscribe = null; }
+    if (conversationDetailsUnsubscribe) { conversationDetailsUnsubscribe(); conversationDetailsUnsubscribe = null; }
+    if (typingUnsubscribe) { typingUnsubscribe(); typingUnsubscribe = null; }
+    if (activeConversationId === conversationId) {
+        activeConversationId = null;
+    }
+    renderConversationUnavailable(message);
+}
+
 async function setTypingState(conversationId, isTyping) {
     if (!conversationId || !currentUser) return;
     if (typingStateByConversation[conversationId] === isTyping) return;
@@ -5105,12 +5124,16 @@ function listenToConversationDetails(convoId) {
     if (conversationDetailsUnsubscribe) conversationDetailsUnsubscribe();
     const convoRef = doc(db, 'conversations', convoId);
     conversationDetailsUnsubscribe = ListenerRegistry.register(`conversation:details:${convoId}`, onSnapshot(convoRef, function (snap) {
-        if (!snap.exists()) return;
+        if (!snap.exists()) { handleConversationAccessLoss(convoId); return; }
         const data = { id: convoId, ...snap.data() };
+        if (!(data.participants || []).includes(currentUser?.uid)) { handleConversationAccessLoss(convoId); return; }
         conversationDetailsCache[convoId] = data;
         renderMessageHeader(data);
         renderMessages(messageThreadCache[convoId] || [], data);
         renderTypingIndicator(data);
+    }, function (err) {
+        console.warn('Conversation details listener error', err?.message || err);
+        handleConversationAccessLoss(convoId);
     }));
 }
 
@@ -5163,11 +5186,6 @@ async function ensureConversation(convoId, participantId) {
         conversationDetailsCache[convoId] = { id: convoId, ...existingSnap.data() };
     }
 
-    const participantMeta = participants.reduce(function (acc, uid) {
-        acc[uid] = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
-        return acc;
-    }, {});
-
     const mappingRef = doc(db, `users/${currentUser.uid}/conversations/${convoId}`);
     let existingMapExists = false;
     try {
@@ -5178,11 +5196,18 @@ async function ensureConversation(convoId, participantId) {
         throw e;
     }
 
+    const participantMeta = participants.reduce(function (acc, uid) {
+        acc[uid] = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
+        return acc;
+    }, {});
+
     const currentPayload = {
         conversationId: convoId,
         otherParticipantIds: participantMeta[currentUser.uid].otherIds,
         otherParticipantUsernames: participantMeta[currentUser.uid].usernames,
         otherParticipantAvatars: participantMeta[currentUser.uid].avatars,
+        participants,
+        createdAt: serverTimestamp()
     };
 
     if (!existingMapExists) {
@@ -5196,36 +5221,37 @@ async function ensureConversation(convoId, participantId) {
 
     await setDoc(mappingRef, currentPayload, { merge: true });
 
-    const otherParticipants = participants.filter(function (uid) { return uid !== currentUser.uid; });
-    const writeTasks = otherParticipants.map(function (uid) {
-        return (async function () {
-            const meta = participantMeta[uid];
-            const otherRef = doc(db, `users/${uid}/conversations/${convoId}`);
-            const payload = {
-                conversationId: convoId,
-                otherParticipantIds: meta.otherIds,
-                otherParticipantUsernames: meta.usernames,
-                otherParticipantAvatars: meta.avatars,
-            };
-            try {
-                await setDoc(otherRef, payload, { merge: true });
-            } catch (e) {
-                console.warn('Skipping mapping write for participant', uid, e?.message || e);
-            }
-        })();
-    });
-
-    await Promise.allSettled(writeTasks);
+    const optimistic = {
+        id: convoId,
+        ...currentPayload,
+        lastMessageAt: currentPayload.lastMessageAt || Timestamp.now(),
+        createdAt: currentPayload.createdAt || Timestamp.now(),
+        archived: currentPayload.archived,
+        muted: currentPayload.muted,
+        pinned: currentPayload.pinned,
+        unreadCount: currentPayload.unreadCount
+    };
+    if (!conversationMappings.find(function (m) { return m.id === convoId; })) {
+        conversationMappings.push(optimistic);
+    } else {
+        updateConversationMappingState(convoId, optimistic);
+    }
+    renderConversationList();
 
     return conversationDetailsCache[convoId];
 }
 
 async function fetchConversation(conversationId) {
     if (conversationDetailsCache[conversationId]) return conversationDetailsCache[conversationId];
-    const snap = await getDoc(doc(db, 'conversations', conversationId));
-    if (snap.exists()) {
-        conversationDetailsCache[conversationId] = { id: conversationId, ...snap.data() };
-        return conversationDetailsCache[conversationId];
+    try {
+        const snap = await getDoc(doc(db, 'conversations', conversationId));
+        if (snap.exists()) {
+            conversationDetailsCache[conversationId] = { id: conversationId, ...snap.data() };
+            return conversationDetailsCache[conversationId];
+        }
+    } catch (e) {
+        console.warn('Unable to fetch conversation', conversationId, e?.message || e);
+        throw e;
     }
     return null;
 }
@@ -5241,6 +5267,9 @@ async function listenToMessages(convoId) {
         renderTypingIndicator(details);
         markMessagesDelivered(convoId, msgs);
         markConversationAsRead(convoId);
+    }, function (err) {
+        console.warn('Messages listener error', err?.message || err);
+        handleConversationAccessLoss(convoId);
     }));
 }
 
@@ -5255,11 +5284,21 @@ async function openConversation(conversationId) {
     const header = document.getElementById('message-header');
     if (header) header.textContent = 'Loading conversation...';
 
-    const convo = await fetchConversation(conversationId);
-    if (convo) {
-        renderMessageHeader(convo);
-        renderTypingIndicator(convo);
+    let convo = null;
+    try {
+        convo = await fetchConversation(conversationId);
+    } catch (e) {
+        handleConversationAccessLoss(conversationId, 'Unable to open this conversation.');
+        return;
     }
+
+    if (!convo || !(convo.participants || []).includes(currentUser.uid)) {
+        handleConversationAccessLoss(conversationId, 'You no longer have access to this conversation.');
+        return;
+    }
+
+    renderMessageHeader(convo);
+    renderTypingIndicator(convo);
     listenToConversationDetails(conversationId);
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
@@ -5270,12 +5309,35 @@ async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
     if (conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
-    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function (snap) {
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
         conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+
+        const missingDetails = conversationMappings
+            .map(function (m) { return m.id; })
+            .filter(function (id) { return !conversationDetailsCache[id]; });
+
+        await Promise.all(missingDetails.map(async function (id) {
+            try { await fetchConversation(id); } catch (e) { console.warn('Unable to prefetch conversation', id, e?.message || e); }
+        }));
+
+        const userIds = new Set();
+        conversationMappings.forEach(function (mapping) {
+            const details = conversationDetailsCache[mapping.id] || {};
+            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) { if (!userCache[uid]) userIds.add(uid); });
+        });
+        await Promise.all(Array.from(userIds).map(function (uid) { return resolveUserProfile(uid).catch(function () {}); }));
+
         renderConversationList();
+
+        if (activeConversationId && !conversationMappings.some(function (m) { return m.id === activeConversationId; })) {
+            handleConversationAccessLoss(activeConversationId, 'You no longer have access to this conversation.');
+        }
+
         if (autoOpen && !activeConversationId && conversationMappings.length > 0) {
             openConversation(conversationMappings[0].id);
         }
+    }, function (err) {
+        console.warn('Conversation list listener error', err?.message || err);
     }));
 }
 
@@ -6161,30 +6223,20 @@ async function createGroupConversation(participantIds = [], title = null) {
         archived: false,
         lastMessagePreview: '',
         lastMessageAt: payload.lastMessageAt,
+        createdAt: payload.createdAt,
+        participants,
         unreadCount: 0
     };
     await setDoc(currentRef, currentPayload, { merge: true });
 
-    const otherParticipants = participants.filter(function (uid) { return uid !== currentUser.uid; });
-    const otherTasks = otherParticipants.map(function (uid) {
-        return (async function () {
-            const meta = participantMeta[uid];
-            const mappingRef = doc(db, `users/${uid}/conversations/${convoRef.id}`);
-            const mappingPayload = {
-                conversationId: convoRef.id,
-                otherParticipantIds: meta.otherIds,
-                otherParticipantUsernames: meta.usernames,
-                otherParticipantAvatars: meta.avatars,
-            };
-            try {
-                await setDoc(mappingRef, mappingPayload, { merge: true });
-            } catch (e) {
-                console.warn('Skipping participant mapping write', uid, e?.message || e);
-            }
-        })();
-    });
-
-    await Promise.allSettled(otherTasks);
+    const optimistic = {
+        id: convoRef.id,
+        ...currentPayload,
+        lastMessageAt: currentPayload.lastMessageAt || Timestamp.now(),
+        createdAt: currentPayload.createdAt || Timestamp.now()
+    };
+    conversationMappings.push(optimistic);
+    renderConversationList();
 
     return conversationDetailsCache[convoRef.id];
 }
