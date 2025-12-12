@@ -618,8 +618,17 @@
                 </div>
                 <div class="messages-thread">
                     <div id="message-header" class="message-thread-header">Select a conversation</div>
+                    <div class="message-header-tools">
+                        <input id="conversation-search" class="form-input" placeholder="Search in conversation" oninput="window.handleConversationSearch(this.value)">
+                        <div class="search-nav">
+                            <button class="icon-pill" onclick="window.navigateConversationSearch(-1)"><i class="ph ph-caret-up"></i></button>
+                            <button class="icon-pill" onclick="window.navigateConversationSearch(1)"><i class="ph ph-caret-down"></i></button>
+                        </div>
+                    </div>
                     <div id="message-thread" class="message-thread-body"></div>
+                    <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
                     <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                    <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
                     <div class="message-compose">
                         <input type="file" id="message-media" accept="image/*" style="display:none;">
                         <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i class="ph ph-image"></i></button>
