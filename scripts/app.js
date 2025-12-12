@@ -360,6 +360,10 @@ let messagesUnsubscribe = null;
 let activeConversationId = null;
 let conversationsCache = [];
 let activeMessageUpload = null;
+let conversationMappings = [];
+let conversationDetailsCache = {};
+let newChatSelections = [];
+let chatSearchResults = [];
 let videosUnsubscribe = null;
 let videosCache = [];
 let videoObserver = null;
@@ -1891,6 +1895,7 @@ function getPostHTML(post) {
                     <button id="post-like-btn-${post.id}" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}</button>
                     <button id="post-dislike-btn-${post.id}" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}</button>
                     <button class="action-btn" onclick="window.openThread('${post.id}')"><i class="ph ph-chat-circle" style="font-size:1.1rem;"></i> Discuss</button>
+                    <button class="action-btn" onclick="event.stopPropagation(); window.messageAuthor('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:1.1rem;"></i> Message author</button>
                     <button id="post-save-btn-${post.id}" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}</button>
                     <button class="action-btn review-action ${reviewDisplay.className}" data-post-id="${post.id}" data-icon-size="1.1rem" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:1.1rem;"></i> ${reviewDisplay.label}</button>
                 </div>
@@ -3931,7 +3936,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             </div>
             <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
                 ${followCta}
-                ${isSelfView ? '' : '<button class="create-btn-sidebar" style="width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);">Message</button>'}
+                ${isSelfView ? '' : `<button class=\"create-btn-sidebar\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);\" onclick=\"window.openOrStartDirectConversationWithUser('${uid}')\">Message</button>`}
             </div>
         </div>
         <div style="padding: 1rem; border-bottom: 1px solid var(--border);">
@@ -3994,6 +3999,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
                     <div class="card-actions">
                         <button class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><span>${isLiked ? '👍' : '👍'}</span> ${post.likes || 0}</button>
                         <button class="action-btn" onclick="window.openThread('${post.id}')"><span>💬</span> Discuss</button>
+                        <button class="action-btn" onclick="event.stopPropagation(); window.messageAuthor('${post.id}', event)"><span>📨</span> Message author</button>
                         <button class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><span>${isSaved ? '🔖' : '🔖'}</span> ${isSaved ? 'Saved' : 'Save'}</button>
                     </div>
                 </div>`;
@@ -4320,178 +4326,561 @@ window.beginEditPost = function() {
 };
 
 // --- Messaging (DMs) ---
-window.toggleNewChatModal = function(show = true) {
-    const modal = document.getElementById('new-chat-modal');
-    if(modal) modal.style.display = show ? 'flex' : 'none';
-};
-window.openNewChatModal = function() { return window.toggleNewChatModal(true); };
-
-window.searchChatUsers = async function(term = '') {
-    const resultsEl = document.getElementById('chat-search-results');
-    if(!resultsEl) return;
-    resultsEl.innerHTML = '';
-    const cleaned = term.trim().toLowerCase();
-    if(cleaned.length < 2) return;
-    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
-    qSnap.forEach(function(docSnap) {
-        const data = docSnap.data();
-        const row = document.createElement('div');
-        row.className = 'conversation-item';
-        row.innerHTML = `<div><strong>@${data.username || 'user'}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${data.displayName || data.name || 'Nexera User'}</div></div>`;
-        row.onclick = function() { return createConversationWithUser(docSnap.id, data); };
-        resultsEl.appendChild(row);
-    });
-};
-
-async function createConversationWithUser(targetUid, targetData = {}) {
-    if(!requireAuth()) return;
-    try {
-        const sortedMembers = [currentUser.uid, targetUid].sort();
-        const existing = conversationsCache.find(function(c) {
-            const members = c.members || [];
-            return members.length === 2 && sortedMembers.every(function(id) { return members.includes(id); });
-        });
-        if(existing) {
-            setActiveConversation(existing.id, existing);
-            toggleNewChatModal(false);
-            return;
-        }
-
-        const convoId = `${sortedMembers[0]}_${sortedMembers[1]}`;
-        const convoRef = doc(db, 'conversations', convoId);
-        const existingSnap = await getDoc(convoRef);
-        if(existingSnap.exists()) {
-            const data = existingSnap.data();
-            conversationsCache.push({ id: convoId, ...data });
-            toggleNewChatModal(false);
-            setActiveConversation(convoId, data);
-            return;
-        }
-
-        const payload = {
-            members: sortedMembers,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            lastMessageText: '',
-            lastMessageAt: serverTimestamp(),
-            requestState: { [currentUser.uid]: 'inbox', [targetUid]: 'requested' }
-        };
-
-        await setDoc(convoRef, payload, { merge: true });
-        conversationsCache.push({ id: convoId, ...payload });
-        toggleNewChatModal(false);
-        setActiveConversation(convoId, payload);
-    } catch(err) {
-        console.error('Conversation create error', err);
-        toast('Unable to start chat. Please try again.', 'error');
-    }
+function getDirectConversationId(a, b) {
+    return [a, b].sort().join('_');
 }
 
-function initConversations() {
-    if(!requireAuth()) return;
-    if(conversationsUnsubscribe) conversationsUnsubscribe();
-    const convRef = query(collection(db, 'conversations'), where('members', 'array-contains', currentUser.uid), orderBy('updatedAt', 'desc'));
-    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function(snap) {
-        conversationsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        renderConversationList();
-    }));
+function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
+    const otherIds = participants.filter(function (uid) { return uid !== viewerId; });
+    const usernames = otherIds.map(function (uid) {
+        const idx = participants.indexOf(uid);
+        return (details.participantUsernames || [])[idx] || userCache[uid]?.username || 'user';
+    });
+    const avatars = otherIds.map(function (uid) {
+        const idx = participants.indexOf(uid);
+        return (details.participantAvatars || [])[idx] || userCache[uid]?.photoURL || '';
+    });
+    return { otherIds, usernames, avatars };
+}
+
+async function resolveUserProfile(uid) {
+    if (userCache[uid]) return userCache[uid];
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+        const normalized = normalizeUserProfileData(snap.data());
+        userCache[uid] = normalized;
+        return normalized;
+    }
+    return { username: 'user', name: 'Nexera User' };
+}
+
+function formatMessagePreview(payload = {}) {
+    if (payload.type === 'image') return '[image]';
+    if (payload.type === 'video') return '[video]';
+    if (payload.type === 'post_ref') return '[post]';
+    const text = (payload.text || '').trim();
+    if (!text) return '[message]';
+    return text.length > 80 ? text.substring(0, 77) + '…' : text;
 }
 
 function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
-    if(!listEl) return;
+    if (!listEl) return;
     listEl.innerHTML = '';
-    if(conversationsCache.length === 0) {
+
+    if (conversationMappings.length === 0) {
         listEl.innerHTML = '<div class="empty-state">No conversations yet.</div>';
         return;
     }
-    conversationsCache.forEach(function(convo) {
-        const partnerId = convo.members.find(function(m) { return m !== currentUser.uid; }) || currentUser.uid;
-        const display = userCache[partnerId]?.username || 'user';
-        const partnerProfile = userCache[partnerId] || { username: display, name: display, avatarColor: computeAvatarColor(partnerId || display) };
-        const avatarHtml = renderAvatar({ ...partnerProfile, uid: partnerId }, { size: 36 });
+
+    conversationMappings.forEach(function (mapping) {
+        const details = conversationDetailsCache[mapping.id] || {};
+        const participants = details.participants || mapping.otherParticipantIds || [];
+        const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
+        const name = mapping.otherParticipantUsernames?.[0] || meta.usernames?.[0] || details.title || 'Conversation';
+        const avatarUrl = mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
+        const avatarHtml = renderAvatar({
+            uid: meta.otherIds?.[0] || mapping.otherParticipantIds?.[0] || 'user',
+            username: name,
+            photoURL: avatarUrl,
+            avatarColor: computeAvatarColor(name)
+        }, { size: 36 });
+
         const item = document.createElement('div');
-        item.className = 'conversation-item' + (activeConversationId === convo.id ? ' active' : '');
+        item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
+        const unread = mapping.unreadCount || 0;
+        const timeLabel = mapping.lastMessageAt?.toDate ? formatTimestampDisplay(mapping.lastMessageAt) : '';
         item.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">
             ${avatarHtml}
             <div>
-                <strong>@${display}</strong>
-                <div style="color:var(--text-muted); font-size:0.8rem;">${convo.lastMessageText || 'Tap to start'}</div>
+                <strong>${escapeHtml(details.title || name)}</strong>
+                <div style="color:var(--text-muted); font-size:0.8rem;">${escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Tap to start')}</div>
             </div>
         </div>
-        <span style="color:var(--text-muted); font-size:0.75rem;">${convo.requestState?.[currentUser.uid] === 'requested' ? '<span class="badge">Requested</span>' : ''}</span>`;
-        item.onclick = function() { return setActiveConversation(convo.id, convo); };
+        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+            ${timeLabel ? `<span style="color:var(--text-muted); font-size:0.75rem;">${timeLabel}</span>` : ''}
+            ${unread > 0 ? `<span class="badge">${unread}</span>` : ''}
+        </div>`;
+        item.onclick = function () { openConversation(mapping.id); };
         listEl.appendChild(item);
     });
 }
 
-function setActiveConversation(convoId, convoData = null) {
-    activeConversationId = convoId;
+function renderMessageHeader(convo = {}) {
     const header = document.getElementById('message-header');
-    const partnerId = (convoData || conversationsCache.find(function(c) { return c.id === convoId; }) || {}).members?.find(function(m) { return m !== currentUser.uid; });
-    if(header) header.textContent = partnerId ? `Chat with @${userCache[partnerId]?.username || 'user'}` : 'Conversation';
-    listenToMessages(convoId);
+    if (!header) return;
+    const participants = convo.participants || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
+    const label = convo.type === 'group' ? (convo.title || 'Group') : (meta.usernames?.join(', ') || 'Conversation');
+    const avatar = renderAvatar({
+        uid: meta.otherIds?.[0] || 'group',
+        username: label,
+        photoURL: meta.avatars?.[0] || '',
+        avatarColor: computeAvatarColor(label)
+    }, { size: 36 });
+    header.innerHTML = `<div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800;">${escapeHtml(label)}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>`;
 }
 
-function listenToMessages(convoId) {
-    if(messagesUnsubscribe) messagesUnsubscribe();
-    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function(snap) {
-        const msgs = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        renderMessages(msgs);
-    }));
-}
-
-function renderMessages(msgs = []) {
+function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
-    if(!body) return;
+    if (!body) return;
     body.innerHTML = '';
-    msgs.forEach(function(msg) {
+    msgs.forEach(function (msg) {
         const bubble = document.createElement('div');
-        bubble.className = 'message-bubble ' + (msg.senderId === currentUser.uid ? 'self' : 'other');
-        bubble.innerHTML = msg.type === 'image' ? `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">` : escapeHtml(msg.text || '');
+        bubble.className = 'message-bubble ' + (msg.senderId === currentUser?.uid ? 'self' : 'other');
+        const senderLabel = msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
+        let content = escapeHtml(msg.text || '');
+        if (msg.type === 'image' && msg.mediaURL) {
+            content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
+        } else if (msg.type === 'video' && msg.mediaURL) {
+            content = `<video src="${msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
+        } else if (msg.type === 'post_ref') {
+            const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
+            content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${escapeHtml(msg.text || '')}</div>${refBtn}</div>`;
+        }
+        bubble.innerHTML = `${senderLabel}${content}`;
         body.appendChild(bubble);
     });
     body.scrollTop = body.scrollHeight;
 }
 
-window.sendMessage = async function() {
-    if(!activeConversationId || !requireAuth()) return;
-    const input = document.getElementById('message-input');
-    const fileInput = document.getElementById('message-media');
-    const text = (input?.value || '').trim();
-    if(!text && !fileInput?.files?.length) return;
+async function ensureConversation(convoId, participantId) {
+    const convoRef = doc(db, 'conversations', convoId);
+    const existingSnap = await getDoc(convoRef);
+    const participants = [currentUser.uid, participantId].sort();
+    const profiles = await Promise.all(participants.map(resolveUserProfile));
+    const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
 
-    const msgRef = collection(db, 'conversations', activeConversationId, 'messages');
-    let mediaURL = null;
-
-    if(fileInput && fileInput.files && fileInput.files[0]) {
-        const file = fileInput.files[0];
-        const storageRef = ref(storage, `dm_media/${activeConversationId}/${Date.now()}_${file.name}`);
-        await uploadBytes(storageRef, file);
-        mediaURL = await getDownloadURL(storageRef);
+    if (!existingSnap.exists()) {
+        const payload = {
+            participants,
+            participantUsernames,
+            participantAvatars,
+            type: 'direct',
+            title: null,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            lastMessagePreview: '',
+            lastMessageSenderId: '',
+            lastMessageAt: serverTimestamp(),
+            unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
+            mutedBy: [],
+            pinnedBy: []
+        };
+        await setDoc(convoRef, payload, { merge: true });
+        conversationDetailsCache[convoId] = { id: convoId, ...payload };
+    } else {
+        conversationDetailsCache[convoId] = { id: convoId, ...existingSnap.data() };
     }
 
-    await addDoc(msgRef, {
-        senderId: currentUser.uid,
-        type: mediaURL ? 'image' : 'text',
-        text: mediaURL ? '' : text,
-        mediaURL: mediaURL || '',
-        createdAt: serverTimestamp()
+    await Promise.all(participants.map(async function (uid) {
+        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoId]);
+        const mappingRef = doc(db, `users/${uid}/conversations/${convoId}`);
+        const existingMap = await getDoc(mappingRef);
+        const payload = {
+            conversationId: convoId,
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars,
+            muted: false,
+            pinned: false
+        };
+        if (!existingMap.exists()) {
+            payload.lastMessagePreview = '';
+            payload.lastMessageAt = serverTimestamp();
+            payload.unreadCount = 0;
+        }
+        await setDoc(mappingRef, payload, { merge: true });
+    }));
+
+    return conversationDetailsCache[convoId];
+}
+
+async function fetchConversation(conversationId) {
+    if (conversationDetailsCache[conversationId]) return conversationDetailsCache[conversationId];
+    const snap = await getDoc(doc(db, 'conversations', conversationId));
+    if (snap.exists()) {
+        conversationDetailsCache[conversationId] = { id: conversationId, ...snap.data() };
+        return conversationDetailsCache[conversationId];
+    }
+    return null;
+}
+
+async function listenToMessages(convoId) {
+    if (messagesUnsubscribe) messagesUnsubscribe();
+    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
+        const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const details = conversationDetailsCache[convoId] || {};
+        renderMessages(msgs, details);
+        markConversationAsRead(convoId);
+    }));
+}
+
+async function openConversation(conversationId) {
+    if (!conversationId || !requireAuth()) return;
+    activeConversationId = conversationId;
+    const body = document.getElementById('message-thread');
+    if (body) body.innerHTML = '';
+    const header = document.getElementById('message-header');
+    if (header) header.textContent = 'Loading conversation...';
+
+    const convo = await fetchConversation(conversationId);
+    if (convo) {
+        renderMessageHeader(convo);
+    }
+
+    await listenToMessages(conversationId);
+}
+
+async function initConversations(autoOpen = true) {
+    if (!requireAuth()) return;
+    if (conversationsUnsubscribe) conversationsUnsubscribe();
+    const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, function (snap) {
+        conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        renderConversationList();
+        if (autoOpen && !activeConversationId && conversationMappings.length > 0) {
+            openConversation(conversationMappings[0].id);
+        }
+    }));
+}
+
+async function updateConversationUnread(conversationId, participants = [], previewPayload = {}) {
+    const convoRef = doc(db, 'conversations', conversationId);
+    const preview = formatMessagePreview(previewPayload);
+    const unreadCounts = {};
+    const cachedCounts = (conversationDetailsCache[conversationId] || {}).unreadCounts || {};
+    participants.forEach(function (uid) {
+        unreadCounts[uid] = uid === currentUser.uid ? 0 : (cachedCounts[uid] || 0) + 1;
     });
 
-    // updateDoc does not accept { merge: true }; use a nested field update for requestState
-    await updateDoc(doc(db, 'conversations', activeConversationId), {
-        lastMessageText: mediaURL ? '📷 Photo' : text,
+    await updateDoc(convoRef, {
+        lastMessagePreview: preview,
+        lastMessageSenderId: currentUser.uid,
         lastMessageAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        [`requestState.${currentUser.uid}`]: 'inbox'
+        unreadCounts
     });
 
-    if(input) input.value = '';
-    if(fileInput) fileInput.value = '';
+    conversationDetailsCache[conversationId] = {
+        ...(conversationDetailsCache[conversationId] || {}),
+        lastMessagePreview: preview,
+        lastMessageSenderId: currentUser.uid,
+        unreadCounts
+    };
+
+    await Promise.all(participants.map(async function (uid) {
+        const details = conversationDetailsCache[conversationId] || { participants };
+        const meta = deriveOtherParticipantMeta(participants, uid, details);
+        const mappingRef = doc(db, `users/${uid}/conversations/${conversationId}`);
+        const update = {
+            conversationId,
+            lastMessagePreview: preview,
+            lastMessageAt: serverTimestamp(),
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars
+        };
+        if (uid === currentUser.uid) {
+            update.unreadCount = 0;
+        } else {
+            update.unreadCount = increment(1);
+        }
+        await setDoc(mappingRef, update, { merge: true });
+    }));
+}
+
+async function sendChatPayload(conversationId, payload = {}) {
+    if (!conversationId || !requireAuth()) return;
+    const convo = await fetchConversation(conversationId) || conversationDetailsCache[conversationId];
+    const participants = (convo && convo.participants) || [];
+
+    const message = {
+        senderId: currentUser.uid,
+        senderUsername: userProfile.username || currentUser.displayName || 'Nexera user',
+        text: payload.text || '',
+        type: payload.type || 'text',
+        mediaURL: payload.mediaURL || null,
+        mediaType: payload.mediaType || null,
+        postId: payload.postId || null,
+        threadId: payload.threadId || null,
+        createdAt: serverTimestamp(),
+        editedAt: null,
+        deletedAt: null,
+        readBy: [currentUser.uid],
+        reported: false,
+        reportCount: 0,
+        systemPayload: payload.systemPayload || null
+    };
+
+    await addDoc(collection(db, 'conversations', conversationId, 'messages'), message);
+    await updateConversationUnread(conversationId, participants, payload);
+}
+
+window.sendMessage = async function (conversationId = activeConversationId) {
+    if (!conversationId || !requireAuth()) return;
+    const input = document.getElementById('message-input');
+    const text = (input?.value || '').trim();
+    const fileInput = document.getElementById('message-media');
+    if (fileInput?.files?.length) {
+        await window.sendMediaMessage(conversationId, 'message-media', text);
+        if (input) input.value = '';
+        return;
+    }
+    if (!text) return;
+    await sendChatPayload(conversationId, { text, type: 'text' });
+    if (input) input.value = '';
 };
 
+window.sendMediaMessage = async function (conversationId = activeConversationId, fileInputElementId = 'message-media', caption = '') {
+    if (!conversationId || !requireAuth()) return;
+    const fileInput = document.getElementById(fileInputElementId);
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
+    const file = fileInput.files[0];
+    const storageRef = ref(storage, `dm_media/${conversationId}/${Date.now()}_${file.name}`);
+    const uploadTask = uploadBytesResumable(storageRef, file);
+    await uploadTask;
+    const mediaURL = await getDownloadURL(uploadTask.snapshot.ref);
+    const type = file.type.startsWith('video') ? 'video' : 'image';
+    await sendChatPayload(conversationId, {
+        text: caption,
+        type,
+        mediaURL,
+        mediaType: file.type
+    });
+    fileInput.value = '';
+    const input = document.getElementById('message-input');
+    if (input && caption) input.value = '';
+};
+
+window.markConversationAsRead = async function (conversationId = activeConversationId) {
+    if (!conversationId || !currentUser) return;
+    try {
+        await updateDoc(doc(db, 'conversations', conversationId), { [`unreadCounts.${currentUser.uid}`]: 0 });
+    } catch (e) {
+        console.warn('Unable to update unread counts', e);
+    }
+    try {
+        await setDoc(doc(db, `users/${currentUser.uid}/conversations/${conversationId}`), { unreadCount: 0 }, { merge: true });
+    } catch (e) {
+        console.warn('Unable to update mapping unread', e);
+    }
+};
+
+function updateChatStartControls() {
+    const startBtn = document.getElementById('start-chat-btn');
+    const groupNameRow = document.getElementById('chat-group-name-row');
+    if (startBtn) {
+        startBtn.disabled = newChatSelections.length === 0;
+        startBtn.textContent = newChatSelections.length > 1 ? 'Create group chat' : 'Start chat';
+    }
+    if (groupNameRow) {
+        groupNameRow.style.display = newChatSelections.length > 1 ? 'block' : 'none';
+        if (newChatSelections.length <= 1) {
+            const nameInput = document.getElementById('chat-group-name');
+            if (nameInput) nameInput.value = '';
+        }
+    }
+}
+
+function renderSelectedUsers() {
+    const listEl = document.getElementById('selected-chat-users');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (newChatSelections.length === 0) {
+        listEl.innerHTML = '<div class="empty-state" style="padding:8px 0;">Select users to start a conversation.</div>';
+        updateChatStartControls();
+        return;
+    }
+
+    newChatSelections.forEach(function (user) {
+        const row = document.createElement('div');
+        row.className = 'conversation-item';
+        row.style.alignItems = 'center';
+        const avatar = renderAvatar({ uid: user.id, username: user.username || user.displayName || 'user', photoURL: user.photoURL || '' }, { size: 32 });
+        row.innerHTML = `<div style="display:flex; align-items:center; gap:8px;">${avatar}<div><div style="font-weight:700;">${escapeHtml(user.displayName || user.name || user.username || 'User')}</div><div style="color:var(--text-muted); font-size:0.85rem;">@${escapeHtml(user.username || 'user')}</div></div></div><button class="icon-pill" style="padding:6px 10px;" onclick="window.removeSelectedChatUser('${user.id}')"><i class="ph ph-x"></i></button>`;
+        listEl.appendChild(row);
+    });
+    updateChatStartControls();
+}
+
+function renderChatSearchResults(users = []) {
+    const resultsEl = document.getElementById('chat-search-results');
+    if (!resultsEl) return;
+    resultsEl.innerHTML = '';
+    users.forEach(function (user) {
+        const row = document.createElement('div');
+        row.className = 'conversation-item' + (newChatSelections.some(function (u) { return u.id === user.id; }) ? ' active' : '');
+        row.innerHTML = `<div><strong>@${escapeHtml(user.username || 'user')}</strong><div style="color:var(--text-muted); font-size:0.85rem;">${escapeHtml(user.displayName || user.name || 'Nexera User')}</div></div>`;
+        row.onclick = function () { window.toggleChatUserSelection(user.id); };
+        resultsEl.appendChild(row);
+    });
+}
+
+window.removeSelectedChatUser = function (userId) {
+    newChatSelections = newChatSelections.filter(function (u) { return u.id !== userId; });
+    renderSelectedUsers();
+    renderChatSearchResults(chatSearchResults);
+};
+
+window.toggleChatUserSelection = function (userId) {
+    const existing = newChatSelections.find(function (u) { return u.id === userId; });
+    if (existing) {
+        window.removeSelectedChatUser(userId);
+        return;
+    }
+    const found = chatSearchResults.find(function (u) { return u.id === userId; });
+    if (found) {
+        newChatSelections.push(found);
+        renderSelectedUsers();
+        renderChatSearchResults(chatSearchResults);
+    }
+};
+
+function resetNewChatModalState() {
+    newChatSelections = [];
+    chatSearchResults = [];
+    const searchInput = document.getElementById('chat-search');
+    if (searchInput) searchInput.value = '';
+    const resultsEl = document.getElementById('chat-search-results');
+    if (resultsEl) resultsEl.innerHTML = '';
+    renderSelectedUsers();
+    updateChatStartControls();
+}
+
+window.toggleNewChatModal = function (show = true) {
+    const modal = document.getElementById('new-chat-modal');
+    if (show) resetNewChatModalState();
+    if (modal) modal.style.display = show ? 'flex' : 'none';
+};
+window.openNewChatModal = function () { if (!requireAuth()) return; return window.toggleNewChatModal(true); };
+
+window.searchChatUsers = async function (term = '') {
+    const resultsEl = document.getElementById('chat-search-results');
+    if (!resultsEl) return;
+    const cleaned = term.trim().toLowerCase();
+    if (cleaned.length < 2) {
+        chatSearchResults = [];
+        renderChatSearchResults(chatSearchResults);
+        return;
+    }
+    const qSnap = await getDocs(query(collection(db, 'users'), where('username', '>=', cleaned), where('username', '<=', cleaned + '~')));
+    const deduped = new Map();
+    qSnap.forEach(function (docSnap) {
+        const data = docSnap.data();
+        if (docSnap.id === currentUser?.uid) return;
+        deduped.set(docSnap.id, { id: docSnap.id, username: data.username, displayName: data.displayName || data.name, photoURL: data.photoURL || data.avatar || '' });
+    });
+    chatSearchResults = Array.from(deduped.values());
+    renderChatSearchResults(chatSearchResults);
+};
+
+async function createGroupConversation(participantIds = [], title = null) {
+    if (!requireAuth()) return null;
+    const participants = Array.from(new Set(participantIds.concat([currentUser.uid]))).sort();
+    const profiles = await Promise.all(participants.map(resolveUserProfile));
+    const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+    const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
+
+    const convoRef = doc(collection(db, 'conversations'));
+    const payload = {
+        participants,
+        participantUsernames,
+        participantAvatars,
+        type: participants.length > 2 ? 'group' : 'direct',
+        title: participants.length > 2 ? (title || null) : null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastMessagePreview: '',
+        lastMessageSenderId: '',
+        lastMessageAt: serverTimestamp(),
+        unreadCounts: participants.reduce(function (acc, uid) { acc[uid] = 0; return acc; }, {}),
+        mutedBy: [],
+        pinnedBy: []
+    };
+
+    await setDoc(convoRef, payload, { merge: true });
+    conversationDetailsCache[convoRef.id] = { id: convoRef.id, ...payload };
+
+    await Promise.all(participants.map(async function (uid) {
+        const meta = deriveOtherParticipantMeta(participants, uid, conversationDetailsCache[convoRef.id]);
+        const mappingRef = doc(db, `users/${uid}/conversations/${convoRef.id}`);
+        const mappingPayload = {
+            conversationId: convoRef.id,
+            otherParticipantIds: meta.otherIds,
+            otherParticipantUsernames: meta.usernames,
+            otherParticipantAvatars: meta.avatars,
+            muted: false,
+            pinned: false,
+            lastMessagePreview: '',
+            lastMessageAt: payload.lastMessageAt,
+            unreadCount: 0
+        };
+        await setDoc(mappingRef, mappingPayload, { merge: true });
+    }));
+
+    return conversationDetailsCache[convoRef.id];
+}
+
+window.startChatFromSelection = async function () {
+    if (!requireAuth() || newChatSelections.length === 0) return;
+    const participantIds = newChatSelections.map(function (u) { return u.id; });
+    toggleNewChatModal(false);
+
+    if (participantIds.length === 1) {
+        await window.openOrStartDirectConversationWithUser(participantIds[0]);
+        return;
+    }
+
+    const nameInput = document.getElementById('chat-group-name');
+    const title = (nameInput?.value || '').trim();
+    const convo = await createGroupConversation(participantIds, title || null);
+    if (convo) {
+        await window.openMessagesPage();
+        await openConversation(convo.id);
+    }
+};
+
+window.openOrStartDirectConversationWithUser = async function (targetUserId, options = {}) {
+    if (!requireAuth() || !targetUserId) return null;
+    const convoId = getDirectConversationId(currentUser.uid, targetUserId);
+    await ensureConversation(convoId, targetUserId);
+    await window.openMessagesPage();
+    await openConversation(convoId);
+
+    if (options.postId) {
+        await sendChatPayload(convoId, {
+            type: 'post_ref',
+            postId: options.postId,
+            threadId: options.threadId || null,
+            text: options.initialText || 'Check out this post'
+        });
+    }
+    return convoId;
+};
+
+window.openConversation = openConversation;
+
+window.openMessagesPage = async function () {
+    if (!requireAuth()) return;
+    window.navigateTo('messages');
+    await initConversations();
+};
+
+window.messageAuthor = async function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!requireAuth() || !postId) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post || !post.userId) return;
+    const note = prompt('Add a note to the author (optional):', '') || '';
+    await openOrStartDirectConversationWithUser(post.userId, {
+        postId: post.id,
+        threadId: post.threadId || null,
+        initialText: note || `Regarding your post: ${post.title || ''}`
+    });
+};
 // --- Videos ---
 window.openVideoUploadModal = function() { return window.toggleVideoUploadModal(true); };
 window.toggleVideoUploadModal = function(show = true) {
