@@ -7715,12 +7715,27 @@ class GoLiveSetupController {
         this.setState('initializing', 'Calling backend to create channel');
         console.info('[GoLive]', 'Calling createEphemeralChannel', payload);
         try {
-            if (!this.createEphemeralChannel) {
-                this.createEphemeralChannel = httpsCallable(this.functions, 'createEphemeralChannel');
+            const idToken = await auth.currentUser.getIdToken();
+            const response = await fetch(
+                'https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${idToken}`,
+                    },
+                    body: JSON.stringify(payload),
+                }
+            );
+
+            if (!response.ok) {
+                const errorPayload = await response.json().catch(() => ({}));
+                throw new Error(errorPayload?.error || 'Backend initialization failed');
             }
-            const response = await this.createEphemeralChannel(payload);
-            this.session = response?.data || null;
-            console.info('[GoLive]', 'createEphemeralChannel response', response?.data);
+
+            const data = await response.json();
+            this.session = data || null;
+            console.info('[GoLive]', 'createEphemeralChannel response', data);
             this.setState('live', 'Ephemeral channel ready');
         } catch (error) {
             console.error('[GoLive]', 'Backend call failed', error);

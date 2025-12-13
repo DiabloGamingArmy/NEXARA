@@ -1,9 +1,8 @@
 // Scripts/GoLive.js
 // Nexera Go Live Controller – Browser First
 
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
-import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { updateDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // --------------------------------------------------
 // Load IVS Web Broadcast SDK
@@ -28,7 +27,7 @@ function loadBroadcastSdk() {
 // --------------------------------------------------
 export class NexeraGoLiveController {
     constructor() {
-        this.functions = getFunctions();
+        this.auth = getAuth();
         this.db = getFirestore();
 
         this.state = "idle";
@@ -112,16 +111,37 @@ export class NexeraGoLiveController {
         const latencyMode =
             this.latencyMode === "low" ? "LOW" : "NORMAL";
 
-        const createChannel = httpsCallable(this.functions, "createEphemeralChannel");
-        const res = await createChannel({
-            title,
-            category,
-            tags,
-            latencyMode,
-            visibility: "public",
-        });
+        const user = this.auth?.currentUser;
+        if (!user) {
+            throw new Error("User must be signed in to start streaming");
+        }
 
-        this.session = res.data;
+        const idToken = await user.getIdToken();
+
+        const response = await fetch(
+            "https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify({
+                    title,
+                    category,
+                    tags,
+                    latencyMode,
+                    visibility: "public",
+                }),
+            }
+        );
+
+        if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            throw new Error(errorPayload?.error || "Failed to create channel");
+        }
+
+        this.session = await response.json();
 
         if (this.inputMode === "external") {
             this.enterOBSMode();
