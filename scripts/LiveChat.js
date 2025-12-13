@@ -1,4 +1,4 @@
-// Scripts/LiveChat.js
+// scripts/LiveChat.js
 // Live chat controller for liveStreams
 
 import {

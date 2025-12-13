@@ -27,13 +27,13 @@ Frontend (static hosting)
 - index.html — Bootstrap shell that redirects to pages/feed.html, preloads core CSS (style.css, styleweb.css, stylemobile.css), mounts Live/GoLive roots, and loads module scripts main.js plus streaming controllers.
 - main.js — Minimal entry that imports ./scripts/app.js to initialize application side effects.
 - scripts/app.js — Central SPA logic built on Firebase JS SDK 11.6.1 (auth, firestore, storage). Contains auth flows, content feed orchestration, category/member state, caching, and UI helpers. Uses getFunctions/httpsCallable for legacy callable functions but live flow now relies on HTTPS fetches with Authorization headers.
-- Scripts/GoLive.js — Go Live controller; loads Amazon IVS Web Broadcast SDK, requires authenticated user, fetches an ID token, and POSTs to https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel with Authorization: Bearer <idToken>. Manages live session state, preview UI, OBS mode display, and updates liveStreams documents (startedAt/endedAt/isLive) via Firestore.
-- Scripts/Live.js — Live stream viewing controller; resolves streamId from URL/hash, creates NexeraLivePlayer, subscribes to liveStreams/{id} snapshots, wires chat (LiveChat.js), likes/follow (LiveInteractions.js), and toggles UI banners.
-- Scripts/VideoPlayer.js — Encapsulates video playback UI for live and VOD content (imported by Live.js). 
-- Scripts/LiveChat.js — Chat initialization for live sessions (Firestore message binding).
-- Scripts/LiveDiscover.js — Live discovery surface used by scripts/app.js to hydrate live listings.
-- Scripts/LiveInteractions.js — Helpers for sending likes and following streamers.
-- Scripts/UserStreamManager.js — User-level utilities for stream lifecycle management.
+- scripts/GoLive.js — Go Live controller; loads Amazon IVS Web Broadcast SDK, requires authenticated user, fetches an ID token, and POSTs to https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel with Authorization: Bearer <idToken>. Manages live session state, preview UI, OBS mode display, and updates liveStreams documents (startedAt/endedAt/isLive) via Firestore.
+- scripts/Live.js — Live stream viewing controller; resolves streamId from URL/hash, creates NexeraLivePlayer, subscribes to liveStreams/{id} snapshots, wires chat (LiveChat.js), likes/follow (LiveInteractions.js), and toggles UI banners.
+- scripts/VideoPlayer.js — Encapsulates video playback UI for live and VOD content (imported by Live.js).
+- scripts/LiveChat.js — Chat initialization for live sessions (Firestore message binding).
+- scripts/LiveDiscover.js — Live discovery surface used by scripts/app.js to hydrate live listings.
+- scripts/LiveInteractions.js — Helpers for sending likes and following streamers.
+- scripts/UserStreamManager.js — User-level utilities for stream lifecycle management.
 
 Data & Security Configuration
 -----------------------------
@@ -55,5 +55,5 @@ Build/Runtime Notes
 Quick pointers
 --------------
 - Backend entrypoints: functions/ivs.js exported via functions/index.js (no callable functions; HTTPS only).
-- Frontend streaming call site: Scripts/GoLive.js start() fetches createEphemeralChannel with Authorization header and no uid in payload; other endpoints can be invoked similarly by attaching ID tokens.
+- Frontend streaming call site: scripts/GoLive.js start() fetches createEphemeralChannel with Authorization header and no uid in payload; other endpoints can be invoked similarly by attaching ID tokens.
 - Project config: firebase.json + .firebaserc keep Hosting/Functions aligned to spike-streaming-service; Firestore default database in nam5 location.

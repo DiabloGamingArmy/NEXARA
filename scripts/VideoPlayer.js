@@ -1,4 +1,4 @@
-// Scripts/VideoPlayer.js
+// scripts/VideoPlayer.js
 // Nexera Live Video Player (Viewer-Side)
 
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";

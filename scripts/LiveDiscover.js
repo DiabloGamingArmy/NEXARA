@@ -1,4 +1,4 @@
-// Scripts/LiveDiscover.js
+// scripts/LiveDiscover.js
 // Live Discover Page Controller
 
 import {

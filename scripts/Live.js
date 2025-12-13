@@ -1,4 +1,4 @@
-// Scripts/Live.js
+// scripts/Live.js
 // Live viewing controller for Nexera liveStreams
 
 import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
