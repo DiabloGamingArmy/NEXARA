@@ -57,3 +57,89 @@ Quick pointers
 - Backend entrypoints: functions/ivs.js exported via functions/index.js (no callable functions; HTTPS only).
 - Frontend streaming call site: Scripts/GoLive.js start() fetches createEphemeralChannel with Authorization header and no uid in payload; other endpoints can be invoked similarly by attaching ID tokens.
 - Project config: firebase.json + .firebaserc keep Hosting/Functions aligned to spike-streaming-service; Firestore default database in nam5 location.
+
+File Path Routes
+----------------
+{
+  "root": {
+    "files": [
+      ".firebaserc",
+      ".gitignore",
+      "commentUtils.js",
+      "commentUtils.test.mjs",
+      "firebase.json",
+      "firestore.indexes.json",
+      "firestore.rules",
+      "index.html",
+      "info.txt",
+      "main.js",
+      "script.js",
+      "storage.rules",
+      "style.css",
+      "stylemobile.css",
+      "styleweb.css",
+      "y"
+    ],
+    "directories": {
+      "Scripts": {
+        "files": [
+          "GoLive.js",
+          "Live.js",
+          "LiveChat.js",
+          "LiveDiscover.js",
+          "LiveInteractions.js",
+          "UserStreamManager.js",
+          "VideoPlayer.js"
+        ]
+      },
+      "functions": {
+        "files": [
+          ".gitignore",
+          "index.js",
+          "ivs.js",
+          "package-lock.json",
+          "package.json"
+        ]
+      },
+      "pages": {
+        "files": [
+          "admin.html",
+          "feed.html",
+          "login.html",
+          "profile.html"
+        ]
+      },
+      "public": {
+        "files": [
+          "index.html"
+        ]
+      },
+      "scripts": {
+        "files": [
+          "admin.js",
+          "app.js",
+          "auth.js",
+          "composer.js",
+          "data.js",
+          "discover.js",
+          "feed.js",
+          "firebase-config.js",
+          "media.js",
+          "messaging.js",
+          "navigation.js",
+          "profile.js",
+          "state.js",
+          "thread.js",
+          "utils.js"
+        ],
+        "directories": {
+          "ui": {
+            "files": [
+              "topBar.js"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
