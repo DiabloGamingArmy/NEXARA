@@ -2,26 +2,26 @@
  * IVS Backend for Nexera – Gen-2 Compatible
  */
 
-import { onCall } from "firebase-functions/v2/https";
-import { defineString, defineSecret } from "firebase-functions/params";
+const { onRequest } = require("firebase-functions/v2/https");
+const { defineString, defineSecret } = require("firebase-functions/params");
 
-import { initializeApp, applicationDefault } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+const { initializeApp, applicationDefault } = require("firebase-admin/app");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
-import jwt from "jsonwebtoken";
-import { v4 as uuidv4 } from "uuid";
+const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
 
-import {
+const {
     IvsClient,
     CreateChannelCommand,
     CreateStreamKeyCommand,
-} from "@aws-sdk/client-ivs";
+} = require("@aws-sdk/client-ivs");
 
 // -------------------------------------------------------------
 // Initialize Admin SDK (ESM-Compatible)
 // -------------------------------------------------------------
 initializeApp({
-    credential: applicationDefault()
+    credential: applicationDefault(),
 });
 
 const db = getFirestore();
@@ -29,12 +29,38 @@ const db = getFirestore();
 // -------------------------------------------------------------
 // PARAM DEFINITIONS
 // -------------------------------------------------------------
-export const AWS_RECORDING_ARN = defineString("AWS_RECORDING_ARN");
-export const AWS_PLAYBACK_KEY_ARN = defineString("AWS_PLAYBACK_KEY_ARN");
+const AWS_RECORDING_ARN = defineString("AWS_RECORDING_ARN");
+const AWS_PLAYBACK_KEY_ARN = defineString("AWS_PLAYBACK_KEY_ARN");
 
-export const AWS_KEY = defineSecret("AWS_KEY");
-export const AWS_SECRET = defineSecret("AWS_SECRET");
-export const AWS_PLAYBACK_PRIVATE_KEY = defineSecret("AWS_PLAYBACK_PRIVATE_KEY");
+const AWS_KEY = defineSecret("AWS_KEY");
+const AWS_SECRET = defineSecret("AWS_SECRET");
+const AWS_PLAYBACK_PRIVATE_KEY = defineSecret("AWS_PLAYBACK_PRIVATE_KEY");
+
+// -------------------------------------------------------------
+// CORS configuration
+// -------------------------------------------------------------
+const ALLOWED_ORIGINS = [
+    "https://spike-streaming-service.web.app",
+    "https://spike-streaming-service.firebaseapp.com",
+    "https://diablogamingarmy.github.io",
+];
+
+function applyCors(req, res) {
+    const origin = req.headers.origin;
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        res.set("Access-Control-Allow-Origin", origin);
+        res.set("Vary", "Origin");
+    }
+    res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set("Access-Control-Max-Age", "3600");
+
+    if (req.method === "OPTIONS") {
+        res.status(204).send("");
+        return true;
+    }
+    return false;
+}
 
 // -------------------------------------------------------------
 // Helper – Create IVS client using loaded secrets
@@ -49,7 +75,6 @@ function makeIVS(accessKey, secretKey) {
     });
 }
 
-
 // -------------------------------------------------------------
 // Helper: Create Stream Key
 // -------------------------------------------------------------
@@ -59,150 +84,192 @@ async function createStreamKey(ivs, channelArn) {
     return res.streamKey.value;
 }
 
+function respondWithError(res, status, message) {
+    return res.status(status).json({ error: message });
+}
+
 // =============================================================
 // 1. initializeUserChannel  (Persistent Channel Per User)
 // =============================================================
-export const initializeUserChannel = onCall(
-    { region: "us-east-1", secrets: [AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY] },
-    async (request) => {
+const initializeUserChannel = onRequest(
+    { region: "us-central1", secrets: [AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY] },
+    async (req, res) => {
+        if (applyCors(req, res)) return;
 
-        const uid = request.auth?.uid;
+        if (req.method !== "POST") {
+            return respondWithError(res, 405, "Method Not Allowed");
+        }
+
+        const uid = req.body?.uid;
         if (!uid) {
-            throw new Error("User must be authenticated.");
+            return respondWithError(res, 400, "Missing required field: uid");
         }
 
-        // Load params
-        const accessKey = AWS_KEY.value();
-        const secretKey = AWS_SECRET.value();
-        const recordingArn = AWS_RECORDING_ARN.value();
+        try {
+            // Load params
+            const accessKey = AWS_KEY.value();
+            const secretKey = AWS_SECRET.value();
+            const recordingArn = AWS_RECORDING_ARN.value();
 
-        const ivs = makeIVS(accessKey, secretKey);
+            const ivs = makeIVS(accessKey, secretKey);
 
-        const ref = db.collection("users")
-            .doc(uid)
-            .collection("streamConfig")
-            .doc("persistent");
+            const ref = db.collection("users")
+                .doc(uid)
+                .collection("streamConfig")
+                .doc("persistent");
 
-        const existing = await ref.get();
-        if (existing.exists) {
-            return existing.data();
+            const existing = await ref.get();
+            if (existing.exists) {
+                return res.json(existing.data());
+            }
+
+            const channelName = `user_${uid}_persistent`;
+
+            const channelCmd = new CreateChannelCommand({
+                name: channelName,
+                type: "STANDARD",
+                latencyMode: "LOW",
+                recordingConfigurationArn: recordingArn,
+            });
+
+            const channelRes = await ivs.send(channelCmd);
+            const { arn: channelArn, playbackUrl } = channelRes.channel;
+
+            const streamKeyValue = await createStreamKey(ivs, channelArn);
+
+            const payload = {
+                uid,
+                channelArn,
+                streamKey: streamKeyValue,
+                playbackUrl,
+                createdAt: FieldValue.serverTimestamp(),
+            };
+
+            await ref.set(payload);
+            return res.json(payload);
+        } catch (error) {
+            console.error("initializeUserChannel error", error);
+            return respondWithError(res, 500, "Failed to initialize user channel");
         }
-
-        const channelName = `user_${uid}_persistent`;
-
-        const channelCmd = new CreateChannelCommand({
-            name: channelName,
-            type: "STANDARD",
-            latencyMode: "LOW",
-            recordingConfigurationArn: recordingArn,
-        });
-
-        const channelRes = await ivs.send(channelCmd);
-        const { arn: channelArn, playbackUrl } = channelRes.channel;
-
-        const streamKeyValue = await createStreamKey(ivs, channelArn);
-
-        const payload = {
-            uid,
-            channelArn,
-            streamKey: streamKeyValue,
-            playbackUrl,
-            createdAt: FieldValue.serverTimestamp()
-,
-        };
-
-        await ref.set(payload);
-        return payload;
     }
 );
 
 // =============================================================
 // 2. createEphemeralChannel  (Temporary Streams On-Demand)
 // =============================================================
-export const createEphemeralChannel = onCall(
-    { region: "us-east-1", secrets: [AWS_KEY, AWS_SECRET] },
-    async (request) => {
+const createEphemeralChannel = onRequest(
+    { region: "us-central1", secrets: [AWS_KEY, AWS_SECRET] },
+    async (req, res) => {
+        if (applyCors(req, res)) return;
 
-        const uid = request.auth?.uid;
-        if (!uid) {
-            throw new Error("User must be authenticated.");
+        if (req.method !== "POST") {
+            return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        // Load params
-        const accessKey = AWS_KEY.value();
-        const secretKey = AWS_SECRET.value();
-        const recordingArn = AWS_RECORDING_ARN.value();
+        const uid = req.body?.uid;
+        if (!uid) {
+            return respondWithError(res, 400, "Missing required field: uid");
+        }
 
-        const ivs = makeIVS(accessKey, secretKey);
+        try {
+            // Load params
+            const accessKey = AWS_KEY.value();
+            const secretKey = AWS_SECRET.value();
+            const recordingArn = AWS_RECORDING_ARN.value();
 
-        const visibility = request.data.visibility || "public";
-        const sessionId = uuidv4();
-        const channelName = `user_${uid}_session_${sessionId}`;
+            const ivs = makeIVS(accessKey, secretKey);
 
-        const channelCmd = new CreateChannelCommand({
-            name: channelName,
-            type: "STANDARD",
-            latencyMode: "LOW",
-            recordingConfigurationArn: recordingArn,
-        });
+            const visibility = req.body.visibility || "public";
+            const sessionId = uuidv4();
+            const channelName = `user_${uid}_session_${sessionId}`;
 
-        const channelRes = await ivs.send(channelCmd);
-        const { arn: channelArn, playbackUrl } = channelRes.channel;
+            const channelCmd = new CreateChannelCommand({
+                name: channelName,
+                type: "STANDARD",
+                latencyMode: "LOW",
+                recordingConfigurationArn: recordingArn,
+            });
 
-        const streamKeyValue = await createStreamKey(ivs, channelArn);
+            const channelRes = await ivs.send(channelCmd);
+            const { arn: channelArn, playbackUrl } = channelRes.channel;
 
-        const streamDoc = {
-            sessionId,
-            uid,
-            channelArn,
-            playbackUrl,
-            streamKey: streamKeyValue,
-            visibility,
-            isLive: false,
-            title: request.data.title || "",
-            category: request.data.category || "",
-            tags: request.data.tags || [],
-            createdAt: FieldValue.serverTimestamp()
-,
-        };
+            const streamKeyValue = await createStreamKey(ivs, channelArn);
 
-        await db.collection("liveStreams").doc(sessionId).set(streamDoc);
-        return streamDoc;
+            const streamDoc = {
+                sessionId,
+                uid,
+                channelArn,
+                playbackUrl,
+                streamKey: streamKeyValue,
+                visibility,
+                isLive: false,
+                title: req.body.title || "",
+                category: req.body.category || "",
+                tags: req.body.tags || [],
+                createdAt: FieldValue.serverTimestamp(),
+            };
+
+            await db.collection("liveStreams").doc(sessionId).set(streamDoc);
+            return res.json(streamDoc);
+        } catch (error) {
+            console.error("createEphemeralChannel error", error);
+            return respondWithError(res, 500, "Failed to create ephemeral channel");
+        }
     }
 );
 
 // =============================================================
 // 3. generatePlaybackToken  (Signed Token for Private Streams)
 // =============================================================
-export const generatePlaybackToken = onCall(
-    { region: "us-east-1", secrets: [AWS_PLAYBACK_PRIVATE_KEY] },
-    async (request) => {
+const generatePlaybackToken = onRequest(
+    { region: "us-central1", secrets: [AWS_PLAYBACK_PRIVATE_KEY] },
+    async (req, res) => {
+        if (applyCors(req, res)) return;
 
-        const channelArn = request.data.channelArn;
-        const visibility = request.data.visibility || "public";
-
-        // Public streams need no token
-        if (visibility === "public") {
-            return { token: null };
+        if (req.method !== "POST") {
+            return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const privateKey = AWS_PLAYBACK_PRIVATE_KEY.value();
-        if (!privateKey) {
-            throw new Error("Missing playback private key.");
+        const channelArn = req.body?.channelArn;
+        if (!channelArn) {
+            return respondWithError(res, 400, "Missing required field: channelArn");
         }
 
-        const token = jwt.sign(
-            {
-                "aws:channel-arn": channelArn,
-                "aws:access-control:action": "ivs:Play",
-            },
-            privateKey,
-            {
-                algorithm: "RS256",
-                expiresIn: "1h",
+        const visibility = req.body.visibility || "public";
+
+        try {
+            // Public streams need no token
+            if (visibility === "public") {
+                return res.json({ token: null });
             }
-        );
 
-        return { token };
+            const privateKey = AWS_PLAYBACK_PRIVATE_KEY.value();
+            if (!privateKey) {
+                return respondWithError(res, 500, "Missing playback private key.");
+            }
+
+            const token = jwt.sign(
+                {
+                    "aws:channel-arn": channelArn,
+                    "aws:access-control:action": "ivs:Play",
+                },
+                privateKey,
+                {
+                    algorithm: "RS256",
+                    expiresIn: "1h",
+                }
+            );
+
+            return res.json({ token });
+        } catch (error) {
+            console.error("generatePlaybackToken error", error);
+            return respondWithError(res, 500, "Failed to generate playback token");
+        }
     }
 );
+
+module.exports = {
+    initializeUserChannel,
+    createEphemeralChannel,
+    generatePlaybackToken,
+};
