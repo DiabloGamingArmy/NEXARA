@@ -1,0 +1,145 @@
+NEXERA REPOSITORY REFERENCE
+===========================
+
+Overview
+--------
+This repo hosts the Nexera single-page web app backed by Firebase Hosting, Firestore, Storage, and Gen2 HTTPS Cloud Functions that bridge to AWS IVS. The front end is written as ES module scripts served statically; backend logic lives under functions/ with Node.js 24 runtimes. Hosting rewrites everything to /index.html so the SPA router works for deep links (firebase.json hosting.rewrites).
+
+Backend (functions/)
+--------------------
+- functions/index.js — Exposes the Gen2 HTTPS onRequest endpoints initializeUserChannel, createEphemeralChannel, and generatePlaybackToken by re-exporting from ./ivs.js. Global options cap maxInstances to 10 to constrain autoscaling.
+- functions/ivs.js — Core IVS bridge using firebase-functions v2 HTTPS handlers and AWS SDK v3.
+  - Admin bootstrap: initializes firebase-admin with applicationDefault credentials; reuses the singleton Firestore handle for persistence.
+  - Parameterization: defineString bindings for AWS_RECORDING_ARN and AWS_PLAYBACK_KEY_ARN plus defineSecret bindings for AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY.
+  - Regions: Firebase functions pinned to us-central1 in onRequest options; AWS IVS client construction hard-codes us-east-1.
+  - CORS: applyCors() enforces allowed origins (spike-streaming-service.web.app, spike-streaming-service.firebaseapp.com, diablogamingarmy.github.io), sets Vary: Origin, and returns 204 for OPTIONS before any logic.
+  - Auth: getUidFromRequest(req) extracts Bearer ID tokens from Authorization headers and verifies via admin.auth().verifyIdToken; handlers return 401 UNAUTHENTICATED when absent/invalid and reject non-POST with 405.
+  - initializeUserChannel — Creates a persistent IVS channel per user (type STANDARD, LOW latency) with AWS_RECORDING_ARN; stores channelArn/streamKey/playbackUrl under users/{uid}/streamConfig/persistent in Firestore and short-circuits if already present.
+  - createEphemeralChannel — Generates per-session channels keyed by uuidv4 sessionId, records visibility/title/category/tags, and writes to liveStreams/{sessionId} with isLive=false. Uses AWS_KEY/AWS_SECRET and AWS_RECORDING_ARN secrets/params.
+  - generatePlaybackToken — For private streams, signs an IVS playback JWT (RS256, 1h TTL) using AWS_PLAYBACK_PRIVATE_KEY defineSecret; public visibility returns token: null.
+  - Shared helpers: makeIVS() for credentialized IVS client, createStreamKey() wrapper, respondWithError() JSON helper.
+- functions/package.json — Node 24 engine; dependencies include @aws-sdk/client-ivs, firebase-admin, firebase-functions v7, jsonwebtoken. Scripts wire firebase deploy/serve flows.
+- firebase.json — Declares functions source=functions with disallowLegacyRuntimeConfig, Firestore rules file y, indexes file firestore.indexes.json, hosting public dir public with SPA rewrite, and storage.rules.
+- .firebaserc — Project alias default -> spike-streaming-service.
+
+Frontend (static hosting)
+-------------------------
+- index.html — Bootstrap shell that redirects to pages/feed.html, preloads core CSS (style.css, styleweb.css, stylemobile.css), mounts Live/GoLive roots, and loads module scripts main.js plus streaming controllers.
+- main.js — Minimal entry that imports ./scripts/app.js to initialize application side effects.
+- scripts/app.js — Central SPA logic built on Firebase JS SDK 11.6.1 (auth, firestore, storage). Contains auth flows, content feed orchestration, category/member state, caching, and UI helpers. Uses getFunctions/httpsCallable for legacy callable functions but live flow now relies on HTTPS fetches with Authorization headers.
+- Scripts/GoLive.js — Go Live controller; loads Amazon IVS Web Broadcast SDK, requires authenticated user, fetches an ID token, and POSTs to https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel with Authorization: Bearer <idToken>. Manages live session state, preview UI, OBS mode display, and updates liveStreams documents (startedAt/endedAt/isLive) via Firestore.
+- Scripts/Live.js — Live stream viewing controller; resolves streamId from URL/hash, creates NexeraLivePlayer, subscribes to liveStreams/{id} snapshots, wires chat (LiveChat.js), likes/follow (LiveInteractions.js), and toggles UI banners.
+- Scripts/VideoPlayer.js — Encapsulates video playback UI for live and VOD content (imported by Live.js). 
+- Scripts/LiveChat.js — Chat initialization for live sessions (Firestore message binding).
+- Scripts/LiveDiscover.js — Live discovery surface used by scripts/app.js to hydrate live listings.
+- Scripts/LiveInteractions.js — Helpers for sending likes and following streamers.
+- Scripts/UserStreamManager.js — User-level utilities for stream lifecycle management.
+
+Data & Security Configuration
+-----------------------------
+- Firestore security rules: stored in root file y (referenced by firebase.json as rules). Rules define helper predicates (isSignedIn, founder claim, category membership/moderation) and secure users, categories, posts, conversations, videos, liveSessions, verificationRequests, reports, and adminLogs with granular field-level constraints. Index definitions live in firestore.indexes.json.
+- Storage rules: storage.rules governs Cloud Storage (file content not expanded here but referenced by firebase.json).
+
+Pages & Assets
+--------------
+- pages/feed.html, login.html, admin.html, profile.html — Routed SPA entry points rewritten by Hosting; content relies on scripts/app.js modules for dynamic behavior.
+- Stylesheets: style.css (base), styleweb.css (desktop layout), stylemobile.css (responsive/mobile). Additional assets referenced via Firebase Storage URLs for branding.
+
+Build/Runtime Notes
+-------------------
+- Front end is ES module–based; served directly from Firebase Hosting without bundling. Uses CDN-hosted Firebase v11.6.1 modules and IVS Web Broadcast SDK 1.0.0.
+- Backend uses Firebase Functions Gen2 onRequest handlers; deployment assumes firebase-tools configured for spike-streaming-service project. Secrets (AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY) supplied via Secret Manager; runtime parameters AWS_RECORDING_ARN/AWS_PLAYBACK_KEY_ARN injected with defineString.
+- IVS integration: AWS region fixed to us-east-1 for SDK calls; Firebase region fixed to us-central1 in handler options so URLs match https://us-central1-spike-streaming-service.cloudfunctions.net/<function>.
+- CORS/preflight: All HTTP functions respond to OPTIONS with 204 and mirror allowed origins to satisfy browser fetches from Hosting/legacy GitHub Pages origins.
+
+Quick pointers
+--------------
+- Backend entrypoints: functions/ivs.js exported via functions/index.js (no callable functions; HTTPS only).
+- Frontend streaming call site: Scripts/GoLive.js start() fetches createEphemeralChannel with Authorization header and no uid in payload; other endpoints can be invoked similarly by attaching ID tokens.
+- Project config: firebase.json + .firebaserc keep Hosting/Functions aligned to spike-streaming-service; Firestore default database in nam5 location.
+
+File Path Routes
+----------------
+{
+  "root": {
+    "files": [
+      ".firebaserc",
+      ".gitignore",
+      "commentUtils.js",
+      "commentUtils.test.mjs",
+      "firebase.json",
+      "firestore.indexes.json",
+      "firestore.rules",
+      "index.html",
+      "info.txt",
+      "main.js",
+      "script.js",
+      "storage.rules",
+      "style.css",
+      "stylemobile.css",
+      "styleweb.css",
+      "y"
+    ],
+    "directories": {
+      "Scripts": {
+        "files": [
+          "GoLive.js",
+          "Live.js",
+          "LiveChat.js",
+          "LiveDiscover.js",
+          "LiveInteractions.js",
+          "UserStreamManager.js",
+          "VideoPlayer.js"
+        ]
+      },
+      "functions": {
+        "files": [
+          ".gitignore",
+          "index.js",
+          "ivs.js",
+          "package-lock.json",
+          "package.json"
+        ]
+      },
+      "pages": {
+        "files": [
+          "admin.html",
+          "feed.html",
+          "login.html",
+          "profile.html"
+        ]
+      },
+      "public": {
+        "files": [
+          "index.html"
+        ]
+      },
+      "scripts": {
+        "files": [
+          "admin.js",
+          "app.js",
+          "auth.js",
+          "composer.js",
+          "data.js",
+          "discover.js",
+          "feed.js",
+          "firebase-config.js",
+          "media.js",
+          "messaging.js",
+          "navigation.js",
+          "profile.js",
+          "state.js",
+          "thread.js",
+          "utils.js"
+        ],
+        "directories": {
+          "ui": {
+            "files": [
+              "topBar.js"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
