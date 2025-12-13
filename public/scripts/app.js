@@ -7711,6 +7711,7 @@ class GoLiveSetupController {
             autoRecord: config.autoRecord,
             inputMode: config.videoMode,
             audioMode: config.audioMode,
+            uid: auth.currentUser.uid,
         };
         this.setState('initializing', 'Calling backend to create channel');
         console.info('[GoLive]', 'Calling createEphemeralChannel', payload);

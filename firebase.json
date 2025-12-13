@@ -35,10 +35,32 @@
       "**/firebase-debug.*.log"
     ],
     "headers": [
-  {
-    "source": "**/*.@(js|mjs|css)",
-    "headers": [
-      { "key": "Cache-Control", "value": "public,max-age=3600" }
+      {
+        "source": "**/*.@(js|mjs)",
+        "headers": [
+          { "key": "Content-Type", "value": "application/javascript; charset=UTF-8" },
+          { "key": "Cache-Control", "value": "public, max-age=300, s-maxage=600" },
+          { "key": "X-Content-Type-Options", "value": "nosniff" }
+        ]
+      },
+      {
+        "source": "**/*.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+        ]
+      },
+      {
+        "source": "**/*.@(css|png|jpg|jpeg|gif|svg|webp|ico|json|txt|woff|woff2|ttf|eot)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=86400" }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "regex": "^(?!.*\\.).*$",
+        "destination": "/index.html"
+      }
     ]
   }
 ]
