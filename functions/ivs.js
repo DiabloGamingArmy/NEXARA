@@ -65,24 +65,43 @@ function applyCors(req, res) {
 }
 
 // -------------------------------------------------------------
-// Helper – Extract UID from Firebase Auth ID token
+// Helper – Extract UID from Firebase Auth ID token (with safe body fallback)
 // -------------------------------------------------------------
 async function getUidFromRequest(req) {
-    const authHeader = req.headers.authorization || "";
-    if (!authHeader.toLowerCase().startsWith("bearer ")) {
-        return null;
+    const authHeader = (req.headers.authorization || "").trim();
+    const hasAuthHeader = authHeader.toLowerCase().startsWith("bearer ");
+    const bodyUid = req.body?.uid || null;
+    let tokenUid = null;
+    let tokenError = null;
+
+    if (hasAuthHeader) {
+        const idToken = authHeader.split(" ")[1];
+        if (!idToken) {
+            tokenError = { status: 401, message: "UNAUTHENTICATED" };
+        } else {
+            try {
+                const decoded = await admin.auth().verifyIdToken(idToken);
+                tokenUid = decoded?.uid || null;
+            } catch (error) {
+                console.error("Failed to verify ID token", error);
+                tokenError = { status: 401, message: "UNAUTHENTICATED" };
+            }
+        }
     }
 
-    const idToken = authHeader.split(" ")[1];
-    if (!idToken) return null;
-
-    try {
-        const decoded = await admin.auth().verifyIdToken(idToken);
-        return decoded?.uid || null;
-    } catch (error) {
-        console.error("Failed to verify ID token", error);
-        return null;
+    if (tokenUid && bodyUid && bodyUid !== tokenUid) {
+        return { uid: null, error: { status: 403, message: "UID_MISMATCH" } };
     }
+
+    if (tokenUid) {
+        return { uid: tokenUid };
+    }
+
+    if (!hasAuthHeader && bodyUid) {
+        return { uid: bodyUid };
+    }
+
+    return { uid: null, error: tokenError || { status: 401, message: "UNAUTHENTICATED" } };
 }
 
 // -------------------------------------------------------------
@@ -123,9 +142,9 @@ const initializeUserChannel = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const uid = await getUidFromRequest(req);
-        if (!uid) {
-            return respondWithError(res, 401, "UNAUTHENTICATED");
+        const { uid, error } = await getUidFromRequest(req);
+        if (error || !uid) {
+            return respondWithError(res, error?.status || 401, error?.message || "UNAUTHENTICATED");
         }
 
         try {
@@ -189,9 +208,9 @@ const createEphemeralChannel = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const uid = await getUidFromRequest(req);
-        if (!uid) {
-            return respondWithError(res, 401, "UNAUTHENTICATED");
+        const { uid, error } = await getUidFromRequest(req);
+        if (error || !uid) {
+            return respondWithError(res, error?.status || 401, error?.message || "UNAUTHENTICATED");
         }
 
         try {
@@ -253,9 +272,9 @@ const generatePlaybackToken = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const uid = await getUidFromRequest(req);
-        if (!uid) {
-            return respondWithError(res, 401, "UNAUTHENTICATED");
+        const { uid, error } = await getUidFromRequest(req);
+        if (error || !uid) {
+            return respondWithError(res, error?.status || 401, error?.message || "UNAUTHENTICATED");
         }
 
         const channelArn = req.body?.channelArn;

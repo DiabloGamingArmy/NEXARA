@@ -3,9 +3,9 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
-import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "../commentUtils.js";
-import { buildTopBar, buildTopBarControls } from "./ui/topBar.js";
-import { initializeLiveDiscover } from "./LiveDiscover.js";
+import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
+import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
+import { initializeLiveDiscover } from "/scripts/LiveDiscover.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -7711,6 +7711,7 @@ class GoLiveSetupController {
             autoRecord: config.autoRecord,
             inputMode: config.videoMode,
             audioMode: config.audioMode,
+            uid: auth.currentUser.uid,
         };
         this.setState('initializing', 'Calling backend to create channel');
         console.info('[GoLive]', 'Calling createEphemeralChannel', payload);

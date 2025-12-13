@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from './commentUtils.js';
+import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from './scripts/commentUtils.js';
 
 const comments = [
     { id: 'c1', userId: 'user1', text: 'first' },

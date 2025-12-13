@@ -127,6 +127,7 @@ export class NexeraGoLiveController {
                     Authorization: `Bearer ${idToken}`,
                 },
                 body: JSON.stringify({
+                    uid: user.uid,
                     title,
                     category,
                     tags,

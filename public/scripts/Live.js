@@ -2,9 +2,9 @@
 // Live viewing controller for Nexera liveStreams
 
 import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { NexeraLivePlayer } from "./VideoPlayer.js";
-import { initLiveChat } from "./LiveChat.js";
-import { sendLike, followStreamer } from "./LiveInteractions.js";
+import { NexeraLivePlayer } from "/scripts/VideoPlayer.js";
+import { initLiveChat } from "/scripts/LiveChat.js";
+import { sendLike, followStreamer } from "/scripts/LiveInteractions.js";
 
 let player = null;
 let playerLoaded = false;
