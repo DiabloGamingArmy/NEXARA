@@ -5,8 +5,7 @@
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineString, defineSecret } = require("firebase-functions/params");
 
-const { initializeApp, applicationDefault } = require("firebase-admin/app");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const admin = require("firebase-admin");
 
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
@@ -20,11 +19,14 @@ const {
 // -------------------------------------------------------------
 // Initialize Admin SDK (ESM-Compatible)
 // -------------------------------------------------------------
-initializeApp({
-    credential: applicationDefault(),
-});
+if (!admin.apps.length) {
+    admin.initializeApp({
+        credential: admin.credential.applicationDefault(),
+    });
+}
 
-const db = getFirestore();
+const db = admin.firestore();
+const FieldValue = admin.firestore.FieldValue;
 
 // -------------------------------------------------------------
 // PARAM DEFINITIONS
@@ -60,6 +62,27 @@ function applyCors(req, res) {
         return true;
     }
     return false;
+}
+
+// -------------------------------------------------------------
+// Helper – Extract UID from Firebase Auth ID token
+// -------------------------------------------------------------
+async function getUidFromRequest(req) {
+    const authHeader = req.headers.authorization || "";
+    if (!authHeader.toLowerCase().startsWith("bearer ")) {
+        return null;
+    }
+
+    const idToken = authHeader.split(" ")[1];
+    if (!idToken) return null;
+
+    try {
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        return decoded?.uid || null;
+    } catch (error) {
+        console.error("Failed to verify ID token", error);
+        return null;
+    }
 }
 
 // -------------------------------------------------------------
@@ -100,9 +123,9 @@ const initializeUserChannel = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const uid = req.body?.uid;
+        const uid = await getUidFromRequest(req);
         if (!uid) {
-            return respondWithError(res, 400, "Missing required field: uid");
+            return respondWithError(res, 401, "UNAUTHENTICATED");
         }
 
         try {
@@ -166,9 +189,9 @@ const createEphemeralChannel = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const uid = req.body?.uid;
+        const uid = await getUidFromRequest(req);
         if (!uid) {
-            return respondWithError(res, 400, "Missing required field: uid");
+            return respondWithError(res, 401, "UNAUTHENTICATED");
         }
 
         try {
@@ -228,6 +251,11 @@ const generatePlaybackToken = onRequest(
 
         if (req.method !== "POST") {
             return respondWithError(res, 405, "Method Not Allowed");
+        }
+
+        const uid = await getUidFromRequest(req);
+        if (!uid) {
+            return respondWithError(res, 401, "UNAUTHENTICATED");
         }
 
         const channelArn = req.body?.channelArn;
