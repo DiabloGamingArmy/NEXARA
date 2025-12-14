@@ -1,59 +1,51 @@
-NEXERA REPOSITORY REFERENCE
-===========================
+Executive summary
+- Modernized the Go Live experience into a full-screen studio with Basic and Advanced modes, keeping the existing IVS streaming flow intact while adding richer front-end structure, binding, and operational feedback.
 
-Overview
---------
-This repo hosts the Nexera single-page web app backed by Firebase Hosting, Firestore, Storage, and Gen2 HTTPS Cloud Functions that bridge to AWS IVS. The front end is written as ES module scripts served statically; backend logic lives under functions/ with Node.js 24 runtimes. Hosting rewrites everything to /index.html so the SPA router works for deep links (firebase.json hosting.rewrites).
+Core constraints respected
+- No changes to backend endpoints or Firebase project configuration.
+- IVS channel creation logic and streaming flow semantics remain the same; start()/stop() still drive the broadcast lifecycle.
+- Front-end adjustments are limited to HTML/CSS scaffolding and GoLive controller binding/state/logging; no new backend fields were introduced.
 
-Backend (functions/)
---------------------
-- functions/index.js — Exposes the Gen2 HTTPS onRequest endpoints initializeUserChannel, createEphemeralChannel, and generatePlaybackToken by re-exporting from ./ivs.js. Global options cap maxInstances to 10 to constrain autoscaling.
-- functions/ivs.js — Core IVS bridge using firebase-functions v2 HTTPS handlers and AWS SDK v3.
-  - Admin bootstrap: initializes firebase-admin with applicationDefault credentials; reuses the singleton Firestore handle for persistence.
-  - Parameterization: defineString bindings for AWS_RECORDING_ARN and AWS_PLAYBACK_KEY_ARN plus defineSecret bindings for AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY.
-  - Regions: Firebase functions pinned to us-central1 in onRequest options; AWS IVS client construction hard-codes us-east-1.
-  - CORS: applyCors() enforces allowed origins (spike-streaming-service.web.app, spike-streaming-service.firebaseapp.com, diablogamingarmy.github.io), sets Vary: Origin, and returns 204 for OPTIONS before any logic.
-  - Auth: getUidFromRequest(req) extracts Bearer ID tokens from Authorization headers and verifies via admin.auth().verifyIdToken; handlers return 401 UNAUTHENTICATED when absent/invalid and reject non-POST with 405.
-  - initializeUserChannel — Creates a persistent IVS channel per user (type STANDARD, LOW latency) with AWS_RECORDING_ARN; stores channelArn/streamKey/playbackUrl under users/{uid}/streamConfig/persistent in Firestore and short-circuits if already present.
-  - createEphemeralChannel — Generates per-session channels keyed by uuidv4 sessionId, records visibility/title/category/tags, and writes to liveStreams/{sessionId} with isLive=false. Uses AWS_KEY/AWS_SECRET and AWS_RECORDING_ARN secrets/params.
-  - generatePlaybackToken — For private streams, signs an IVS playback JWT (RS256, 1h TTL) using AWS_PLAYBACK_PRIVATE_KEY defineSecret; public visibility returns token: null.
-  - Shared helpers: makeIVS() for credentialized IVS client, createStreamKey() wrapper, respondWithError() JSON helper.
-- functions/package.json — Node 24 engine; dependencies include @aws-sdk/client-ivs, firebase-admin, firebase-functions v7, jsonwebtoken. Scripts wire firebase deploy/serve flows.
-- firebase.json — Declares functions source=functions with disallowLegacyRuntimeConfig, Firestore rules file y, indexes file firestore.indexes.json, hosting public dir public with SPA rewrite, and storage.rules.
-- .firebaserc — Project alias default -> spike-streaming-service.
+Files changed
+- public/pages/feed.html, public/pages/login.html, public/pages/admin.html, public/pages/profile.html: embed the full-screen Go Live Studio skeleton (top bar, Basic/Advanced containers, preview/OBS slots, status surfaces) within the SPA pages.
+- public/style.css: add the studio visual system (dark gradient background, glass panels, grids, preview shells), responsive layouts, and mode-specific hooks (.ui-basic/.ui-advanced) for Basic and Advanced views.
+- public/scripts/GoLive.js: update NexeraGoLiveController (initializeUI, bindExistingUI, renderLegacyUI, applyUIMode, read/write form syncing helpers, start, stop, setState, renderSessionDetails, renderLogEntries, renderStats, logEvent) to bind to existing markup when present, keep Basic/Advanced controls synchronized, log state transitions, and expose session/stats details without altering backend calls.
 
-Frontend (static hosting)
--------------------------
-- index.html — Bootstrap shell that redirects to pages/feed.html, preloads core CSS (style.css, styleweb.css, stylemobile.css), mounts Live/GoLive roots, and loads module scripts main.js plus streaming controllers.
-- main.js — Minimal entry that imports ./scripts/app.js to initialize application side effects.
-- scripts/app.js — Central SPA logic built on Firebase JS SDK 11.6.1 (auth, firestore, storage). Contains auth flows, content feed orchestration, category/member state, caching, and UI helpers. Uses getFunctions/httpsCallable for legacy callable functions but live flow now relies on HTTPS fetches with Authorization headers.
-- scripts/GoLive.js — Go Live controller; loads Amazon IVS Web Broadcast SDK, requires authenticated user, fetches an ID token, and POSTs to https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel with Authorization: Bearer <idToken>. Manages live session state, preview UI, OBS mode display, and updates liveStreams documents (startedAt/endedAt/isLive) via Firestore.
-- scripts/Live.js — Live stream viewing controller; resolves streamId from URL/hash, creates NexeraLivePlayer, subscribes to liveStreams/{id} snapshots, wires chat (LiveChat.js), likes/follow (LiveInteractions.js), and toggles UI banners.
-- scripts/VideoPlayer.js — Encapsulates video playback UI for live and VOD content (imported by Live.js).
-- scripts/LiveChat.js — Chat initialization for live sessions (Firestore message binding).
-- scripts/LiveDiscover.js — Live discovery surface used by scripts/app.js to hydrate live listings.
-- scripts/LiveInteractions.js — Helpers for sending likes and following streamers.
-- scripts/UserStreamManager.js — User-level utilities for stream lifecycle management.
+UI structure
+- The Go Live Studio is a position:fixed full-viewport workspace with a persistent top bar containing the "Go Live Setup" title/subtitle, a status pill, and the "UI Config:" dropdown (Basic/Advanced).
+- Below the top bar sit two sibling containers: #go-live-basic-view (default visible) and #go-live-advanced-view (hidden until ui-advanced class is applied). Root toggles .ui-basic/.ui-advanced to show/hide them.
+- The preview video element (#live-preview) lives in a shared preview shell that can sit in the Basic preview card or Advanced monitor area without duplicating IDs. The OBS panel (#obs-panel) is similarly shared via designated slots in both modes.
+- Basic view: large preview on the left, guided configuration cards on the right (Stream Details, Source, Latency, Recording, Controls) with helper text, troubleshooting block, and sticky Start/End controls.
+- Advanced view: broadcast-style grid with Scenes & Sources list, Program/Preview monitors and transition strip, Audio Mixer channels, Stream Stats, bottom tabbed panels (Logs/Chat/Events/Encoder), session details and OBS placeholders.
 
-Data & Security Configuration
------------------------------
-- Firestore security rules: stored in root file y (referenced by firebase.json as rules). Rules define helper predicates (isSignedIn, founder claim, category membership/moderation) and secure users, categories, posts, conversations, videos, liveSessions, verificationRequests, reports, and adminLogs with granular field-level constraints. Index definitions live in firestore.indexes.json.
-- Storage rules: storage.rules governs Cloud Storage (file content not expanded here but referenced by firebase.json).
+State and binding logic
+- Controller now checks for an existing .go-live-studio inside #go-live-root and binds to it instead of overwriting innerHTML; only falls back to legacy injection when the skeleton is absent to preserve backward compatibility.
+- formState (title, category, tags, visibility, inputMode, latencyMode, autoRecord) is the single source of truth; defaults are applied when fields are empty.
+- Helper pairs readBasicFormIntoState/readAdvancedFormIntoState and writeStateIntoBasicForm/writeStateIntoAdvancedForm keep both views synchronized via change/input listeners without duplicating IDs.
+- UI mode preference persists in localStorage (nexera_go_live_ui_mode). applyUIMode toggles root classes, shows/hides view containers, and avoids resetting form values.
+- Start and End buttons in both modes invoke controller.start()/stop() using formState values; listeners are guarded to avoid duplication and avoid reinitializing media when switching modes.
 
-Pages & Assets
---------------
-- pages/feed.html, login.html, admin.html, profile.html — Routed SPA entry points rewritten by Hosting; content relies on scripts/app.js modules for dynamic behavior.
-- Stylesheets: style.css (base), styleweb.css (desktop layout), stylemobile.css (responsive/mobile). Additional assets referenced via Firebase Storage URLs for branding.
+Advanced UI operational features
+- Session detail panels (Basic and Advanced) render sessionId, channelArn, ingest host, playbackUrl copy placeholder, latencyMode, and autoRecord after createEphemeralChannel completes via renderSessionDetails().
+- Logger records timestamped lines for UI mode changes, state transitions, backend call lifecycle, SDK load/start/stop events, payloads sent, and errors; entries render in the Advanced Logs panel.
+- Stream health polling runs while live: attempts SDK stats if available and otherwise shows duration, client presence, track counts, and current inputMode; displays a fallback message when stats are unavailable.
+- Preview and OBS surfaces are shared across modes without duplicating media; Advanced monitor uses the same #live-preview element, and the OBS info area reuses #obs-panel in the advanced slot.
+- Mode switching is purely visual; it does not recreate clients or media tracks, and binding guards prevent duplicate event listeners.
 
-Build/Runtime Notes
--------------------
-- Front end is ES module–based; served directly from Firebase Hosting without bundling. Uses CDN-hosted Firebase v11.6.1 modules and IVS Web Broadcast SDK 1.0.0.
-- Backend uses Firebase Functions Gen2 onRequest handlers; deployment assumes firebase-tools configured for spike-streaming-service project. Secrets (AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY) supplied via Secret Manager; runtime parameters AWS_RECORDING_ARN/AWS_PLAYBACK_KEY_ARN injected with defineString.
-- IVS integration: AWS region fixed to us-east-1 for SDK calls; Firebase region fixed to us-central1 in handler options so URLs match https://us-central1-spike-streaming-service.cloudfunctions.net/<function>.
-- CORS/preflight: All HTTP functions respond to OPTIONS with 204 and mirror allowed origins to satisfy browser fetches from Hosting/legacy GitHub Pages origins.
+Behavioral changes
+- UI mode persists across sessions and applies immediately on load; switching modes retains all field values through two-way sync.
+- Start/End button enablement stays consistent across modes; status pill and chips reflect controller state (Ready/Previewing/Live/Error).
+- State transitions append concise log lines in Advanced view; session details surface backend response values for visibility.
+- Latency and autoRecord selections are read from formState and included in the start payload; visibility placeholder is preserved.
 
-Quick pointers
---------------
-- Backend entrypoints: functions/ivs.js exported via functions/index.js (no callable functions; HTTPS only).
-- Frontend streaming call site: scripts/GoLive.js start() fetches createEphemeralChannel with Authorization header and no uid in payload; other endpoints can be invoked similarly by attaching ID tokens.
-- Project config: firebase.json + .firebaserc keep Hosting/Functions aligned to spike-streaming-service; Firestore default database in nam5 location.
+Testing checklist performed
+- Switched UI Config between Basic and Advanced before starting to confirm field values persisted and no duplicate IDs appeared.
+- Started a stream from Advanced view, observed session details/logs, and verified End was enabled in both views; ended from Basic and returned to idle.
+- Toggled modes while live to ensure preview/OBS surfaces and state persisted without reinitializing media or duplicating listeners.
+- Confirmed Start disabled while live/starting, End disabled while idle, and autoRecord/latency selections flowed into the start payload logs.
+- Observed Advanced Logs panel collecting mode/state/backend entries without console errors.
+
+Known limitations / follow-ups
+- Visibility "private" remains a placeholder until fully wired to backend tokenized playback; UI still defaults to public.
+- Stream health depends on IVS Broadcast SDK capabilities; stats view falls back to basic status when metrics APIs are unavailable.
+- Additional UI polish (e.g., tab interactivity, richer mixer controls) can be layered without altering the current binding/state model.
