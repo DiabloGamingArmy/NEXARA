@@ -230,9 +230,22 @@ export class NexeraGoLiveController {
 
         this.previewVideo.srcObject = this.stream;
 
-        this.client.addVideoInputDevice(this.stream.getVideoTracks()[0], "camera");
-        if (this.stream.getAudioTracks()[0]) {
-            this.client.addAudioInputDevice(this.stream.getAudioTracks()[0]);
+        // Split tracks into clean MediaStreams for IVS SDK
+        const vTrack = this.stream.getVideoTracks()[0] || null;
+        const aTrack = this.stream.getAudioTracks()[0] || null;
+
+        if (!vTrack) {
+            throw new Error("No video track available from capture source");
+        }
+
+        const videoStream = new MediaStream([vTrack]);
+        const audioStream = aTrack ? new MediaStream([aTrack]) : null;
+
+        // IMPORTANT: provide a name AND a VideoComposition
+        await this.client.addVideoInputDevice(videoStream, "video1", { index: 0 });
+
+        if (audioStream) {
+            await this.client.addAudioInputDevice(audioStream, "audio1");
         }
 
         await this.client.startBroadcast(this.session.streamKey);
