@@ -539,102 +539,216 @@
                 <div id="live-directory-grid" class="live-grid live-directory-grid"></div>
             </div>
         </div>
-        <div id="view-live-setup" class="view-section" style="display:none;">
-            <div class="go-live-setup">
-                <div class="go-live-setup-header">
-                    <div>
-                        <div class="go-live-title">Go Live Setup</div>
-                        <p class="go-live-subtitle">Prepare your stream with a dedicated page before you go live.</p>
+        
+                <div id="view-live-setup" class="view-section" style="display:none;">
+            <div id="go-live-root" class="go-live-studio ui-basic is-active">
+                <div class="go-live-studio-topbar glass-panel">
+                    <div class="topbar-left">
+                        <button class="ghost-btn go-live-close-btn" type="button">
+                            <i class="ph ph-caret-left"></i>
+                            <span>Back</span>
+                        </button>
+                        <div>
+                            <div class="go-live-title">Go Live Setup</div>
+                            <p class="go-live-subtitle">Prepare your stream with a dedicated page before you go live.</p>
+                        </div>
                     </div>
-                    <button class="icon-pill" type="button" onclick="window.navigateTo('live');"><i class="ph ph-caret-left"></i> Back to Live</button>
+                    <div class="topbar-right">
+                        <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
+                        <select id="go-live-ui-config" class="go-live-select form-input">
+                            <option value="basic">Basic</option>
+                            <option value="advanced">Advanced</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="go-live-grid">
-                    <div class="glass-panel go-live-card">
-                        <div class="input-group">
-                            <label class="settings-label" for="live-setup-title">Session Title</label>
-                            <input id="live-setup-title" class="form-input" placeholder="Give your stream a standout title">
-                        </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="live-setup-category">Category</label>
-                            <select id="live-setup-category" class="form-input">
-                                <option>STEM</option>
-                                <option>Gaming</option>
-                                <option>Music</option>
-                                <option>Sports</option>
-                                <option>Creative</option>
-                            </select>
-                        </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="live-setup-tags">Tags / Keywords</label>
-                            <input id="live-setup-tags" class="form-input" placeholder="#science, #coding, #askmeanything">
-                            <div class="chip-row">
-                                <span class="chip">Live</span>
-                                <span class="chip">Community</span>
-                                <span class="chip">Q&amp;A</span>
+                <div class="go-live-views">
+                    <section id="go-live-basic-view" class="go-live-view is-active">
+                        <div class="basic-layout">
+                            <div class="basic-preview-column">
+                                <div class="glass-panel preview-pane">
+                                    <div class="preview-pane-header">
+                                        <div class="status-pill" id="go-live-status">Idle</div>
+                                        <div class="status-pill muted" id="go-live-visibility-pill">Preview</div>
+                                    </div>
+                                    <div class="preview-video-frame">
+                                        <video id="live-preview" autoplay muted playsinline></video>
+                                        <div id="obs-panel" class="obs-panel"></div>
+                                        <div class="preview-overlay">
+                                            <div class="state-callout" id="go-live-state-chip">Idle</div>
+                                            <div class="health-indicator">
+                                                <span class="dot"></span>
+                                                <span>Stream Health</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="preview-footer">
+                                        <div class="status-helper">Monitor your input and preview before you go live.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="basic-config-column">
+                                <div class="glass-panel config-shell">
+                                    <div class="config-header">
+                                        <div>
+                                            <div class="section-heading">Stream Setup</div>
+                                            <div class="settings-hint">Configure your stream before going live.</div>
+                                        </div>
+                                        <div class="status-dot-row">
+                                            <span class="status-dot" id="status-dot-indicator"></span>
+                                            <span id="status-dot-label">Idle</span>
+                                        </div>
+                                    </div>
+                                    <div class="config-scroll">
+                                        <div class="config-section">
+                                            <div class="section-heading">Stream Details</div>
+                                            <label class="settings-label" for="stream-title">Title</label>
+                                            <input id="stream-title" class="form-input" placeholder="Stream title">
+                                            <label class="settings-label" for="stream-category">Category</label>
+                                            <input id="stream-category" class="form-input" placeholder="Choose a category">
+                                            <label class="settings-label" for="stream-tags">Tags</label>
+                                            <input id="stream-tags" class="form-input" placeholder="Tags (comma separated)">
+                                        </div>
+                                        <div class="config-section">
+                                            <div class="section-heading">Input Source</div>
+                                            <label class="settings-label" for="input-mode">Choose source</label>
+                                            <select id="input-mode" class="form-input">
+                                                <option value="camera">Camera</option>
+                                                <option value="screen">Screen Share</option>
+                                                <option value="external">Streaming Software (OBS)</option>
+                                            </select>
+                                        </div>
+                                        <div class="config-section">
+                                            <div class="section-heading">Latency</div>
+                                            <label class="settings-label" for="latency-mode">Latency mode</label>
+                                            <select id="latency-mode" class="form-input">
+                                                <option value="NORMAL">Normal Latency</option>
+                                                <option value="LOW">Low Latency</option>
+                                            </select>
+                                            <div class="settings-hint">Normal latency balances reliability; low latency favors interactivity.</div>
+                                        </div>
+                                        <div class="config-section">
+                                            <div class="section-heading">Recording</div>
+                                            <div class="toggle-row">
+                                                <div>
+                                                    <div class="settings-label">Auto-Record</div>
+                                                    <div class="settings-hint">Save a copy of your stream when ending the session.</div>
+                                                </div>
+                                                <label class="switch">
+                                                    <input type="checkbox" id="auto-record">
+                                                    <span class="slider"></span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="config-actions">
+                                        <div class="status-helper" id="go-live-status-text">Idle</div>
+                                        <div class="control-row">
+                                            <button class="create-btn-sidebar" id="start-stream">Start Stream</button>
+                                            <button class="icon-pill" id="end-stream" disabled>End Stream</button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="live-setup-thumbnail">Thumbnail Upload (optional)</label>
-                            <input id="live-setup-thumbnail" type="file" class="form-input">
-                        </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="live-setup-privacy">Privacy / Visibility</label>
-                            <select id="live-setup-privacy" class="form-input">
-                                <option>Public</option>
-                                <option>Followers</option>
-                                <option>Unlisted</option>
-                            </select>
-                        </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="latency-mode">Latency</label>
-                            <select id="latency-mode" class="form-input">
-                                <option value="normal" selected>Normal Latency</option>
-                                <option value="low">Low Latency</option>
-                            </select>
-                            <div class="settings-hint">Balance real-time interaction with stream stability.</div>
-                        </div>
-                        <div class="input-group toggle-row">
-                            <div>
-                                <div class="settings-label">Auto-Record</div>
-                                <div class="settings-hint">Save a copy of your stream when ending the session.</div>
+                    </section>
+                    <section id="go-live-advanced-view" class="go-live-view">
+                        <div class="advanced-layout">
+                            <div class="advanced-grid">
+                                <div class="glass-panel advanced-card scenes-panel">
+                                    <div class="section-heading">Scenes &amp; Sources</div>
+                                    <div class="scene-list">
+                                        <div class="scene-row active">Scene 1 – Main</div>
+                                        <div class="scene-row">Scene 2 – Intermission</div>
+                                        <div class="scene-row">Scene 3 – BRB</div>
+                                    </div>
+                                    <div class="source-subpanel">
+                                        <div class="section-subheading">Sources</div>
+                                        <div class="source-list">
+                                            <div class="source-row">Camera 1</div>
+                                            <div class="source-row">Screen Capture</div>
+                                            <div class="source-row">Overlay: Alerts</div>
+                                        </div>
+                                        <div class="add-row">
+                                            <button class="icon-pill" type="button"><i class="ph ph-plus"></i>Add Scene</button>
+                                            <button class="icon-pill" type="button"><i class="ph ph-plus"></i>Add Source</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="glass-panel advanced-card program-card">
+                                    <div class="program-grid">
+                                        <div class="monitor program-monitor">
+                                            <div class="monitor-label">PROGRAM</div>
+                                            <div class="monitor-body"></div>
+                                        </div>
+                                        <div class="monitor preview-monitor">
+                                            <div class="monitor-label">PREVIEW</div>
+                                            <div class="monitor-body"></div>
+                                        </div>
+                                    </div>
+                                    <div class="program-meta">
+                                        <div class="live-indicator">LIVE</div>
+                                        <div class="program-timer">00:00:00</div>
+                                        <div class="program-notes">Program/preview monitors ready for switching.</div>
+                                    </div>
+                                </div>
+                                <div class="advanced-right">
+                                    <div class="glass-panel advanced-card mixer-card">
+                                        <div class="section-heading">Audio Mixer</div>
+                                        <div class="mixer-grid">
+                                            <div class="mixer-strip">
+                                                <div class="mixer-title">Mic</div>
+                                                <div class="meter"></div>
+                                                <div class="mixer-actions">
+                                                    <button class="icon-pill" type="button">Mute</button>
+                                                    <button class="icon-pill" type="button">Solo</button>
+                                                </div>
+                                            </div>
+                                            <div class="mixer-strip">
+                                                <div class="mixer-title">System</div>
+                                                <div class="meter"></div>
+                                                <div class="mixer-actions">
+                                                    <button class="icon-pill" type="button">Mute</button>
+                                                    <button class="icon-pill" type="button">Solo</button>
+                                                </div>
+                                            </div>
+                                            <div class="mixer-strip">
+                                                <div class="mixer-title">Music</div>
+                                                <div class="meter"></div>
+                                                <div class="mixer-actions">
+                                                    <button class="icon-pill" type="button">Mute</button>
+                                                    <button class="icon-pill" type="button">Solo</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="glass-panel advanced-card stats-card">
+                                        <div class="section-heading">Stream Stats</div>
+                                        <div class="stats-grid">
+                                            <div class="stat-row"><span>Bitrate</span><span class="muted">—</span></div>
+                                            <div class="stat-row"><span>Dropped Frames</span><span class="muted">—</span></div>
+                                            <div class="stat-row"><span>Ingest</span><span class="muted">—</span></div>
+                                            <div class="stat-row"><span>Viewers</span><span class="muted">—</span></div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <label class="switch">
-                                <input type="checkbox" id="auto-record">
-                                <span class="slider"></span>
-                            </label>
+                            <div class="glass-panel advanced-tabs">
+                                <div class="tab-row">
+                                    <button class="tab active" type="button">Logs</button>
+                                    <button class="tab" type="button">Chat</button>
+                                    <button class="tab" type="button">Stream Events</button>
+                                    <button class="tab" type="button">Encoder</button>
+                                </div>
+                                <div class="tab-panel">
+                                    <pre class="log-feed">Awaiting logs...</pre>
+                                </div>
+                            </div>
                         </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="live-video-mode">Video Source</label>
-                            <select id="live-video-mode" class="form-input">
-                                <option value="camera">Camera (webcam)</option>
-                                <option value="screen">Screen share</option>
-                                <option value="external">External software (OBS / RTMP)</option>
-                            </select>
-                            <select id="live-video-device" class="form-input" style="margin-top:8px;"></select>
-                        </div>
-                        <div class="input-group">
-                            <label class="settings-label" for="live-audio-mode">Audio Source</label>
-                            <select id="live-audio-mode" class="form-input">
-                                <option value="mic">Microphone</option>
-                                <option value="system">Use system audio (screen share)</option>
-                                <option value="mixed">Mic + system audio</option>
-                                <option value="external">External / provided by OBS</option>
-                            </select>
-                            <select id="live-audio-device" class="form-input" style="margin-top:8px;"></select>
-                        </div>
-                        <div class="input-group">
-                            <label class="settings-label">Live Preview</label>
-                            <video id="live-preview" class="live-preview" style="width:100%; border-radius:10px; background:#0c0c0f;" muted playsinline autoplay></video>
-                            <div id="live-status-text" class="settings-hint" style="margin-top:6px;">Idle</div>
-                        </div>
-                        <div style="display:flex; justify-content:flex-end; gap:8px;">
-                            <button class="create-btn-sidebar" id="start-stream" style="width:auto;">Start Streaming</button>
-                            <button class="create-btn-sidebar" id="end-stream" style="width:auto; display:none;">End Stream</button>
-                        </div>
-                    </div>
+                    </section>
                 </div>
             </div>
         </div>
+
         <div id="view-videos" class="view-section" style="display:none;">
             <div id="videos-topbar"></div>
             <div id="video-feed" class="video-feed"></div>
