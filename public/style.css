@@ -1925,6 +1925,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     padding: 10px;
     background: rgba(255, 255, 255, 0.02);
     display: flex;
+    flex-direction: column;
     gap: 8px;
 }
 
