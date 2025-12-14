@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
@@ -20,7 +20,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
+const db = getFirestore(app);
 const storage = getStorage(app);
 
 // --- Global State & Cache ---
@@ -835,10 +835,7 @@ function initApp(onReady) {
                         userProfile.theme = savedTheme;
                         applyTheme(savedTheme);
 
-                        // Restore 'following' state locally
-                        if (userProfile.following) {
-                            userProfile.following.forEach(function (uid) { followedUsers.add(uid); });
-                        }
+                        await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
                     } else {
@@ -2080,6 +2077,88 @@ window.goBack = function () {
 };
 
 // --- Follow Logic (Optimistic UI) ---
+function updateFollowButtonsForUser(uid, isFollowing) {
+    const btns = document.querySelectorAll(`.js-follow-user-${uid}`);
+    btns.forEach(function (btn) {
+        if (isFollowing) {
+            btn.innerHTML = 'Following';
+            btn.classList.add('following');
+
+            btn.style.background = 'transparent';
+            btn.style.borderColor = 'var(--border)';
+            btn.style.color = 'var(--text-muted)';
+
+            if (btn.classList.contains('create-btn-sidebar')) {
+                btn.textContent = "Following";
+                btn.style.background = "transparent";
+                btn.style.color = "var(--primary)";
+                btn.style.borderColor = "var(--primary)";
+            }
+        } else {
+            btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
+            btn.classList.remove('following');
+
+            btn.style.background = 'rgba(255,255,255,0.1)';
+            btn.style.borderColor = 'transparent';
+            btn.style.color = 'var(--text-main)';
+
+            if (btn.classList.contains('create-btn-sidebar')) {
+                btn.textContent = "Follow";
+                btn.style.background = "var(--primary)";
+                btn.style.color = "black";
+                btn.style.borderColor = "var(--primary)";
+            }
+        }
+    });
+}
+
+function updateFollowerCountCache(uid, previousState, nextState) {
+    if (previousState === nextState) return;
+    const delta = nextState ? 1 : -1;
+    const countEl = document.getElementById(`profile-follower-count-${uid}`);
+
+    if (userCache[uid]) {
+        const currentCount = userCache[uid].followersCount || 0;
+        userCache[uid].followersCount = Math.max(0, currentCount + delta);
+    }
+
+    if (countEl) {
+        const rendered = parseInt(countEl.textContent || '0', 10) || 0;
+        const updated = Math.max(0, rendered + delta);
+        countEl.textContent = updated;
+    }
+}
+
+async function persistFollowChange(uid, wasFollowing) {
+    const targetUserRef = doc(db, 'users', uid);
+    const currentUserRef = doc(db, 'users', currentUser.uid);
+    const followerRef = doc(db, 'users', uid, 'followers', currentUser.uid);
+    const followingRef = doc(db, 'users', currentUser.uid, 'following', uid);
+
+    let finalState = wasFollowing;
+
+    await runTransaction(db, async function (tx) {
+        const followerDoc = await tx.get(followerRef);
+        const currentlyFollowing = followerDoc.exists();
+
+        if (currentlyFollowing) {
+            tx.delete(followerRef);
+            tx.delete(followingRef);
+            tx.set(targetUserRef, { followersCount: increment(-1) }, { merge: true });
+            tx.set(currentUserRef, { following: arrayRemove(uid), followingCount: increment(-1) }, { merge: true });
+            finalState = false;
+        } else {
+            tx.set(followerRef, { followedAt: serverTimestamp() }, { merge: true });
+            tx.set(followingRef, { followedAt: serverTimestamp() }, { merge: true });
+            tx.set(targetUserRef, { followersCount: increment(1) }, { merge: true });
+            tx.set(currentUserRef, { following: arrayUnion(uid), followingCount: increment(1) }, { merge: true });
+            finalState = true;
+        }
+    });
+
+    return finalState;
+}
+
 window.toggleFollow = function (c, event) {
     if (event) event.stopPropagation();
 
@@ -2104,70 +2183,38 @@ window.toggleFollow = function (c, event) {
 
 window.toggleFollowUser = async function (uid, event) {
     if (event) event.stopPropagation();
+    if (!currentUser || !currentUser.uid) return toast('Please sign in to follow users.', 'info');
 
-    const isFollowing = followedUsers.has(uid);
-    if (isFollowing) followedUsers.delete(uid);
-    else followedUsers.add(uid);
+    const previousState = followedUsers.has(uid);
 
-    // 1. Update Buttons immediately
-    const btns = document.querySelectorAll(`.js-follow-user-${uid}`);
-    btns.forEach(function (btn) {
-        if (isFollowing) {
-            btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
-            btn.classList.remove('following');
-
-            btn.style.background = 'rgba(255,255,255,0.1)';
-            btn.style.borderColor = 'transparent';
-            btn.style.color = 'var(--text-main)';
-
-            if (btn.classList.contains('create-btn-sidebar')) {
-                btn.textContent = "Follow";
-                btn.style.background = "var(--primary)";
-                btn.style.color = "black";
-                btn.style.borderColor = "var(--primary)";
-            }
-        } else {
-            btn.innerHTML = 'Following';
-            btn.classList.add('following');
-
-            btn.style.background = 'transparent';
-            btn.style.borderColor = 'var(--border)';
-            btn.style.color = 'var(--text-muted)';
-
-            if (btn.classList.contains('create-btn-sidebar')) {
-                btn.textContent = "Following";
-                btn.style.background = "transparent";
-                btn.style.color = "var(--primary)";
-                btn.style.borderColor = "var(--primary)";
-            }
-        }
-    });
-
-    // 2. Real-time Follower Count Update
-    const countEl = document.getElementById(`profile-follower-count-${uid}`);
-    let newCount = 0;
-
-    if (userCache[uid]) {
-        let currentCount = userCache[uid].followersCount || 0;
-        newCount = isFollowing ? Math.max(0, currentCount - 1) : currentCount + 1;
-        userCache[uid].followersCount = newCount;
-    }
-
-    if (countEl) {
-        countEl.textContent = newCount;
-    }
-
-    // 3. Backend Update
     try {
-        if (isFollowing) {
-            await updateDoc(doc(db, 'users', uid), { followersCount: increment(-1) });
-            await updateDoc(doc(db, 'users', currentUser.uid), { following: arrayRemove(uid) });
-        } else {
-            await updateDoc(doc(db, 'users', uid), { followersCount: increment(1) });
-            await updateDoc(doc(db, 'users', currentUser.uid), { following: arrayUnion(uid) });
-        }
-    } catch (e) { console.error(e); }
+        const finalState = await persistFollowChange(uid, previousState);
+        if (finalState) followedUsers.add(uid); else followedUsers.delete(uid);
+        updateFollowButtonsForUser(uid, finalState);
+        updateFollowerCountCache(uid, previousState, finalState);
+    } catch (e) {
+        console.error('Follow action failed', e);
+        toast('Could not update follow status. Please try again.', 'error');
+        updateFollowButtonsForUser(uid, previousState);
+    }
 };
+
+async function hydrateFollowingState(uid, profileData = {}) {
+    followedUsers = new Set();
+
+    const seeded = Array.isArray(profileData.following) ? profileData.following : [];
+    seeded.forEach(function (id) { followedUsers.add(id); });
+
+    try {
+        const snap = await getDocs(collection(db, 'users', uid, 'following'));
+        snap.forEach(function (docSnap) { followedUsers.add(docSnap.id); });
+    } catch (err) {
+        console.error('Unable to refresh following list', err);
+    }
+
+    userProfile.following = Array.from(followedUsers);
+    if (userCache[uid]) userCache[uid].following = userProfile.following;
+}
 
 // --- Render Logic (The Core) ---
 function getPostHTML(post) {
@@ -3490,6 +3537,10 @@ const renderCommentHtml = function(c, isReply) {
   const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
   const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
+  const username = cAuthor.username ? `@${escapeHtml(cAuthor.username)}` : '';
+  const timestampText = c.timestamp
+    ? new Date(c.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : 'Now';
 
   const parentCommentId = c.parentCommentId || c.parentId;
   const replyStyle = (isReply || !!parentCommentId)
@@ -3505,15 +3556,16 @@ const renderCommentHtml = function(c, isReply) {
   return `
     <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
       <div style="display:flex; gap:10px; align-items:flex-start;">
-        ${avatarHtml}
+        <div class="author-wrapper reply-author" onclick="window.openUserProfile('${c.userId}', event)" style="margin-left:0; padding:6px 8px;">
+          ${avatarHtml}
+          <div>
+            <div class="author-line" style="font-size:0.95rem;"><span class="author-name">${escapeHtml(cAuthor.name || 'User')}</span></div>
+            <span class="post-meta">${username}</span>
+          </div>
+        </div>
 
         <div style="flex:1;">
-          <div style="font-size:0.9rem; margin-bottom:2px;">
-            <strong>${escapeHtml(cAuthor.name || 'User')}</strong>
-            <span style="color:var(--text-muted); font-size:0.8rem;">
-              • ${c.timestamp ? new Date(c.timestamp.seconds * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : 'Now'}
-            </span>
-          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;">${timestampText}</div>
 
           <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">
             ${escapeHtml(c.text || '')}
@@ -7956,7 +8008,7 @@ class GoLiveSetupController {
             let json = null;
             try {
                 json = raw ? JSON.parse(raw) : null;
-            } catch (parseError) {
+            } catch (_) {
                 json = null;
             }
 
