@@ -7412,12 +7412,57 @@ function renderLiveDirectoryFromCache() {
     renderLiveGrid(filtered);
 }
 
+const IVS_BROADCAST_SRC = 'https://web-broadcast.live-video.net/1.0.0/amazon-ivs-web-broadcast.min.js';
+
+function loadBroadcastSdk() {
+    if (window.IVSBroadcastClient) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = IVS_BROADCAST_SRC;
+        script.async = true;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+}
+
+function mapSessionFromBackend(data = {}, config = {}) {
+    const ingestEndpoint = data.ingestEndpoint || data.inputEndpoint;
+    const rtmpsIngestUrl = data.rtmpsIngestUrl || (ingestEndpoint ? `rtmps://${ingestEndpoint}:443/app/` : '');
+    return {
+        sessionId: data.sessionId,
+        channelArn: data.channelArn,
+        playbackUrl: data.playbackUrl,
+        streamKey: data.streamKey,
+        visibility: data.visibility ?? (config.privacy || 'public').toLowerCase(),
+        title: data.title ?? config.title ?? '',
+        category: data.category ?? config.category ?? '',
+        tags: Array.isArray(data.tags) ? data.tags : config.tags ?? [],
+        ingestEndpoint,
+        rtmpsIngestUrl,
+    };
+}
+
+function deriveIngestHostname(session = {}) {
+    if (session.ingestEndpoint) return session.ingestEndpoint;
+    if (session.rtmpsIngestUrl) {
+        try {
+            const url = new URL(session.rtmpsIngestUrl);
+            return url.hostname;
+        } catch (_) {
+            return null;
+        }
+    }
+    return null;
+}
+
 class GoLiveSetupController {
     constructor() {
         this.functions = getFunctions(app);
         this.state = 'idle';
         this.session = null;
         this.stream = null;
+        this.broadcastClient = null;
         this.previewEl = null;
         this.statusEl = null;
         this.startButton = null;
@@ -7516,11 +7561,12 @@ class GoLiveSetupController {
 
     updateUiState() {
         if (this.startButton) {
-            this.startButton.disabled = this.state === 'initializing';
-            this.startButton.textContent = this.state === 'initializing' ? 'Starting…' : 'Start Streaming';
+            const disableStart = ['initializing', 'starting', 'live', 'ready'].includes(this.state);
+            this.startButton.disabled = disableStart;
+            this.startButton.textContent = this.state === 'initializing' ? 'Starting…' : this.state === 'starting' ? 'Going Live…' : 'Start Streaming';
         }
         if (this.endButton) {
-            this.endButton.style.display = this.state === 'live' || this.state === 'previewing' ? 'inline-flex' : 'none';
+            this.endButton.style.display = this.state === 'live' || this.state === 'previewing' || this.state === 'ready' ? 'inline-flex' : 'none';
         }
     }
 
@@ -7600,7 +7646,15 @@ class GoLiveSetupController {
             } else {
                 this.setState('previewing', 'External streaming software selected; skipping local capture');
             }
-            await this.initializeBackend(config);
+            const session = await this.initializeBackend(config);
+            if (!session) {
+                throw new Error('No session returned from backend');
+            }
+            if (config.videoMode === 'external') {
+                this.showExternalInstructions(session);
+                return;
+            }
+            await this.startBroadcast(session);
         } catch (error) {
             console.error('[GoLive]', 'Start flow failed', error);
             this.setState('error', error?.message || 'Failed to start stream');
@@ -7610,7 +7664,11 @@ class GoLiveSetupController {
     async onEnd(event) {
         if (event) event.preventDefault();
         console.info('[GoLive]', 'End Stream requested');
+        await this.stopBroadcast();
         this.stopCurrentStream();
+        if (this.session?.sessionId) {
+            await this.markSessionEnded(this.session.sessionId);
+        }
         this.session = null;
         this.setState('idle', 'Stream ended or cancelled');
     }
@@ -7624,6 +7682,84 @@ class GoLiveSetupController {
         if (this.previewEl) {
             this.previewEl.srcObject = null;
         }
+    }
+
+    async stopBroadcast() {
+        if (this.broadcastClient) {
+            try {
+                await this.broadcastClient.stopBroadcast();
+            } catch (error) {
+                console.error('[GoLive]', 'Error stopping broadcast client', error);
+            }
+            this.broadcastClient = null;
+        }
+    }
+
+    async markSessionLive(sessionId) {
+        if (!sessionId) return;
+        try {
+            await updateDoc(doc(db, 'liveStreams', sessionId), {
+                isLive: true,
+                startedAt: serverTimestamp(),
+                endedAt: null,
+            });
+        } catch (error) {
+            console.error('[GoLive]', 'Failed to mark session live', error);
+        }
+    }
+
+    async markSessionEnded(sessionId) {
+        if (!sessionId) return;
+        try {
+            await updateDoc(doc(db, 'liveStreams', sessionId), {
+                isLive: false,
+                endedAt: serverTimestamp(),
+            });
+        } catch (error) {
+            console.error('[GoLive]', 'Failed to mark session ended', error);
+        }
+    }
+
+    async startBroadcast(session) {
+        if (!session) throw new Error('Missing session details for broadcast');
+        if (!this.stream) throw new Error('No media stream available to broadcast');
+
+        const ingestHostname = deriveIngestHostname(session);
+        if (!ingestHostname) {
+            throw new Error('Missing ingest endpoint from backend');
+        }
+
+        this.setState('starting', 'Loading broadcast SDK');
+        await loadBroadcastSdk();
+
+        const streamConfig = window.IVSBroadcastClient?.BASIC_LANDSCAPE;
+        this.broadcastClient = window.IVSBroadcastClient.create({
+            ingestEndpoint: ingestHostname,
+            streamConfig,
+        });
+
+        const videoTrack = this.stream.getVideoTracks?.()[0];
+        if (videoTrack) {
+            this.broadcastClient.addVideoInputDevice(videoTrack, 'camera');
+        }
+
+        const audioTracks = this.stream.getAudioTracks ? this.stream.getAudioTracks() : [];
+        if (audioTracks?.length) {
+            audioTracks.forEach((track) => this.broadcastClient.addAudioInputDevice(track));
+        }
+
+        this.setState('starting', 'Connecting to ingest server');
+        await this.broadcastClient.startBroadcast(session.streamKey);
+        await this.markSessionLive(session.sessionId);
+        this.setState('live', 'Broadcast started');
+    }
+
+    showExternalInstructions(session) {
+        const ingestUrl = session?.rtmpsIngestUrl || (session?.ingestEndpoint ? `rtmps://${session.ingestEndpoint}:443/app/` : '');
+        const detail = ingestUrl && session?.streamKey
+            ? `Use ${ingestUrl} with stream key ${session.streamKey}`
+            : 'Channel ready. Configure your encoder with the provided ingest endpoint and stream key.';
+        this.setState('ready', detail);
     }
 
     async acquireMedia(config) {
@@ -7745,9 +7881,11 @@ class GoLiveSetupController {
             }
 
             const data = json ?? {};
-            this.session = data || null;
-            console.info('[GoLive]', 'createEphemeralChannel response', data);
-            this.setState('live', 'Ephemeral channel ready');
+            const session = mapSessionFromBackend(data, config);
+            this.session = session;
+            console.info('[GoLive]', 'createEphemeralChannel response', session);
+            this.setState('starting', 'Ephemeral channel ready');
+            return session;
         } catch (error) {
             console.error('[GoLive]', 'Backend call failed', error);
             this.setState('error', error?.message || 'Backend initialization failed');
