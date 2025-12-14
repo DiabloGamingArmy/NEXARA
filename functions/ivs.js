@@ -122,7 +122,7 @@ function respondWithError(res, status, message) {
 // =============================================================
 // 1. initializeUserChannel  (Persistent Channel Per User)
 // =============================================================
-const initializeUserChannel = onRequest(
+exports.initializeUserChannel = onRequest(
     { region: "us-central1", secrets: [AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY] },
     async (req, res) => {
         if (applyCors(req, res)) return;
@@ -188,7 +188,7 @@ const initializeUserChannel = onRequest(
 // =============================================================
 // 2. createEphemeralChannel  (Temporary Streams On-Demand)
 // =============================================================
-const createEphemeralChannel = onRequest(
+exports.createEphemeralChannel = onRequest(
     { region: "us-central1", secrets: [AWS_KEY, AWS_SECRET] },
     async (req, res) => {
         if (applyCors(req, res)) return;
@@ -252,7 +252,7 @@ const createEphemeralChannel = onRequest(
 // =============================================================
 // 3. generatePlaybackToken  (Signed Token for Private Streams)
 // =============================================================
-const generatePlaybackToken = onRequest(
+exports.generatePlaybackToken = onRequest(
     { region: "us-central1", secrets: [AWS_PLAYBACK_PRIVATE_KEY] },
     async (req, res) => {
         if (applyCors(req, res)) return;
@@ -304,8 +304,3 @@ const generatePlaybackToken = onRequest(
     }
 );
 
-module.exports = {
-    initializeUserChannel,
-    createEphemeralChannel,
-    generatePlaybackToken,
-};
