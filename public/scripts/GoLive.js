@@ -58,6 +58,7 @@ export class NexeraGoLiveController {
         this.inputMode = "camera"; // camera | screen | external
         this.audioMode = "mic";    // mic | system | mixed | external
         this.latencyMode = "normal"; // normal | low
+        this.autoRecord = false;
 
         this.session = null;
         this.client = null;
@@ -92,9 +93,14 @@ export class NexeraGoLiveController {
                     </select>
 
                     <select id="latency-mode">
-                        <option value="normal">Normal Latency</option>
+                        <option value="normal">Normal Latency (default)</option>
                         <option value="low">Low Latency</option>
                     </select>
+
+                    <label class="checkbox-inline">
+                        <input type="checkbox" id="auto-record" />
+                        <span>Enable Auto-record</span>
+                    </label>
                 </div>
 
                 <div class="control-area">
@@ -112,6 +118,10 @@ export class NexeraGoLiveController {
 
         document.getElementById("latency-mode").onchange = e => {
             this.latencyMode = e.target.value;
+        };
+
+        document.getElementById("auto-record").onchange = e => {
+            this.autoRecord = e.target.checked;
         };
 
         document.getElementById("start-stream").onclick = () => this.start();
@@ -148,16 +158,17 @@ export class NexeraGoLiveController {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${idToken}`,
-                },
-                body: JSON.stringify({
-                    title,
-                    category,
-                    tags,
-                    latencyMode,
-                    visibility: "public",
-                }),
-            }
+            Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+            title,
+            category,
+            tags,
+            latencyMode,
+            autoRecord: !!this.autoRecord,
+            visibility: "public",
+        }),
+    }
         );
 
         const raw = await response.text();
