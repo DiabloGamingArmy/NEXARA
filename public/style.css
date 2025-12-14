@@ -1330,6 +1330,10 @@ body.go-live-open {
     --gl-text: var(--text-main);
     --gl-accent: var(--primary);
     --gl-radius: 16px;
+    height: 100vh;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
 #view-live-setup {
@@ -1439,6 +1443,10 @@ body.go-live-open {
     padding-right: 6px;
 }
 
+.go-live-studio.ui-basic .topbar-status-chip {
+    display: none;
+}
+
 .go-live-view {
     flex: 1;
     display: none;
@@ -1499,6 +1507,14 @@ body.go-live-open {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+.go-live-status-outside {
+    color: var(--gl-muted);
+}
+
+.go-live-status-outside.is-live {
+    color: var(--gl-accent);
 }
 
 .stream-health {
@@ -1580,10 +1596,23 @@ body.go-live-open {
     letter-spacing: 0.5px;
 }
 
+.preview-corner-status.is-live {
+    color: #ff3b30;
+    font-weight: 800;
+}
+
+.preview-corner-status:not(.is-live) {
+    color: var(--gl-muted);
+}
+
 .overlay-meta {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px;
+}
+
+.go-live-studio.ui-basic .basic-overlay-strip {
+    display: none !important;
 }
 
 .overlay-label {
@@ -1762,8 +1791,38 @@ body.go-live-open {
     align-items: center;
 }
 
+.go-live-action-btn {
+    min-height: 44px;
+    align-items: center;
+}
+
+.go-live-action-btn.btn-primary {
+    background: var(--gl-accent);
+    color: #050608;
+    border: none;
+    font-weight: 800;
+}
+
+.go-live-action-btn.btn-danger {
+    background: #ff3b30;
+    color: #fff;
+    border: none;
+    font-weight: 800;
+}
+
+.go-live-action-btn.btn-disabled {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--gl-muted);
+    cursor: not-allowed;
+    border: 1px solid var(--gl-border);
+}
+
 .status-helper {
     color: var(--gl-muted);
+}
+
+.go-live-studio.ui-basic #go-live-status-text-secondary {
+    display: none;
 }
 
 .troubleshooting {
@@ -2052,6 +2111,34 @@ body.go-live-open {
     justify-content: space-between;
     gap: 10px;
     font-size: 0.95rem;
+}
+
+.go-live-studio.ui-basic .basic-latency-section,
+.go-live-studio.ui-basic .basic-recording-section {
+    display: none !important;
+}
+
+.chat-placeholder {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.chat-body-placeholder {
+    border: 1px dashed var(--gl-border);
+    border-radius: 12px;
+    padding: 12px;
+    min-height: 160px;
+    color: var(--gl-muted);
+}
+
+.chat-composer-placeholder {
+    display: flex;
+    gap: 8px;
+}
+
+.chat-composer-placeholder .form-input {
+    flex: 1;
 }
 
 .session-details.subtle-panel {

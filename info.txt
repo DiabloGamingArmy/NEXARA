@@ -68,10 +68,20 @@ Feed/Topics formatting + Discussion filters + Messaging hover controls + Time Ca
 - Verified badges: comment author lines now call renderVerifiedBadge so verified users show their badge alongside feed cards and thread headers.
 - Messaging UI: message meta/time/actions hide by default and reveal on hover/focus-within; actions button sits top-right in the bubble. Reaction button was removed from the inline row—React lives in the 3-dots menu. Message header tools gain 5px top padding; compose area remains anchored with flex column layout.
 - Time Capsule: added a small muted “Powered by Wikipedia” link inside the Time Capsule widget footer (wiki-attribution) opening https://www.wikipedia.org in a new tab.
-- Manual test checklist: 
+- Manual test checklist:
   * Topic bar shows verified topics first with checkmarks, followed topics appear after following/unfollowing without duplicates.
   * Post bodies and discussion main post render line breaks/indentation; comments preserve spacing.
   * Discussion view shows “Discuss” header; filter dropdown defaults to Popularity; user/content modes show input and filter correctly; posting a reply surfaces it at the top until the stream updates.
   * Verified badge appears next to comment authors and elsewhere names already use renderVerifiedBadge.
   * Messages: hover/focus reveals time and 3-dots inside the bubble; React only available via 3-dots; header padding looks spaced; composer stays fixed while scrolling history.
   * Time Capsule footer shows “Powered by Wikipedia” link that opens in a new tab.
+
+Go Live Basic UI cleanup (status indicators, chat placeholder, controls, scroll, bindings)
+- Files: public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (Basic studio markup tweaks), public/style.css (status colors, chat placeholder styling, scroll/controls), public/scripts/GoLive.js (state rendering, button states, defaults).
+- Status indicators: top-bar status pill hidden in Basic; primary outside-preview pill #go-live-status now gets .is-live accent color; inside-preview #go-live-state-chip turns red with “LIVE” when live. Basic hides the overlay status strip and the extra status helper.
+- Layout/scroll: go-live-root/go-live-studio set to full viewport with go-live-views as the scrollable region so the studio scrolls without inspector hacks.
+- Basic visibility/controls: latency and recording sections are hidden in Basic and force defaults latencyMode=NORMAL and autoRecord=false before start. Visibility pills keep shared formState.
+- Basic bottom area: session details replaced by a chat placeholder (Live Chat panel with disabled input/button) while Advanced retains session/log panels.
+- Buttons: Start/End buttons use go-live-action-btn with state-driven classes (btn-primary for enabled start, btn-danger for enabled end, btn-disabled otherwise) and stay aligned in a flex row.
+- Private key persistence: persistPrivateStreamKey now no-ops unless visibility is private and logs non-blocking warnings on failure so permission-denied errors do not break start.
+- Manual test steps: open Go Live Basic, scroll through panels, confirm only two live indicators (outside pill blue when live, inside preview red). Start with camera and screen inputs; public/private toggles update pill active state; latency/auto-record hidden and payload defaults to NORMAL/false. Start/End buttons enable per state (Start disabled when live, End red and enabled). Chat placeholder visible instead of session details. Advanced view still loads with logs/session info.

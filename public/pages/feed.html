@@ -561,7 +561,7 @@
                 </div>
             </div>
             <div class="topbar-right">
-                <div class="gl-pill status-pill ready" id="go-live-top-status">Ready</div>
+                <div class="gl-pill status-pill ready topbar-status-chip" id="go-live-top-status">Ready</div>
                 <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
                 <select id="go-live-ui-config" class="go-live-select form-input">
                     <option value="basic">Basic</option>
@@ -576,7 +576,7 @@
                         <div class="preview-pane gl-panel">
                             <div class="preview-pane-header">
                                 <div class="status-chip-row">
-                                    <div class="gl-pill" id="go-live-status">Ready</div>
+                                    <div class="gl-pill go-live-status-outside" id="go-live-status">Ready</div>
                                     <div class="gl-pill subtle" id="go-live-visibility-pill">Preview</div>
                                 </div>
                                 <div class="stream-health">
@@ -588,8 +588,8 @@
                                 <div id="live-preview-shell" class="preview-visual">
                                     <video id="live-preview" autoplay muted playsinline></video>
                                     <div class="preview-overlay">
-                                        <div class="state-callout" id="go-live-state-chip">Idle</div>
-                                        <div class="overlay-meta">
+                                        <div class="state-callout preview-corner-status" id="go-live-state-chip">Idle</div>
+                                        <div class="overlay-meta basic-overlay-strip">
                                             <div class="overlay-label">Status</div>
                                             <div class="overlay-text" id="go-live-status-text">Idle</div>
                                             <div class="overlay-label">Notes</div>
@@ -601,15 +601,12 @@
                             <div class="preview-footer">
                                 <div class="preview-note">Use this preview to verify audio/video before you go live.</div>
                             </div>
-                            <div class="session-details gl-panel subtle-panel">
-                                <div class="section-heading">Live Session</div>
-                                <div class="session-grid">
-                                    <div class="session-row"><span class="muted">Session ID</span><span id="session-id-basic">—</span></div>
-                                    <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-basic">—</span></div>
-                                    <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-basic">—</span></div>
-                                    <div class="session-row"><span class="muted">Playback</span><span id="session-playback-basic">—</span></div>
-                                    <div class="session-row"><span class="muted">Latency</span><span id="session-latency-basic">—</span></div>
-                                    <div class="session-row"><span class="muted">Auto-record</span><span id="session-auto-basic">—</span></div>
+                            <div class="gl-panel subtle-panel chat-placeholder" aria-label="Live chat placeholder">
+                                <div class="section-heading">Live Chat</div>
+                                <div class="chat-body-placeholder">Chat will appear here when enabled.</div>
+                                <div class="chat-composer-placeholder">
+                                    <input class="form-input" placeholder="Chat coming soon…" disabled>
+                                    <button class="icon-pill" type="button" disabled>Send</button>
                                 </div>
                             </div>
                         </div>
@@ -658,7 +655,7 @@
                                         <button class="ghost-pill" type="button" id="basic-visibility-private" data-go-live-visibility="private">Private</button>
                                     </div>
                                 </div>
-                                <div class="config-section">
+                                <div class="config-section basic-latency-section">
                                     <div class="section-heading">Latency</div>
                                     <p class="helper-text">Lower latency reduces delay with your viewers but can be less forgiving on unstable connections.</p>
                                     <div class="gl-field">
@@ -669,7 +666,7 @@
                                         </select>
                                     </div>
                                 </div>
-                                <div class="config-section">
+                                <div class="config-section basic-recording-section">
                                     <div class="section-heading">Recording</div>
                                     <p class="helper-text">Automatically capture your broadcast for replay while you stream.</p>
                                     <div class="gl-row align-center">
@@ -684,8 +681,8 @@
                                     <div class="section-heading">Controls</div>
                                     <div class="status-helper" id="go-live-status-text-secondary">Ready to preview.</div>
                                     <div class="control-row">
-                                        <button class="create-btn-sidebar primary" id="start-stream">Start Stream</button>
-                                        <button class="icon-pill destructive" id="end-stream" disabled>End Stream</button>
+                                        <button class="create-btn-sidebar primary go-live-action-btn" id="start-stream">Start Stream</button>
+                                        <button class="icon-pill destructive go-live-action-btn" id="end-stream" disabled>End Stream</button>
                                     </div>
                                     <div class="troubleshooting">
                                         <div class="troubleshooting-title">Troubleshooting</div>

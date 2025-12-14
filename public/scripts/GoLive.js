@@ -294,9 +294,15 @@ export class NexeraGoLiveController {
 
         if (!titleEl && !categoryEl && !tagsEl) return false;
 
-        const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
+        let latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
         const inputMode = inputModeEl?.value || "camera";
         const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
+        let autoRecord = !!autoRecordEl?.checked;
+
+        if (this.uiMode === "basic") {
+            latencyMode = "NORMAL";
+            autoRecord = false;
+        }
 
         this.formState = {
             ...this.formState,
@@ -306,7 +312,7 @@ export class NexeraGoLiveController {
             visibility,
             inputMode,
             latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
-            autoRecord: !!autoRecordEl?.checked,
+            autoRecord,
         };
 
         this.inputMode = this.formState.inputMode;
@@ -428,6 +434,13 @@ export class NexeraGoLiveController {
 
         const modeSelect = document.getElementById("go-live-ui-config");
         if (modeSelect) modeSelect.value = nextMode;
+
+        if (nextMode === "basic") {
+            this.formState.latencyMode = "NORMAL";
+            this.formState.autoRecord = false;
+            this.latencyMode = "NORMAL";
+            this.autoRecord = false;
+        }
 
         if (!options.skipPersist) {
             try {
@@ -712,6 +725,7 @@ export class NexeraGoLiveController {
         const helper = document.getElementById("go-live-status-text-secondary");
         const helperAdv = document.getElementById("go-live-status-text-secondary-adv");
         const topStatus = document.getElementById("go-live-top-status");
+        const liveOutside = document.getElementById("go-live-status");
 
         const labels = {
             idle: "Idle",
@@ -724,8 +738,15 @@ export class NexeraGoLiveController {
         const label = labels[state] || "Idle";
         const detail = message ? `${label} – ${message}` : label;
 
-        if (chip) chip.textContent = label;
-        if (status) status.textContent = detail;
+        if (chip) {
+            chip.textContent = state === "live" ? "LIVE" : label;
+            chip.classList.toggle("is-live", state === "live");
+        }
+        if (status) {
+            status.textContent = label;
+            status.classList.toggle("is-live", state === "live");
+            status.classList.toggle("is-idle", state !== "live");
+        }
         if (overlayText) overlayText.textContent = detail;
         if (pill) pill.textContent = this.inputMode === "external" ? "External Software" : "Preview";
         if (dotLabel) dotLabel.textContent = label;
@@ -748,6 +769,11 @@ export class NexeraGoLiveController {
                     : "state-idle";
             el.classList.add(cls);
         });
+
+        if (liveOutside) {
+            liveOutside.classList.toggle("is-live", state === "live");
+            liveOutside.classList.toggle("is-idle", state !== "live");
+        }
 
         if (previous !== state || message) {
             this.log(`State: ${detail}`);
@@ -780,6 +806,22 @@ export class NexeraGoLiveController {
         if (advStart) advStart.disabled = startDisabled;
         if (endBtn) endBtn.disabled = endDisabled;
         if (advEnd) advEnd.disabled = endDisabled;
+
+        const decorate = (btn, activeClass) => {
+            if (!btn) return;
+            btn.classList.add("go-live-action-btn");
+            btn.classList.remove("btn-primary", "btn-danger", "btn-disabled");
+            if (btn.disabled) {
+                btn.classList.add("btn-disabled");
+            } else if (activeClass) {
+                btn.classList.add(activeClass);
+            }
+        };
+
+        decorate(startBtn, "btn-primary");
+        decorate(advStart, "btn-primary");
+        decorate(endBtn, "btn-danger");
+        decorate(advEnd, "btn-danger");
     }
 
     log(message) {
@@ -1035,6 +1077,7 @@ export class NexeraGoLiveController {
         if (!this.session?.sessionId || !this.session.streamKey) return;
         const uid = this.auth?.currentUser?.uid || null;
         if (!uid) return;
+        if ((this.formState.visibility || this.session.visibility) !== "private") return;
         try {
             await setDoc(
                 doc(this.db, "liveStreams", this.session.sessionId, "private", "keys"),
@@ -1043,8 +1086,8 @@ export class NexeraGoLiveController {
             );
             await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), { streamKey: deleteField() });
         } catch (error) {
-            console.error("[GoLive] failed to persist private stream key", error);
-            this.log(`Persist key failed: ${error.message || error}`);
+            console.warn("[GoLive] failed to persist private stream key", error);
+            this.log(`Persist key failed (non-blocking): ${error.message || error}`);
         }
     }
 
@@ -1094,6 +1137,11 @@ export class NexeraGoLiveController {
             this.readAdvancedFormIntoState();
         } else {
             this.readBasicFormIntoState();
+        }
+
+        if (this.uiMode === "basic") {
+            this.formState.latencyMode = "NORMAL";
+            this.formState.autoRecord = false;
         }
 
         const state = {
