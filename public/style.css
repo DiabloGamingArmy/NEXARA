@@ -1513,6 +1513,12 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     border: 1px solid var(--gl-border);
 }
 
+.preview-visual {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
 .preview-video-frame video {
     width: 100%;
     height: 100%;
@@ -1751,6 +1757,26 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     gap: 12px;
 }
 
+.advanced-config {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.advanced-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
 .program-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(240px, 1fr));
@@ -1899,7 +1925,6 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     padding: 10px;
     background: rgba(255, 255, 255, 0.02);
     display: flex;
-    flex-direction: column;
     gap: 8px;
 }
 
@@ -1939,6 +1964,34 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     display: flex;
     justify-content: space-between;
     align-items: center;
+}
+
+.session-grid {
+    display: grid;
+    gap: 8px;
+}
+
+.session-grid.compact {
+    gap: 6px;
+}
+
+.session-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 0.95rem;
+}
+
+.session-details.subtle-panel {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed var(--gl-border);
+}
+
+.obs-slot {
+    border: 1px dashed var(--gl-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.02);
 }
 
 .advanced-tabs {

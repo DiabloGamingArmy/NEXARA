@@ -550,7 +550,7 @@
                 </div>
             </div>
             <div class="topbar-right">
-                <div class="gl-pill status-pill ready">Ready</div>
+                <div class="gl-pill status-pill ready" id="go-live-top-status">Ready</div>
                 <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
                 <select id="go-live-ui-config" class="go-live-select form-input">
                     <option value="basic">Basic</option>
@@ -573,20 +573,33 @@
                                     <div class="health-dot good"></div>
                                 </div>
                             </div>
-                            <div class="preview-video-frame">
-                                <video id="live-preview" autoplay muted playsinline></video>
-                                <div class="preview-overlay">
-                                    <div class="state-callout" id="go-live-state-chip">Idle</div>
-                                    <div class="overlay-meta">
-                                        <div class="overlay-label">Status</div>
-                                        <div class="overlay-text" id="go-live-status-text">Idle</div>
-                                        <div class="overlay-label">Notes</div>
-                                        <div class="overlay-text">Stream will appear here once started.</div>
+                            <div class="preview-video-frame" id="live-preview-slot-basic">
+                                <div id="live-preview-shell" class="preview-visual">
+                                    <video id="live-preview" autoplay muted playsinline></video>
+                                    <div class="preview-overlay">
+                                        <div class="state-callout" id="go-live-state-chip">Idle</div>
+                                        <div class="overlay-meta">
+                                            <div class="overlay-label">Status</div>
+                                            <div class="overlay-text" id="go-live-status-text">Idle</div>
+                                            <div class="overlay-label">Notes</div>
+                                            <div class="overlay-text">Stream will appear here once started.</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                             <div class="preview-footer">
                                 <div class="preview-note">Use this preview to verify audio/video before you go live.</div>
+                            </div>
+                            <div class="session-details gl-panel subtle-panel">
+                                <div class="section-heading">Live Session</div>
+                                <div class="session-grid">
+                                    <div class="session-row"><span class="muted">Session ID</span><span id="session-id-basic">—</span></div>
+                                    <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-basic">—</span></div>
+                                    <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-basic">—</span></div>
+                                    <div class="session-row"><span class="muted">Playback</span><span id="session-playback-basic">—</span></div>
+                                    <div class="session-row"><span class="muted">Latency</span><span id="session-latency-basic">—</span></div>
+                                    <div class="session-row"><span class="muted">Auto-record</span><span id="session-auto-basic">—</span></div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -626,9 +639,11 @@
                                             <option value="external">External Encoder</option>
                                         </select>
                                     </div>
-                                    <div id="obs-panel" class="obs-panel">
-                                        <div class="obs-panel-title">OBS / External encoder</div>
-                                        <p class="helper-text">Point your encoder here when using RTMP.</p>
+                                    <div id="obs-panel-slot-basic">
+                                        <div id="obs-panel" class="obs-panel">
+                                            <div class="obs-panel-title">OBS / External encoder</div>
+                                            <p class="helper-text">Point your encoder here when using RTMP.</p>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="config-section">
@@ -637,8 +652,8 @@
                                     <div class="gl-field">
                                         <label class="gl-label" for="latency-mode">Latency profile</label>
                                         <select id="latency-mode" class="form-input">
-                                            <option value="normal">Normal</option>
-                                            <option value="low">Low Latency</option>
+                                            <option value="NORMAL">Normal</option>
+                                            <option value="LOW">Low Latency</option>
                                         </select>
                                     </div>
                                 </div>
@@ -676,6 +691,61 @@
             </section>
             <section id="go-live-advanced-view" class="go-live-view">
                 <div class="advanced-layout">
+                    <div class="gl-panel advanced-card advanced-config">
+                        <div class="gl-panel-header">
+                            <div class="section-heading">Stream Controls</div>
+                            <div class="status-helper" id="go-live-status-text-secondary-adv">Manage settings before going live.</div>
+                        </div>
+                        <div class="config-grid">
+                            <div class="gl-field">
+                                <label class="gl-label" for="adv-stream-title">Title</label>
+                                <input id="adv-stream-title" class="form-input" placeholder="Name your stream">
+                            </div>
+                            <div class="gl-field">
+                                <label class="gl-label" for="adv-stream-category">Category</label>
+                                <input id="adv-stream-category" class="form-input" placeholder="Gaming, IRL, Podcast...">
+                            </div>
+                            <div class="gl-field">
+                                <label class="gl-label" for="adv-stream-tags">Tags</label>
+                                <input id="adv-stream-tags" class="form-input" placeholder="Add tags separated by commas">
+                            </div>
+                            <div class="gl-field">
+                                <label class="gl-label" for="adv-input-mode">Input mode</label>
+                                <select id="adv-input-mode" class="form-input">
+                                    <option value="camera">Camera</option>
+                                    <option value="screen">Screen Share</option>
+                                    <option value="external">External Encoder</option>
+                                </select>
+                            </div>
+                            <div class="gl-field">
+                                <label class="gl-label" for="adv-latency-mode">Latency profile</label>
+                                <select id="adv-latency-mode" class="form-input">
+                                    <option value="NORMAL">Normal</option>
+                                    <option value="LOW">Low Latency</option>
+                                </select>
+                            </div>
+                            <div class="gl-row align-center">
+                                <div class="gl-label">Auto-record</div>
+                                <label class="switch" aria-label="Toggle auto recording in advanced view">
+                                    <input type="checkbox" id="adv-auto-record">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="advanced-actions">
+                            <div class="gl-row align-center gap-8">
+                                <div class="gl-label muted">Visibility</div>
+                                <div class="pill-row">
+                                    <button class="ghost-pill active" type="button" id="adv-visibility-public">Public</button>
+                                    <button class="ghost-pill" type="button" id="adv-visibility-private">Private</button>
+                                </div>
+                            </div>
+                            <div class="control-row">
+                                <button class="create-btn-sidebar primary" id="adv-start-stream">Start Stream</button>
+                                <button class="icon-pill destructive" id="adv-end-stream" disabled>End Stream</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="advanced-grid">
                         <div class="gl-panel advanced-card scenes-panel">
                             <div class="gl-panel-header">
@@ -719,7 +789,7 @@
                                 </div>
                                 <div class="monitor preview-monitor">
                                     <div class="monitor-label">PREVIEW</div>
-                                    <div class="monitor-body"></div>
+                                    <div class="monitor-body" id="live-preview-slot-advanced"></div>
                                 </div>
                             </div>
                             <div class="program-meta">
@@ -781,12 +851,35 @@
                                     <div class="section-heading">Stream Stats</div>
                                 </div>
                                 <div class="stats-grid">
-                                    <div class="stat-row"><span>Ingest</span><span class="muted">—</span></div>
-                                    <div class="stat-row"><span>Bitrate</span><span class="muted">—</span></div>
-                                    <div class="stat-row"><span>RTT</span><span class="muted">—</span></div>
-                                    <div class="stat-row"><span>Dropped Frames</span><span class="muted">—</span></div>
-                                    <div class="stat-row"><span>CPU</span><span class="muted">—</span></div>
+                                    <div class="stat-row"><span>Ingest</span><span class="muted" id="adv-stat-ingest">—</span></div>
+                                    <div class="stat-row"><span>Bitrate</span><span class="muted" id="adv-stat-bitrate">—</span></div>
+                                    <div class="stat-row"><span>RTT</span><span class="muted" id="adv-stat-rtt">—</span></div>
+                                    <div class="stat-row"><span>Dropped Frames</span><span class="muted" id="adv-stat-dropped">—</span></div>
+                                    <div class="stat-row"><span>CPU</span><span class="muted" id="adv-stat-cpu">—</span></div>
+                                    <div class="stat-row"><span>Duration</span><span class="muted" id="adv-stat-duration">00:00:00</span></div>
+                                    <div class="stat-row"><span>Tracks</span><span class="muted" id="adv-stat-tracks">—</span></div>
+                                    <div class="stat-row"><span>Input</span><span class="muted" id="adv-stat-mode">—</span></div>
+                                    <div class="stat-row"><span>Health</span><span class="muted" id="adv-stat-health">Monitoring</span></div>
                                 </div>
+                            </div>
+                            <div class="gl-panel advanced-card session-card">
+                                <div class="gl-panel-header">
+                                    <div class="section-heading">Live Session</div>
+                                </div>
+                                <div class="session-grid compact">
+                                    <div class="session-row"><span class="muted">Session ID</span><span id="session-id-advanced">—</span></div>
+                                    <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-advanced">—</span></div>
+                                    <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-advanced" class="muted">—</span></div>
+                                    <div class="session-row"><span class="muted">Playback</span><span id="session-playback-advanced" class="muted">—</span></div>
+                                    <div class="session-row"><span class="muted">Latency</span><span id="session-latency-advanced" class="muted">—</span></div>
+                                    <div class="session-row"><span class="muted">Auto-record</span><span id="session-auto-advanced" class="muted">—</span></div>
+                                </div>
+                            </div>
+                            <div class="gl-panel advanced-card obs-advanced">
+                                <div class="gl-panel-header">
+                                    <div class="section-heading">OBS / External Encoder</div>
+                                </div>
+                                <div id="obs-panel-slot-advanced" class="obs-slot helper-text">External encoder info will appear here when selected.</div>
                             </div>
                         </div>
                     </div>
@@ -799,7 +892,7 @@
                         </div>
                         <div class="tab-panels">
                             <div class="tab-panel show">
-                                <pre class="log-feed">Awaiting logs...</pre>
+                                <pre class="log-feed" id="go-live-log-advanced">Awaiting logs...</pre>
                             </div>
                             <div class="tab-panel">
                                 <div class="placeholder-block">Chat will appear here.</div>
