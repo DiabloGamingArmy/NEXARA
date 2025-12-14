@@ -56,17 +56,8 @@
       }
     ],
     "rewrites": [
-      {
-        "regex": "^(?!.*\\.).*$",
-        "destination": "/index.html"
-      }
+      { "source": "**", "destination": "/index.html" }
     ]
-  }
-]
-,
-    "rewrites": [
-  { "source": "**", "destination": "/index.html" }
-]
   },
   "storage": {
     "rules": "storage.rules"
