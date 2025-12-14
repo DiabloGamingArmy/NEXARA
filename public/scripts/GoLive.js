@@ -7,6 +7,9 @@ import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp, setDoc, dele
 const GO_LIVE_MODE_STORAGE_KEY = "nexera-go-live-mode";
 const GO_LIVE_AUDIO_STORAGE_KEY = "nexera-go-live-audio-gains";
 
+const GO_LIVE_MODE_STORAGE_KEY = "nexera-go-live-mode";
+const GO_LIVE_AUDIO_STORAGE_KEY = "nexera-go-live-audio-gains";
+
 // --------------------------------------------------
 // Load IVS Web Broadcast SDK
 // --------------------------------------------------
