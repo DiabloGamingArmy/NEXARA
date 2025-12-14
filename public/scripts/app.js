@@ -564,6 +564,9 @@ let staffReportsUnsub = null;
 let staffLogsUnsub = null;
 let activeOptionsPost = null;
 let threadComments = [];
+let optimisticThreadComments = [];
+let commentFilterMode = 'popularity';
+let commentFilterQuery = '';
 
 // --- Navigation Stack ---
 let navStack = [];
@@ -636,6 +639,16 @@ const THEMES = {
     'Random': '#bd00ff', 'Brainrot': '#ff00ff', 'Sports': '#ff4500',
     'Gaming': '#7000ff', 'News': '#ff3d3d', 'Music': '#00bfff'
 };
+
+const VERIFIED_TOPICS = [
+    'STEM',
+    'Coding',
+    'Gaming',
+    'Music',
+    'Sports',
+    'News',
+    'History'
+];
 
 const DEFAULT_CATEGORY_RULES = [
     'Stay on-topic; explain context for beginners.',
@@ -2501,7 +2514,7 @@ function getPostHTML(post) {
                     <div class="category-badge">${post.category}</div>
                     ${verificationChip}
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                    <p>${formattedBody}</p>
+                    <p class="post-body-text">${formattedBody}</p>
                     ${tagListHtml}
                     ${locationBadge}
                     ${scheduledChip}
@@ -3697,6 +3710,12 @@ window.openThread = function(postId) {
     activeReplyId = null;
     commentRootDisplayCount[postId] = 20;
     replyExpansionState = {};
+    commentFilterMode = 'popularity';
+    commentFilterQuery = '';
+    const filterSelect = document.getElementById('comment-filter-mode');
+    const filterInput = document.getElementById('comment-filter-input');
+    if (filterSelect) filterSelect.value = 'popularity';
+    if (filterInput) { filterInput.value = ''; filterInput.style.display = 'none'; }
     window.resetInputBox();
     window.navigateTo('thread');
     renderThreadMainPost(postId);
@@ -3716,15 +3735,68 @@ function attachThreadComments(postId) {
         const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
         if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
-        renderThreadComments(comments);
+        threadComments = comments;
+        pruneOptimisticMatches(comments);
+        renderThreadComments();
     }, function(error) {
         console.error('Comments load error', error);
         container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
     }));
 }
 
+function mergeOptimisticComments(base = []) {
+  const seen = new Set();
+  const merged = [];
+  optimisticThreadComments.forEach(function(c) { merged.push(c); seen.add(c.id); });
+  base.forEach(function(c) { if (!seen.has(c.id)) merged.push(c); });
+  return merged;
+}
+
+function pruneOptimisticMatches(serverComments = []) {
+  if (!optimisticThreadComments.length) return;
+  const serverKeys = new Set(serverComments.map(function(c) { return `${c.userId || ''}::${(c.text || '').trim()}`; }));
+  optimisticThreadComments = optimisticThreadComments.filter(function(opt) {
+    const key = `${opt.userId || ''}::${(opt.text || '').trim()}`;
+    return !serverKeys.has(key);
+  });
+}
+
+function getCommentSortComparator() {
+  if (commentFilterMode === 'popularity') {
+    return function(a, b) {
+      const likeDiff = (b.likes || 0) - (a.likes || 0);
+      if (likeDiff !== 0) return likeDiff;
+      return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
+    };
+  }
+  if (commentFilterMode === 'datetime') {
+    return function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); };
+  }
+  return function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); };
+}
+
+function filterAndSortComments(list = []) {
+  const queryVal = (commentFilterQuery || '').trim().toLowerCase();
+  let filtered = list.slice();
+
+  if (commentFilterMode === 'user' && queryVal) {
+    filtered = filtered.filter(function(c) {
+      const author = userCache[c.userId] || {};
+      const name = (author.name || '').toLowerCase();
+      const username = (author.username || '').toLowerCase();
+      return name.includes(queryVal) || username.includes(queryVal);
+    });
+  } else if (commentFilterMode === 'content' && queryVal) {
+    filtered = filtered.filter(function(c) { return (c.text || '').toLowerCase().includes(queryVal); });
+  }
+
+  const sorter = getCommentSortComparator();
+  return filtered.slice().sort(sorter);
+}
+
 const renderCommentHtml = function(c, isReply) {
   const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
+  const verifiedBadge = renderVerifiedBadge(cAuthor, 'with-gap');
 
   const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
   const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
@@ -3752,7 +3824,7 @@ const renderCommentHtml = function(c, isReply) {
         <div class="author-wrapper reply-author" onclick="window.openUserProfile('${c.userId}', event)" style="margin-left:0; padding:6px 8px;">
           ${avatarHtml}
           <div>
-            <div class="author-line" style="font-size:0.95rem;"><span class="author-name">${escapeHtml(cAuthor.name || 'User')}</span></div>
+          <div class="author-line" style="font-size:0.95rem;"><span class="author-name">${escapeHtml(cAuthor.name || 'User')}</span>${verifiedBadge}</div>
             <span class="post-meta">${username}</span>
           </div>
         </div>
@@ -3760,7 +3832,7 @@ const renderCommentHtml = function(c, isReply) {
         <div style="flex:1;">
           <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;">${timestampText}</div>
 
-          <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">
+          <div class="comment-body-text" style="margin-top:2px; font-size:0.95rem; line-height:1.4;">
             ${escapeHtml(c.text || '')}
           </div>
 
@@ -3801,13 +3873,15 @@ const renderCommentHtml = function(c, isReply) {
     </div>`;
 };
 
-function renderThreadComments(comments = []) {
+function renderThreadComments(comments = mergeOptimisticComments(threadComments)) {
   const container = document.getElementById('thread-stream');
   if (!container) return;
 
-  currentThreadComments = comments;
-  const grouping = groupCommentsByParent(comments);
-  const roots = grouping.roots.slice().sort(function(a, b) { return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0); });
+  const filtered = filterAndSortComments(comments);
+  currentThreadComments = filtered;
+  const grouping = groupCommentsByParent(filtered);
+  const sorter = getCommentSortComparator();
+  const roots = grouping.roots.slice().sort(sorter);
   const byParent = grouping.byParent;
 
   const postId = activePostId;
@@ -3819,9 +3893,7 @@ function renderThreadComments(comments = []) {
   visibleRoots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
 
   const renderReplies = function(parentId) {
-    const replies = (byParent[parentId] || []).slice().sort(function(a, b) {
-      return (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0);
-    });
+    const replies = (byParent[parentId] || []).slice().sort(sorter);
     const slot = document.getElementById(`reply-slot-${parentId}`);
     if (!slot) return;
     const expanded = !!replyExpansionState[parentId];
@@ -3865,6 +3937,24 @@ function renderThreadComments(comments = []) {
     }
   }
 }
+
+window.updateCommentFilterMode = function(mode = 'popularity') {
+  commentFilterMode = mode || 'popularity';
+  commentFilterQuery = '';
+  const input = document.getElementById('comment-filter-input');
+  if (input) {
+    const needsInput = mode === 'user' || mode === 'content';
+    input.style.display = needsInput ? 'block' : 'none';
+    input.placeholder = mode === 'user' ? 'Filter by username' : 'Filter by keyword';
+    input.value = '';
+  }
+  renderThreadComments();
+};
+
+window.updateCommentFilterQuery = function(value = '') {
+  commentFilterQuery = value || '';
+  renderThreadComments();
+};
 
 
 
@@ -3937,7 +4027,7 @@ function renderThreadMainPost(postId) {
             </div>
             ${verificationBanner}
             <h2 id="thread-view-title" data-post-id="${post.id}" style="font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; line-height: 1.3;">${escapeHtml(post.title)}</h2>
-            <p style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${formattedBody}</p>
+            <p class="post-body-text thread-body-text" style="font-size: 1.1rem; line-height: 1.5; color: var(--text-main); margin-bottom: 1rem;">${formattedBody}</p>
             ${tagListHtml}
             ${locationBadge}
             ${scheduledChip}
@@ -3967,6 +4057,7 @@ window.sendComment = async function() {
     btn.disabled = true; 
     btn.textContent = "...";
 
+    let optimisticId = null;
     try {
         let mediaUrl = null;
         if(fileInput.files[0]) {
@@ -3976,6 +4067,21 @@ window.sendComment = async function() {
 
         const parentCommentId = normalizeReplyTarget(activeReplyId);
         const payload = buildReplyRecord({ text, mediaUrl, parentCommentId, userId: currentUser.uid });
+
+        const optimisticTimestamp = { seconds: Math.floor(Date.now() / 1000) };
+        optimisticId = `optimistic-${Date.now()}`;
+        const optimisticComment = {
+            ...payload,
+            id: optimisticId,
+            timestamp: optimisticTimestamp,
+            likes: 0,
+            dislikes: 0,
+            likedBy: [],
+            dislikedBy: []
+        };
+        optimisticThreadComments.unshift(optimisticComment);
+        renderThreadComments();
+
         payload.timestamp = serverTimestamp();
 
         await addDoc(collection(db, 'posts', activePostId, 'comments'), payload);
@@ -3993,8 +4099,10 @@ window.sendComment = async function() {
         document.getElementById('attach-btn-text').textContent = "📎 Attach"; 
         document.getElementById('attach-btn-text').style.color = "var(--text-muted)"; 
         fileInput.value = "";
-    } catch(e) { 
+    } catch(e) {
         console.error(e);
+        optimisticThreadComments = optimisticThreadComments.filter(function(c) { return c.id !== optimisticId; });
+        renderThreadComments();
     } finally {
         btn.disabled = false;
         btn.textContent = "Reply";
@@ -4643,7 +4751,9 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     }
 
     const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
-    const bodyPreview = compact ? `<p class="profile-card-body">${formattedBody}</p>` : `<p>${formattedBody}</p>`;
+    const bodyPreview = compact
+        ? `<p class="profile-card-body post-body-text">${formattedBody}</p>`
+        : `<p class="post-body-text">${formattedBody}</p>`;
 
     return `
         <div class="${cardClass}" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};${compact ? 'min-width:260px;' : ''}">
@@ -4902,6 +5012,16 @@ function renderCategoryPills() {
     header.innerHTML = '';
 
     const anchors = ['For You', 'Following'];
+    const seen = new Set(anchors.map(function(label) { return label.toLowerCase(); }));
+
+    const addTopic = function(list, topicName, verifiedFlag) {
+        const name = typeof topicName === 'string' ? topicName.trim() : '';
+        const key = name.toLowerCase();
+        if (!name || seen.has(key)) return;
+        seen.add(key);
+        list.push({ name, verified: !!verifiedFlag });
+    };
+
     anchors.forEach(function(label) {
         const pill = document.createElement('div');
         pill.className = 'category-pill' + (currentCategory === label ? ' active' : '');
@@ -4914,17 +5034,28 @@ function renderCategoryPills() {
     divider.className = 'category-divider';
     header.appendChild(divider);
 
+    const dynamicTopics = [];
+    const normalizedVerifiedSet = new Set(VERIFIED_TOPICS.map(function(t) { return (t || '').toLowerCase(); }));
+
+    VERIFIED_TOPICS.forEach(function(name) { addTopic(dynamicTopics, name, true); });
+
     const followedNames = collectFollowedCategoryNames();
-    const dynamicFull = (followedNames.length ? followedNames : computeTrendingCategories(20)).filter(function(name) {
-        return name && !anchors.includes(name);
-    });
+    followedNames.forEach(function(name) { addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase())); });
+
+    if (!followedNames.length) {
+        computeTrendingCategories(20).forEach(function(name) {
+            addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase()));
+        });
+    }
+
+    const dynamicFull = dynamicTopics;
     const dynamic = dynamicFull.slice(0, categoryVisibleCount);
 
-    dynamic.forEach(function(name) {
+    dynamic.forEach(function(topic) {
         const pill = document.createElement('div');
-        pill.className = 'category-pill' + (currentCategory === name ? ' active' : '');
-        pill.textContent = name;
-        pill.onclick = function() { window.setCategory(name); };
+        pill.className = 'category-pill' + (currentCategory === topic.name ? ' active' : '') + (topic.verified ? ' verified-topic' : '');
+        pill.innerHTML = `${escapeHtml(topic.name)}${topic.verified ? `<span class="topic-verified-icon">${getVerifiedIconSvg()}</span>` : ''}`;
+        pill.onclick = function() { window.setCategory(topic.name); };
         header.appendChild(pill);
     });
 
@@ -5545,11 +5676,6 @@ function renderMessages(msgs = [], convo = {}) {
             pill.onclick = function () { toggleReaction(convo.id || activeConversationId, msg.id, emoji, youReacted); };
             reactionRow.appendChild(pill);
         });
-        const addReactionBtn = document.createElement('button');
-        addReactionBtn.className = 'icon-pill';
-        addReactionBtn.innerHTML = '<i class="ph ph-smiley"></i>';
-        addReactionBtn.onclick = function () { showReactionPicker(convo.id || activeConversationId, msg.id); };
-        reactionRow.appendChild(addReactionBtn);
         bubble.appendChild(reactionRow);
 
         row.oncontextmenu = function (e) { e.preventDefault(); showMessageActionsMenu(msg, bubble, convo); };

@@ -496,7 +496,7 @@
                  <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;">
                     <span>←</span> Back
                 </button>
-                <h2 style="font-weight: 800; font-size: 1.2rem;">Thread</h2>
+                <h2 style="font-weight: 800; font-size: 1.2rem;">Discuss</h2>
             </div>
             <div id="thread-main-post"></div>
 
@@ -517,6 +517,16 @@
                          </div>
                      </div>
                 </div>
+            </div>
+            <div class="thread-filter-row">
+                <label for="comment-filter-mode" class="thread-filter-label">Filter</label>
+                <select id="comment-filter-mode" class="form-input" style="max-width:220px;" onchange="window.updateCommentFilterMode(this.value)">
+                    <option value="popularity">Popularity</option>
+                    <option value="user">User</option>
+                    <option value="datetime">Date/Time</option>
+                    <option value="content">Content</option>
+                </select>
+                <input id="comment-filter-input" class="form-input" style="display:none; max-width:260px;" placeholder="Type to filter..." oninput="window.updateCommentFilterQuery(this.value)">
             </div>
             <div id="thread-stream" style="padding: 1rem; max-width: 800px; margin: 0 auto;"></div>
         </div>
@@ -1059,6 +1069,7 @@
                         <i class="ph ph-book-open"></i> Learn More
                     </a>
                 </div>
+                <div class="time-capsule-footer"><a class="wiki-attribution" href="https://www.wikipedia.org" target="_blank" rel="noopener noreferrer">Powered by Wikipedia</a></div>
             </div>
         </div>
 
