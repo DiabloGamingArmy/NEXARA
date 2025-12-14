@@ -580,6 +580,22 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .messages-thread { display:flex; flex-direction:column; min-height:0; height:100%; overflow:hidden; }
 .messages-thread-inner { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
 .message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; }
+.message-thread-header .message-thread-profile-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    color: inherit;
+}
+.message-thread-header .message-thread-profile-btn:disabled {
+    opacity: 0.85;
+    cursor: default;
+}
+.message-thread-header .message-thread-title-row { display:flex; align-items:center; gap:6px; font-weight:800; }
+.message-thread-header .message-thread-subtitle { color:var(--text-muted); font-size:0.9rem; }
 .message-header-tools { display:flex; gap:8px; align-items:center; padding:0 1rem 0.5rem; }
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
@@ -1578,7 +1594,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 }
 
 #view-messages .message-thread-body {
-    overflow: visible;
+    overflow-y: auto;
+    overflow-x: hidden;
     padding-right: 0.75rem;
     scrollbar-gutter: stable both-edges;
 }

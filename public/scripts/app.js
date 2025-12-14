@@ -5375,6 +5375,7 @@ function renderMessageHeader(convo = {}) {
     const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
     const cid = convo.id || activeConversationId;
     const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
+    const targetProfileId = primaryOtherId || meta.otherIds?.[0] || null;
     let avatarUser = {
         uid: cid || primaryOtherId || 'conversation',
         username: label,
@@ -5397,8 +5398,26 @@ function renderMessageHeader(convo = {}) {
 
     const avatar = renderAvatar(avatarUser, { size: 36 });
     const verifiedBadge = (!convo.title && participants.length === 2) ? renderVerifiedBadge(avatarUser) : '';
+    const targetProfile = targetProfileId ? resolveParticipantDisplay(convo, targetProfileId) : null;
+    const participantCountLabel = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
+    const subtitleUsername = targetProfile
+        ? targetProfile.username
+            ? `@${escapeHtml(targetProfile.username)}`
+            : escapeHtml(targetProfile.displayName || '')
+        : '';
+    const subtitle = subtitleUsername ? `${subtitleUsername} • ${participantCountLabel}` : participantCountLabel;
+    const profileBtnAttrs = targetProfileId
+        ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
+        : 'class="message-thread-profile-btn" type="button" disabled';
+
     header.innerHTML = `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <div style="display:flex; align-items:center; gap:10px;">${avatar}<div><div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(label)}${verifiedBadge}</div><div style="color:var(--text-muted); font-size:0.85rem;">${participants.length} participant${participants.length === 1 ? '' : 's'}</div></div></div>
+        <button ${profileBtnAttrs}>
+            ${avatar}
+            <div>
+                <div class="message-thread-title-row">${escapeHtml(label)}${verifiedBadge}</div>
+                <div class="message-thread-subtitle">${subtitle}</div>
+            </div>
+        </button>
         <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')"><i class="ph ph-dots-three-outline"></i></button>
     </div>`;
 }

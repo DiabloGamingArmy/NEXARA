@@ -367,7 +367,7 @@ export class NexeraGoLiveController {
         if (!logEl) return;
         logEl.innerHTML = this.logEntries
             .slice(-50)
-            .map((line) => `<div class=\"log-line\">${line}</div>`)
+            .map((line) => `<div class="log-line">${line}</div>`)
             .join("");
         logEl.scrollTop = logEl.scrollHeight;
     }
