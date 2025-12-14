@@ -13,7 +13,6 @@ const { v4: uuidv4 } = require("uuid");
 const {
     IvsClient,
     CreateChannelCommand,
-    CreateStreamKeyCommand,
 } = require("@aws-sdk/client-ivs");
 
 // -------------------------------------------------------------
@@ -106,15 +105,6 @@ function makeIVS(accessKey, secretKey) {
     });
 }
 
-// -------------------------------------------------------------
-// Helper: Create Stream Key
-// -------------------------------------------------------------
-async function createStreamKey(ivs, channelArn) {
-    const cmd = new CreateStreamKeyCommand({ channelArn });
-    const res = await ivs.send(cmd);
-    return res.streamKey.value;
-}
-
 function respondWithError(res, status, message) {
     return res.status(status).json({ error: message });
 }
@@ -165,8 +155,11 @@ exports.initializeUserChannel = onRequest(
 
             const channelRes = await ivs.send(channelCmd);
             const { arn: channelArn, playbackUrl } = channelRes.channel;
-
-            const streamKeyValue = await createStreamKey(ivs, channelArn);
+            const streamKeyValue = channelRes.streamKey?.value;
+            if (!streamKeyValue) {
+                console.error("CreateChannel response missing stream key", channelRes);
+                return respondWithError(res, 500, "IVS channel created but stream key missing");
+            }
 
             const payload = {
                 uid,
@@ -223,8 +216,11 @@ exports.createEphemeralChannel = onRequest(
 
             const channelRes = await ivs.send(channelCmd);
             const { arn: channelArn, playbackUrl } = channelRes.channel;
-
-            const streamKeyValue = await createStreamKey(ivs, channelArn);
+            const streamKeyValue = channelRes.streamKey?.value;
+            if (!streamKeyValue) {
+                console.error("CreateChannel response missing stream key", channelRes);
+                return respondWithError(res, 500, "IVS channel created but stream key missing");
+            }
 
             const streamDoc = {
                 sessionId,
