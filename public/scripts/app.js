@@ -71,6 +71,7 @@ let followedCategories = new Set();
 let followedCategoryList = [];
 let followedUsers = new Set();
 let followedTopicsUnsubscribe = null;
+let followingUnsubscribe = null;
 
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
@@ -879,9 +880,15 @@ function initApp(onReady) {
                     try { followedTopicsUnsubscribe(); } catch (err) {}
                     followedTopicsUnsubscribe = null;
                 }
+                if (followingUnsubscribe) {
+                    try { followingUnsubscribe(); } catch (err) {}
+                    followingUnsubscribe = null;
+                }
                 followedCategories = new Set();
                 followedCategoryList = [];
                 userProfile.followedCategories = [];
+                followedUsers = new Set();
+                userProfile.following = [];
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
@@ -2149,26 +2156,57 @@ async function persistFollowChange(uid, wasFollowing) {
 
     let finalState = wasFollowing;
 
+    /* Dev verification checklist (follow systems):
+     * 1) Follow a user via "+ User" on a post -> navigate -> reload -> still followed.
+     * 2) Unfollow the same user -> reload -> remains unfollowed.
+     * 3) Follow a topic via Discover -> top bar updates immediately and survives reload.
+     * 4) Unfollow a topic -> top bar removes it and state persists across reloads.
+     * 5) Switching For You vs Following retains follow state and Following reflects the followed set.
+     * 6) One click = one write (no duplicate toggles/writes).
+     * 7) No console errors during follow/unfollow flows.
+     */
     await runTransaction(db, async function (tx) {
         const followerDoc = await tx.get(followerRef);
         const currentlyFollowing = followerDoc.exists();
+        const followingUpdate = currentlyFollowing ? arrayRemove(uid) : arrayUnion(uid);
 
         if (currentlyFollowing) {
             tx.delete(followerRef);
             tx.delete(followingRef);
             tx.set(targetUserRef, { followersCount: increment(-1) }, { merge: true });
-            tx.set(currentUserRef, { following: arrayRemove(uid), followingCount: increment(-1) }, { merge: true });
+            tx.set(currentUserRef, { following: followingUpdate, followingUsers: followingUpdate, followingCount: increment(-1) }, { merge: true });
             finalState = false;
         } else {
             tx.set(followerRef, { followedAt: serverTimestamp() }, { merge: true });
             tx.set(followingRef, { followedAt: serverTimestamp() }, { merge: true });
             tx.set(targetUserRef, { followersCount: increment(1) }, { merge: true });
-            tx.set(currentUserRef, { following: arrayUnion(uid), followingCount: increment(1) }, { merge: true });
+            tx.set(currentUserRef, { following: followingUpdate, followingUsers: followingUpdate, followingCount: increment(1) }, { merge: true });
             finalState = true;
         }
     });
 
     return finalState;
+}
+
+function normalizeFollowedTopicsFromProfile(data = {}) {
+    const ordered = Array.isArray(data.followedCategories) ? data.followedCategories : [];
+    const fallbacks = [];
+    if (Array.isArray(data.followingTopics)) fallbacks.push(...data.followingTopics);
+    if (Array.isArray(data.followedTopics)) fallbacks.push(...data.followedTopics);
+
+    const seen = new Set();
+    const normalized = [];
+    const pushUnique = function (value) {
+        const topic = typeof value === 'string' ? value.trim() : '';
+        if (topic && !seen.has(topic)) {
+            seen.add(topic);
+            normalized.push(topic);
+        }
+    };
+
+    ordered.forEach(pushUnique);
+    fallbacks.forEach(pushUnique);
+    return normalized;
 }
 
 function applyFollowedCategoryList(list = []) {
@@ -2240,14 +2278,14 @@ async function hydrateFollowedCategories(uid, profileData = {}) {
         followedTopicsUnsubscribe = null;
     }
 
-    const seeded = Array.isArray(profileData.followedCategories) ? profileData.followedCategories : [];
+    const seeded = normalizeFollowedTopicsFromProfile(profileData);
     applyFollowedCategoryList(seeded);
 
     try {
         const userRef = doc(db, 'users', uid);
         followedTopicsUnsubscribe = onSnapshot(userRef, function (snap) {
             if (!snap.exists()) return;
-            const next = Array.isArray(snap.data().followedCategories) ? snap.data().followedCategories : [];
+            const next = normalizeFollowedTopicsFromProfile(snap.data());
             applyFollowedCategoryList(next);
         });
     } catch (err) {
@@ -2267,7 +2305,7 @@ window.toggleFollow = async function (c, event) {
 
     try {
         const update = wasFollowing ? arrayRemove(topic) : arrayUnion(topic);
-        await setDoc(doc(db, 'users', currentUser.uid), { followedCategories: update }, { merge: true });
+        await setDoc(doc(db, 'users', currentUser.uid), { followedCategories: update, followingTopics: update }, { merge: true });
 
         const updatedList = wasFollowing
             ? followedCategoryList.filter(function (name) { return name !== topic; })
@@ -2300,21 +2338,70 @@ window.toggleFollowUser = async function (uid, event) {
     }
 };
 
-async function hydrateFollowingState(uid, profileData = {}) {
-    followedUsers = new Set();
+function normalizeFollowingArray(data = {}) {
+    const merged = [];
+    if (Array.isArray(data.following)) merged.push(...data.following);
+    if (Array.isArray(data.followingUsers)) merged.push(...data.followingUsers);
+    const unique = [];
+    const seen = new Set();
+    merged.forEach(function (id) {
+        const normalized = typeof id === 'string' ? id.trim() : '';
+        if (normalized && !seen.has(normalized)) {
+            seen.add(normalized);
+            unique.push(normalized);
+        }
+    });
+    return unique;
+}
 
-    const seeded = Array.isArray(profileData.following) ? profileData.following : [];
-    seeded.forEach(function (id) { followedUsers.add(id); });
+function applyFollowingUsersList(list = []) {
+    const next = new Set();
+    (list || []).forEach(function (id) {
+        if (typeof id === 'string' && id.trim()) next.add(id.trim());
+    });
+    followedUsers = next;
+    userProfile.following = Array.from(followedUsers);
+    if (currentUser?.uid && userCache[currentUser.uid]) userCache[currentUser.uid].following = userProfile.following;
+    syncFollowButtonsForKnownUsers();
+}
+
+function syncFollowButtonsForKnownUsers() {
+    document.querySelectorAll('[class*="js-follow-user-"]').forEach(function (btn) {
+        const match = Array.from(btn.classList).find(function (cls) { return cls.startsWith('js-follow-user-'); });
+        if (!match) return;
+        const uid = match.replace('js-follow-user-', '');
+        updateFollowButtonsForUser(uid, followedUsers.has(uid));
+    });
+}
+
+async function hydrateFollowingState(uid, profileData = {}) {
+    if (followingUnsubscribe) {
+        try { followingUnsubscribe(); } catch (err) {}
+        followingUnsubscribe = null;
+    }
+
+    applyFollowingUsersList(normalizeFollowingArray(profileData));
 
     try {
-        const snap = await getDocs(collection(db, 'users', uid, 'following'));
-        snap.forEach(function (docSnap) { followedUsers.add(docSnap.id); });
+        const docSnap = await getDoc(doc(db, 'users', uid));
+        if (docSnap.exists()) {
+            applyFollowingUsersList(normalizeFollowingArray(docSnap.data()));
+        }
+    } catch (err) {
+        console.warn('Unable to hydrate following array from profile', err);
+    }
+
+    try {
+        const followingRef = collection(db, 'users', uid, 'following');
+        followingUnsubscribe = onSnapshot(followingRef, function (snap) {
+            const ids = [];
+            snap.forEach(function (docSnap) { ids.push(docSnap.id); });
+            const merged = [...normalizeFollowingArray(userProfile), ...ids];
+            applyFollowingUsersList(merged);
+        });
     } catch (err) {
         console.error('Unable to refresh following list', err);
     }
-
-    userProfile.following = Array.from(followedUsers);
-    if (userCache[uid]) userCache[uid].following = userProfile.following;
 }
 
 // --- Render Logic (The Core) ---
@@ -4354,6 +4441,13 @@ window.renderDiscover = async function() {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
                 const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
+                const topicLabel = cat.name || cat.slug || cat.id || 'Category';
+                const topicClass = topicLabel.replace(/[^a-zA-Z0-9]/g, '');
+                const isFollowingTopic = followedCategories.has(topicLabel);
+                const topicArg = topicLabel.replace(/'/g, "\\'");
+                const followLabel = isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic';
+                const followClass = isFollowingTopic ? 'following' : '';
+                const followButton = `<button class="follow-btn js-follow-topic-${topicClass} ${followClass}" data-topic="${escapeHtml(topicLabel)}" onclick="event.stopPropagation(); window.toggleFollow('${topicArg}', event)" style="padding:8px 12px;">${followLabel}</button>`;
                 container.innerHTML += `
                     <div class="social-card" style="padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid ${cat.verified ? '#00f2ea' : 'var(--border)'};">
                         <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
@@ -4361,7 +4455,10 @@ window.renderDiscover = async function() {
                             <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
                             <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
                         </div>
-                        <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
+                        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
+                            <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
+                            ${followButton}
+                        </div>
                     </div>`;
             });
         } else if (discoverFilter === 'Categories' && discoverSearchTerm) {
@@ -4783,8 +4880,6 @@ function collectFollowedCategoryNames() {
             if ((memberships[id]?.status || 'active') !== 'left') pushName(name);
         });
     }
-
-    followedCategories.forEach(pushName);
     return names;
 }
 
