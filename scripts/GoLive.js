@@ -228,7 +228,7 @@ export class NexeraGoLiveController {
                 ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
                 : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
-                this.previewVideo.srcObject = this.stream;
+        this.previewVideo.srcObject = this.stream;
 
         // Split tracks into clean MediaStreams for IVS SDK
         const vTrack = this.stream.getVideoTracks()[0] || null;
