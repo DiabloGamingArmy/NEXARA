@@ -49,3 +49,39 @@ Known limitations / follow-ups
 - Visibility "private" remains a placeholder until fully wired to backend tokenized playback; UI still defaults to public.
 - Stream health depends on IVS Broadcast SDK capabilities; stats view falls back to basic status when metrics APIs are unavailable.
 - Additional UI polish (e.g., tab interactivity, richer mixer controls) can be layered without altering the current binding/state model.
+
+Go Live usability + control binding fixes (scrolling, mode switch, source/visibility/recording/latency wiring, private key persistence)
+- Canonical selectors/IDs: go-live-root/go-live-studio wrap the studio; go-live-ui-config is the single UI mode dropdown; basic controls use stream-title/stream-category/stream-tags/input-mode/latency-mode/auto-record-toggle with visibility pills basic-visibility-public|basic-visibility-private; advanced controls mirror via adv-stream-title/adv-stream-category/adv-stream-tags/adv-input-mode/adv-latency-mode/adv-auto-record with visibility pills adv-visibility-public|adv-visibility-private. Back button id: go-live-back-button.
+- Layout/scrolling: go-live-studio is fixed full-viewport with go-live-views as the internal scroll container (overflow-y:auto, touch scrolling). Body gains class go-live-open while the studio is open to lock background scrolling; removed automatically when leaving via navigation or the Back button.
+- State: single formState { title, category, tags, visibility, inputMode, latencyMode, autoRecord } kept in NexeraGoLiveController. Basic/Advanced forms sync via read/write helpers; visibility pills drive the shared state.
+- Payload: start() builds payload with visibility, latencyMode (NORMAL/LOW), autoRecord boolean, inputMode, title/category/tags. Debug logs now emit the chosen visibility/latency/autoRecord and the full createEphemeralChannel payload, plus the selected inputMode before media capture begins.
+- Input source: inputMode "screen" triggers navigator.mediaDevices.getDisplayMedia with audio, while "camera" uses getUserMedia; debug log prints the chosen mode before capture. Latency selector writes NORMAL/LOW into state and payload.
+- Auto-record UI: switch styling added for #auto-record-toggle and #adv-auto-record, defaults off, feeds boolean into payload.
+- Back/close: top bar Back button confirms before ending when starting/live (uses safeStop), always removes go-live-open, and navigates back without reloading.
+- Private key persistence: client-side write to liveStreams/{sessionId}/private/keys is no longer invoked; stream keys remain in-memory within the controller session only. No firestore.rules changes required; liveStreams visibility/isLive behavior unchanged.
+
+Feed/Topics formatting + Discussion filters + Messaging hover controls + Time Capsule attribution
+- Files: public/scripts/app.js (topic bar, comment filtering/sorting, optimistic replies, verified badges, message rendering), public/style.css (topic badge icon, post/comment formatting, thread filter row, messaging hover states, time capsule link), public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (discussion header label, comment filter UI, time capsule footer).
+- Topic bar: verified topics source lives in VERIFIED_TOPICS (app.js). renderCategoryPills now prepends verified topics with a check icon (class .topic-verified-icon) and appends followed topics without duplicates; trending topics only fill in when none are followed.
+- Post formatting: post bodies and profile previews use class post-body-text with white-space: pre-wrap; comment bodies use comment-body-text to preserve newlines/indentation in feed and discussion view without innerHTML changes.
+- Discussion view: header label is “Discuss”. Added thread-filter-row with #comment-filter-mode (Popularity/User/Date/Time/Content) and #comment-filter-input (shown for User/Content). Filtering/sorting is client-side over live snapshot data; default mode is popularity (likes desc, then newest). New replies render optimistically at the top via optimisticThreadComments and reconcile on snapshot.
+- Verified badges: comment author lines now call renderVerifiedBadge so verified users show their badge alongside feed cards and thread headers.
+- Messaging UI: message meta/time/actions hide by default and reveal on hover/focus-within; actions button sits top-right in the bubble. Reaction button was removed from the inline row—React lives in the 3-dots menu. Message header tools gain 5px top padding; compose area remains anchored with flex column layout.
+- Time Capsule: added a small muted “Powered by Wikipedia” link inside the Time Capsule widget footer (wiki-attribution) opening https://www.wikipedia.org in a new tab.
+- Manual test checklist:
+  * Topic bar shows verified topics first with checkmarks, followed topics appear after following/unfollowing without duplicates.
+  * Post bodies and discussion main post render line breaks/indentation; comments preserve spacing.
+  * Discussion view shows “Discuss” header; filter dropdown defaults to Popularity; user/content modes show input and filter correctly; posting a reply surfaces it at the top until the stream updates.
+  * Verified badge appears next to comment authors and elsewhere names already use renderVerifiedBadge.
+  * Messages: hover/focus reveals time and 3-dots inside the bubble; React only available via 3-dots; header padding looks spaced; composer stays fixed while scrolling history.
+  * Time Capsule footer shows “Powered by Wikipedia” link that opens in a new tab.
+
+Go Live Basic UI cleanup (status indicators, chat placeholder, controls, scroll, bindings)
+- Files: public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (Basic studio markup tweaks), public/style.css (status colors, chat placeholder styling, scroll/controls), public/scripts/GoLive.js (state rendering, button states, defaults).
+- Status indicators: top-bar status pill hidden in Basic; primary outside-preview pill #go-live-status now gets .is-live accent color; inside-preview #go-live-state-chip turns red with “LIVE” when live. Basic hides the overlay status strip and the extra status helper.
+- Layout/scroll: go-live-root/go-live-studio set to full viewport with go-live-views as the scrollable region so the studio scrolls without inspector hacks.
+- Basic visibility/controls: latency and recording sections are hidden in Basic and force defaults latencyMode=NORMAL and autoRecord=false before start. Visibility pills keep shared formState.
+- Basic bottom area: session details replaced by a chat placeholder (Live Chat panel with disabled input/button) while Advanced retains session/log panels.
+- Buttons: Start/End buttons use go-live-action-btn with state-driven classes (btn-primary for enabled start, btn-danger for enabled end, btn-disabled otherwise) and stay aligned in a flex row.
+- Private key persistence: persistPrivateStreamKey now no-ops unless visibility is private and logs non-blocking warnings on failure so permission-denied errors do not break start.
+- Manual test steps: open Go Live Basic, scroll through panels, confirm only two live indicators (outside pill blue when live, inside preview red). Start with camera and screen inputs; public/private toggles update pill active state; latency/auto-record hidden and payload defaults to NORMAL/false. Start/End buttons enable per state (Start disabled when live, End red and enabled). Chat placeholder visible instead of session details. Advanced view still loads with logs/session info.

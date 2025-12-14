@@ -294,18 +294,25 @@ export class NexeraGoLiveController {
 
         if (!titleEl && !categoryEl && !tagsEl) return false;
 
-        const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
+        let latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
         const inputMode = inputModeEl?.value || "camera";
+        const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
+        let autoRecord = !!autoRecordEl?.checked;
+
+        if (this.uiMode === "basic") {
+            latencyMode = "NORMAL";
+            autoRecord = false;
+        }
 
         this.formState = {
             ...this.formState,
             title: titleEl?.value || "",
             category: categoryEl?.value || "",
             tags: this.parseTags(tagsEl?.value || []),
-            visibility: this.formState.visibility || "public",
+            visibility,
             inputMode,
             latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
-            autoRecord: !!autoRecordEl?.checked,
+            autoRecord,
         };
 
         this.inputMode = this.formState.inputMode;
@@ -332,12 +339,14 @@ export class NexeraGoLiveController {
 
         const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
         const inputMode = inputModeEl?.value || "camera";
+        const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
 
         this.formState = {
             ...this.formState,
             title: titleEl?.value || "",
             category: categoryEl?.value || "",
             tags: this.parseTags(tagsEl?.value || []),
+            visibility,
             inputMode,
             latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
             autoRecord: !!autoRecordEl?.checked,
@@ -368,6 +377,8 @@ export class NexeraGoLiveController {
         if (inputModeEl) inputModeEl.value = this.formState.inputMode || "camera";
         if (latencyEl) latencyEl.value = (this.formState.latencyMode || "NORMAL").toUpperCase();
         if (autoRecordEl) autoRecordEl.checked = !!this.formState.autoRecord;
+
+        this.updateVisibilityButtons();
     }
 
     writeStateIntoAdvancedForm() {
@@ -388,12 +399,19 @@ export class NexeraGoLiveController {
         this.updateVisibilityButtons();
     }
 
+    resolveVisibilityFromDom(fallback = "public") {
+        const active = document.querySelector("[data-go-live-visibility].active");
+        return active?.dataset?.goLiveVisibility || fallback;
+    }
+
     updateVisibilityButtons() {
-        const publicBtn = document.getElementById("adv-visibility-public");
-        const privateBtn = document.getElementById("adv-visibility-private");
         const isPublic = (this.formState.visibility || "public") === "public";
-        if (publicBtn) publicBtn.classList.toggle("active", isPublic);
-        if (privateBtn) privateBtn.classList.toggle("active", !isPublic);
+        const target = isPublic ? "public" : "private";
+        document.querySelectorAll("[data-go-live-visibility]").forEach((btn) => {
+            const isActive = btn.dataset?.goLiveVisibility === target;
+            btn.classList.toggle("active", isActive);
+            btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
     }
 
     applyUIMode(mode, options = {}) {
@@ -416,6 +434,13 @@ export class NexeraGoLiveController {
 
         const modeSelect = document.getElementById("go-live-ui-config");
         if (modeSelect) modeSelect.value = nextMode;
+
+        if (nextMode === "basic") {
+            this.formState.latencyMode = "NORMAL";
+            this.formState.autoRecord = false;
+            this.latencyMode = "NORMAL";
+            this.autoRecord = false;
+        }
 
         if (!options.skipPersist) {
             try {
@@ -499,6 +524,9 @@ export class NexeraGoLiveController {
         const basicAutoRecord = document.getElementById("auto-record-toggle") || document.getElementById("auto-record");
         const basicStart = document.getElementById("start-stream");
         const basicEnd = document.getElementById("end-stream");
+        const basicPublic = document.getElementById("basic-visibility-public");
+        const basicPrivate = document.getElementById("basic-visibility-private");
+        const backButton = document.getElementById("go-live-back-button");
 
         [basicTitle, basicCategory, basicTags].forEach((el) => {
             if (!el) return;
@@ -529,11 +557,32 @@ export class NexeraGoLiveController {
                 this.writeStateIntoAdvancedForm();
             });
 
+        if (basicPublic)
+            basicPublic.addEventListener("click", () => {
+                this.formState.visibility = "public";
+                this.updateVisibilityButtons();
+                this.writeStateIntoAdvancedForm();
+            });
+
+        if (basicPrivate)
+            basicPrivate.addEventListener("click", () => {
+                this.formState.visibility = "private";
+                this.updateVisibilityButtons();
+                this.writeStateIntoAdvancedForm();
+            });
+
         if (basicStart)
-            basicStart.addEventListener("click", () => {
+            basicStart.addEventListener("click", async () => {
                 this.readBasicFormIntoState();
                 this.writeStateIntoAdvancedForm();
-                this.safeStart();
+                try {
+                    await this.primeMediaCaptureFromUserGesture();
+                    await this.safeStart();
+                } catch (error) {
+                    console.error("[GoLive] pre-start capture failed", error);
+                    this.log(`Pre-start capture failed: ${error.message || error}`);
+                    this.setStatus("error", error.message || "Capture failed");
+                }
             });
 
         if (basicEnd)
@@ -598,10 +647,17 @@ export class NexeraGoLiveController {
             });
 
         if (advStart)
-            advStart.addEventListener("click", () => {
+            advStart.addEventListener("click", async () => {
                 this.readAdvancedFormIntoState();
                 this.writeStateIntoBasicForm();
-                this.safeStart();
+                try {
+                    await this.primeMediaCaptureFromUserGesture();
+                    await this.safeStart();
+                } catch (error) {
+                    console.error("[GoLive] pre-start capture failed", error);
+                    this.log(`Pre-start capture failed: ${error.message || error}`);
+                    this.setStatus("error", error.message || "Capture failed");
+                }
             });
 
         if (advEnd)
@@ -609,6 +665,27 @@ export class NexeraGoLiveController {
                 this.readAdvancedFormIntoState();
                 this.writeStateIntoBasicForm();
                 this.safeStop();
+            });
+
+        if (backButton)
+            backButton.addEventListener("click", async () => {
+                const isActive = this.state === "starting" || this.state === "live";
+                if (isActive) {
+                    const shouldEnd = confirm("End stream and go back?");
+                    if (!shouldEnd) return;
+                    try {
+                        await this.safeStop();
+                    } finally {
+                        document.body.classList.remove("go-live-open");
+                        if (window.goBack) window.goBack();
+                        else if (window.navigateTo) window.navigateTo("feed");
+                    }
+                    return;
+                }
+
+                document.body.classList.remove("go-live-open");
+                if (window.goBack) window.goBack();
+                else if (window.navigateTo) window.navigateTo("feed");
             });
 
         const micGain = document.getElementById("mixer-mic");
@@ -648,6 +725,7 @@ export class NexeraGoLiveController {
         const helper = document.getElementById("go-live-status-text-secondary");
         const helperAdv = document.getElementById("go-live-status-text-secondary-adv");
         const topStatus = document.getElementById("go-live-top-status");
+        const liveOutside = document.getElementById("go-live-status");
 
         const labels = {
             idle: "Idle",
@@ -660,8 +738,15 @@ export class NexeraGoLiveController {
         const label = labels[state] || "Idle";
         const detail = message ? `${label} – ${message}` : label;
 
-        if (chip) chip.textContent = label;
-        if (status) status.textContent = detail;
+        if (chip) {
+            chip.textContent = state === "live" ? "LIVE" : label;
+            chip.classList.toggle("is-live", state === "live");
+        }
+        if (status) {
+            status.textContent = label;
+            status.classList.toggle("is-live", state === "live");
+            status.classList.toggle("is-idle", state !== "live");
+        }
         if (overlayText) overlayText.textContent = detail;
         if (pill) pill.textContent = this.inputMode === "external" ? "External Software" : "Preview";
         if (dotLabel) dotLabel.textContent = label;
@@ -684,6 +769,11 @@ export class NexeraGoLiveController {
                     : "state-idle";
             el.classList.add(cls);
         });
+
+        if (liveOutside) {
+            liveOutside.classList.toggle("is-live", state === "live");
+            liveOutside.classList.toggle("is-idle", state !== "live");
+        }
 
         if (previous !== state || message) {
             this.log(`State: ${detail}`);
@@ -716,6 +806,22 @@ export class NexeraGoLiveController {
         if (advStart) advStart.disabled = startDisabled;
         if (endBtn) endBtn.disabled = endDisabled;
         if (advEnd) advEnd.disabled = endDisabled;
+
+        const decorate = (btn, activeClass) => {
+            if (!btn) return;
+            btn.classList.add("go-live-action-btn");
+            btn.classList.remove("btn-primary", "btn-danger", "btn-disabled");
+            if (btn.disabled) {
+                btn.classList.add("btn-disabled");
+            } else if (activeClass) {
+                btn.classList.add(activeClass);
+            }
+        };
+
+        decorate(startBtn, "btn-primary");
+        decorate(advStart, "btn-primary");
+        decorate(endBtn, "btn-danger");
+        decorate(advEnd, "btn-danger");
     }
 
     log(message) {
@@ -971,6 +1077,7 @@ export class NexeraGoLiveController {
         if (!this.session?.sessionId || !this.session.streamKey) return;
         const uid = this.auth?.currentUser?.uid || null;
         if (!uid) return;
+        if ((this.formState.visibility || this.session.visibility) !== "private") return;
         try {
             await setDoc(
                 doc(this.db, "liveStreams", this.session.sessionId, "private", "keys"),
@@ -979,14 +1086,38 @@ export class NexeraGoLiveController {
             );
             await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), { streamKey: deleteField() });
         } catch (error) {
-            console.error("[GoLive] failed to persist private stream key", error);
-            this.log(`Persist key failed: ${error.message || error}`);
+            console.warn("[GoLive] failed to persist private stream key", error);
+            this.log(`Persist key failed (non-blocking): ${error.message || error}`);
         }
     }
 
     // ----------------------------------------------
     // Start Stream
     // ----------------------------------------------
+    async primeMediaCaptureFromUserGesture() {
+        const mode = this.formState.inputMode || "camera";
+        this.inputMode = mode;
+
+        if (mode === "external") return;
+
+        if (this.stream) {
+            this.stream.getTracks().forEach((t) => t.stop());
+            this.stream = null;
+        }
+
+        this.log(`Preparing media capture for inputMode=${mode} (pre-flight)`);
+
+        const stream =
+            mode === "screen"
+                ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+        this.stream = stream;
+        if (this.previewVideo) {
+            this.previewVideo.srcObject = stream;
+        }
+    }
+
     async safeStart() {
         this.setStatus("starting");
         this.log("Starting stream request");
@@ -1006,6 +1137,11 @@ export class NexeraGoLiveController {
             this.readAdvancedFormIntoState();
         } else {
             this.readBasicFormIntoState();
+        }
+
+        if (this.uiMode === "basic") {
+            this.formState.latencyMode = "NORMAL";
+            this.formState.autoRecord = false;
         }
 
         const state = {
@@ -1040,6 +1176,7 @@ export class NexeraGoLiveController {
             visibility,
         };
 
+        this.log(`Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}`);
         this.log(`Calling createEphemeralChannel with ${JSON.stringify(payload)}`);
 
         const response = await fetch(
@@ -1096,8 +1233,6 @@ export class NexeraGoLiveController {
             visibility,
         });
 
-        await this.persistPrivateStreamKey();
-
         if (this.inputMode === "external") {
             this.setStatus("starting", "Waiting for external encoder");
             this.enterOBSMode();
@@ -1134,10 +1269,15 @@ export class NexeraGoLiveController {
             streamConfig: IVSBroadcastClient.BASIC_LANDSCAPE,
         });
 
-        this.stream =
-            this.inputMode === "screen"
-                ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
-                : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (this.stream) {
+            this.log(`Using pre-captured media for inputMode=${this.inputMode}`);
+        } else {
+            this.log(`Preparing media capture for inputMode=${this.inputMode}`);
+            this.stream =
+                this.inputMode === "screen"
+                    ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                    : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        }
 
         this.previewVideo.srcObject = this.stream;
 
