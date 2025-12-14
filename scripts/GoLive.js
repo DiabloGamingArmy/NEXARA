@@ -136,12 +136,34 @@ export class NexeraGoLiveController {
             }
         );
 
-        if (!response.ok) {
-            const errorPayload = await response.json().catch(() => ({}));
-            throw new Error(errorPayload?.error || "Failed to create channel");
+        const raw = await response.text();
+        let json = null;
+        try {
+            json = raw ? JSON.parse(raw) : null;
+        } catch (_) {
+            json = null;
         }
 
-        this.session = await response.json();
+        if (!response.ok) {
+            const messageCandidate = json?.error?.message || json?.error || json?.message || raw || `HTTP ${response.status}`;
+            const message = typeof messageCandidate === "string" ? messageCandidate : JSON.stringify(messageCandidate);
+            console.error("[GoLive] createEphemeralChannel failed", { status: response.status, raw, json });
+            throw new Error(message);
+        }
+
+        const data = json ?? {};
+        this.session = {
+            sessionId: data.sessionId,
+            channelArn: data.channelArn,
+            playbackUrl: data.playbackUrl,
+            streamKey: data.streamKey,
+            visibility: data.visibility,
+            title,
+            category,
+            tags,
+            ingestEndpoint: data.ingestEndpoint,
+            rtmpsIngestUrl: data.rtmpsIngestUrl || (data.ingestEndpoint ? `rtmps://${data.ingestEndpoint}:443/app/` : ""),
+        };
 
         if (this.inputMode === "external") {
             this.enterOBSMode();
@@ -157,9 +179,24 @@ export class NexeraGoLiveController {
     async startBrowserBroadcast() {
         await loadBroadcastSdk();
 
+        const ingestHostname =
+            this.session.ingestEndpoint ||
+            (this.session.rtmpsIngestUrl
+                ? (() => {
+                      try {
+                          return new URL(this.session.rtmpsIngestUrl).hostname;
+                      } catch (_) {
+                          return null;
+                      }
+                  })()
+                : null);
+        if (!ingestHostname) {
+            throw new Error("Missing ingest endpoint from backend response");
+        }
+
         this.client = IVSBroadcastClient.create({
-            ingestEndpoint: this.session.channelArn,
-            streamKey: this.session.streamKey,
+            ingestEndpoint: ingestHostname,
+            streamConfig: IVSBroadcastClient.BASIC_LANDSCAPE,
         });
 
         this.stream =
@@ -174,16 +211,20 @@ export class NexeraGoLiveController {
             this.client.addAudioInputDevice(this.stream.getAudioTracks()[0]);
         }
 
-        await this.client.startBroadcast(this.session.streamKey, this.session.channelArn);
+        await this.client.startBroadcast(this.session.streamKey);
 
-        await updateDoc(
-  doc(this.db, "liveStreams", this.session.sessionId),
-  {
-    isLive: true,
-    startedAt: serverTimestamp(),
-    endedAt: null
-  }
-);
+        try {
+            await updateDoc(
+                doc(this.db, "liveStreams", this.session.sessionId),
+                {
+                    isLive: true,
+                    startedAt: serverTimestamp(),
+                    endedAt: null,
+                }
+            );
+        } catch (error) {
+            console.error("[GoLive] failed to mark session live", error);
+        }
 
 
         this.state = "live";
@@ -232,13 +273,17 @@ export class NexeraGoLiveController {
             this.unsubscribeLiveDoc = null;
         }
 
-        await updateDoc(
-  doc(this.db, "liveStreams", this.session.sessionId),
-  {
-    isLive: false,
-    endedAt: serverTimestamp()
-  }
-);
+        try {
+            await updateDoc(
+                doc(this.db, "liveStreams", this.session.sessionId),
+                {
+                    isLive: false,
+                    endedAt: serverTimestamp(),
+                }
+            );
+        } catch (error) {
+            console.error("[GoLive] failed to mark session ended", error);
+        }
 
 
         this.state = "idle";
