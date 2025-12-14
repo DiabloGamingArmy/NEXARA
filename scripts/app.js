@@ -7805,14 +7805,19 @@ class GoLiveSetupController {
             streamConfig,
         });
 
-        const videoTrack = this.stream.getVideoTracks?.()[0];
-        if (videoTrack) {
-            this.broadcastClient.addVideoInputDevice(videoTrack, 'camera');
+        const videoTrack = this.stream.getVideoTracks?.()[0] || null;
+        if (!videoTrack) {
+            throw new Error('No video track available to broadcast');
         }
+        const videoStream = new MediaStream([videoTrack]);
+        await this.broadcastClient.addVideoInputDevice(videoStream, 'video1', { index: 0 });
 
         const audioTracks = this.stream.getAudioTracks ? this.stream.getAudioTracks() : [];
-        if (audioTracks?.length) {
-            audioTracks.forEach((track) => this.broadcastClient.addAudioInputDevice(track));
+        if (audioTracks && audioTracks.length) {
+            await Promise.all(audioTracks.map((track, idx) => {
+                const audioStream = new MediaStream([track]);
+                return this.broadcastClient.addAudioInputDevice(audioStream, `audio${idx + 1}`);
+            }));
         }
 
         this.setState('starting', 'Connecting to ingest server');
