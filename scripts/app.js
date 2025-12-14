@@ -67,8 +67,10 @@ let liveSessionsCache = [];
 let profileMediaPrefetching = {};
 
 // Optimistic UI Sets
-let followedCategories = new Set(['STEM', 'Coding']);
+let followedCategories = new Set();
+let followedCategoryList = [];
 let followedUsers = new Set();
+let followedTopicsUnsubscribe = null;
 
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
@@ -262,7 +264,8 @@ let userProfile = {
     accountRoles: [],
     savedPosts: [],
     following: [],
-    followersCount: 0
+    followersCount: 0,
+    followedCategories: []
 };
 
 const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
@@ -835,6 +838,7 @@ function initApp(onReady) {
                         userProfile.theme = savedTheme;
                         applyTheme(savedTheme);
 
+                        await hydrateFollowedCategories(user.uid, userProfile);
                         await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
@@ -871,6 +875,13 @@ function initApp(onReady) {
             } else {
                 currentUser = null;
                 updateAuthClaims({});
+                if (followedTopicsUnsubscribe) {
+                    try { followedTopicsUnsubscribe(); } catch (err) {}
+                    followedTopicsUnsubscribe = null;
+                }
+                followedCategories = new Set();
+                followedCategoryList = [];
+                userProfile.followedCategories = [];
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
@@ -1049,6 +1060,7 @@ async function ensureUserDocument(user) {
             locationHistory: [],
             accountRoles: [],
             tagAffinity: {},
+            followedCategories: [],
             interests: [],
             createdAt: now,
             updatedAt: now
@@ -2159,26 +2171,115 @@ async function persistFollowChange(uid, wasFollowing) {
     return finalState;
 }
 
-window.toggleFollow = function (c, event) {
-    if (event) event.stopPropagation();
-
-    const isFollowing = followedCategories.has(c);
-    if (isFollowing) followedCategories.delete(c);
-    else followedCategories.add(c);
-
-    // Sanitize class name to match HTML
-    const cleanTopic = c.replace(/[^a-zA-Z0-9]/g, '');
-    const btns = document.querySelectorAll(`.js-follow-topic-${cleanTopic}`);
-
-    btns.forEach(function (btn) {
-        if (isFollowing) {
-            btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
-            btn.classList.remove('following');
-        } else {
-            btn.innerHTML = 'Following';
-            btn.classList.add('following');
+function applyFollowedCategoryList(list = []) {
+    const nextList = [];
+    const seen = new Set();
+    (list || []).forEach(function (name) {
+        const normalized = typeof name === 'string' ? name.trim() : '';
+        if (normalized && !seen.has(normalized)) {
+            seen.add(normalized);
+            nextList.push(normalized);
         }
     });
+
+    followedCategoryList = nextList;
+    followedCategories = new Set(nextList);
+    userProfile.followedCategories = nextList;
+    syncTopicFollowButtons();
+    renderCategoryPills();
+    if (currentCategory === 'Following') renderFeed();
+}
+
+function getTopicButtons(topic) {
+    const matches = [];
+    const cleanTopic = topic.replace(/[^a-zA-Z0-9]/g, '');
+
+    document.querySelectorAll('[data-topic]').forEach(function (btn) {
+        if (btn.getAttribute('data-topic') === topic) matches.push(btn);
+    });
+
+    document.querySelectorAll(`.js-follow-topic-${cleanTopic}`).forEach(function (btn) {
+        if (!matches.includes(btn)) matches.push(btn);
+    });
+
+    return matches;
+}
+
+function updateTopicFollowButtons(topic, isFollowing) {
+    const buttons = getTopicButtons(topic);
+    buttons.forEach(function (btn) {
+        if (isFollowing) {
+            btn.innerHTML = 'Following';
+            btn.classList.add('following');
+        } else {
+            btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
+            btn.classList.remove('following');
+        }
+    });
+}
+
+function syncTopicFollowButtons() {
+    document.querySelectorAll('[data-topic]').forEach(function (btn) {
+        const topic = btn.getAttribute('data-topic');
+        const isFollowing = followedCategories.has(topic);
+        if (isFollowing) {
+            btn.innerHTML = 'Following';
+            btn.classList.add('following');
+        } else {
+            btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
+            btn.classList.remove('following');
+        }
+    });
+}
+
+async function hydrateFollowedCategories(uid, profileData = {}) {
+    if (!uid) return;
+
+    if (followedTopicsUnsubscribe) {
+        try { followedTopicsUnsubscribe(); } catch (err) { console.warn('Topic follow unsubscribe failed', err); }
+        followedTopicsUnsubscribe = null;
+    }
+
+    const seeded = Array.isArray(profileData.followedCategories) ? profileData.followedCategories : [];
+    applyFollowedCategoryList(seeded);
+
+    try {
+        const userRef = doc(db, 'users', uid);
+        followedTopicsUnsubscribe = onSnapshot(userRef, function (snap) {
+            if (!snap.exists()) return;
+            const next = Array.isArray(snap.data().followedCategories) ? snap.data().followedCategories : [];
+            applyFollowedCategoryList(next);
+        });
+    } catch (err) {
+        console.error('Unable to subscribe to followed topics', err);
+    }
+}
+
+window.toggleFollow = async function (c, event) {
+    if (event) event.stopPropagation();
+    if (!currentUser || !currentUser.uid) return toast('Please sign in to follow topics.', 'info');
+
+    const topic = (c || '').trim();
+    if (!topic) return;
+
+    const wasFollowing = followedCategories.has(topic);
+    updateTopicFollowButtons(topic, !wasFollowing);
+
+    try {
+        const update = wasFollowing ? arrayRemove(topic) : arrayUnion(topic);
+        await setDoc(doc(db, 'users', currentUser.uid), { followedCategories: update }, { merge: true });
+
+        const updatedList = wasFollowing
+            ? followedCategoryList.filter(function (name) { return name !== topic; })
+            : [...followedCategoryList, topic];
+
+        applyFollowedCategoryList(updatedList);
+        if (currentCategory === 'Following') renderFeed();
+    } catch (e) {
+        console.error('Topic follow action failed', e);
+        toast('Could not update topic follow. Please try again.', 'error');
+        updateTopicFollowButtons(topic, wasFollowing);
+    }
 };
 
 window.toggleFollowUser = async function (uid, event) {
@@ -2240,7 +2341,7 @@ function getPostHTML(post) {
 
         const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}"onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
         let trustBadge = "";
         if (post.trustScore > 2) {
@@ -3704,7 +3805,7 @@ function renderThreadMainPost(postId) {
     const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
     const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
     let mediaContent = '';
     if (post.mediaUrl) { 
@@ -4663,14 +4764,28 @@ function renderProfile() {
 
 // --- Utils & Helpers ---
 function collectFollowedCategoryNames() {
-    const names = new Set();
-    Object.keys(memberships || {}).forEach(function(id) {
-        const snapshot = getCategorySnapshot(id);
-        const name = snapshot?.name || snapshot?.id || id;
-        if ((memberships[id]?.status || 'active') !== 'left') names.add(name);
-    });
-    followedCategories.forEach(function(name) { names.add(name); });
-    return Array.from(names);
+    const names = [];
+    const seen = new Set();
+
+    const pushName = function (name) {
+        const normalized = typeof name === 'string' ? name.trim() : '';
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        names.push(normalized);
+    };
+
+    (followedCategoryList || []).forEach(pushName);
+
+    if (!names.length) {
+        Object.keys(memberships || {}).forEach(function (id) {
+            const snapshot = getCategorySnapshot(id);
+            const name = snapshot?.name || snapshot?.id || id;
+            if ((memberships[id]?.status || 'active') !== 'left') pushName(name);
+        });
+    }
+
+    followedCategories.forEach(pushName);
+    return names;
 }
 
 function computeTrendingCategories(limit = 8) {
@@ -4699,7 +4814,8 @@ function renderCategoryPills() {
     divider.className = 'category-divider';
     header.appendChild(divider);
 
-    const dynamicFull = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(20)])).filter(function(name) {
+    const followedNames = collectFollowedCategoryNames();
+    const dynamicFull = (followedNames.length ? followedNames : computeTrendingCategories(20)).filter(function(name) {
         return name && !anchors.includes(name);
     });
     const dynamic = dynamicFull.slice(0, categoryVisibleCount);
@@ -5496,7 +5612,7 @@ async function toggleMessagePin(conversationId, messageId) {
 
 function showReactionPicker(conversationId, messageId) {
     const menu = document.createElement('div');
-    menu.className = 'message-actions-menu';
+    menu.className = 'message-actions-menu menu-surface';
     REACTION_EMOJIS.forEach(function (emoji) {
         const btn = document.createElement('button');
         btn.textContent = emoji;
@@ -5529,7 +5645,7 @@ function closeMessageActionsMenu() {
 function showMessageActionsMenu(message, anchor, convo = {}) {
     closeMessageActionsMenu();
     const menu = document.createElement('div');
-    menu.className = 'message-actions-menu';
+    menu.className = 'message-actions-menu menu-surface';
     const actions = [
         { label: 'Reply', handler: function () { setReplyContext(message, 'reply', convo.id); } },
         { label: 'Quote', handler: function () { setReplyContext(message, 'quote', convo.id); } },

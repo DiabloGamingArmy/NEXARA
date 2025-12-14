@@ -258,6 +258,32 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .post-options-dropdown button { width: 100%; background: none; border: none; color: var(--text-main); padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; text-align: left; font-weight: 600; }
 .post-options-dropdown button:hover { background: var(--bg-hover); color: var(--primary); }
 
+.menu-surface {
+    background: rgba(15, 15, 18, 0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
+    color: var(--text-main);
+}
+
+.post-options-dropdown,
+.message-actions-menu {
+    background: rgba(15, 15, 18, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
+}
+
+.post-options-dropdown button,
+.message-actions-menu button {
+    color: var(--text-main);
+}
+
+.post-options-dropdown button:hover,
+.message-actions-menu button:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
 .back-btn-outline { border: 1px solid var(--border); padding: 5px 12px; border-radius: 20px; transition: 0.2s; box-shadow: inset 0 1px 0 rgba(255,255,255,0.04); }
 .back-btn-outline:hover { background: var(--bg-hover); border-color: var(--primary); box-shadow: 0 8px 18px rgba(0, 120, 150, 0.16); }
 .back-btn-outline:active { transform: translateY(0); box-shadow: 0 0 0 4px rgba(0, 242, 234, 0.1); }
@@ -1473,6 +1499,29 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     to {
         transform: rotate(360deg);
     }
+}
+
+/* Glassmorphism menu surfaces */
+.menu-surface,
+.post-options-dropdown.menu-surface,
+.message-actions-menu.menu-surface {
+    background: rgba(15, 15, 18, 0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
+    color: var(--text-main);
+}
+
+.post-options-dropdown.menu-surface button,
+.message-actions-menu.menu-surface button {
+    color: var(--text-main);
+}
+
+.post-options-dropdown.menu-surface button:hover,
+.message-actions-menu.menu-surface button:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--primary);
 }
 
 .live-video-frame {}
