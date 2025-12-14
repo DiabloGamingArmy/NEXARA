@@ -103,7 +103,22 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isSignedIn();
       allow write: if (isSignedIn() && request.auth.uid == userId && accountRolesUnchanged(userId))
-                   || hasFounderClaim();
+                   || hasFounderClaim()
+                   || (isSignedIn()
+                       && exists(/databases/$(database)/documents/users/$(userId))
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount'])
+                       && (request.resource.data.followersCount is number)
+                       && request.resource.data.followersCount >= 0);
+    }
+
+    match /users/{userId}/followers/{followerId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && request.auth.uid == followerId;
+    }
+
+    match /users/{userId}/following/{targetId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update, delete: if isSignedIn() && request.auth.uid == userId;
     }
 
     match /users/{userId}/categoryMemberships/{categoryId} {

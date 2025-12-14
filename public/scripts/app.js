@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
@@ -20,7 +20,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
+const db = getFirestore(app);
 const storage = getStorage(app);
 
 // --- Global State & Cache ---
@@ -67,8 +67,10 @@ let liveSessionsCache = [];
 let profileMediaPrefetching = {};
 
 // Optimistic UI Sets
-let followedCategories = new Set(['STEM', 'Coding']);
+let followedCategories = new Set();
+let followedCategoryList = [];
 let followedUsers = new Set();
+let followedTopicsUnsubscribe = null;
 
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
@@ -262,7 +264,8 @@ let userProfile = {
     accountRoles: [],
     savedPosts: [],
     following: [],
-    followersCount: 0
+    followersCount: 0,
+    followedCategories: []
 };
 
 const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
@@ -835,10 +838,8 @@ function initApp(onReady) {
                         userProfile.theme = savedTheme;
                         applyTheme(savedTheme);
 
-                        // Restore 'following' state locally
-                        if (userProfile.following) {
-                            userProfile.following.forEach(function (uid) { followedUsers.add(uid); });
-                        }
+                        await hydrateFollowedCategories(user.uid, userProfile);
+                        await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
                     } else {
@@ -874,6 +875,13 @@ function initApp(onReady) {
             } else {
                 currentUser = null;
                 updateAuthClaims({});
+                if (followedTopicsUnsubscribe) {
+                    try { followedTopicsUnsubscribe(); } catch (err) {}
+                    followedTopicsUnsubscribe = null;
+                }
+                followedCategories = new Set();
+                followedCategoryList = [];
+                userProfile.followedCategories = [];
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
@@ -1052,6 +1060,7 @@ async function ensureUserDocument(user) {
             locationHistory: [],
             accountRoles: [],
             tagAffinity: {},
+            followedCategories: [],
             interests: [],
             createdAt: now,
             updatedAt: now
@@ -2080,53 +2089,10 @@ window.goBack = function () {
 };
 
 // --- Follow Logic (Optimistic UI) ---
-window.toggleFollow = function (c, event) {
-    if (event) event.stopPropagation();
-
-    const isFollowing = followedCategories.has(c);
-    if (isFollowing) followedCategories.delete(c);
-    else followedCategories.add(c);
-
-    // Sanitize class name to match HTML
-    const cleanTopic = c.replace(/[^a-zA-Z0-9]/g, '');
-    const btns = document.querySelectorAll(`.js-follow-topic-${cleanTopic}`);
-
-    btns.forEach(function (btn) {
-        if (isFollowing) {
-            btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
-            btn.classList.remove('following');
-        } else {
-            btn.innerHTML = 'Following';
-            btn.classList.add('following');
-        }
-    });
-};
-
-window.toggleFollowUser = async function (uid, event) {
-    if (event) event.stopPropagation();
-
-    const isFollowing = followedUsers.has(uid);
-    if (isFollowing) followedUsers.delete(uid);
-    else followedUsers.add(uid);
-
-    // 1. Update Buttons immediately
+function updateFollowButtonsForUser(uid, isFollowing) {
     const btns = document.querySelectorAll(`.js-follow-user-${uid}`);
     btns.forEach(function (btn) {
         if (isFollowing) {
-            btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
-            btn.classList.remove('following');
-
-            btn.style.background = 'rgba(255,255,255,0.1)';
-            btn.style.borderColor = 'transparent';
-            btn.style.color = 'var(--text-main)';
-
-            if (btn.classList.contains('create-btn-sidebar')) {
-                btn.textContent = "Follow";
-                btn.style.background = "var(--primary)";
-                btn.style.color = "black";
-                btn.style.borderColor = "var(--primary)";
-            }
-        } else {
             btn.innerHTML = 'Following';
             btn.classList.add('following');
 
@@ -2140,34 +2106,216 @@ window.toggleFollowUser = async function (uid, event) {
                 btn.style.color = "var(--primary)";
                 btn.style.borderColor = "var(--primary)";
             }
+        } else {
+            btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
+            btn.classList.remove('following');
+
+            btn.style.background = 'rgba(255,255,255,0.1)';
+            btn.style.borderColor = 'transparent';
+            btn.style.color = 'var(--text-main)';
+
+            if (btn.classList.contains('create-btn-sidebar')) {
+                btn.textContent = "Follow";
+                btn.style.background = "var(--primary)";
+                btn.style.color = "black";
+                btn.style.borderColor = "var(--primary)";
+            }
         }
     });
+}
 
-    // 2. Real-time Follower Count Update
+function updateFollowerCountCache(uid, previousState, nextState) {
+    if (previousState === nextState) return;
+    const delta = nextState ? 1 : -1;
     const countEl = document.getElementById(`profile-follower-count-${uid}`);
-    let newCount = 0;
 
     if (userCache[uid]) {
-        let currentCount = userCache[uid].followersCount || 0;
-        newCount = isFollowing ? Math.max(0, currentCount - 1) : currentCount + 1;
-        userCache[uid].followersCount = newCount;
+        const currentCount = userCache[uid].followersCount || 0;
+        userCache[uid].followersCount = Math.max(0, currentCount + delta);
     }
 
     if (countEl) {
-        countEl.textContent = newCount;
+        const rendered = parseInt(countEl.textContent || '0', 10) || 0;
+        const updated = Math.max(0, rendered + delta);
+        countEl.textContent = updated;
+    }
+}
+
+async function persistFollowChange(uid, wasFollowing) {
+    const targetUserRef = doc(db, 'users', uid);
+    const currentUserRef = doc(db, 'users', currentUser.uid);
+    const followerRef = doc(db, 'users', uid, 'followers', currentUser.uid);
+    const followingRef = doc(db, 'users', currentUser.uid, 'following', uid);
+
+    let finalState = wasFollowing;
+
+    await runTransaction(db, async function (tx) {
+        const followerDoc = await tx.get(followerRef);
+        const currentlyFollowing = followerDoc.exists();
+
+        if (currentlyFollowing) {
+            tx.delete(followerRef);
+            tx.delete(followingRef);
+            tx.set(targetUserRef, { followersCount: increment(-1) }, { merge: true });
+            tx.set(currentUserRef, { following: arrayRemove(uid), followingCount: increment(-1) }, { merge: true });
+            finalState = false;
+        } else {
+            tx.set(followerRef, { followedAt: serverTimestamp() }, { merge: true });
+            tx.set(followingRef, { followedAt: serverTimestamp() }, { merge: true });
+            tx.set(targetUserRef, { followersCount: increment(1) }, { merge: true });
+            tx.set(currentUserRef, { following: arrayUnion(uid), followingCount: increment(1) }, { merge: true });
+            finalState = true;
+        }
+    });
+
+    return finalState;
+}
+
+function applyFollowedCategoryList(list = []) {
+    const nextList = [];
+    const seen = new Set();
+    (list || []).forEach(function (name) {
+        const normalized = typeof name === 'string' ? name.trim() : '';
+        if (normalized && !seen.has(normalized)) {
+            seen.add(normalized);
+            nextList.push(normalized);
+        }
+    });
+
+    followedCategoryList = nextList;
+    followedCategories = new Set(nextList);
+    userProfile.followedCategories = nextList;
+    syncTopicFollowButtons();
+    renderCategoryPills();
+    if (currentCategory === 'Following') renderFeed();
+}
+
+function getTopicButtons(topic) {
+    const matches = [];
+    const cleanTopic = topic.replace(/[^a-zA-Z0-9]/g, '');
+
+    document.querySelectorAll('[data-topic]').forEach(function (btn) {
+        if (btn.getAttribute('data-topic') === topic) matches.push(btn);
+    });
+
+    document.querySelectorAll(`.js-follow-topic-${cleanTopic}`).forEach(function (btn) {
+        if (!matches.includes(btn)) matches.push(btn);
+    });
+
+    return matches;
+}
+
+function updateTopicFollowButtons(topic, isFollowing) {
+    const buttons = getTopicButtons(topic);
+    buttons.forEach(function (btn) {
+        if (isFollowing) {
+            btn.innerHTML = 'Following';
+            btn.classList.add('following');
+        } else {
+            btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
+            btn.classList.remove('following');
+        }
+    });
+}
+
+function syncTopicFollowButtons() {
+    document.querySelectorAll('[data-topic]').forEach(function (btn) {
+        const topic = btn.getAttribute('data-topic');
+        const isFollowing = followedCategories.has(topic);
+        if (isFollowing) {
+            btn.innerHTML = 'Following';
+            btn.classList.add('following');
+        } else {
+            btn.innerHTML = '<i class="ph-bold ph-plus"></i> Topic';
+            btn.classList.remove('following');
+        }
+    });
+}
+
+async function hydrateFollowedCategories(uid, profileData = {}) {
+    if (!uid) return;
+
+    if (followedTopicsUnsubscribe) {
+        try { followedTopicsUnsubscribe(); } catch (err) { console.warn('Topic follow unsubscribe failed', err); }
+        followedTopicsUnsubscribe = null;
     }
 
-    // 3. Backend Update
+    const seeded = Array.isArray(profileData.followedCategories) ? profileData.followedCategories : [];
+    applyFollowedCategoryList(seeded);
+
     try {
-        if (isFollowing) {
-            await updateDoc(doc(db, 'users', uid), { followersCount: increment(-1) });
-            await updateDoc(doc(db, 'users', currentUser.uid), { following: arrayRemove(uid) });
-        } else {
-            await updateDoc(doc(db, 'users', uid), { followersCount: increment(1) });
-            await updateDoc(doc(db, 'users', currentUser.uid), { following: arrayUnion(uid) });
-        }
-    } catch (e) { console.error(e); }
+        const userRef = doc(db, 'users', uid);
+        followedTopicsUnsubscribe = onSnapshot(userRef, function (snap) {
+            if (!snap.exists()) return;
+            const next = Array.isArray(snap.data().followedCategories) ? snap.data().followedCategories : [];
+            applyFollowedCategoryList(next);
+        });
+    } catch (err) {
+        console.error('Unable to subscribe to followed topics', err);
+    }
+}
+
+window.toggleFollow = async function (c, event) {
+    if (event) event.stopPropagation();
+    if (!currentUser || !currentUser.uid) return toast('Please sign in to follow topics.', 'info');
+
+    const topic = (c || '').trim();
+    if (!topic) return;
+
+    const wasFollowing = followedCategories.has(topic);
+    updateTopicFollowButtons(topic, !wasFollowing);
+
+    try {
+        const update = wasFollowing ? arrayRemove(topic) : arrayUnion(topic);
+        await setDoc(doc(db, 'users', currentUser.uid), { followedCategories: update }, { merge: true });
+
+        const updatedList = wasFollowing
+            ? followedCategoryList.filter(function (name) { return name !== topic; })
+            : [...followedCategoryList, topic];
+
+        applyFollowedCategoryList(updatedList);
+        if (currentCategory === 'Following') renderFeed();
+    } catch (e) {
+        console.error('Topic follow action failed', e);
+        toast('Could not update topic follow. Please try again.', 'error');
+        updateTopicFollowButtons(topic, wasFollowing);
+    }
 };
+
+window.toggleFollowUser = async function (uid, event) {
+    if (event) event.stopPropagation();
+    if (!currentUser || !currentUser.uid) return toast('Please sign in to follow users.', 'info');
+
+    const previousState = followedUsers.has(uid);
+
+    try {
+        const finalState = await persistFollowChange(uid, previousState);
+        if (finalState) followedUsers.add(uid); else followedUsers.delete(uid);
+        updateFollowButtonsForUser(uid, finalState);
+        updateFollowerCountCache(uid, previousState, finalState);
+    } catch (e) {
+        console.error('Follow action failed', e);
+        toast('Could not update follow status. Please try again.', 'error');
+        updateFollowButtonsForUser(uid, previousState);
+    }
+};
+
+async function hydrateFollowingState(uid, profileData = {}) {
+    followedUsers = new Set();
+
+    const seeded = Array.isArray(profileData.following) ? profileData.following : [];
+    seeded.forEach(function (id) { followedUsers.add(id); });
+
+    try {
+        const snap = await getDocs(collection(db, 'users', uid, 'following'));
+        snap.forEach(function (docSnap) { followedUsers.add(docSnap.id); });
+    } catch (err) {
+        console.error('Unable to refresh following list', err);
+    }
+
+    userProfile.following = Array.from(followedUsers);
+    if (userCache[uid]) userCache[uid].following = userProfile.following;
+}
 
 // --- Render Logic (The Core) ---
 function getPostHTML(post) {
@@ -2193,7 +2341,7 @@ function getPostHTML(post) {
 
         const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}"onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.65rem; padding:2px 8px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
         let trustBadge = "";
         if (post.trustScore > 2) {
@@ -3490,6 +3638,10 @@ const renderCommentHtml = function(c, isReply) {
   const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
   const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
+  const username = cAuthor.username ? `@${escapeHtml(cAuthor.username)}` : '';
+  const timestampText = c.timestamp
+    ? new Date(c.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : 'Now';
 
   const parentCommentId = c.parentCommentId || c.parentId;
   const replyStyle = (isReply || !!parentCommentId)
@@ -3505,15 +3657,16 @@ const renderCommentHtml = function(c, isReply) {
   return `
     <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
       <div style="display:flex; gap:10px; align-items:flex-start;">
-        ${avatarHtml}
+        <div class="author-wrapper reply-author" onclick="window.openUserProfile('${c.userId}', event)" style="margin-left:0; padding:6px 8px;">
+          ${avatarHtml}
+          <div>
+            <div class="author-line" style="font-size:0.95rem;"><span class="author-name">${escapeHtml(cAuthor.name || 'User')}</span></div>
+            <span class="post-meta">${username}</span>
+          </div>
+        </div>
 
         <div style="flex:1;">
-          <div style="font-size:0.9rem; margin-bottom:2px;">
-            <strong>${escapeHtml(cAuthor.name || 'User')}</strong>
-            <span style="color:var(--text-muted); font-size:0.8rem;">
-              • ${c.timestamp ? new Date(c.timestamp.seconds * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : 'Now'}
-            </span>
-          </div>
+          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;">${timestampText}</div>
 
           <div style="margin-top:2px; font-size:0.95rem; line-height:1.4;">
             ${escapeHtml(c.text || '')}
@@ -3652,7 +3805,7 @@ function renderThreadMainPost(postId) {
     const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
     const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
-                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
+                                <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
     let mediaContent = '';
     if (post.mediaUrl) { 
@@ -4611,14 +4764,28 @@ function renderProfile() {
 
 // --- Utils & Helpers ---
 function collectFollowedCategoryNames() {
-    const names = new Set();
-    Object.keys(memberships || {}).forEach(function(id) {
-        const snapshot = getCategorySnapshot(id);
-        const name = snapshot?.name || snapshot?.id || id;
-        if ((memberships[id]?.status || 'active') !== 'left') names.add(name);
-    });
-    followedCategories.forEach(function(name) { names.add(name); });
-    return Array.from(names);
+    const names = [];
+    const seen = new Set();
+
+    const pushName = function (name) {
+        const normalized = typeof name === 'string' ? name.trim() : '';
+        if (!normalized || seen.has(normalized)) return;
+        seen.add(normalized);
+        names.push(normalized);
+    };
+
+    (followedCategoryList || []).forEach(pushName);
+
+    if (!names.length) {
+        Object.keys(memberships || {}).forEach(function (id) {
+            const snapshot = getCategorySnapshot(id);
+            const name = snapshot?.name || snapshot?.id || id;
+            if ((memberships[id]?.status || 'active') !== 'left') pushName(name);
+        });
+    }
+
+    followedCategories.forEach(pushName);
+    return names;
 }
 
 function computeTrendingCategories(limit = 8) {
@@ -4647,7 +4814,8 @@ function renderCategoryPills() {
     divider.className = 'category-divider';
     header.appendChild(divider);
 
-    const dynamicFull = Array.from(new Set([...collectFollowedCategoryNames(), ...computeTrendingCategories(20)])).filter(function(name) {
+    const followedNames = collectFollowedCategoryNames();
+    const dynamicFull = (followedNames.length ? followedNames : computeTrendingCategories(20)).filter(function(name) {
         return name && !anchors.includes(name);
     });
     const dynamic = dynamicFull.slice(0, categoryVisibleCount);
@@ -5444,7 +5612,7 @@ async function toggleMessagePin(conversationId, messageId) {
 
 function showReactionPicker(conversationId, messageId) {
     const menu = document.createElement('div');
-    menu.className = 'message-actions-menu';
+    menu.className = 'message-actions-menu menu-surface';
     REACTION_EMOJIS.forEach(function (emoji) {
         const btn = document.createElement('button');
         btn.textContent = emoji;
@@ -5477,7 +5645,7 @@ function closeMessageActionsMenu() {
 function showMessageActionsMenu(message, anchor, convo = {}) {
     closeMessageActionsMenu();
     const menu = document.createElement('div');
-    menu.className = 'message-actions-menu';
+    menu.className = 'message-actions-menu menu-surface';
     const actions = [
         { label: 'Reply', handler: function () { setReplyContext(message, 'reply', convo.id); } },
         { label: 'Quote', handler: function () { setReplyContext(message, 'quote', convo.id); } },
@@ -7956,7 +8124,7 @@ class GoLiveSetupController {
             let json = null;
             try {
                 json = raw ? JSON.parse(raw) : null;
-            } catch (parseError) {
+            } catch (_) {
                 json = null;
             }
 
