@@ -386,7 +386,7 @@
     </div>
 </div>
 
-        <div id="post-options-dropdown" class="post-options-dropdown">
+        <div id="post-options-dropdown" class="post-options-dropdown menu-surface">
     <button id="dropdown-edit-btn" style="display:none;" onclick="window.handlePostOptionSelect('edit')"><i class="ph ph-pencil"></i> Edit Post</button>
     <button id="dropdown-share-btn" onclick="window.handlePostOptionSelect('share')"><i class="ph ph-paper-plane-tilt"></i> Share</button>
     <button id="dropdown-message-btn" onclick="window.handlePostOptionSelect('message')"><i class="ph ph-chats"></i> Message author</button>
@@ -658,9 +658,13 @@
                             <button class="icon-pill" onclick="window.navigateConversationSearch(1)"><i class="ph ph-caret-down"></i></button>
                         </div>
                     </div>
-                    <div id="message-thread" class="message-thread-body"></div>
-                    <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
-                    <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                    <div class="messages-thread-inner">
+                        <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
+                        <div class="message-scroll-region">
+                            <div id="message-thread" class="message-thread-body"></div>
+                            <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                        </div>
+                    </div>
                     <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
                     <div class="message-compose">
                         <input type="file" id="message-media" accept="image/*" style="display:none;">
