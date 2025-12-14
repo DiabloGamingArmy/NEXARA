@@ -296,13 +296,14 @@ export class NexeraGoLiveController {
 
         const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
         const inputMode = inputModeEl?.value || "camera";
+        const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
 
         this.formState = {
             ...this.formState,
             title: titleEl?.value || "",
             category: categoryEl?.value || "",
             tags: this.parseTags(tagsEl?.value || []),
-            visibility: this.formState.visibility || "public",
+            visibility,
             inputMode,
             latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
             autoRecord: !!autoRecordEl?.checked,
@@ -332,12 +333,14 @@ export class NexeraGoLiveController {
 
         const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
         const inputMode = inputModeEl?.value || "camera";
+        const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
 
         this.formState = {
             ...this.formState,
             title: titleEl?.value || "",
             category: categoryEl?.value || "",
             tags: this.parseTags(tagsEl?.value || []),
+            visibility,
             inputMode,
             latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
             autoRecord: !!autoRecordEl?.checked,
@@ -368,6 +371,8 @@ export class NexeraGoLiveController {
         if (inputModeEl) inputModeEl.value = this.formState.inputMode || "camera";
         if (latencyEl) latencyEl.value = (this.formState.latencyMode || "NORMAL").toUpperCase();
         if (autoRecordEl) autoRecordEl.checked = !!this.formState.autoRecord;
+
+        this.updateVisibilityButtons();
     }
 
     writeStateIntoAdvancedForm() {
@@ -388,12 +393,19 @@ export class NexeraGoLiveController {
         this.updateVisibilityButtons();
     }
 
+    resolveVisibilityFromDom(fallback = "public") {
+        const active = document.querySelector("[data-go-live-visibility].active");
+        return active?.dataset?.goLiveVisibility || fallback;
+    }
+
     updateVisibilityButtons() {
-        const publicBtn = document.getElementById("adv-visibility-public");
-        const privateBtn = document.getElementById("adv-visibility-private");
         const isPublic = (this.formState.visibility || "public") === "public";
-        if (publicBtn) publicBtn.classList.toggle("active", isPublic);
-        if (privateBtn) privateBtn.classList.toggle("active", !isPublic);
+        const target = isPublic ? "public" : "private";
+        document.querySelectorAll("[data-go-live-visibility]").forEach((btn) => {
+            const isActive = btn.dataset?.goLiveVisibility === target;
+            btn.classList.toggle("active", isActive);
+            btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
     }
 
     applyUIMode(mode, options = {}) {
@@ -499,6 +511,9 @@ export class NexeraGoLiveController {
         const basicAutoRecord = document.getElementById("auto-record-toggle") || document.getElementById("auto-record");
         const basicStart = document.getElementById("start-stream");
         const basicEnd = document.getElementById("end-stream");
+        const basicPublic = document.getElementById("basic-visibility-public");
+        const basicPrivate = document.getElementById("basic-visibility-private");
+        const backButton = document.getElementById("go-live-back-button");
 
         [basicTitle, basicCategory, basicTags].forEach((el) => {
             if (!el) return;
@@ -526,6 +541,20 @@ export class NexeraGoLiveController {
             basicAutoRecord.addEventListener("change", (e) => {
                 this.formState.autoRecord = !!e.target.checked;
                 this.autoRecord = this.formState.autoRecord;
+                this.writeStateIntoAdvancedForm();
+            });
+
+        if (basicPublic)
+            basicPublic.addEventListener("click", () => {
+                this.formState.visibility = "public";
+                this.updateVisibilityButtons();
+                this.writeStateIntoAdvancedForm();
+            });
+
+        if (basicPrivate)
+            basicPrivate.addEventListener("click", () => {
+                this.formState.visibility = "private";
+                this.updateVisibilityButtons();
                 this.writeStateIntoAdvancedForm();
             });
 
@@ -609,6 +638,27 @@ export class NexeraGoLiveController {
                 this.readAdvancedFormIntoState();
                 this.writeStateIntoBasicForm();
                 this.safeStop();
+            });
+
+        if (backButton)
+            backButton.addEventListener("click", async () => {
+                const isActive = this.state === "starting" || this.state === "live";
+                if (isActive) {
+                    const shouldEnd = confirm("End stream and go back?");
+                    if (!shouldEnd) return;
+                    try {
+                        await this.safeStop();
+                    } finally {
+                        document.body.classList.remove("go-live-open");
+                        if (window.goBack) window.goBack();
+                        else if (window.navigateTo) window.navigateTo("feed");
+                    }
+                    return;
+                }
+
+                document.body.classList.remove("go-live-open");
+                if (window.goBack) window.goBack();
+                else if (window.navigateTo) window.navigateTo("feed");
             });
 
         const micGain = document.getElementById("mixer-mic");
@@ -1040,6 +1090,7 @@ export class NexeraGoLiveController {
             visibility,
         };
 
+        this.log(`Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}`);
         this.log(`Calling createEphemeralChannel with ${JSON.stringify(payload)}`);
 
         const response = await fetch(
@@ -1096,8 +1147,6 @@ export class NexeraGoLiveController {
             visibility,
         });
 
-        await this.persistPrivateStreamKey();
-
         if (this.inputMode === "external") {
             this.setStatus("starting", "Waiting for external encoder");
             this.enterOBSMode();
@@ -1134,6 +1183,7 @@ export class NexeraGoLiveController {
             streamConfig: IVSBroadcastClient.BASIC_LANDSCAPE,
         });
 
+        this.log(`Preparing media capture for inputMode=${this.inputMode}`);
         this.stream =
             this.inputMode === "screen"
                 ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
