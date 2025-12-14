@@ -1584,6 +1584,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     background: var(--bg-panel);
     border-top: 1px solid var(--border);
     padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    flex-shrink: 0;
 }
 
 #view-messages .message-compose-inner {
