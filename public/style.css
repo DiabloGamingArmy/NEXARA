@@ -187,6 +187,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .card-content:hover { background: rgba(255,255,255,0.02); box-shadow: 0 8px 20px rgba(0, 70, 100, 0.22); border-color: rgba(0, 242, 234, 0.16); }
 
 .post-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-main); }
+.post-body-text { white-space: pre-wrap; }
+.comment-body-text { white-space: pre-wrap; }
 
 /* UPDATED IMAGE STYLES: CONTAIN & CENTERED */
 .post-media { 
@@ -297,6 +299,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .category-pill:hover { color: var(--text-main); border-color: rgba(0, 242, 234, 0.4); box-shadow: 0 8px 20px rgba(0, 150, 200, 0.22); transform: translateY(-2px); }
 .category-pill:hover::after { animation: shimmerMove 1.35s ease forwards; }
 .category-pill.active { background: var(--primary); color: black; border-color: var(--primary); box-shadow: 0 0 15px rgba(0, 242, 234, 0.3); }
+.verified-topic { display:flex; align-items:center; gap:6px; }
+.topic-verified-icon { display:inline-flex; width:16px; height:16px; color:var(--primary); }
+.topic-verified-icon svg { width:16px; height:16px; display:block; }
 .category-badge { font-size: 0.7rem; padding: 4px 10px; border-radius: 6px; background: rgba(255, 255, 255, 0.03); color: var(--primary); border: 1px solid var(--border); font-weight: 600; display: inline-block; margin-bottom: 0.5rem; }
 
 /* Discover Pill Styles */
@@ -347,6 +352,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .otd-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .otd-source { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-main); text-decoration: none; }
 .otd-source:hover { color: var(--primary); text-decoration: underline; }
+.time-capsule-footer { margin-top:6px; font-size:0.8rem; color:var(--text-muted); }
+.time-capsule-footer .wiki-attribution { color:inherit; text-decoration:none; }
+.time-capsule-footer .wiki-attribution:hover { text-decoration:underline; }
 .time-capsule-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .time-capsule-header .icon-pill { padding: 6px 12px; font-size: 0.85rem; }
 
@@ -596,7 +604,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 }
 .message-thread-header .message-thread-title-row { display:flex; align-items:center; gap:6px; font-weight:800; }
 .message-thread-header .message-thread-subtitle { color:var(--text-muted); font-size:0.9rem; }
-.message-header-tools { display:flex; gap:8px; align-items:center; padding:0 1rem 0.5rem; }
+.message-header-tools { display:flex; gap:8px; align-items:center; padding:5px 1rem 0.5rem; }
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
 .message-scroll-region { flex:1; display:flex; flex-direction:column; overflow:hidden; padding:0 1rem 1rem; gap:10px; min-height:0; }
@@ -614,7 +622,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .reaction-pill { display:inline-flex; align-items:center; gap:4px; background:var(--surface); border:1px solid var(--border); padding:4px 8px; border-radius:999px; cursor:pointer; font-size:0.9rem; }
 .reaction-pill.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
 .message-row.highlight { outline:2px solid var(--accent); border-radius:12px; }
-.message-actions-button { background:transparent; border:none; color:var(--text-muted); cursor:pointer; margin-left:6px; }
+.message-actions-button { background:transparent; border:none; color:var(--text-muted); cursor:pointer; margin-left:0; }
 .message-actions-menu { position:absolute; background:var(--card); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.15); padding:6px; display:flex; flex-direction:column; gap:4px; z-index:20; }
 .message-actions-menu button { background:transparent; border:none; padding:6px 8px; text-align:left; cursor:pointer; border-radius:6px; }
 .message-actions-menu button:hover { background:var(--hover); }
@@ -636,13 +644,16 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-row.stacked { margin-top:-4px; }
 .message-avatar-slot { width:42px; height:42px; flex:0 0 42px; display:flex; align-items:flex-end; justify-content:center; }
 .message-avatar-slot.placeholder { visibility:hidden; }
-.message-bubble { padding:10px 12px; border-radius:12px; max-width:70%; display:flex; flex-direction:column; gap:6px; }
+.message-bubble { padding:10px 12px; border-radius:12px; max-width:70%; display:flex; flex-direction:column; gap:6px; position:relative; }
 .message-bubble.self { background: rgba(0,242,234,0.12); border:1px solid rgba(0,242,234,0.3); margin-left:auto; }
 .message-bubble.other { background: var(--bg-hover); border:1px solid var(--border); margin-right:auto; }
 .message-time { font-size:0.75rem; color:var(--text-muted); text-align:right; margin-top:2px; }
 .message-status { font-size:0.8rem; color:var(--text-muted); margin-top:-6px; margin-bottom:8px; }
 .message-status.self { text-align:right; }
 .message-date-divider { text-align:center; color:var(--text-muted); font-size:0.85rem; margin:6px 0 2px; }
+.message-actions-button { position:absolute; top:6px; right:8px; opacity:0; pointer-events:none; transition:opacity 0.15s ease; }
+.message-meta, .message-time { opacity:0; pointer-events:none; transition:opacity 0.15s ease; }
+.message-row:hover .message-meta, .message-row:focus-within .message-meta, .message-row:hover .message-time, .message-row:focus-within .message-time, .message-row:hover .message-actions-button, .message-row:focus-within .message-actions-button { opacity:1; pointer-events:auto; }
 .typing-indicator { padding:0 1rem 0; color:var(--text-muted); font-size:0.9rem; display:flex; align-items:center; gap:8px; }
 .typing-dots { display:flex; gap:4px; }
 .typing-dots span { width:6px; height:6px; background:var(--text-muted); border-radius:50%; animation: typingBlink 1s infinite ease-in-out; }
@@ -981,6 +992,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .scheduled-chip { display:inline-block; padding:4px 10px; border:1px dashed var(--border); border-radius:8px; color:var(--text-muted); font-size:0.85rem; margin-top:6px; }
 .see-more-replies, .load-more-comments { background: none; border:1px solid var(--border); color: var(--primary); padding:6px 10px; border-radius:8px; cursor:pointer; margin-top:6px; }
 .see-more-replies:hover, .load-more-comments:hover { border-color: var(--primary); background: rgba(0,242,234,0.08); }
+.thread-filter-row { padding:1rem; max-width:800px; margin:0 auto; display:flex; gap:10px; align-items:center; }
+.thread-filter-label { color:var(--text-muted); font-weight:700; }
 
 /* Mobile Shell and Components */
 .mobile-app-bar { display:none; position:sticky; top:0; z-index:60; backdrop-filter:blur(12px); background:rgba(10,10,12,0.9); border-bottom:1px solid var(--border); padding:10px 14px; align-items:center; justify-content:space-between; }
@@ -1301,7 +1314,12 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     padding: 20px;
     gap: 16px;
     overflow: hidden;
+    min-height: 0;
     color: var(--text-main);
+}
+
+body.go-live-open {
+    overflow: hidden;
 }
 
 #go-live-root {
@@ -1416,6 +1434,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     flex-direction: column;
     min-height: 0;
     gap: 14px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 6px;
 }
 
 .go-live-view {
@@ -1670,6 +1691,56 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .ghost-pill.active {
     border-color: var(--gl-accent);
     color: var(--gl-accent);
+}
+
+.go-live-back-btn {
+    gap: 6px;
+}
+
+.switch {
+    position: relative;
+    display: inline-flex;
+    width: 46px;
+    height: 24px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch .slider {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: 0.2s ease;
+    box-shadow: inset 0 0 0 1px var(--gl-border);
+}
+
+.switch .slider:before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 4px;
+    top: 3px;
+    background: #0f172a;
+    border-radius: 50%;
+    transition: 0.2s ease;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.switch input:checked + .slider {
+    background: var(--primary);
+    box-shadow: none;
+}
+
+.switch input:checked + .slider:before {
+    transform: translateX(20px);
+    background: #04060a;
 }
 
 .obs-panel {
