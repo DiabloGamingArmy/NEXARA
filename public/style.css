@@ -259,9 +259,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .post-options-dropdown button:hover { background: var(--bg-hover); color: var(--primary); }
 
 .menu-surface {
-    background: rgba(15, 15, 18, 0.78);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(15, 15, 18, 0.39);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
     color: var(--text-main);
@@ -269,7 +269,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 
 .post-options-dropdown,
 .message-actions-menu {
-    background: rgba(15, 15, 18, 0.78);
+    background: rgba(15, 15, 18, 0.39);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
 }
@@ -583,8 +583,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-header-tools { display:flex; gap:8px; align-items:center; padding:0 1rem 0.5rem; }
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
-.message-scroll-region { flex:1; display:flex; flex-direction:column; overflow-y:auto; padding:0 1rem 1rem; gap:10px; min-height:0; }
-.message-thread-body { flex:1; display:flex; flex-direction:column; gap:10px; padding:0; justify-content:flex-end; min-height:0; }
+.message-scroll-region { flex:1; display:flex; flex-direction:column; overflow:hidden; padding:0 1rem 1rem; gap:10px; min-height:0; }
+.message-thread-body { flex:1; display:flex; flex-direction:column; gap:10px; padding:0; justify-content:flex-end; min-height:0; overflow-y:auto; }
 .pinned-messages { padding:0 1rem 0.5rem; display:flex; flex-direction:column; gap:6px; }
 .pinned-messages .pinned-row { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:8px; cursor:pointer; }
 .pinned-messages .pinned-row:hover { background:var(--hover); }
@@ -1505,9 +1505,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .menu-surface,
 .post-options-dropdown.menu-surface,
 .message-actions-menu.menu-surface {
-    background: rgba(15, 15, 18, 0.78);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: rgba(15, 15, 18, 0.39);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
     color: var(--text-main);
@@ -1571,10 +1571,14 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 #view-messages .message-scroll-region {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
     padding: 0 1rem 1rem;
+}
+
+#view-messages .message-thread-body {
+    overflow-y: auto;
 }
 
 #view-messages .message-compose {
