@@ -64,6 +64,10 @@ export class NexeraGoLiveController {
         this.latencyMode = "NORMAL"; // NORMAL | LOW
         this.autoRecord = false;
 
+        this.uiBound = false;
+        this.liveStartTime = null;
+        this.statsInterval = null;
+
         this.formState = {
             title: "",
             category: "",
@@ -80,6 +84,9 @@ export class NexeraGoLiveController {
         this.client = null;
         this.stream = null;
         this.previewVideo = null;
+        this.previewShell = null;
+        this.previewSlots = { basic: null, advanced: null };
+        this.obsSlots = { basic: null, advanced: null };
         this.unsubscribeLiveDoc = null;
 
         const storedMode =
@@ -404,6 +411,9 @@ export class NexeraGoLiveController {
         if (basicView) basicView.classList.toggle("is-active", nextMode === "basic");
         if (advancedView) advancedView.classList.toggle("is-active", nextMode === "advanced");
 
+        this.movePreviewIntoActiveSlot(nextMode);
+        this.moveObsPanelIntoActiveSlot(nextMode);
+
         const modeSelect = document.getElementById("go-live-ui-config");
         if (modeSelect) modeSelect.value = nextMode;
 
@@ -421,15 +431,47 @@ export class NexeraGoLiveController {
         } else {
             this.writeStateIntoBasicForm();
         }
+
+        if (!options.skipLog) {
+            this.log(`UI mode: ${nextMode}`);
+        }
+    }
+
+    movePreviewIntoActiveSlot(mode) {
+        if (!this.previewShell) return;
+        const target = mode === "advanced" ? this.previewSlots.advanced : this.previewSlots.basic;
+        if (target && this.previewShell.parentElement !== target) {
+            target.appendChild(this.previewShell);
+        }
+    }
+
+    moveObsPanelIntoActiveSlot(mode) {
+        const obsPanel = document.getElementById("obs-panel");
+        const target = mode === "advanced" ? this.obsSlots.advanced : this.obsSlots.basic;
+        if (obsPanel && target && obsPanel.parentElement !== target) {
+            target.appendChild(obsPanel);
+        }
     }
 
     bindExistingUI() {
+        if (this.uiBound) return;
         this.previewVideo = document.getElementById("live-preview");
+        this.previewShell = document.getElementById("live-preview-shell");
+        this.previewSlots = {
+            basic: document.getElementById("live-preview-slot-basic"),
+            advanced: document.getElementById("live-preview-slot-advanced"),
+        };
+        this.obsSlots = {
+            basic: document.getElementById("obs-panel-slot-basic"),
+            advanced: document.getElementById("obs-panel-slot-advanced"),
+        };
         this.studioRoot = this.studioRoot || (this.root?.classList?.contains("go-live-studio") ? this.root : document.querySelector(".go-live-studio"));
 
         this.hydrateFormStateFromDom();
         this.writeStateIntoBasicForm();
         this.writeStateIntoAdvancedForm();
+        this.renderSessionDetails();
+        this.renderStats({ note: "Idle" });
 
         const modeSelect = document.getElementById("go-live-ui-config");
         if (modeSelect) {
@@ -591,6 +633,7 @@ export class NexeraGoLiveController {
 
         this.applyUIMode(this.uiMode, { skipPersist: true });
         this.syncControls();
+        this.uiBound = true;
     }
 
     setStatus(state, message = "") {
@@ -646,6 +689,17 @@ export class NexeraGoLiveController {
             this.log(`State: ${detail}`);
         }
 
+        if (state === "live") {
+            if (!this.liveStartTime) this.liveStartTime = Date.now();
+            this.startStatsPolling();
+        } else if (state !== "starting") {
+            this.stopStatsPolling();
+            if (state === "idle" || state === "error") {
+                this.liveStartTime = null;
+                this.renderStats({ note: "Idle" });
+            }
+        }
+
         this.syncControls();
     }
 
@@ -685,6 +739,117 @@ export class NexeraGoLiveController {
         if (advLogEl) {
             advLogEl.textContent = recent.join("\n");
         }
+    }
+
+    renderSessionDetails() {
+        const defaults = {
+            id: "—",
+            arn: "—",
+            ingest: "—",
+            playback: "—",
+            latency: (this.formState.latencyMode || "NORMAL").toUpperCase(),
+            autoRecord: this.formState.autoRecord ? "On" : "Off",
+        };
+
+        const details = {
+            id: this.session?.sessionId || defaults.id,
+            arn: this.session?.channelArn || defaults.arn,
+            ingest: this.session?.ingestEndpoint || defaults.ingest,
+            playback: this.session?.playbackUrl || defaults.playback,
+            latency: this.session?.latencyMode || defaults.latency,
+            autoRecord: this.session?.autoRecord ?? defaults.autoRecord,
+        };
+
+        const targets = [
+            ["session-id-basic", details.id],
+            ["session-arn-basic", details.arn],
+            ["session-ingest-basic", details.ingest],
+            ["session-playback-basic", details.playback],
+            ["session-latency-basic", details.latency],
+            ["session-auto-basic", details.autoRecord === true ? "On" : details.autoRecord === false ? "Off" : details.autoRecord],
+            ["session-id-advanced", details.id],
+            ["session-arn-advanced", details.arn],
+            ["session-ingest-advanced", details.ingest],
+            ["session-playback-advanced", details.playback],
+            ["session-latency-advanced", details.latency],
+            ["session-auto-advanced", details.autoRecord === true ? "On" : details.autoRecord === false ? "Off" : details.autoRecord],
+        ];
+
+        targets.forEach(([id, value]) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value ?? "—";
+        });
+    }
+
+    renderStats(stats = {}) {
+        const formatter = (val, suffix = "") => {
+            if (val === undefined || val === null || Number.isNaN(val)) return "—";
+            if (typeof val === "number") {
+                return `${val}${suffix}`;
+            }
+            return String(val);
+        };
+
+        const durationMs = this.liveStartTime ? Date.now() - this.liveStartTime : 0;
+        const duration = new Date(durationMs).toISOString().substring(11, 19);
+        const audioTracks = this.stream?.getAudioTracks()?.length || 0;
+        const videoTracks = this.stream?.getVideoTracks()?.length || 0;
+
+        const fields = {
+            "adv-stat-ingest": stats.ingestEndpoint || this.session?.ingestEndpoint || "—",
+            "adv-stat-bitrate": formatter(stats.bitrate, " kbps"),
+            "adv-stat-rtt": formatter(stats.rtt, " ms"),
+            "adv-stat-dropped": formatter(stats.droppedFrames),
+            "adv-stat-cpu": formatter(stats.cpuPercentage, "%"),
+            "adv-stat-duration": duration,
+            "adv-stat-tracks": `${videoTracks} video / ${audioTracks} audio`,
+            "adv-stat-mode": this.formState.inputMode || this.inputMode,
+            "adv-stat-health": stats.note || (stats.available === false ? "Stats unavailable in this SDK build" : "Monitoring"),
+        };
+
+        Object.entries(fields).forEach(([id, value]) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value ?? "—";
+        });
+    }
+
+    startStatsPolling() {
+        if (this.statsInterval) return;
+        this.statsInterval = window.setInterval(() => this.collectStats(), 1500);
+    }
+
+    stopStatsPolling() {
+        if (this.statsInterval) {
+            clearInterval(this.statsInterval);
+            this.statsInterval = null;
+        }
+    }
+
+    collectStats() {
+        if (!this.client) {
+            this.renderStats({ available: false, note: "Client not initialized" });
+            return;
+        }
+
+        if (typeof this.client.getStats === "function") {
+            try {
+                const stats = this.client.getStats();
+                this.renderStats({
+                    available: true,
+                    bitrate: stats?.bitrates?.audio || stats?.bitrates?.video || stats?.bitrate,
+                    rtt: stats?.rtt,
+                    droppedFrames: stats?.droppedFrames,
+                    cpuPercentage: stats?.cpuPercentage,
+                    ingestEndpoint: stats?.ingestEndpoint || this.session?.ingestEndpoint,
+                });
+                return;
+            } catch (err) {
+                console.warn("[GoLive] stats unavailable", err);
+                this.log(`Stats unavailable: ${err.message || err}`);
+            }
+        }
+
+        this.renderStats({ available: false });
     }
 
     persistAudioGains(updates) {
@@ -866,6 +1031,17 @@ export class NexeraGoLiveController {
 
         const idToken = await user.getIdToken();
 
+        const payload = {
+            title,
+            category,
+            tags,
+            latencyMode: state.latencyMode,
+            autoRecord: !!state.autoRecord,
+            visibility,
+        };
+
+        this.log(`Calling createEphemeralChannel with ${JSON.stringify(payload)}`);
+
         const response = await fetch(
             "https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel",
             {
@@ -874,14 +1050,7 @@ export class NexeraGoLiveController {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${idToken}`,
                 },
-                body: JSON.stringify({
-                    title,
-                    category,
-                    tags,
-                    latencyMode: state.latencyMode,
-                    autoRecord: !!state.autoRecord,
-                    visibility,
-                }),
+                body: JSON.stringify(payload),
             }
         );
 
@@ -912,7 +1081,13 @@ export class NexeraGoLiveController {
             tags,
             ingestEndpoint: data.ingestEndpoint,
             rtmpsIngestUrl: data.rtmpsIngestUrl || (data.ingestEndpoint ? `rtmps://${data.ingestEndpoint}:443/app/` : ""),
+            latencyMode: state.latencyMode,
+            autoRecord: !!state.autoRecord,
         };
+
+        this.log("createEphemeralChannel response received");
+
+        this.renderSessionDetails();
 
         await this.persistLiveSnapshot({
             title,
@@ -937,6 +1112,7 @@ export class NexeraGoLiveController {
     // ----------------------------------------------
     async startBrowserBroadcast() {
         await loadBroadcastSdk();
+        this.log("IVS Broadcast SDK loaded");
 
         const ingestHostname =
             this.session.ingestEndpoint ||
@@ -985,6 +1161,8 @@ export class NexeraGoLiveController {
 
         await this.client.startBroadcast(this.session.streamKey);
 
+        this.liveStartTime = this.liveStartTime || Date.now();
+
         try {
             await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), {
                 isLive: true,
@@ -998,6 +1176,8 @@ export class NexeraGoLiveController {
 
         this.setStatus("live");
         this.log("Browser broadcast active");
+        this.startStatsPolling();
+        this.collectStats();
     }
 
     // ----------------------------------------------
@@ -1068,6 +1248,10 @@ export class NexeraGoLiveController {
         }
 
         this.session = null;
+        this.liveStartTime = null;
+        this.stopStatsPolling();
+        this.renderSessionDetails();
+        this.renderStats({ note: "Idle" });
     }
 }
 
