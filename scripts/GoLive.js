@@ -7,18 +7,30 @@ import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp } from "https
 // --------------------------------------------------
 // Load IVS Web Broadcast SDK
 // --------------------------------------------------
-const IVS_BROADCAST_SRC =
-    "https://web-broadcast.live-video.net/1.0.0/amazon-ivs-web-broadcast.min.js";
+const IVS_BROADCAST_SOURCES = [
+    "https://web-broadcast.live-video.net/1.13.0/amazon-ivs-web-broadcast.min.js",
+    "https://web-broadcast.live-video.net/1.0.0/amazon-ivs-web-broadcast.min.js",
+];
 
 function loadBroadcastSdk() {
     if (window.IVSBroadcastClient) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = IVS_BROADCAST_SRC;
-        script.async = true;
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
+    const loadFromSource = (src) =>
+        new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = src;
+            script.async = true;
+            script.onload = resolve;
+            script.onerror = (err) => {
+                console.error("[GoLive]", `Failed to load IVS Broadcast SDK from ${src}`, err);
+                reject(err || new Error(`Failed to load IVS Broadcast SDK from ${src}`));
+            };
+            document.head.appendChild(script);
+        });
+
+    return IVS_BROADCAST_SOURCES.reduce((chain, src) => chain.catch(() => loadFromSource(src)), Promise.reject()).then(() => {
+        if (!window.IVSBroadcastClient) {
+            throw new Error("IVS Broadcast SDK did not initialize after script load attempts");
+        }
     });
 }
 

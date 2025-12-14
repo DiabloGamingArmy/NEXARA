@@ -4301,10 +4301,19 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
             }));
         }
         if (!liveSessionsCache.some(function(session) { return (session.hostId || session.author) === uid; })) {
-            const liveQuery = query(collection(db, 'liveSessions'), where('hostId', '==', uid), limit(12));
+            const liveQuery = query(collection(db, 'liveStreams'), where('hostId', '==', uid), limit(12));
             tasks.push(getDocs(liveQuery).then(function(snap) {
-                const additions = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); })
-                    .sort(function(a, b) { return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0); });
+                const additions = snap.docs.map(function(d) {
+                    const data = d.data();
+                    const playbackUrl = data.playbackUrl || data.streamUrl || data.streamEmbedURL || '';
+                    return ({
+                        id: d.id,
+                        ...data,
+                        streamUrl: data.streamUrl || playbackUrl,
+                        streamEmbedURL: data.streamEmbedURL || playbackUrl,
+                        tags: Array.isArray(data.tags) ? data.tags : [],
+                    });
+                }).sort(function(a, b) { return (b.startedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0) - (a.startedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0); });
                 const existingIds = new Set(liveSessionsCache.map(function(s) { return s.id; }));
                 liveSessionsCache = liveSessionsCache.concat(additions.filter(function(s) { return !existingIds.has(s.id); }));
             }));
@@ -7404,7 +7413,11 @@ function renderLiveDirectoryFromCache() {
     if (liveSortMode === 'popular' || liveSortMode === 'most_viewed') {
         filtered = filtered.slice().sort(function (a, b) { return parseViewerCount(b.viewerCount || b.stats?.viewerCount) - parseViewerCount(a.viewerCount || a.stats?.viewerCount); });
     } else if (liveSortMode === 'new') {
-        filtered = filtered.slice().sort(function (a, b) { return (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0); });
+        filtered = filtered.slice().sort(function (a, b) {
+            const aStarted = a.startedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0;
+            const bStarted = b.startedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
+            return bStarted - aStarted;
+        });
     }
 
     renderLiveFeatured(filtered);
@@ -7412,17 +7425,32 @@ function renderLiveDirectoryFromCache() {
     renderLiveGrid(filtered);
 }
 
-const IVS_BROADCAST_SRC = 'https://web-broadcast.live-video.net/1.0.0/amazon-ivs-web-broadcast.min.js';
+const IVS_BROADCAST_SOURCES = [
+    'https://web-broadcast.live-video.net/1.13.0/amazon-ivs-web-broadcast.min.js',
+    'https://web-broadcast.live-video.net/1.0.0/amazon-ivs-web-broadcast.min.js',
+];
 
 function loadBroadcastSdk() {
     if (window.IVSBroadcastClient) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = IVS_BROADCAST_SRC;
-        script.async = true;
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
+    const loadFromSource = (src) =>
+        new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = src;
+            script.async = true;
+            script.onload = resolve;
+            script.onerror = (err) => {
+                console.error('[GoLive]', `Failed to load IVS Broadcast SDK from ${src}`, err);
+                reject(err || new Error(`Failed to load IVS Broadcast SDK from ${src}`));
+            };
+            document.head.appendChild(script);
+        });
+
+    return IVS_BROADCAST_SOURCES.reduce((chain, src) => {
+        return chain.catch(() => loadFromSource(src));
+    }, Promise.reject()).then(() => {
+        if (!window.IVSBroadcastClient) {
+            throw new Error('IVS Broadcast SDK did not initialize after script load attempts');
+        }
     });
 }
 
@@ -7430,6 +7458,7 @@ function mapSessionFromBackend(data = {}, config = {}) {
     const ingestEndpoint = data.ingestEndpoint || data.inputEndpoint;
     const rtmpsIngestUrl = data.rtmpsIngestUrl || (ingestEndpoint ? `rtmps://${ingestEndpoint}:443/app/` : '');
     return {
+        uid: data.uid || currentUser?.uid || auth?.currentUser?.uid,
         sessionId: data.sessionId,
         channelArn: data.channelArn,
         playbackUrl: data.playbackUrl,
@@ -7438,6 +7467,7 @@ function mapSessionFromBackend(data = {}, config = {}) {
         title: data.title ?? config.title ?? '',
         category: data.category ?? config.category ?? '',
         tags: Array.isArray(data.tags) ? data.tags : config.tags ?? [],
+        isLive: Boolean(data.isLive),
         ingestEndpoint,
         rtmpsIngestUrl,
     };
@@ -7720,6 +7750,31 @@ class GoLiveSetupController {
         }
     }
 
+    async persistSession(session) {
+        if (!session?.sessionId) return;
+        try {
+            const uid = session.uid || currentUser?.uid || auth?.currentUser?.uid || null;
+            const payload = {
+                sessionId: session.sessionId,
+                uid,
+                channelArn: session.channelArn,
+                playbackUrl: session.playbackUrl,
+                streamKey: session.streamKey,
+                visibility: session.visibility,
+                title: session.title,
+                category: session.category,
+                tags: Array.isArray(session.tags) ? session.tags : [],
+                ingestEndpoint: session.ingestEndpoint,
+                rtmpsIngestUrl: session.rtmpsIngestUrl,
+                isLive: Boolean(session.isLive),
+                createdAt: serverTimestamp(),
+            };
+            await setDoc(doc(db, 'liveStreams', session.sessionId), payload, { merge: true });
+        } catch (error) {
+            console.error('[GoLive]', 'Failed to persist session details', error);
+        }
+    }
+
     async startBroadcast(session) {
         if (!session) throw new Error('Missing session details for broadcast');
         if (!this.stream) throw new Error('No media stream available to broadcast');
@@ -7882,8 +7937,9 @@ class GoLiveSetupController {
 
             const data = json ?? {};
             const session = mapSessionFromBackend(data, config);
-            this.session = session;
+            this.session = { ...session, isLive: session.isLive ?? false };
             console.info('[GoLive]', 'createEphemeralChannel response', session);
+            await this.persistSession(this.session);
             this.setState('starting', 'Ephemeral channel ready');
             return session;
         } catch (error) {
@@ -7911,10 +7967,27 @@ function renderLiveSetup() {
 
 function renderLiveSessions() {
     if(liveSessionsUnsubscribe) { renderLiveDirectoryFromCache(); return; }
-    const liveRef = query(collection(db, 'liveSessions'), where('status', '==', 'live'), orderBy('createdAt', 'desc'));
+    const liveRef = query(
+        collection(db, 'liveStreams'),
+        where('isLive', '==', true),
+        orderBy('startedAt', 'desc'),
+        orderBy('createdAt', 'desc')
+    );
     liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
         try {
-            liveSessionsCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+            liveSessionsCache = snap.docs.map(function(d) {
+                const data = d.data();
+                const playbackUrl = data.playbackUrl || data.streamUrl || data.streamEmbedURL || '';
+                return ({
+                    id: d.id,
+                    ...data,
+                    streamUrl: data.streamUrl || playbackUrl,
+                    streamEmbedURL: data.streamEmbedURL || playbackUrl,
+                    title: data.title || '',
+                    category: data.category || '',
+                    tags: Array.isArray(data.tags) ? data.tags : [],
+                });
+            });
             renderLiveDirectoryFromCache();
         } catch (e) {
             console.error('Live sessions snapshot failed', e);
@@ -7932,14 +8005,15 @@ window.createLiveSession = async function() {
     const tags = (document.getElementById('live-tags').value || '').split(',').map(function(t) { return t.trim(); }).filter(Boolean);
     const streamEmbedURL = document.getElementById('live-url').value;
     try {
-        await addDoc(collection(db, 'liveSessions'), {
+        await addDoc(collection(db, 'liveStreams'), {
             hostId: currentUser.uid,
             title,
             category,
             tags,
-            status: 'live',
             streamEmbedURL,
-            createdAt: serverTimestamp()
+            isLive: true,
+            createdAt: serverTimestamp(),
+            startedAt: serverTimestamp(),
         });
         toggleGoLiveModal(false);
     } catch (e) {
@@ -7955,20 +8029,35 @@ window.openLiveSession = function(sessionId) {
     const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
     if(!container) return;
     const sessionData = liveSessionsCache.find(function(session) { return session.id === sessionId; });
+    const streamUrl = sessionData?.streamEmbedURL || sessionData?.streamUrl || sessionData?.playbackUrl;
     const sessionCard = document.createElement('div');
     sessionCard.className = 'social-card';
-    if (!sessionData || (!sessionData.streamEmbedURL && !sessionData.streamUrl)) {
+    if (!sessionData || !streamUrl) {
         sessionCard.innerHTML = '<div style="padding:1rem;"><div class="empty-state">Stream is offline or unavailable.</div></div>';
         container.prepend(sessionCard);
         return;
     }
-    sessionCard.innerHTML = `<div style="padding:1rem;"><div id="live-player" style="margin-bottom:10px;"></div><div id="live-chat" style="max-height:200px; overflow:auto;"></div><div style="display:flex; gap:8px; margin-top:8px;"><input id="live-chat-input" class="form-input" placeholder="Chat"/><button class="create-btn-sidebar" style="width:auto;" onclick="window.sendLiveChat('${sessionId}')">Send</button></div></div>`;
+    const tags = (sessionData.tags || []).join(', ');
+    sessionCard.innerHTML = `<div style="padding:1rem;">
+        <div id="live-player" style="margin-bottom:10px;">
+            <video src="${escapeHtml(streamUrl)}" controls autoplay playsinline style="width:100%;max-height:320px;" type="application/x-mpegURL"></video>
+        </div>
+        <div style="margin-bottom:8px;">
+            <div style="font-weight:700;">${escapeHtml(sessionData.title || 'Live Session')}</div>
+            <div style="color:var(--text-muted);">${escapeHtml(sessionData.category || 'Live')}${tags ? ` • ${escapeHtml(tags)}` : ''}</div>
+        </div>
+        <div id="live-chat" style="max-height:200px; overflow:auto;"></div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+            <input id="live-chat-input" class="form-input" placeholder="Chat"/>
+            <button class="create-btn-sidebar" style="width:auto;" onclick="window.sendLiveChat('${sessionId}')">Send</button>
+        </div>
+    </div>`;
     container.prepend(sessionCard);
     listenLiveChat(sessionId);
 };
 
 function listenLiveChat(sessionId) {
-    const chatRef = query(collection(db, 'liveSessions', sessionId, 'chat'), orderBy('createdAt'));
+    const chatRef = query(collection(db, 'liveStreams', sessionId, 'chat'), orderBy('createdAt'));
     ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function(snap) {
         try {
             const chatEl = document.getElementById('live-chat');
@@ -7995,7 +8084,7 @@ window.sendLiveChat = async function(sessionId) {
     const input = document.getElementById('live-chat-input');
     if(!input || !input.value.trim()) return;
     try {
-        await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
+        await addDoc(collection(db, 'liveStreams', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
         input.value = '';
     } catch (e) {
         console.error('Failed to send live chat', e);
