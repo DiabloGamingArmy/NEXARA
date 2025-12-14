@@ -7513,9 +7513,11 @@ class GoLiveSetupController {
         this.audioModeSelect = null;
         this.videoDeviceSelect = null;
         this.audioDeviceSelect = null;
+        this.latencySelect = null;
         this.bound = false;
         this.inputMode = 'camera';
         this.audioMode = 'mic';
+        this.latencyMode = 'normal';
 
         this.onStart = this.onStart.bind(this);
         this.onEnd = this.onEnd.bind(this);
@@ -7536,6 +7538,7 @@ class GoLiveSetupController {
         const audioMode = document.getElementById('live-audio-mode');
         const videoDevice = document.getElementById('live-video-device');
         const audioDevice = document.getElementById('live-audio-device');
+        const latencySelect = document.getElementById('latency-mode');
 
         if (!startBtn || !preview) {
             console.warn('[GoLive]', 'Go Live UI not ready; waiting for DOM');
@@ -7557,6 +7560,7 @@ class GoLiveSetupController {
         this.audioModeSelect = audioMode;
         this.videoDeviceSelect = videoDevice;
         this.audioDeviceSelect = audioDevice;
+        this.latencySelect = latencySelect;
 
         this.startButton.addEventListener('click', this.onStart);
         if (this.endButton) this.endButton.addEventListener('click', this.onEnd);
@@ -7573,6 +7577,14 @@ class GoLiveSetupController {
                 this.audioMode = e.target.value || 'mic';
                 console.info('[GoLive]', 'Audio mode changed', { mode: this.audioMode });
                 this.updateStatus('Audio input updated');
+            });
+        }
+        if (this.latencySelect) {
+            this.latencyMode = this.latencySelect.value || 'normal';
+            this.latencySelect.addEventListener('change', (e) => {
+                this.latencyMode = e.target.value || 'normal';
+                console.info('[GoLive]', 'Latency mode changed', { mode: this.latencyMode });
+                this.updateStatus('Latency preference updated');
             });
         }
 
@@ -7648,12 +7660,15 @@ class GoLiveSetupController {
 
     collectFormValues() {
         const tagsRaw = (document.getElementById('live-setup-tags')?.value || '').split(',').map((t) => t.trim()).filter(Boolean);
+        const autoRecordInput = document.getElementById('auto-record') || document.getElementById('live-setup-autorecord');
+        const latencySelect = document.getElementById('latency-mode');
         const values = {
             title: document.getElementById('live-setup-title')?.value || '',
             category: document.getElementById('live-setup-category')?.value || '',
             tags: tagsRaw,
             privacy: document.getElementById('live-setup-privacy')?.value || 'Public',
-            autoRecord: Boolean(document.getElementById('live-setup-autorecord')?.checked),
+            autoRecord: Boolean(autoRecordInput?.checked),
+            latencyMode: latencySelect?.value || this.latencyMode || 'normal',
             videoMode: this.videoModeSelect?.value || 'camera',
             audioMode: this.audioModeSelect?.value || 'mic',
             videoDeviceId: this.videoDeviceSelect?.value || '',
@@ -7914,7 +7929,7 @@ class GoLiveSetupController {
             title: config.title,
             category: config.category,
             tags: config.tags,
-            latencyMode: 'LOW',
+            latencyMode: (config.latencyMode || 'normal').toUpperCase(),
             visibility: (config.privacy || 'Public').toLowerCase(),
             autoRecord: config.autoRecord,
             inputMode: config.videoMode,
