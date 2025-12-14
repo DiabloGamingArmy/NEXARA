@@ -2,7 +2,10 @@
 // Nexera Go Live Controller – Browser First
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp, setDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+const GO_LIVE_MODE_STORAGE_KEY = "nexera-go-live-mode";
+const GO_LIVE_AUDIO_STORAGE_KEY = "nexera-go-live-audio-gains";
 
 const GO_LIVE_MODE_STORAGE_KEY = "nexera-go-live-mode";
 const GO_LIVE_AUDIO_STORAGE_KEY = "nexera-go-live-audio-gains";
@@ -251,18 +254,28 @@ export class NexeraGoLiveController {
             modeToggle.onclick = () => {
                 this.uiMode = this.uiMode === "advanced" ? "basic" : "advanced";
                 localStorage.setItem(GO_LIVE_MODE_STORAGE_KEY, this.uiMode);
+                this.persistUiSnapshot();
                 this.renderUI();
             };
         }
 
         const inputMode = document.getElementById("input-mode");
-        if (inputMode) inputMode.onchange = (e) => (this.inputMode = e.target.value);
+        if (inputMode) inputMode.onchange = (e) => {
+            this.inputMode = e.target.value;
+            this.persistSettingsSnapshot();
+        };
 
         const latencyMode = document.getElementById("latency-mode");
-        if (latencyMode) latencyMode.onchange = (e) => (this.latencyMode = e.target.value || "NORMAL");
+        if (latencyMode) latencyMode.onchange = (e) => {
+            this.latencyMode = e.target.value || "NORMAL";
+            this.persistSettingsSnapshot();
+        };
 
         const autoRecord = document.getElementById("auto-record");
-        if (autoRecord) autoRecord.onchange = (e) => (this.autoRecord = !!e.target.checked);
+        if (autoRecord) autoRecord.onchange = (e) => {
+            this.autoRecord = !!e.target.checked;
+            this.persistSettingsSnapshot();
+        };
 
         const startBtn = document.getElementById("start-stream");
         if (startBtn) startBtn.onclick = () => this.safeStart();
@@ -273,13 +286,21 @@ export class NexeraGoLiveController {
         const micGain = document.getElementById("mixer-mic");
         if (micGain) {
             micGain.value = this.audioGains.mic;
-            micGain.oninput = (e) => this.persistAudioGains({ mic: Number(e.target.value) });
+            micGain.onchange = (e) => {
+                const mic = Number(e.target.value);
+                this.persistAudioGains({ mic });
+                this.persistStudioSnapshot({ audio: { micGain: mic, systemGain: this.audioGains.system } });
+            };
         }
 
         const systemGain = document.getElementById("mixer-system");
         if (systemGain) {
             systemGain.value = this.audioGains.system;
-            systemGain.oninput = (e) => this.persistAudioGains({ system: Number(e.target.value) });
+            systemGain.onchange = (e) => {
+                const system = Number(e.target.value);
+                this.persistAudioGains({ system });
+                this.persistStudioSnapshot({ audio: { micGain: this.audioGains.mic, systemGain: system } });
+            };
         }
     }
 
@@ -377,6 +398,111 @@ export class NexeraGoLiveController {
         if (systemGain) systemGain.value = this.audioGains.system;
     }
 
+    settingsPayload(overrides = {}) {
+        const tags = Array.isArray(overrides.tags)
+            ? overrides.tags
+            : overrides.tags
+            ? String(overrides.tags)
+                  .split(",")
+                  .map((t) => t.trim())
+                  .filter(Boolean)
+            : Array.isArray(this.session?.tags)
+            ? this.session.tags
+            : [];
+
+        const title = overrides.title ?? this.session?.title ?? document.getElementById("stream-title")?.value ?? "";
+        const category = overrides.category ?? this.session?.category ?? document.getElementById("stream-category")?.value ?? "";
+        const visibility = overrides.visibility ?? this.session?.visibility ?? document.getElementById("stream-visibility")?.value ?? "public";
+
+        return {
+            inputMode: this.inputMode,
+            audioMode: this.audioMode,
+            latencyMode: this.latencyMode === "LOW" ? "LOW" : "NORMAL",
+            autoRecord: !!this.autoRecord,
+            visibility,
+            title,
+            category,
+            tags,
+        };
+    }
+
+    async persistLiveSnapshot(overrides = {}) {
+        if (!this.session?.sessionId) return;
+
+        const settings = this.settingsPayload(overrides);
+        const payload = {
+            uid: this.auth?.currentUser?.uid || null,
+            playbackUrl: this.session.playbackUrl || null,
+            visibility: settings.visibility,
+            title: settings.title,
+            category: settings.category,
+            tags: settings.tags,
+            channelArn: this.session.channelArn || null,
+            ingestEndpoint: this.session.ingestEndpoint || null,
+            rtmpsIngestUrl: this.session.rtmpsIngestUrl || null,
+            settings,
+            ui: { mode: this.uiMode, updatedAt: serverTimestamp() },
+        };
+
+        try {
+            await setDoc(doc(this.db, "liveStreams", this.session.sessionId), payload, { merge: true });
+        } catch (error) {
+            console.error("[GoLive] failed to persist live settings", error);
+            this.log(`Persist settings failed: ${error.message || error}`);
+        }
+    }
+
+    async persistSettingsSnapshot(overrides = {}) {
+        await this.persistLiveSnapshot(overrides);
+    }
+
+    async persistUiSnapshot() {
+        if (!this.session?.sessionId) return;
+        try {
+            await setDoc(
+                doc(this.db, "liveStreams", this.session.sessionId),
+                { ui: { mode: this.uiMode, updatedAt: serverTimestamp() } },
+                { merge: true }
+            );
+        } catch (error) {
+            console.error("[GoLive] failed to persist UI snapshot", error);
+        }
+    }
+
+    async persistStudioSnapshot(partial = {}) {
+        if (!this.session?.sessionId) return;
+        const audio = partial.audio || { micGain: this.audioGains.mic, systemGain: this.audioGains.system };
+        const studio = {
+            activeSceneId: partial.activeSceneId ?? null,
+            scenes: partial.scenes ?? [],
+            sources: partial.sources ?? [],
+            graphics: partial.graphics ?? [],
+            audio,
+        };
+        try {
+            await setDoc(doc(this.db, "liveStreams", this.session.sessionId), { studio }, { merge: true });
+        } catch (error) {
+            console.error("[GoLive] failed to persist studio snapshot", error);
+        }
+    }
+
+    async persistPrivateStreamKey() {
+        if (!this.session?.sessionId || !this.session.streamKey) return;
+        const uid = this.auth?.currentUser?.uid || null;
+        if (!uid) return;
+        try {
+            await setDoc(
+                doc(this.db, "liveStreams", this.session.sessionId, "private", "keys"),
+                { uid, streamKey: this.session.streamKey, updatedAt: serverTimestamp() },
+                { merge: true }
+            );
+            await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), { streamKey: deleteField() });
+        } catch (error) {
+            console.error("[GoLive] failed to persist private stream key", error);
+            this.log(`Persist key failed: ${error.message || error}`);
+        }
+    }
+
     // ----------------------------------------------
     // Start Stream
     // ----------------------------------------------
@@ -460,6 +586,15 @@ export class NexeraGoLiveController {
             ingestEndpoint: data.ingestEndpoint,
             rtmpsIngestUrl: data.rtmpsIngestUrl || (data.ingestEndpoint ? `rtmps://${data.ingestEndpoint}:443/app/` : ""),
         };
+
+        await this.persistLiveSnapshot({
+            title,
+            category,
+            tags,
+            visibility,
+        });
+
+        await this.persistPrivateStreamKey();
 
         if (this.inputMode === "external") {
             this.setStatus("starting", "Waiting for external encoder");

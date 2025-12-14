@@ -280,17 +280,26 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------
-    // TEMPORARY — DEVELOPMENT ONLY
-    // WILL BE HARDENED BEFORE PRODUCTION
-    // Relaxed live streaming access for development
+    // Live streaming (hardened)
     // ------------------------------------------------
+    function liveStreamOwner(streamId) {
+      return exists(/databases/$(database)/documents/liveStreams/$(streamId))
+        ? get(/databases/$(database)/documents/liveStreams/$(streamId)).data.uid
+        : request.resource.data.uid;
+    }
+
     match /liveStreams/{streamId} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn()
-        && (request.auth.uid == resource.data.uid || request.auth.uid == request.resource.data.uid);
+      allow read: if true; // public metadata only; secrets live in private subdocs
+
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isSignedIn() && liveStreamOwner(streamId) == request.auth.uid;
 
       match /chat/{messageId} {
         allow read, write: if isSignedIn();
+      }
+
+      match /private/{docId} {
+        allow read, write: if isSignedIn() && liveStreamOwner(streamId) == request.auth.uid;
       }
     }
 

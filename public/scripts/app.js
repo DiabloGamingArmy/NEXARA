@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
@@ -38,6 +38,8 @@ let discoverPostsSort = 'recent';
 let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
+
+const GO_LIVE_MODE_STORAGE_KEY = 'nexera-go-live-mode';
 let videoSearchTerm = '';
 let videoFilter = 'All';
 let videoSortMode = 'recent';
@@ -7737,14 +7739,18 @@ function mapSessionFromBackend(data = {}, config = {}) {
         sessionId: data.sessionId,
         channelArn: data.channelArn,
         playbackUrl: data.playbackUrl,
-        streamKey: data.streamKey,
         visibility: data.visibility ?? (config.privacy || 'public').toLowerCase(),
         title: data.title ?? config.title ?? '',
         category: data.category ?? config.category ?? '',
         tags: Array.isArray(data.tags) ? data.tags : config.tags ?? [],
+        latencyMode: (data.latencyMode || config.latencyMode || 'NORMAL').toUpperCase(),
+        autoRecord: data.autoRecord ?? config.autoRecord ?? false,
+        inputMode: config.videoMode || data.inputMode || 'camera',
+        audioMode: config.audioMode || data.audioMode || 'mic',
         isLive: Boolean(data.isLive),
         ingestEndpoint,
         rtmpsIngestUrl,
+        streamKey: data.streamKey,
     };
 }
 
@@ -7781,6 +7787,7 @@ class GoLiveSetupController {
         this.inputMode = 'camera';
         this.audioMode = 'mic';
         this.latencyMode = 'normal';
+        this.uiMode = localStorage.getItem(GO_LIVE_MODE_STORAGE_KEY) === 'advanced' ? 'advanced' : 'basic';
 
         this.onStart = this.onStart.bind(this);
         this.onEnd = this.onEnd.bind(this);
@@ -8040,26 +8047,55 @@ class GoLiveSetupController {
         }
     }
 
+    async persistPrivateStreamKey(session) {
+        if (!session?.sessionId || !session.streamKey) return;
+        const uid = session.uid || currentUser?.uid || auth?.currentUser?.uid || null;
+        if (!uid) return;
+        try {
+            await setDoc(
+                doc(db, 'liveStreams', session.sessionId, 'private', 'keys'),
+                { uid, streamKey: session.streamKey, updatedAt: serverTimestamp() },
+                { merge: true }
+            );
+            await updateDoc(doc(db, 'liveStreams', session.sessionId), { streamKey: deleteField() });
+        } catch (error) {
+            console.error('[GoLive]', 'Failed to persist private stream key', error);
+        }
+    }
+
     async persistSession(session) {
         if (!session?.sessionId) return;
         try {
             const uid = session.uid || currentUser?.uid || auth?.currentUser?.uid || null;
+            const settings = {
+                inputMode: session.inputMode || this.inputMode || 'camera',
+                audioMode: session.audioMode || this.audioMode || 'mic',
+                latencyMode: (session.latencyMode || this.latencyMode || 'NORMAL').toUpperCase(),
+                autoRecord: !!(session.autoRecord ?? false),
+                visibility: session.visibility || 'public',
+                title: session.title || '',
+                category: session.category || '',
+                tags: Array.isArray(session.tags) ? session.tags : [],
+            };
             const payload = {
                 sessionId: session.sessionId,
                 uid,
                 channelArn: session.channelArn,
                 playbackUrl: session.playbackUrl,
-                streamKey: session.streamKey,
-                visibility: session.visibility,
-                title: session.title,
-                category: session.category,
-                tags: Array.isArray(session.tags) ? session.tags : [],
+                visibility: settings.visibility,
+                title: settings.title,
+                category: settings.category,
+                tags: settings.tags,
                 ingestEndpoint: session.ingestEndpoint,
                 rtmpsIngestUrl: session.rtmpsIngestUrl,
                 isLive: Boolean(session.isLive),
+                settings,
+                ui: { mode: this.uiMode, updatedAt: serverTimestamp() },
                 createdAt: serverTimestamp(),
             };
             await setDoc(doc(db, 'liveStreams', session.sessionId), payload, { merge: true });
+            await updateDoc(doc(db, 'liveStreams', session.sessionId), { streamKey: deleteField() });
+            await this.persistPrivateStreamKey(session);
         } catch (error) {
             console.error('[GoLive]', 'Failed to persist session details', error);
         }
