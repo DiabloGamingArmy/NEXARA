@@ -544,6 +544,7 @@
             <div id="go-live-root" class="go-live-studio ui-basic is-active">
         <div class="go-live-studio-topbar gl-panel">
             <div class="topbar-left">
+                <button class="icon-pill ghost go-live-back-btn" type="button" id="go-live-back-button"><i class="ph ph-caret-left"></i> Back</button>
                 <div class="go-live-title-block">
                     <div class="go-live-title">Go Live Setup</div>
                     <p class="go-live-subtitle">Streaming Center</p>
@@ -616,18 +617,11 @@
                                         <label class="gl-label" for="stream-category">Category</label>
                                         <input id="stream-category" class="form-input" placeholder="Gaming, IRL, Podcast...">
                                     </div>
-                                    <div class="gl-field">
-                                        <label class="gl-label" for="stream-tags">Tags</label>
-                                        <input id="stream-tags" class="form-input" placeholder="Add tags separated by commas">
-                                    </div>
-                                    <div class="gl-row align-center">
-                                        <div class="gl-label muted">Privacy</div>
-                                        <div class="pill-row">
-                                            <button class="ghost-pill active" type="button">Public</button>
-                                            <button class="ghost-pill" type="button">Private</button>
-                                        </div>
-                                    </div>
-                                </div>
+                                      <div class="gl-field">
+                                          <label class="gl-label" for="stream-tags">Tags</label>
+                                          <input id="stream-tags" class="form-input" placeholder="Add tags separated by commas">
+                                      </div>
+                                  </div>
                                 <div class="config-section">
                                     <div class="section-heading">Source</div>
                                     <p class="helper-text">Choose what you want to share. You can swap inputs while previewing.</p>
@@ -644,6 +638,14 @@
                                             <div class="obs-panel-title">OBS / External encoder</div>
                                             <p class="helper-text">Point your encoder here when using RTMP.</p>
                                         </div>
+                                    </div>
+                                </div>
+                                <div class="config-section">
+                                    <div class="section-heading">Visibility</div>
+                                    <p class="helper-text">Choose who can watch your stream.</p>
+                                    <div class="pill-row">
+                                        <button class="ghost-pill active" type="button" id="basic-visibility-public" data-go-live-visibility="public">Public</button>
+                                        <button class="ghost-pill" type="button" id="basic-visibility-private" data-go-live-visibility="private">Private</button>
                                     </div>
                                 </div>
                                 <div class="config-section">
@@ -736,8 +738,8 @@
                             <div class="gl-row align-center gap-8">
                                 <div class="gl-label muted">Visibility</div>
                                 <div class="pill-row">
-                                    <button class="ghost-pill active" type="button" id="adv-visibility-public">Public</button>
-                                    <button class="ghost-pill" type="button" id="adv-visibility-private">Private</button>
+                                    <button class="ghost-pill active" type="button" id="adv-visibility-public" data-go-live-visibility="public">Public</button>
+                                    <button class="ghost-pill" type="button" id="adv-visibility-private" data-go-live-visibility="private">Private</button>
                                 </div>
                             </div>
                             <div class="control-row">

@@ -6,6 +6,7 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { initializeLiveDiscover } from "/scripts/LiveDiscover.js";
+import { NexeraGoLiveController } from "/scripts/GoLive.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -2034,8 +2035,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     currentViewId = viewId;
     updateMobileNavState(viewId);
     const lockScroll = viewId === 'messages' || viewId === 'conversation-settings';
+    const goLiveLock = viewId === 'live-setup';
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
-    if (!lockScroll) window.scrollTo(0, 0);
+    document.body.classList.toggle('go-live-open', goLiveLock);
+    if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
 };
 
 function ensureLiveDiscoverRoot() {
@@ -8302,8 +8305,12 @@ class GoLiveSetupController {
 
 function ensureGoLiveController() {
     if (!goLiveController) {
-        goLiveController = new GoLiveSetupController();
+        goLiveController = new NexeraGoLiveController();
+        goLiveController.initializeUI();
+        window.__goLiveController = goLiveController;
         window.__goLiveSetupController = goLiveController;
+    } else if (typeof goLiveController.initializeUI === 'function') {
+        goLiveController.initializeUI();
     }
     return goLiveController;
 }
@@ -8311,8 +8318,7 @@ function ensureGoLiveController() {
 function renderLiveSetup() {
     const titleInput = document.getElementById('live-setup-title');
     if (titleInput && !titleInput.value) titleInput.placeholder = 'Give your stream a standout title';
-    const controller = ensureGoLiveController();
-    controller.bindUI();
+    ensureGoLiveController();
 }
 
 function renderLiveSessions() {
