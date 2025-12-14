@@ -217,12 +217,19 @@ exports.createEphemeralChannel = onRequest(
             });
 
             const channelRes = await ivs.send(channelCmd);
-            const { arn: channelArn, playbackUrl } = channelRes.channel;
+            const { arn: channelArn, playbackUrl, ingestEndpoint } = channelRes.channel;
             const streamKeyValue = channelRes.streamKey?.value;
             if (!streamKeyValue) {
                 console.error("CreateChannel response missing stream key", channelRes);
                 return respondWithError(res, 500, "IVS channel created but stream key missing");
             }
+
+            if (!ingestEndpoint) {
+              console.error("CreateChannel response missing ingestEndpoint", channelRes);
+              return respondWithError(res, 500, "IVS channel created but ingest endpoint missing");
+            }
+
+            const rtmpsIngestUrl = `rtmps://${ingestEndpoint}:443/app/`;
 
             const streamDoc = {
                 sessionId,
@@ -236,6 +243,8 @@ exports.createEphemeralChannel = onRequest(
                 category: req.body.category || "",
                 tags: req.body.tags || [],
                 createdAt: FieldValue.serverTimestamp(),
+                ingestEndpoint,
+                rtmpsIngestUrl,
             };
 
             await db.collection("liveStreams").doc(sessionId).set(streamDoc);
