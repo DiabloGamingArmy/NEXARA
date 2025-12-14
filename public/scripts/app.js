@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
@@ -20,7 +20,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const db = initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false });
 const storage = getStorage(app);
 
 // --- Global State & Cache ---
@@ -7711,7 +7711,7 @@ class GoLiveSetupController {
             autoRecord: config.autoRecord,
             inputMode: config.videoMode,
             audioMode: config.audioMode,
-            uid: auth.currentUser.uid,
+            uid: auth?.currentUser?.uid || currentUser?.uid,
         };
         this.setState('initializing', 'Calling backend to create channel');
         console.info('[GoLive]', 'Calling createEphemeralChannel', payload);
@@ -7729,12 +7729,22 @@ class GoLiveSetupController {
                 }
             );
 
-            if (!response.ok) {
-                const errorPayload = await response.json().catch(() => ({}));
-                throw new Error(errorPayload?.error || 'Backend initialization failed');
+            const raw = await response.text();
+            let json = null;
+            try {
+                json = raw ? JSON.parse(raw) : null;
+            } catch (parseError) {
+                json = null;
             }
 
-            const data = await response.json();
+            if (!response.ok) {
+                const messageCandidate = json?.error?.message || json?.error || json?.message || raw || `HTTP ${response.status}`;
+                const message = typeof messageCandidate === 'string' ? messageCandidate : JSON.stringify(messageCandidate);
+                console.error('[GoLive] createEphemeralChannel failed', { status: response.status, raw, json });
+                throw new Error(message);
+            }
+
+            const data = json ?? {};
             this.session = data || null;
             console.info('[GoLive]', 'createEphemeralChannel response', data);
             this.setState('live', 'Ephemeral channel ready');

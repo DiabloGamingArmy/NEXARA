@@ -13,7 +13,6 @@ const { v4: uuidv4 } = require("uuid");
 const {
     IvsClient,
     CreateChannelCommand,
-    CreateStreamKeyCommand,
 } = require("@aws-sdk/client-ivs");
 
 // -------------------------------------------------------------
@@ -65,43 +64,32 @@ function applyCors(req, res) {
 }
 
 // -------------------------------------------------------------
-// Helper – Extract UID from Firebase Auth ID token (with safe body fallback)
+// Helper – Require UID from Firebase Auth ID token
 // -------------------------------------------------------------
-async function getUidFromRequest(req) {
+async function requireAuthUid(req) {
     const authHeader = (req.headers.authorization || "").trim();
     const hasAuthHeader = authHeader.toLowerCase().startsWith("bearer ");
-    const bodyUid = req.body?.uid || null;
-    let tokenUid = null;
-    let tokenError = null;
 
-    if (hasAuthHeader) {
-        const idToken = authHeader.split(" ")[1];
-        if (!idToken) {
-            tokenError = { status: 401, message: "UNAUTHENTICATED" };
-        } else {
-            try {
-                const decoded = await admin.auth().verifyIdToken(idToken);
-                tokenUid = decoded?.uid || null;
-            } catch (error) {
-                console.error("Failed to verify ID token", error);
-                tokenError = { status: 401, message: "UNAUTHENTICATED" };
-            }
+    if (!hasAuthHeader) {
+        return { uid: null, error: { status: 401, message: "UNAUTHENTICATED" } };
+    }
+
+    const idToken = authHeader.split(" ")[1];
+    if (!idToken) {
+        return { uid: null, error: { status: 401, message: "UNAUTHENTICATED" } };
+    }
+
+    try {
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        const uid = decoded?.uid;
+        if (!uid) {
+            return { uid: null, error: { status: 401, message: "UNAUTHENTICATED" } };
         }
+        return { uid };
+    } catch (error) {
+        console.error("Failed to verify ID token", error);
+        return { uid: null, error: { status: 401, message: "UNAUTHENTICATED" } };
     }
-
-    if (tokenUid && bodyUid && bodyUid !== tokenUid) {
-        return { uid: null, error: { status: 403, message: "UID_MISMATCH" } };
-    }
-
-    if (tokenUid) {
-        return { uid: tokenUid };
-    }
-
-    if (!hasAuthHeader && bodyUid) {
-        return { uid: bodyUid };
-    }
-
-    return { uid: null, error: tokenError || { status: 401, message: "UNAUTHENTICATED" } };
 }
 
 // -------------------------------------------------------------
@@ -117,15 +105,6 @@ function makeIVS(accessKey, secretKey) {
     });
 }
 
-// -------------------------------------------------------------
-// Helper: Create Stream Key
-// -------------------------------------------------------------
-async function createStreamKey(ivs, channelArn) {
-    const cmd = new CreateStreamKeyCommand({ channelArn });
-    const res = await ivs.send(cmd);
-    return res.streamKey.value;
-}
-
 function respondWithError(res, status, message) {
     return res.status(status).json({ error: message });
 }
@@ -133,7 +112,7 @@ function respondWithError(res, status, message) {
 // =============================================================
 // 1. initializeUserChannel  (Persistent Channel Per User)
 // =============================================================
-const initializeUserChannel = onRequest(
+exports.initializeUserChannel = onRequest(
     { region: "us-central1", secrets: [AWS_KEY, AWS_SECRET, AWS_PLAYBACK_PRIVATE_KEY] },
     async (req, res) => {
         if (applyCors(req, res)) return;
@@ -142,7 +121,7 @@ const initializeUserChannel = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const { uid, error } = await getUidFromRequest(req);
+        const { uid, error } = await requireAuthUid(req);
         if (error || !uid) {
             return respondWithError(res, error?.status || 401, error?.message || "UNAUTHENTICATED");
         }
@@ -176,8 +155,11 @@ const initializeUserChannel = onRequest(
 
             const channelRes = await ivs.send(channelCmd);
             const { arn: channelArn, playbackUrl } = channelRes.channel;
-
-            const streamKeyValue = await createStreamKey(ivs, channelArn);
+            const streamKeyValue = channelRes.streamKey?.value;
+            if (!streamKeyValue) {
+                console.error("CreateChannel response missing stream key", channelRes);
+                return respondWithError(res, 500, "IVS channel created but stream key missing");
+            }
 
             const payload = {
                 uid,
@@ -199,7 +181,7 @@ const initializeUserChannel = onRequest(
 // =============================================================
 // 2. createEphemeralChannel  (Temporary Streams On-Demand)
 // =============================================================
-const createEphemeralChannel = onRequest(
+exports.createEphemeralChannel = onRequest(
     { region: "us-central1", secrets: [AWS_KEY, AWS_SECRET] },
     async (req, res) => {
         if (applyCors(req, res)) return;
@@ -208,7 +190,7 @@ const createEphemeralChannel = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const { uid, error } = await getUidFromRequest(req);
+        const { uid, error } = await requireAuthUid(req);
         if (error || !uid) {
             return respondWithError(res, error?.status || 401, error?.message || "UNAUTHENTICATED");
         }
@@ -234,8 +216,11 @@ const createEphemeralChannel = onRequest(
 
             const channelRes = await ivs.send(channelCmd);
             const { arn: channelArn, playbackUrl } = channelRes.channel;
-
-            const streamKeyValue = await createStreamKey(ivs, channelArn);
+            const streamKeyValue = channelRes.streamKey?.value;
+            if (!streamKeyValue) {
+                console.error("CreateChannel response missing stream key", channelRes);
+                return respondWithError(res, 500, "IVS channel created but stream key missing");
+            }
 
             const streamDoc = {
                 sessionId,
@@ -263,7 +248,7 @@ const createEphemeralChannel = onRequest(
 // =============================================================
 // 3. generatePlaybackToken  (Signed Token for Private Streams)
 // =============================================================
-const generatePlaybackToken = onRequest(
+exports.generatePlaybackToken = onRequest(
     { region: "us-central1", secrets: [AWS_PLAYBACK_PRIVATE_KEY] },
     async (req, res) => {
         if (applyCors(req, res)) return;
@@ -272,7 +257,7 @@ const generatePlaybackToken = onRequest(
             return respondWithError(res, 405, "Method Not Allowed");
         }
 
-        const { uid, error } = await getUidFromRequest(req);
+        const { uid, error } = await requireAuthUid(req);
         if (error || !uid) {
             return respondWithError(res, error?.status || 401, error?.message || "UNAUTHENTICATED");
         }
@@ -315,8 +300,3 @@ const generatePlaybackToken = onRequest(
     }
 );
 
-module.exports = {
-    initializeUserChannel,
-    createEphemeralChannel,
-    generatePlaybackToken,
-};
