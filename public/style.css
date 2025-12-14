@@ -154,6 +154,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .author-name { font-weight: 700; color: var(--text-main); }
 .author-line { display:flex; align-items:center; gap:6px; }
 .post-meta { font-size: 0.8rem; color: var(--text-muted); padding-left: 5px;}
+.reply-author { padding: 6px 8px; margin-left: 0; }
+.reply-author .post-meta { padding-left: 0; }
 
 /* Profile name: center text, badge must not shift centering */
 .profile-header .author-wrapper{
@@ -546,15 +548,17 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 
 .extra-options-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: none; background: rgba(255,255,255,0.02); }
 /* Messaging, Videos, Staff */
-#view-messages, #view-conversation-settings { display:flex; flex-direction:column; min-height: 100vh; flex:1; padding-bottom:0; height:100%; overflow:hidden; }
-.messages-layout { display:grid; grid-template-columns: 320px 1fr; flex:1; min-height: 0; height:100%; min-height: calc(100vh - 0px); }
+#view-messages, #view-conversation-settings { display:flex; flex-direction:column; min-height: 100vh; flex:1; padding-bottom:0; height:100%; max-height:100vh; overflow:hidden; }
+.messages-layout { display:grid; grid-template-columns: 320px 1fr; flex:1; min-height: 0; height:100%; max-height:100vh; min-height: calc(100vh - 0px); }
 .messages-sidebar { border-right:1px solid var(--border); padding:1rem; overflow-y:auto; }
 .messages-thread { display:flex; flex-direction:column; min-height:0; height:100%; overflow:hidden; }
+.messages-thread-inner { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
 .message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; }
 .message-header-tools { display:flex; gap:8px; align-items:center; padding:0 1rem 0.5rem; }
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
-.message-thread-body { flex:1; padding:1rem; overflow-y:auto; display:flex; flex-direction:column; gap:10px; justify-content:flex-end; }
+.message-scroll-region { flex:1; display:flex; flex-direction:column; overflow-y:auto; padding:0 1rem 1rem; gap:10px; min-height:0; }
+.message-thread-body { flex:1; display:flex; flex-direction:column; gap:10px; padding:0; justify-content:flex-end; min-height:0; }
 .pinned-messages { padding:0 1rem 0.5rem; display:flex; flex-direction:column; gap:6px; }
 .pinned-messages .pinned-row { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:8px; cursor:pointer; }
 .pinned-messages .pinned-row:hover { background:var(--hover); }
@@ -572,7 +576,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-actions-menu { position:absolute; background:var(--card); border:1px solid var(--border); border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.15); padding:6px; display:flex; flex-direction:column; gap:4px; z-index:20; }
 .message-actions-menu button { background:transparent; border:none; padding:6px 8px; text-align:left; cursor:pointer; border-radius:6px; }
 .message-actions-menu button:hover { background:var(--hover); }
-.message-compose { display:flex; gap:10px; padding:1rem; border-top:1px solid var(--border); align-items:center; }
+.message-compose { display:flex; gap:10px; padding:1rem; border-top:1px solid var(--border); align-items:center; position:sticky; bottom:0; background:var(--bg-card); }
 .message-compose .form-input { margin-bottom:0; height: 44px; display:flex; align-items:center; flex:1; }
 .message-compose .create-btn-sidebar { margin-top:0; height:44px; display:inline-flex; align-items:center; justify-content:center; padding: 0 16px; }
 .message-compose .icon-pill { height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 12px; }
