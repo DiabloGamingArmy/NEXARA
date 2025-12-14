@@ -4,10 +4,8 @@
 import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp, setDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-const GO_LIVE_MODE_STORAGE_KEY = "nexera-go-live-mode";
-const GO_LIVE_AUDIO_STORAGE_KEY = "nexera-go-live-audio-gains";
-
-const GO_LIVE_MODE_STORAGE_KEY = "nexera-go-live-mode";
+const UI_MODE_STORAGE_KEY = "nexera_go_live_ui_mode";
+const LEGACY_UI_MODE_STORAGE_KEY = "nexera-go-live-mode";
 const GO_LIVE_AUDIO_STORAGE_KEY = "nexera-go-live-audio-gains";
 
 // --------------------------------------------------
@@ -66,13 +64,27 @@ export class NexeraGoLiveController {
         this.latencyMode = "NORMAL"; // NORMAL | LOW
         this.autoRecord = false;
 
+        this.formState = {
+            title: "",
+            category: "",
+            tags: [],
+            visibility: "public",
+            inputMode: "camera",
+            latencyMode: "NORMAL",
+            autoRecord: false,
+        };
+
+        this.studioRoot = null;
+
         this.session = null;
         this.client = null;
         this.stream = null;
         this.previewVideo = null;
         this.unsubscribeLiveDoc = null;
 
-        this.uiMode = localStorage.getItem(GO_LIVE_MODE_STORAGE_KEY) === "advanced" ? "advanced" : "basic";
+        const storedMode =
+            localStorage.getItem(UI_MODE_STORAGE_KEY) || localStorage.getItem(LEGACY_UI_MODE_STORAGE_KEY) || "basic";
+        this.uiMode = storedMode === "advanced" ? "advanced" : "basic";
         this.logEntries = [];
         this.audioGains = this.loadAudioGains();
     }
@@ -81,26 +93,29 @@ export class NexeraGoLiveController {
     // UI Bootstrapping
     // ----------------------------------------------
     initializeUI() {
-        this.renderUI();
-    }
-
-    captureFormState() {
-        return {
-            title: document.getElementById("stream-title")?.value || "",
-            category: document.getElementById("stream-category")?.value || "",
-            tags: document.getElementById("stream-tags")?.value || "",
-            visibility: document.getElementById("stream-visibility")?.value || "public",
-            inputMode: this.inputMode,
-            latencyMode: this.latencyMode,
-            autoRecord: this.autoRecord,
-        };
-    }
-
-    renderUI() {
         const root = document.getElementById("go-live-root");
         if (!root) return;
 
-        const preserved = this.captureFormState();
+        this.root = root;
+        const studio = root.classList.contains("go-live-studio") ? root : root.querySelector(".go-live-studio");
+
+        if (studio) {
+            this.studioRoot = studio;
+            this.bindExistingUI();
+            this.applyUIMode(this.uiMode, { skipPersist: true });
+            this.setStatus(this.state);
+            this.applyAudioGains();
+            this.renderLogEntries();
+            return;
+        }
+
+        this.renderLegacyUI();
+    }
+
+    renderLegacyUI() {
+        const root = document.getElementById("go-live-root");
+        if (!root) return;
+
         const toggleLabel = this.uiMode === "advanced" ? "Back to Basic" : "Switch to Advanced Studio";
 
         root.innerHTML = `
@@ -224,64 +239,335 @@ export class NexeraGoLiveController {
             </div>
         `;
 
+        this.studioRoot = root.querySelector(".go-live-shell") || root;
         this.previewVideo = document.getElementById("live-preview");
-        this.restoreFormState(preserved);
-        this.bindEvents();
+        this.bindExistingUI();
         this.applyAudioGains();
         this.renderLogEntries();
         this.setStatus(this.state);
     }
 
-    restoreFormState(state) {
-        document.getElementById("stream-title").value = state.title || "";
-        document.getElementById("stream-category").value = state.category || "";
-        document.getElementById("stream-tags").value = state.tags || "";
-        document.getElementById("stream-visibility").value = state.visibility || "public";
-
-        const inputMode = document.getElementById("input-mode");
-        if (inputMode) inputMode.value = state.inputMode || "camera";
-
-        const latencyMode = document.getElementById("latency-mode");
-        if (latencyMode) latencyMode.value = state.latencyMode || "NORMAL";
-
-        const autoRecord = document.getElementById("auto-record");
-        if (autoRecord) autoRecord.checked = !!state.autoRecord;
+    parseTags(value) {
+        if (Array.isArray(value)) return value.filter(Boolean);
+        return String(value || "")
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean);
     }
 
-    bindEvents() {
-        const modeToggle = document.getElementById("go-live-mode-toggle-btn");
-        if (modeToggle) {
-            modeToggle.onclick = () => {
-                this.uiMode = this.uiMode === "advanced" ? "basic" : "advanced";
-                localStorage.setItem(GO_LIVE_MODE_STORAGE_KEY, this.uiMode);
-                this.persistUiSnapshot();
-                this.renderUI();
+    hydrateFormStateFromDom() {
+        const loadedBasic = this.readBasicFormIntoState({ quiet: true });
+        const loadedAdvanced = !loadedBasic && this.readAdvancedFormIntoState({ quiet: true });
+
+        if (!loadedBasic && !loadedAdvanced) {
+            this.formState = {
+                title: "",
+                category: "",
+                tags: [],
+                visibility: "public",
+                inputMode: "camera",
+                latencyMode: "NORMAL",
+                autoRecord: false,
             };
         }
 
-        const inputMode = document.getElementById("input-mode");
-        if (inputMode) inputMode.onchange = (e) => {
-            this.inputMode = e.target.value;
-            this.persistSettingsSnapshot();
+        this.inputMode = this.formState.inputMode || "camera";
+        this.latencyMode = (this.formState.latencyMode || "NORMAL").toUpperCase() === "LOW" ? "LOW" : "NORMAL";
+        this.autoRecord = !!this.formState.autoRecord;
+    }
+
+    readBasicFormIntoState(options = {}) {
+        const quiet = options.quiet;
+        const titleEl = document.getElementById("stream-title");
+        const categoryEl = document.getElementById("stream-category");
+        const tagsEl = document.getElementById("stream-tags");
+        const inputModeEl = document.getElementById("input-mode");
+        const latencyEl = document.getElementById("latency-mode");
+        const autoRecordEl = document.getElementById("auto-record-toggle") || document.getElementById("auto-record");
+
+        if (!titleEl && !categoryEl && !tagsEl) return false;
+
+        const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
+        const inputMode = inputModeEl?.value || "camera";
+
+        this.formState = {
+            ...this.formState,
+            title: titleEl?.value || "",
+            category: categoryEl?.value || "",
+            tags: this.parseTags(tagsEl?.value || []),
+            visibility: this.formState.visibility || "public",
+            inputMode,
+            latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
+            autoRecord: !!autoRecordEl?.checked,
         };
 
-        const latencyMode = document.getElementById("latency-mode");
-        if (latencyMode) latencyMode.onchange = (e) => {
-            this.latencyMode = e.target.value || "NORMAL";
-            this.persistSettingsSnapshot();
+        this.inputMode = this.formState.inputMode;
+        this.latencyMode = this.formState.latencyMode;
+        this.autoRecord = this.formState.autoRecord;
+
+        if (!quiet) {
+            this.writeStateIntoAdvancedForm();
+        }
+
+        return true;
+    }
+
+    readAdvancedFormIntoState(options = {}) {
+        const quiet = options.quiet;
+        const titleEl = document.getElementById("adv-stream-title");
+        const categoryEl = document.getElementById("adv-stream-category");
+        const tagsEl = document.getElementById("adv-stream-tags");
+        const inputModeEl = document.getElementById("adv-input-mode");
+        const latencyEl = document.getElementById("adv-latency-mode");
+        const autoRecordEl = document.getElementById("adv-auto-record");
+
+        if (!titleEl && !categoryEl && !tagsEl && !inputModeEl && !latencyEl) return false;
+
+        const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
+        const inputMode = inputModeEl?.value || "camera";
+
+        this.formState = {
+            ...this.formState,
+            title: titleEl?.value || "",
+            category: categoryEl?.value || "",
+            tags: this.parseTags(tagsEl?.value || []),
+            inputMode,
+            latencyMode: latencyMode === "LOW" ? "LOW" : "NORMAL",
+            autoRecord: !!autoRecordEl?.checked,
         };
 
-        const autoRecord = document.getElementById("auto-record");
-        if (autoRecord) autoRecord.onchange = (e) => {
-            this.autoRecord = !!e.target.checked;
-            this.persistSettingsSnapshot();
-        };
+        this.inputMode = this.formState.inputMode;
+        this.latencyMode = this.formState.latencyMode;
+        this.autoRecord = this.formState.autoRecord;
 
-        const startBtn = document.getElementById("start-stream");
-        if (startBtn) startBtn.onclick = () => this.safeStart();
+        if (!quiet) {
+            this.writeStateIntoBasicForm();
+        }
 
-        const endBtn = document.getElementById("end-stream");
-        if (endBtn) endBtn.onclick = () => this.safeStop();
+        return true;
+    }
+
+    writeStateIntoBasicForm() {
+        const titleEl = document.getElementById("stream-title");
+        const categoryEl = document.getElementById("stream-category");
+        const tagsEl = document.getElementById("stream-tags");
+        const inputModeEl = document.getElementById("input-mode");
+        const latencyEl = document.getElementById("latency-mode");
+        const autoRecordEl = document.getElementById("auto-record-toggle") || document.getElementById("auto-record");
+
+        if (titleEl) titleEl.value = this.formState.title || "";
+        if (categoryEl) categoryEl.value = this.formState.category || "";
+        if (tagsEl) tagsEl.value = Array.isArray(this.formState.tags) ? this.formState.tags.join(", ") : this.formState.tags || "";
+        if (inputModeEl) inputModeEl.value = this.formState.inputMode || "camera";
+        if (latencyEl) latencyEl.value = (this.formState.latencyMode || "NORMAL").toUpperCase();
+        if (autoRecordEl) autoRecordEl.checked = !!this.formState.autoRecord;
+    }
+
+    writeStateIntoAdvancedForm() {
+        const titleEl = document.getElementById("adv-stream-title");
+        const categoryEl = document.getElementById("adv-stream-category");
+        const tagsEl = document.getElementById("adv-stream-tags");
+        const inputModeEl = document.getElementById("adv-input-mode");
+        const latencyEl = document.getElementById("adv-latency-mode");
+        const autoRecordEl = document.getElementById("adv-auto-record");
+
+        if (titleEl) titleEl.value = this.formState.title || "";
+        if (categoryEl) categoryEl.value = this.formState.category || "";
+        if (tagsEl) tagsEl.value = Array.isArray(this.formState.tags) ? this.formState.tags.join(", ") : this.formState.tags || "";
+        if (inputModeEl) inputModeEl.value = this.formState.inputMode || "camera";
+        if (latencyEl) latencyEl.value = (this.formState.latencyMode || "NORMAL").toUpperCase();
+        if (autoRecordEl) autoRecordEl.checked = !!this.formState.autoRecord;
+
+        this.updateVisibilityButtons();
+    }
+
+    updateVisibilityButtons() {
+        const publicBtn = document.getElementById("adv-visibility-public");
+        const privateBtn = document.getElementById("adv-visibility-private");
+        const isPublic = (this.formState.visibility || "public") === "public";
+        if (publicBtn) publicBtn.classList.toggle("active", isPublic);
+        if (privateBtn) privateBtn.classList.toggle("active", !isPublic);
+    }
+
+    applyUIMode(mode, options = {}) {
+        const nextMode = mode === "advanced" ? "advanced" : "basic";
+        this.uiMode = nextMode;
+
+        const basicView = document.getElementById("go-live-basic-view");
+        const advancedView = document.getElementById("go-live-advanced-view");
+
+        if (this.studioRoot) {
+            this.studioRoot.classList.remove("ui-basic", "ui-advanced");
+            this.studioRoot.classList.add(nextMode === "advanced" ? "ui-advanced" : "ui-basic");
+        }
+
+        if (basicView) basicView.classList.toggle("is-active", nextMode === "basic");
+        if (advancedView) advancedView.classList.toggle("is-active", nextMode === "advanced");
+
+        const modeSelect = document.getElementById("go-live-ui-config");
+        if (modeSelect) modeSelect.value = nextMode;
+
+        if (!options.skipPersist) {
+            try {
+                localStorage.setItem(UI_MODE_STORAGE_KEY, nextMode);
+                localStorage.setItem(LEGACY_UI_MODE_STORAGE_KEY, nextMode);
+            } catch (err) {
+                console.warn("[GoLive] failed to persist UI mode", err);
+            }
+        }
+
+        if (nextMode === "advanced") {
+            this.writeStateIntoAdvancedForm();
+        } else {
+            this.writeStateIntoBasicForm();
+        }
+    }
+
+    bindExistingUI() {
+        this.previewVideo = document.getElementById("live-preview");
+        this.studioRoot = this.studioRoot || (this.root?.classList?.contains("go-live-studio") ? this.root : document.querySelector(".go-live-studio"));
+
+        this.hydrateFormStateFromDom();
+        this.writeStateIntoBasicForm();
+        this.writeStateIntoAdvancedForm();
+
+        const modeSelect = document.getElementById("go-live-ui-config");
+        if (modeSelect) {
+            modeSelect.value = this.uiMode;
+            modeSelect.addEventListener("change", (e) => {
+                this.applyUIMode(e.target.value);
+                this.persistUiSnapshot();
+            });
+        }
+
+        const legacyToggle = document.getElementById("go-live-mode-toggle-btn");
+        if (legacyToggle) {
+            legacyToggle.addEventListener("click", () => {
+                const next = this.uiMode === "advanced" ? "basic" : "advanced";
+                this.applyUIMode(next);
+                this.persistUiSnapshot();
+            });
+        }
+
+        const basicTitle = document.getElementById("stream-title");
+        const basicCategory = document.getElementById("stream-category");
+        const basicTags = document.getElementById("stream-tags");
+        const basicInputMode = document.getElementById("input-mode");
+        const basicLatency = document.getElementById("latency-mode");
+        const basicAutoRecord = document.getElementById("auto-record-toggle") || document.getElementById("auto-record");
+        const basicStart = document.getElementById("start-stream");
+        const basicEnd = document.getElementById("end-stream");
+
+        [basicTitle, basicCategory, basicTags].forEach((el) => {
+            if (!el) return;
+            el.addEventListener("input", () => {
+                this.readBasicFormIntoState();
+                this.writeStateIntoAdvancedForm();
+            });
+        });
+
+        if (basicInputMode)
+            basicInputMode.addEventListener("change", (e) => {
+                this.formState.inputMode = e.target.value || "camera";
+                this.inputMode = this.formState.inputMode;
+                this.writeStateIntoAdvancedForm();
+            });
+
+        if (basicLatency)
+            basicLatency.addEventListener("change", (e) => {
+                this.formState.latencyMode = (e.target.value || "NORMAL").toUpperCase() === "LOW" ? "LOW" : "NORMAL";
+                this.latencyMode = this.formState.latencyMode;
+                this.writeStateIntoAdvancedForm();
+            });
+
+        if (basicAutoRecord)
+            basicAutoRecord.addEventListener("change", (e) => {
+                this.formState.autoRecord = !!e.target.checked;
+                this.autoRecord = this.formState.autoRecord;
+                this.writeStateIntoAdvancedForm();
+            });
+
+        if (basicStart)
+            basicStart.addEventListener("click", () => {
+                this.readBasicFormIntoState();
+                this.writeStateIntoAdvancedForm();
+                this.safeStart();
+            });
+
+        if (basicEnd)
+            basicEnd.addEventListener("click", () => {
+                this.readBasicFormIntoState();
+                this.writeStateIntoAdvancedForm();
+                this.safeStop();
+            });
+
+        const advTitle = document.getElementById("adv-stream-title");
+        const advCategory = document.getElementById("adv-stream-category");
+        const advTags = document.getElementById("adv-stream-tags");
+        const advInputMode = document.getElementById("adv-input-mode");
+        const advLatency = document.getElementById("adv-latency-mode");
+        const advAutoRecord = document.getElementById("adv-auto-record");
+        const advStart = document.getElementById("adv-start-stream");
+        const advEnd = document.getElementById("adv-end-stream");
+        const advPublic = document.getElementById("adv-visibility-public");
+        const advPrivate = document.getElementById("adv-visibility-private");
+
+        [advTitle, advCategory, advTags].forEach((el) => {
+            if (!el) return;
+            el.addEventListener("input", () => {
+                this.readAdvancedFormIntoState();
+                this.writeStateIntoBasicForm();
+            });
+        });
+
+        if (advInputMode)
+            advInputMode.addEventListener("change", (e) => {
+                this.formState.inputMode = e.target.value || "camera";
+                this.inputMode = this.formState.inputMode;
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advLatency)
+            advLatency.addEventListener("change", (e) => {
+                this.formState.latencyMode = (e.target.value || "NORMAL").toUpperCase() === "LOW" ? "LOW" : "NORMAL";
+                this.latencyMode = this.formState.latencyMode;
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advAutoRecord)
+            advAutoRecord.addEventListener("change", (e) => {
+                this.formState.autoRecord = !!e.target.checked;
+                this.autoRecord = this.formState.autoRecord;
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advPublic)
+            advPublic.addEventListener("click", () => {
+                this.formState.visibility = "public";
+                this.updateVisibilityButtons();
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advPrivate)
+            advPrivate.addEventListener("click", () => {
+                this.formState.visibility = "private";
+                this.updateVisibilityButtons();
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advStart)
+            advStart.addEventListener("click", () => {
+                this.readAdvancedFormIntoState();
+                this.writeStateIntoBasicForm();
+                this.safeStart();
+            });
+
+        if (advEnd)
+            advEnd.addEventListener("click", () => {
+                this.readAdvancedFormIntoState();
+                this.writeStateIntoBasicForm();
+                this.safeStop();
+            });
 
         const micGain = document.getElementById("mixer-mic");
         if (micGain) {
@@ -302,15 +588,23 @@ export class NexeraGoLiveController {
                 this.persistStudioSnapshot({ audio: { micGain: this.audioGains.mic, systemGain: system } });
             };
         }
+
+        this.applyUIMode(this.uiMode, { skipPersist: true });
+        this.syncControls();
     }
 
     setStatus(state, message = "") {
+        const previous = this.state;
         this.state = state;
         const chip = document.getElementById("go-live-state-chip");
         const status = document.getElementById("go-live-status");
         const pill = document.getElementById("go-live-visibility-pill");
         const dot = document.getElementById("status-dot-indicator");
         const dotLabel = document.getElementById("status-dot-label");
+        const overlayText = document.getElementById("go-live-status-text");
+        const helper = document.getElementById("go-live-status-text-secondary");
+        const helperAdv = document.getElementById("go-live-status-text-secondary-adv");
+        const topStatus = document.getElementById("go-live-top-status");
 
         const labels = {
             idle: "Idle",
@@ -325,10 +619,14 @@ export class NexeraGoLiveController {
 
         if (chip) chip.textContent = label;
         if (status) status.textContent = detail;
+        if (overlayText) overlayText.textContent = detail;
         if (pill) pill.textContent = this.inputMode === "external" ? "External Software" : "Preview";
         if (dotLabel) dotLabel.textContent = label;
+        if (helper) helper.textContent = message || (state === "live" ? "Streaming to your audience." : "Ready to preview.");
+        if (helperAdv) helperAdv.textContent = detail;
+        if (topStatus) topStatus.textContent = detail;
 
-        [chip, status, dot].forEach((el) => {
+        [chip, status, dot, topStatus].forEach((el) => {
             if (!el) return;
             el.classList.remove("state-idle", "state-preview", "state-starting", "state-live", "state-error");
             const cls =
@@ -344,14 +642,26 @@ export class NexeraGoLiveController {
             el.classList.add(cls);
         });
 
+        if (previous !== state || message) {
+            this.log(`State: ${detail}`);
+        }
+
         this.syncControls();
     }
 
     syncControls() {
         const startBtn = document.getElementById("start-stream");
         const endBtn = document.getElementById("end-stream");
-        if (startBtn) startBtn.disabled = this.state === "starting" || this.state === "live";
-        if (endBtn) endBtn.disabled = this.state === "idle" || this.state === "error" || this.state === "previewing";
+        const advStart = document.getElementById("adv-start-stream");
+        const advEnd = document.getElementById("adv-end-stream");
+
+        const startDisabled = this.state === "starting" || this.state === "live";
+        const endDisabled = this.state === "idle" || this.state === "error" || this.state === "previewing";
+
+        if (startBtn) startBtn.disabled = startDisabled;
+        if (advStart) advStart.disabled = startDisabled;
+        if (endBtn) endBtn.disabled = endDisabled;
+        if (advEnd) advEnd.disabled = endDisabled;
     }
 
     log(message) {
@@ -364,12 +674,17 @@ export class NexeraGoLiveController {
 
     renderLogEntries() {
         const logEl = document.getElementById("go-live-log");
-        if (!logEl) return;
-        logEl.innerHTML = this.logEntries
-            .slice(-50)
-            .map((line) => `<div class="log-line">${line}</div>`)
-            .join("");
-        logEl.scrollTop = logEl.scrollHeight;
+        const advLogEl = document.getElementById("go-live-log-advanced");
+        const recent = this.logEntries.slice(-50);
+
+        if (logEl) {
+            logEl.innerHTML = recent.map((line) => `<div class="log-line">${line}</div>`).join("");
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        if (advLogEl) {
+            advLogEl.textContent = recent.join("\n");
+        }
     }
 
     persistAudioGains(updates) {
@@ -399,10 +714,11 @@ export class NexeraGoLiveController {
     }
 
     settingsPayload(overrides = {}) {
-        const tags = Array.isArray(overrides.tags)
-            ? overrides.tags
-            : overrides.tags
-            ? String(overrides.tags)
+        const state = { ...this.formState, ...overrides };
+        const tags = Array.isArray(state.tags)
+            ? state.tags
+            : state.tags
+            ? String(state.tags)
                   .split(",")
                   .map((t) => t.trim())
                   .filter(Boolean)
@@ -410,15 +726,15 @@ export class NexeraGoLiveController {
             ? this.session.tags
             : [];
 
-        const title = overrides.title ?? this.session?.title ?? document.getElementById("stream-title")?.value ?? "";
-        const category = overrides.category ?? this.session?.category ?? document.getElementById("stream-category")?.value ?? "";
-        const visibility = overrides.visibility ?? this.session?.visibility ?? document.getElementById("stream-visibility")?.value ?? "public";
+        const title = state.title ?? this.session?.title ?? "";
+        const category = state.category ?? this.session?.category ?? "";
+        const visibility = state.visibility ?? this.session?.visibility ?? "public";
 
         return {
-            inputMode: this.inputMode,
+            inputMode: state.inputMode || this.inputMode,
             audioMode: this.audioMode,
-            latencyMode: this.latencyMode === "LOW" ? "LOW" : "NORMAL",
-            autoRecord: !!this.autoRecord,
+            latencyMode: (state.latencyMode || this.latencyMode) === "LOW" ? "LOW" : "NORMAL",
+            autoRecord: !!state.autoRecord,
             visibility,
             title,
             category,
@@ -521,16 +837,27 @@ export class NexeraGoLiveController {
     }
 
     async start() {
-        const title = document.getElementById("stream-title").value || "";
-        const category = document.getElementById("stream-category").value || "";
-        const tags = (document.getElementById("stream-tags").value || "")
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean);
-        const visibility = document.getElementById("stream-visibility").value || "public";
+        if (this.uiMode === "advanced") {
+            this.readAdvancedFormIntoState();
+        } else {
+            this.readBasicFormIntoState();
+        }
 
-        const latencyMode = this.latencyMode === "LOW" ? "LOW" : "NORMAL";
-        this.latencyMode = latencyMode;
+        const state = {
+            ...this.formState,
+            latencyMode: (this.formState.latencyMode || "NORMAL").toUpperCase() === "LOW" ? "LOW" : "NORMAL",
+            inputMode: this.formState.inputMode || "camera",
+            tags: Array.isArray(this.formState.tags) ? this.formState.tags : this.parseTags(this.formState.tags),
+        };
+
+        const title = state.title || "";
+        const category = state.category || "";
+        const tags = state.tags || [];
+        const visibility = state.visibility || "public";
+
+        this.inputMode = state.inputMode;
+        this.latencyMode = state.latencyMode;
+        this.autoRecord = !!state.autoRecord;
 
         const user = this.auth?.currentUser;
         if (!user) {
@@ -551,8 +878,8 @@ export class NexeraGoLiveController {
                     title,
                     category,
                     tags,
-                    latencyMode,
-                    autoRecord: !!this.autoRecord,
+                    latencyMode: state.latencyMode,
+                    autoRecord: !!state.autoRecord,
                     visibility,
                 }),
             }
