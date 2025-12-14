@@ -30,7 +30,6 @@
       "firestore.indexes.json",
       "storage.rules",
       "commentUtils.test.mjs",
-      "**/Scripts/**",
       "**/firebase-debug.log",
       "**/firebase-debug.*.log"
     ],
