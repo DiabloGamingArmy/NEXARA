@@ -559,10 +559,17 @@ export class NexeraGoLiveController {
             });
 
         if (basicStart)
-            basicStart.addEventListener("click", () => {
+            basicStart.addEventListener("click", async () => {
                 this.readBasicFormIntoState();
                 this.writeStateIntoAdvancedForm();
-                this.safeStart();
+                try {
+                    await this.primeMediaCaptureFromUserGesture();
+                    await this.safeStart();
+                } catch (error) {
+                    console.error("[GoLive] pre-start capture failed", error);
+                    this.log(`Pre-start capture failed: ${error.message || error}`);
+                    this.setStatus("error", error.message || "Capture failed");
+                }
             });
 
         if (basicEnd)
@@ -627,10 +634,17 @@ export class NexeraGoLiveController {
             });
 
         if (advStart)
-            advStart.addEventListener("click", () => {
+            advStart.addEventListener("click", async () => {
                 this.readAdvancedFormIntoState();
                 this.writeStateIntoBasicForm();
-                this.safeStart();
+                try {
+                    await this.primeMediaCaptureFromUserGesture();
+                    await this.safeStart();
+                } catch (error) {
+                    console.error("[GoLive] pre-start capture failed", error);
+                    this.log(`Pre-start capture failed: ${error.message || error}`);
+                    this.setStatus("error", error.message || "Capture failed");
+                }
             });
 
         if (advEnd)
@@ -1037,6 +1051,30 @@ export class NexeraGoLiveController {
     // ----------------------------------------------
     // Start Stream
     // ----------------------------------------------
+    async primeMediaCaptureFromUserGesture() {
+        const mode = this.formState.inputMode || "camera";
+        this.inputMode = mode;
+
+        if (mode === "external") return;
+
+        if (this.stream) {
+            this.stream.getTracks().forEach((t) => t.stop());
+            this.stream = null;
+        }
+
+        this.log(`Preparing media capture for inputMode=${mode} (pre-flight)`);
+
+        const stream =
+            mode === "screen"
+                ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+
+        this.stream = stream;
+        if (this.previewVideo) {
+            this.previewVideo.srcObject = stream;
+        }
+    }
+
     async safeStart() {
         this.setStatus("starting");
         this.log("Starting stream request");
@@ -1183,11 +1221,15 @@ export class NexeraGoLiveController {
             streamConfig: IVSBroadcastClient.BASIC_LANDSCAPE,
         });
 
-        this.log(`Preparing media capture for inputMode=${this.inputMode}`);
-        this.stream =
-            this.inputMode === "screen"
-                ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
-                : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (this.stream) {
+            this.log(`Using pre-captured media for inputMode=${this.inputMode}`);
+        } else {
+            this.log(`Preparing media capture for inputMode=${this.inputMode}`);
+            this.stream =
+                this.inputMode === "screen"
+                    ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+                    : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        }
 
         this.previewVideo.srcObject = this.stream;
 
