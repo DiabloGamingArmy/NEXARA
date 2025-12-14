@@ -585,13 +585,21 @@
                                 <option>Unlisted</option>
                             </select>
                         </div>
+                        <div class="input-group">
+                            <label class="settings-label" for="latency-mode">Latency</label>
+                            <select id="latency-mode" class="form-input">
+                                <option value="normal" selected>Normal Latency</option>
+                                <option value="low">Low Latency</option>
+                            </select>
+                            <div class="settings-hint">Balance real-time interaction with stream stability.</div>
+                        </div>
                         <div class="input-group toggle-row">
                             <div>
                                 <div class="settings-label">Auto-Record</div>
                                 <div class="settings-hint">Save a copy of your stream when ending the session.</div>
                             </div>
                             <label class="switch">
-                                <input type="checkbox" id="live-setup-autorecord" checked>
+                                <input type="checkbox" id="auto-record">
                                 <span class="slider"></span>
                             </label>
                         </div>
