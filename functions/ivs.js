@@ -206,15 +206,35 @@ exports.createEphemeralChannel = onRequest(
             const ivs = makeIVS(accessKey, secretKey);
 
             const visibility = req.body.visibility || "public";
+            const latencyModeInput = (req.body.latencyMode || "").toString().toUpperCase();
+            const latencyMode = ["NORMAL", "LOW"].includes(latencyModeInput)
+                ? latencyModeInput
+                : "NORMAL";
+
+            const autoRecordRaw = req.body.autoRecord;
+            const autoRecord = autoRecordRaw === true || autoRecordRaw === "true";
+            if (autoRecord && !recordingArn) {
+                return respondWithError(
+                    res,
+                    500,
+                    "Auto-record requested but AWS_RECORDING_ARN is not configured."
+                );
+            }
+
             const sessionId = uuidv4();
             const channelName = `user_${uid}_session_${sessionId}`;
 
-            const channelCmd = new CreateChannelCommand({
+            const channelParams = {
                 name: channelName,
                 type: "STANDARD",
-                latencyMode: "LOW",
-                recordingConfigurationArn: recordingArn,
-            });
+                latencyMode,
+            };
+
+            if (autoRecord) {
+                channelParams.recordingConfigurationArn = recordingArn;
+            }
+
+            const channelCmd = new CreateChannelCommand(channelParams);
 
             const channelRes = await ivs.send(channelCmd);
             const { arn: channelArn, playbackUrl, ingestEndpoint } = channelRes.channel;
@@ -245,6 +265,8 @@ exports.createEphemeralChannel = onRequest(
                 createdAt: FieldValue.serverTimestamp(),
                 ingestEndpoint,
                 rtmpsIngestUrl,
+                latencyMode,
+                autoRecord,
             };
 
             await db.collection("liveStreams").doc(sessionId).set(streamDoc);
