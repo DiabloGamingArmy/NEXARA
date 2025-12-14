@@ -2,6 +2,8 @@
  * IVS Backend for Nexera – Gen-2 Compatible
  */
 
+console.log("IVS backend version:", "2025-12-14T04:00Z-force-redeploy");
+
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineString, defineSecret } = require("firebase-functions/params");
 
