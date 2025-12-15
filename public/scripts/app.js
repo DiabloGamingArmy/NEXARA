@@ -219,15 +219,15 @@ function renderPostActions(post, {
 
     const prefix = idPrefix ? `${idPrefix}-` : '';
 
-    actions.push(`<button id="${prefix}like-btn-${post.id}" data-post-id="${post.id}" data-action="like" class="action-btn" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:${iconSize};"></i> ${likeCount}</button>`);
-    actions.push(`<button id="${prefix}dislike-btn-${post.id}" data-post-id="${post.id}" data-action="dislike" class="action-btn" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:${iconSize};"></i> ${dislikeCount}</button>`);
+    actions.push(`<button id="${prefix}like-btn-${post.id}" data-post-id="${post.id}" data-action="like" class="action-btn" aria-label="Like (${likeCount})" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:${iconSize};"></i><span class="action-label"> Like ${likeCount}</span></button>`);
+    actions.push(`<button id="${prefix}dislike-btn-${post.id}" data-post-id="${post.id}" data-action="dislike" class="action-btn" aria-label="Dislike (${dislikeCount})" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:${iconSize};"></i><span class="action-label"> Dislike ${dislikeCount}</span></button>`);
     const discussionTarget = discussionOnclick || `window.openThread('${post.id}')`;
-    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="discuss" onclick="${discussionTarget}"><i class="ph ph-chat-circle" style="font-size:${iconSize};"></i> ${discussionLabel}</button>`);
-    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="share" onclick="event.stopPropagation(); window.sharePost('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:${iconSize};"></i> Share</button>`);
-    actions.push(`<button id="${prefix}save-btn-${post.id}" data-post-id="${post.id}" data-action="save" class="action-btn" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:${iconSize};"></i> ${isSaved ? 'Saved' : 'Save'}</button>`);
+    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="discuss" aria-label="${discussionLabel}" onclick="${discussionTarget}"><i class="ph ph-chat-circle" style="font-size:${iconSize};"></i><span class="action-label"> ${discussionLabel}</span></button>`);
+    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="share" aria-label="Share" onclick="event.stopPropagation(); window.sharePost('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:${iconSize};"></i><span class="action-label"> Share</span></button>`);
+    actions.push(`<button id="${prefix}save-btn-${post.id}" data-post-id="${post.id}" data-action="save" class="action-btn" aria-label="${isSaved ? 'Saved' : 'Save'}" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:${iconSize};"></i><span class="action-label"> ${isSaved ? 'Saved' : 'Save'}</span></button>`);
 
     if (includeReview) {
-        actions.push(`<button id="${prefix}review-btn-${post.id}" class="action-btn review-action ${computedReview.className}" data-post-id="${post.id}" data-icon-size="${iconSize}" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:${iconSize};"></i> ${computedReview.label}</button>`);
+        actions.push(`<button id="${prefix}review-btn-${post.id}" class="action-btn review-action ${computedReview.className}" data-post-id="${post.id}" data-icon-size="${iconSize}" aria-label="${computedReview.label}" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:${iconSize};"></i><span class="action-label"> ${computedReview.label}</span></button>`);
     }
 
     return `<div class="card-actions${extraClass ? ' ' + extraClass : ''}">${actions.join('')}</div>`;
@@ -413,7 +413,7 @@ function isUserVerified(userLike = {}) {
 }
 
 function getVerifiedIconSvg() {
-    return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.75a1 1 0 0 1 .8.4l1.86 2.52 3.02-.08a1 1 0 0 1 .84.46l1.64 2.56a1 1 0 0 1-.06 1.14l-1.83 2.43.73 2.95a1 1 0 0 1-.39 1.05l-2.5 1.78a1 1 0 0 1-1.12.02L12 17.85l-3.09 1.18a1 1 0 0 1-1.12-.02l-2.5-1.78a1 1 0 0 1-.39-1.05l.73-2.95-1.83-2.43a1 1 0 0 1-.06-1.14l1.64-2.56a1 1 0 0 1 .84-.46l3.02.08L11.2 3.15a1 1 0 0 1 .8-.4Zm-1.2 11 4.7-4.7-1.4-1.4-3.3 3.3-1.6-1.6-1.4 1.42 3 3Z"></path></svg>';
+    return '<svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M232 128a104 104 0 1 1-104-104a104.11 104.11 0 0 1 104 104Zm-117.66 34.34l60-60a8 8 0 0 0-11.32-11.32L112 140.69l-19.31-19.31a8 8 0 0 0-11.32 11.32l24 24a8 8 0 0 0 11.32 0Z"></path></svg>';
 }
 
 function renderVerifiedBadge(userLike = {}, extraClass = '') {
@@ -476,6 +476,7 @@ let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
 let messageThreadCache = {};
+let pendingMessageAttachments = [];
 let conversationDetailsUnsubscribe = null;
 let lastDeliveredAtLocal = {};
 let lastReadAtLocal = {};
@@ -571,6 +572,7 @@ let commentFilterQuery = '';
 // --- Navigation Stack ---
 let navStack = [];
 let currentViewId = 'feed';
+const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
 
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
@@ -2028,7 +2030,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'saved') { renderSaved(); }
     if (viewId === 'profile') renderProfile();
     if (viewId === 'discover') { renderDiscover(); }
-    if (viewId === 'messages') { initConversations(); }
+    if (viewId === 'messages') { initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') {
         ensureLiveDiscoverRoot();
@@ -2047,7 +2049,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
 
     currentViewId = viewId;
     updateMobileNavState(viewId);
-    const lockScroll = viewId === 'messages' || viewId === 'conversation-settings';
+    const lockScroll = ((viewId === 'messages' && !isMobileViewport()) || viewId === 'conversation-settings');
     const goLiveLock = viewId === 'live-setup';
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     document.body.classList.toggle('go-live-open', goLiveLock);
@@ -2078,6 +2080,43 @@ function updateMobileNavState(viewId = 'feed') {
     document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.view === viewId);
     });
+}
+
+function isMobileViewport() {
+    return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
+}
+
+function syncMobileMessagesShell() {
+    const backBtn = document.getElementById('mobile-thread-back');
+    const shouldShowThread = isMobileViewport() && !!activeConversationId;
+    document.body.classList.toggle('mobile-thread-open', shouldShowThread);
+    if (backBtn) backBtn.style.display = isMobileViewport() ? 'inline-flex' : 'none';
+}
+
+function bindMobileMessageGestures() {
+    const thread = document.querySelector('.messages-thread');
+    if (!thread || thread.dataset.gestureBound) return;
+    let startX = 0;
+    let startY = 0;
+    thread.addEventListener('touchstart', function(e) {
+        const touch = e.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+    });
+    thread.addEventListener('touchend', function(e) {
+        if (!isMobileViewport()) return;
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - startX;
+        const dy = Math.abs(touch.clientY - startY);
+        if (startX < 40 && dx > 60 && dy < 40) {
+            window.mobileMessagesBack();
+        }
+    });
+    thread.dataset.gestureBound = 'true';
+}
+
+if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+    MOBILE_VIEWPORT.addEventListener('change', syncMobileMessagesShell);
 }
 
 function bindMobileNav() {
@@ -2425,9 +2464,7 @@ async function hydrateFollowingState(uid, profileData = {}) {
 // --- Render Logic (The Core) ---
 function getPostHTML(post) {
     try {
-        const date = post.timestamp && post.timestamp.seconds
-            ? new Date(post.timestamp.seconds * 1000).toLocaleDateString()
-            : 'Just now';
+        const date = formatDateTime(post.timestamp) || 'Just now';
 
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
@@ -3803,14 +3840,9 @@ const renderCommentHtml = function(c, isReply) {
 
   const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
   const username = cAuthor.username ? `@${escapeHtml(cAuthor.username)}` : '';
-  const timestampText = c.timestamp
-    ? new Date(c.timestamp.seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : 'Now';
+  const timestampText = formatDateTime(c.timestamp) || 'Now';
 
   const parentCommentId = c.parentCommentId || c.parentId;
-  const replyStyle = (isReply || !!parentCommentId)
-    ? 'margin-left: 40px; border-left: 2px solid var(--border);'
-    : '';
 
   const mediaHtml = c.mediaUrl
     ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')">
@@ -3819,56 +3851,57 @@ const renderCommentHtml = function(c, isReply) {
     : "";
 
   return `
-    <div id="comment-${c.id}" style="margin-bottom: 15px; padding: 10px; border-bottom: 1px solid var(--border); ${replyStyle}">
-      <div style="display:flex; gap:10px; align-items:flex-start;">
-        <div class="author-wrapper reply-author" onclick="window.openUserProfile('${c.userId}', event)" style="margin-left:0; padding:6px 8px;">
-          ${avatarHtml}
-          <div>
-          <div class="author-line" style="font-size:0.95rem;"><span class="author-name">${escapeHtml(cAuthor.name || 'User')}</span>${verifiedBadge}</div>
-            <span class="post-meta">${username}</span>
+    <div id="comment-${c.id}" class="comment-item ${isReply ? 'reply-item' : ''}" data-parent="${parentCommentId || ''}">
+      <div class="comment-thread-line"></div>
+      <div class="comment-card">
+        <div class="comment-header">
+          <button class="comment-avatar-btn" onclick="window.openUserProfile('${c.userId}', event)">
+            ${avatarHtml}
+          </button>
+          <div class="comment-header-meta">
+            <div class="comment-author-row">
+              <span class="author-name">${escapeHtml(cAuthor.name || 'User')}</span>${verifiedBadge}
+              <span class="comment-username">${username}</span>
+            </div>
+            <div class="comment-timestamp">${timestampText}</div>
           </div>
         </div>
 
-        <div style="flex:1;">
-          <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:4px;">${timestampText}</div>
-
-          <div class="comment-body-text" style="margin-top:2px; font-size:0.95rem; line-height:1.4;">
-            ${escapeHtml(c.text || '')}
-          </div>
-
-          ${mediaHtml}
-
-          <div style="margin-top:8px; display:flex; gap:15px; align-items:center;">
-            <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name || 'User')}')"
-              style="background:none; border:none; color:var(--text-muted); font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
-              <i class="ph ph-arrow-bend-up-left"></i> Reply
-            </button>
-
-            <button
-              data-role="comment-like"
-              data-comment-id="${c.id}"
-              data-liked="${isLiked ? 'true' : 'false'}"
-              data-disliked="${isDisliked ? 'true' : 'false'}"
-              onclick="window.toggleCommentLike('${c.id}', event)"
-              style="background:none; border:none; color:${isLiked ? '#00f2ea' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
-              <i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i>
-              <span class="comment-like-count" id="comment-like-count-${c.id}">${c.likes || 0}</span>
-            </button>
-
-            <button
-              data-role="comment-dislike"
-              data-comment-id="${c.id}"
-              data-liked="${isLiked ? 'true' : 'false'}"
-              data-disliked="${isDisliked ? 'true' : 'false'}"
-              onclick="window.toggleCommentDislike('${c.id}', event)"
-              style="background:none; border:none; color:${isDisliked ? '#ff3d3d' : 'var(--text-muted)'}; font-size:0.8rem; cursor:pointer; display:flex; align-items:center; gap:5px;">
-              <i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i>
-              <span class="comment-dislike-count" id="comment-dislike-count-${c.id}">${c.dislikes || 0}</span>
-            </button>
-          </div>
-
-          <div id="reply-slot-${c.id}"></div>
+        <div class="comment-body-text">
+          ${escapeHtml(c.text || '')}
         </div>
+
+        ${mediaHtml}
+
+        <div class="comment-actions">
+          <button onclick="window.moveInputToComment('${c.id}', '${escapeHtml(cAuthor.name || 'User')}')" class="comment-action-btn">
+            <i class="ph ph-arrow-bend-up-left"></i> Reply
+          </button>
+
+          <button
+            data-role="comment-like"
+            data-comment-id="${c.id}"
+            data-liked="${isLiked ? 'true' : 'false'}"
+            data-disliked="${isDisliked ? 'true' : 'false'}"
+            onclick="window.toggleCommentLike('${c.id}', event)"
+            class="comment-action-btn ${isLiked ? 'active' : ''}">
+            <i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i>
+            <span class="comment-like-count" id="comment-like-count-${c.id}">${c.likes || 0}</span>
+          </button>
+
+          <button
+            data-role="comment-dislike"
+            data-comment-id="${c.id}"
+            data-liked="${isLiked ? 'true' : 'false'}"
+            data-disliked="${isDisliked ? 'true' : 'false'}"
+            onclick="window.toggleCommentDislike('${c.id}', event)"
+            class="comment-action-btn ${isDisliked ? 'active dislike' : ''}">
+            <i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i>
+            <span class="comment-dislike-count" id="comment-dislike-count-${c.id}">${c.dislikes || 0}</span>
+          </button>
+        </div>
+
+        <div id="reply-slot-${c.id}" class="replies-container"></div>
       </div>
     </div>`;
 };
@@ -3892,24 +3925,67 @@ function renderThreadComments(comments = mergeOptimisticComments(threadComments)
   container.innerHTML = '';
   visibleRoots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
 
+  const ensureReplyState = function(parentId) {
+    if (!replyExpansionState[parentId]) {
+      replyExpansionState[parentId] = { open: false, loaded: 0 };
+    }
+    return replyExpansionState[parentId];
+  };
+
   const renderReplies = function(parentId) {
     const replies = (byParent[parentId] || []).slice().sort(sorter);
     const slot = document.getElementById(`reply-slot-${parentId}`);
     if (!slot) return;
-    const expanded = !!replyExpansionState[parentId];
-    const limit = expanded ? replies.length : Math.min(3, replies.length);
+    const state = ensureReplyState(parentId);
     slot.innerHTML = '';
+
+    if (!state.open && replies.length) {
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'see-more-replies';
+      viewBtn.textContent = `View replies (${replies.length})`;
+      viewBtn.onclick = function() {
+        state.open = true;
+        state.loaded = Math.min(4, replies.length);
+        renderThreadComments(currentThreadComments);
+      };
+      slot.appendChild(viewBtn);
+      return;
+    }
+
+    const limit = Math.min(state.loaded || 4, replies.length);
+    state.loaded = limit;
+    const replyStack = document.createElement('div');
+    replyStack.className = 'reply-stack';
     replies.slice(0, limit).forEach(function(reply) {
-      slot.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+      replyStack.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
       renderReplies(reply.id);
     });
+    slot.appendChild(replyStack);
+
+    const controls = document.createElement('div');
+    controls.className = 'reply-controls';
     if (replies.length > limit) {
-      const btn = document.createElement('button');
-      btn.className = 'see-more-replies';
-      btn.textContent = 'See more replies';
-      btn.onclick = function() { replyExpansionState[parentId] = true; renderThreadComments(currentThreadComments); };
-      slot.appendChild(btn);
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'see-more-replies';
+      moreBtn.textContent = 'View more replies';
+      moreBtn.onclick = function() {
+        state.loaded = Math.min(replies.length, state.loaded + 4);
+        renderThreadComments(currentThreadComments);
+      };
+      controls.appendChild(moreBtn);
     }
+    if (replies.length && state.open) {
+      const hideBtn = document.createElement('button');
+      hideBtn.className = 'see-more-replies subtle';
+      hideBtn.textContent = 'Hide replies';
+      hideBtn.onclick = function() {
+        state.open = false;
+        slot.innerHTML = '';
+        renderThreadComments(currentThreadComments);
+      };
+      controls.appendChild(hideBtn);
+    }
+    if (controls.childElementCount) slot.appendChild(controls);
   };
 
   visibleRoots.forEach(function(c) { renderReplies(c.id); });
@@ -3972,7 +4048,7 @@ function renderThreadMainPost(postId) {
     const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
-    const date = post.timestamp && post.timestamp.seconds ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
+    const date = formatDateTime(post.timestamp) || 'Just now';
     const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
     const verifiedBadge = renderVerifiedBadge(authorData);
@@ -4729,7 +4805,7 @@ function getProfileContentSources(uid) {
 }
 
 function renderProfilePostCard(post, context = 'profile', { compact = false, idPrefix = 'post' } = {}) {
-    const date = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString() : 'Just now';
+    const date = formatDateTime(post.timestamp) || 'Just now';
     const isLiked = post.likedBy && post.likedBy.includes(currentUser?.uid);
     const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser?.uid);
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
@@ -5328,6 +5404,13 @@ function toDateSafe(ts) {
     return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function formatDateTime(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return '—';
+    const formatted = date.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return formatted.replace(', ', ' ');
+}
+
 function isSameDay(a, b) {
     return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
@@ -5345,6 +5428,20 @@ function formatMessageTimeLabel(ts) {
     const date = toDateSafe(ts);
     if (!date) return '';
     return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function needsGapDivider(prevDate, currentDate) {
+    if (!prevDate || !currentDate) return true;
+    const isNewDay = !isSameDay(prevDate, currentDate);
+    const diff = currentDate.getTime() - prevDate.getTime();
+    return isNewDay || diff >= 3 * 60 * 60 * 1000;
+}
+
+function formatGapDivider(prevDate, currentDate) {
+    if (!currentDate) return '';
+    const isNewDay = prevDate ? !isSameDay(prevDate, currentDate) : true;
+    if (isNewDay) return formatDateTime(currentDate);
+    return currentDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 function isNearBottom(el, threshold = 80) {
@@ -5563,7 +5660,7 @@ function renderMessages(msgs = [], convo = {}) {
     const previousOffset = body.scrollHeight - body.scrollTop;
     body.innerHTML = '';
 
-    let lastDateKey = '';
+    let lastTimestamp = null;
     let lastSenderId = null;
     let latestSelfMessage = null;
     const fragment = document.createDocumentFragment();
@@ -5573,19 +5670,17 @@ function renderMessages(msgs = [], convo = {}) {
 
     msgs.forEach(function (msg, idx) {
         const createdDate = toDateSafe(msg.createdAt) || new Date();
-        const dateKey = createdDate.toDateString();
-        if (dateKey !== lastDateKey) {
+        if (!lastTimestamp || needsGapDivider(lastTimestamp, createdDate)) {
             const divider = document.createElement('div');
-            divider.className = 'message-date-divider';
-            divider.textContent = formatChatDateLabel(createdDate);
+            divider.className = 'message-time-divider';
+            divider.textContent = formatGapDivider(lastTimestamp, createdDate);
             fragment.appendChild(divider);
-            lastSenderId = null;
-            lastDateKey = dateKey;
         }
+        lastTimestamp = createdDate;
 
         const nextMsg = msgs[idx + 1];
-        const nextDateKey = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()).toDateString() : null;
-        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || (nextDateKey !== dateKey));
+        const nextDate = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()) : null;
+        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || (nextDate && needsGapDivider(createdDate, nextDate)));
         const isSelf = msg.senderId === currentUser?.uid;
         const row = document.createElement('div');
         row.className = 'message-row ' + (isSelf ? 'self' : 'other');
@@ -5599,19 +5694,23 @@ function renderMessages(msgs = [], convo = {}) {
                 const senderMeta = resolveParticipantDisplay(convo, msg.senderId);
                 avatarSlot.innerHTML = renderAvatar({
                     uid: msg.senderId,
-                    username: senderMeta.displayName || senderMeta.username,
+                    username: senderMeta.username,
+                    displayName: senderMeta.displayName,
                     photoURL: senderMeta.avatar,
-                    avatarColor: senderMeta.avatarColor || computeAvatarColor(senderMeta.username || senderMeta.displayName || msg.senderId)
+                    avatarColor: senderMeta.avatarColor
                 }, { size: 42 });
             } else {
                 avatarSlot.classList.add('placeholder');
             }
         }
 
+        const bubbleWrap = document.createElement('div');
+        bubbleWrap.className = 'message-bubble-wrap ' + (isSelf ? 'self' : 'other');
+
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble ' + (isSelf ? 'self' : 'other');
         bubble.dataset.messageId = msg.id;
-        const senderLabel = !isSelf && msg.senderUsername ? `<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:4px;">${escapeHtml(msg.senderUsername)}</div>` : '';
+        const senderLabel = !isSelf && msg.senderUsername ? `<div class="message-sender-label">${escapeHtml(msg.senderUsername)}</div>` : '';
         const replyHeaderNeeded = msg.replyToMessageId || msg.replyToSnippet;
         let content = escapeHtml(msg.text || '');
         if (msg.type === 'image' && msg.mediaURL) {
@@ -5624,7 +5723,7 @@ function renderMessages(msgs = [], convo = {}) {
         }
         if (searchTerm && (msg.text || '').toLowerCase().includes(searchTerm)) {
             conversationSearchHits.push(msg.id);
-            const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig');
+            const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')})`, 'ig');
             content = escapeHtml(msg.text || '').replace(regex, '<mark>$1</mark>');
         }
 
@@ -5643,49 +5742,77 @@ function renderMessages(msgs = [], convo = {}) {
             bubble.appendChild(replyHeader);
         }
 
-        bubble.appendChild(contentWrap);
+        const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];
+        if (msg.mediaURL && !attachments.length) {
+            attachments.push({ url: msg.mediaURL, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
+        }
 
-        const metaRow = document.createElement('div');
-        metaRow.style.display = 'flex';
-        metaRow.style.alignItems = 'center';
-        metaRow.style.justifyContent = 'space-between';
-        metaRow.style.gap = '8px';
-        const time = document.createElement('div');
-        time.className = 'message-time';
-        const editedLabel = msg.editedAt ? ' · edited' : '';
-        time.textContent = `${formatMessageTimeLabel(msg.createdAt)}${editedLabel}`;
-        metaRow.appendChild(time);
+        if (attachments.length) {
+            const attachmentRow = document.createElement('div');
+            attachmentRow.className = 'message-attachments';
+            attachments.forEach(function (att) {
+                const tile = document.createElement('div');
+                tile.className = 'message-attachment-tile';
+                const isImage = (att.type || '').includes('image');
+                if (isImage) {
+                    const img = document.createElement('img');
+                    img.src = att.url;
+                    img.alt = att.name || 'Attachment';
+                    tile.appendChild(img);
+                } else if ((att.type || '').includes('video')) {
+                    tile.innerHTML = '<div class="attachment-icon"><i class="ph ph-play"></i></div>';
+                } else {
+                    tile.innerHTML = '<div class="attachment-icon"><i class="ph ph-paperclip"></i></div>';
+                }
+                tile.onclick = function () { openFullscreenMedia(att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
+                attachmentRow.appendChild(tile);
+            });
+            bubble.appendChild(attachmentRow);
+        }
+
+        bubble.appendChild(contentWrap);
 
         const actionsBtn = document.createElement('button');
         actionsBtn.className = 'message-actions-button';
         actionsBtn.setAttribute('aria-label', 'Message actions');
         actionsBtn.innerHTML = '<i class="ph ph-dots-three"></i>';
         actionsBtn.onclick = function (e) { e.stopPropagation(); showMessageActionsMenu(msg, actionsBtn, convo); };
-        metaRow.appendChild(actionsBtn);
-        bubble.appendChild(metaRow);
+        bubble.appendChild(actionsBtn);
 
         const reactions = msg.reactions || {};
-        const reactionRow = document.createElement('div');
-        reactionRow.className = 'reaction-row';
-        Object.keys(reactions || {}).forEach(function (emoji) {
-            const users = reactions[emoji] || [];
-            const pill = document.createElement('div');
-            const youReacted = users.includes(currentUser?.uid);
-            pill.className = 'reaction-pill' + (youReacted ? ' active' : '');
-            pill.textContent = `${emoji} ${users.length}`;
-            pill.onclick = function () { toggleReaction(convo.id || activeConversationId, msg.id, emoji, youReacted); };
-            reactionRow.appendChild(pill);
-        });
-        bubble.appendChild(reactionRow);
+        const reactionTotal = Object.keys(reactions || {}).reduce(function (acc, emoji) { return acc + (reactions[emoji]?.length || 0); }, 0);
+        if (reactionTotal > 0) {
+            const reactionRow = document.createElement('div');
+            reactionRow.className = 'reaction-row';
+            Object.keys(reactions || {}).forEach(function (emoji) {
+                const users = reactions[emoji] || [];
+                if (!users.length) return;
+                const pill = document.createElement('div');
+                const youReacted = users.includes(currentUser?.uid);
+                pill.className = 'reaction-pill' + (youReacted ? ' active' : '');
+                pill.textContent = `${emoji} ${users.length}`;
+                pill.onclick = function () { toggleReaction(convo.id || activeConversationId, msg.id, emoji, youReacted); };
+                reactionRow.appendChild(pill);
+            });
+            bubbleWrap.appendChild(reactionRow);
+        }
+
+        const editedLabel = msg.editedAt ? ' · edited' : '';
+        const time = document.createElement('div');
+        time.className = 'message-meta-time ' + (isSelf ? 'self' : 'other');
+        time.textContent = `${formatDateTime(msg.createdAt) || ''}${editedLabel}`;
 
         row.oncontextmenu = function (e) { e.preventDefault(); showMessageActionsMenu(msg, bubble, convo); };
 
+        bubbleWrap.appendChild(bubble);
+        bubbleWrap.appendChild(time);
+
         if (isSelf) {
-            row.appendChild(bubble);
+            row.appendChild(bubbleWrap);
             latestSelfMessage = { message: msg, row };
         } else {
             if (avatarSlot) row.appendChild(avatarSlot);
-            row.appendChild(bubble);
+            row.appendChild(bubbleWrap);
         }
 
         fragment.appendChild(row);
@@ -5765,6 +5892,11 @@ function navigateConversationSearch(step = 0) {
     scrollToMessageById(targetId);
 }
 
+window.mobileMessagesBack = function() {
+    if (!isMobileViewport()) return;
+    document.body.classList.remove('mobile-thread-open');
+};
+
 function clearReplyContext() {
     activeReplyContext = null;
     editingMessageId = null;
@@ -5773,6 +5905,63 @@ function clearReplyContext() {
     if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
     if (compose) compose.classList.remove('editing');
 }
+
+function clearAttachmentPreview() {
+    const preview = document.getElementById('message-attachment-preview');
+    pendingMessageAttachments = [];
+    if (preview) { preview.innerHTML = ''; preview.style.display = 'none'; }
+}
+
+function renderAttachmentPreview() {
+    const preview = document.getElementById('message-attachment-preview');
+    if (!preview) return;
+    preview.innerHTML = '';
+    if (!pendingMessageAttachments.length) { preview.style.display = 'none'; return; }
+    preview.style.display = 'flex';
+    pendingMessageAttachments.forEach(function (file, idx) {
+        const tile = document.createElement('div');
+        tile.className = 'attachment-preview-chip';
+        const label = document.createElement('div');
+        label.className = 'attachment-preview-label';
+        const isImage = file.type && file.type.startsWith('image');
+        const thumb = document.createElement('div');
+        thumb.className = 'attachment-preview-thumb';
+        if (isImage) {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            img.alt = file.name;
+            thumb.appendChild(img);
+        } else {
+            thumb.innerHTML = '<i class="ph ph-paperclip"></i>';
+        }
+        label.textContent = file.name || 'Attachment';
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'attachment-remove-btn';
+        removeBtn.innerHTML = '<i class="ph ph-x"></i>';
+        removeBtn.onclick = function () { removePendingAttachment(idx); };
+        tile.appendChild(thumb);
+        tile.appendChild(label);
+        tile.appendChild(removeBtn);
+        preview.appendChild(tile);
+    });
+}
+
+function removePendingAttachment(index) {
+    if (index < 0 || index >= pendingMessageAttachments.length) return;
+    pendingMessageAttachments.splice(index, 1);
+    renderAttachmentPreview();
+}
+
+function handleMessageFileChange(event) {
+    const files = Array.from(event?.target?.files || []);
+    if (!files.length) return;
+    pendingMessageAttachments = pendingMessageAttachments.concat(files);
+    renderAttachmentPreview();
+    if (event?.target) event.target.value = '';
+}
+
+window.handleMessageFileChange = handleMessageFileChange;
+window.removePendingAttachment = removePendingAttachment;
 
 function renderReplyPreviewBar() {
     const bar = document.getElementById('message-reply-preview');
@@ -6158,6 +6347,11 @@ async function openConversation(conversationId) {
         return;
     }
 
+    if (isMobileViewport()) {
+        document.body.classList.add('mobile-thread-open');
+    }
+    syncMobileMessagesShell();
+
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
     renderTypingIndicator(convo);
@@ -6169,6 +6363,7 @@ async function openConversation(conversationId) {
 
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
+    bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
     conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
@@ -6915,14 +7110,18 @@ async function sendChatPayload(conversationId, payload = {}) {
     }
 
     const replyContext = payload.replyContext || (activeReplyContext && activeReplyContext.conversationId === conversationId ? activeReplyContext : null);
+    const attachments = Array.isArray(payload.attachments) ? payload.attachments.filter(Boolean) : [];
+    const hasVideoAttachment = attachments.some(function (att) { return (att.type || '').includes('video'); });
+    const primaryImage = (!payload.mediaURL && attachments.length === 1 && (attachments[0].type || '').includes('image')) ? attachments[0] : null;
 
     const message = {
         senderId: currentUser.uid,
         senderUsername: userProfile.username || currentUser.displayName || 'Nexera user',
         text: payload.text || '',
-        type: payload.type || 'text',
-        mediaURL: payload.mediaURL || null,
-        mediaType: payload.mediaType || null,
+        type: payload.type || (attachments.length ? (hasVideoAttachment ? 'video' : 'image') : 'text'),
+        mediaURL: payload.mediaURL || (primaryImage ? primaryImage.url : null),
+        mediaType: payload.mediaType || (primaryImage ? primaryImage.type : null),
+        attachments: attachments.length ? attachments : null,
         postId: payload.postId || null,
         threadId: payload.threadId || null,
         createdAt: serverTimestamp(),
@@ -6946,26 +7145,52 @@ async function sendChatPayload(conversationId, payload = {}) {
     await updateConversationUnread(conversationId, participants, payload);
 }
 
+async function uploadAttachments(conversationId, files = []) {
+    const uploads = [];
+    let idx = 0;
+    for (const file of files) {
+        if (!file) continue;
+        const stamp = Date.now();
+        const storageRef = ref(storage, `dm_media/${conversationId}/${stamp}_${idx}_${file.name}`);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        await uploadTask;
+        const mediaURL = await getDownloadURL(uploadTask.snapshot.ref);
+        uploads.push({ url: mediaURL, type: file.type || '', name: file.name || 'Attachment' });
+        idx += 1;
+    }
+    return uploads;
+}
+
 window.sendMessage = async function (conversationId = activeConversationId) {
     if (!conversationId || !requireAuth()) return;
     const input = document.getElementById('message-input');
     const text = (input?.value || '').trim();
     const fileInput = document.getElementById('message-media');
-    if (fileInput?.files?.length) {
-        await window.sendMediaMessage(conversationId, 'message-media', text);
-        if (input) input.value = '';
-        return;
-    }
-    if (!text) return;
-    if (editingMessageId) {
+    const directFiles = Array.from(fileInput?.files || []);
+    const combinedFiles = pendingMessageAttachments.concat(directFiles);
+    if (!text && !combinedFiles.length) return;
+
+    if (editingMessageId && !combinedFiles.length) {
         try {
             await updateDoc(doc(db, 'conversations', conversationId, 'messages', editingMessageId), { text, editedAt: serverTimestamp() });
         } catch (e) { console.warn('Edit failed', e?.message || e); toast('Unable to edit message', 'error'); }
         editingMessageId = null;
     } else {
-        await sendChatPayload(conversationId, { text, type: 'text' });
+        let attachments = [];
+        if (combinedFiles.length) {
+            attachments = await uploadAttachments(conversationId, combinedFiles);
+        }
+        await sendChatPayload(conversationId, {
+            text,
+            attachments,
+            mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image') ? attachments[0].url : null,
+            mediaType: attachments.length === 1 ? attachments[0].type : null,
+            type: attachments.length ? (attachments.some(function (att) { return (att.type || '').includes('video'); }) ? 'video' : 'image') : 'text'
+        });
     }
     if (input) input.value = '';
+    clearAttachmentPreview();
+    if (fileInput) fileInput.value = '';
     setTypingState(conversationId, false);
     clearReplyContext();
 };
@@ -6973,20 +7198,18 @@ window.sendMessage = async function (conversationId = activeConversationId) {
 window.sendMediaMessage = async function (conversationId = activeConversationId, fileInputElementId = 'message-media', caption = '') {
     if (!conversationId || !requireAuth()) return;
     const fileInput = document.getElementById(fileInputElementId);
-    if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
-    const file = fileInput.files[0];
-    const storageRef = ref(storage, `dm_media/${conversationId}/${Date.now()}_${file.name}`);
-    const uploadTask = uploadBytesResumable(storageRef, file);
-    await uploadTask;
-    const mediaURL = await getDownloadURL(uploadTask.snapshot.ref);
-    const type = file.type.startsWith('video') ? 'video' : 'image';
+    if (!fileInput || !fileInput.files || !fileInput.files.length) return;
+    const uploads = await uploadAttachments(conversationId, Array.from(fileInput.files));
+    const hasVideo = uploads.some(function (att) { return (att.type || '').includes('video'); });
     await sendChatPayload(conversationId, {
         text: caption,
-        type,
-        mediaURL,
-        mediaType: file.type
+        attachments: uploads,
+        mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image') ? uploads[0].url : null,
+        mediaType: uploads.length === 1 ? uploads[0].type : null,
+        type: uploads.length ? (hasVideo ? 'video' : 'image') : 'text'
     });
     fileInput.value = '';
+    clearAttachmentPreview();
     const input = document.getElementById('message-input');
     if (input && caption) input.value = '';
     setTypingState(conversationId, false);
@@ -8712,8 +8935,23 @@ window.triggerComposerPost = function() {
     syncPostButtonState();
 };
 
+function bindMobileScrollHelper() {
+    const btn = document.getElementById('mobile-scroll-top');
+    if (!btn) return;
+    const handler = function() {
+        const shouldShow = isMobileViewport() && window.scrollY > 200;
+        btn.classList.toggle('show', shouldShow);
+    };
+    handler();
+    window.addEventListener('scroll', handler, { passive: true });
+    if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+        MOBILE_VIEWPORT.addEventListener('change', handler);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     bindMobileNav();
+    bindMobileScrollHelper();
     syncMobileComposerState();
     bindAuthFormShortcuts();
     const title = document.getElementById('postTitle');
