@@ -832,6 +832,17 @@ export class NexeraGoLiveController {
             programNotes.textContent = detail;
         }
 
+        if (liveIndicator) {
+            liveIndicator.classList.toggle("is-live", state === "live");
+            liveIndicator.classList.toggle("is-idle", state !== "live");
+        }
+        if (liveLabel) {
+            liveLabel.textContent = state === "live" ? "LIVE" : state === "starting" ? "Starting" : "Idle";
+        }
+        if (programNotes) {
+            programNotes.textContent = detail;
+        }
+
         if (previous !== state || message) {
             this.log(`State: ${detail}`);
         }
