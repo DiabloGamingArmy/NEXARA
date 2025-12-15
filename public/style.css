@@ -81,7 +81,10 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
 }
 
-@media(min-width: 1024px) { .sidebar-right { display: block; } }
+@media(min-width: 1024px) {
+    body.sidebar-home .sidebar-right { display: block; }
+    body:not(.sidebar-home) .sidebar-right { display: none !important; }
+}
 
 /* Components */
 .glass-panel { background: var(--glass); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
@@ -609,7 +612,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-thread-header-row { display:flex; align-items:center; gap:10px; padding:1rem; border-bottom:1px solid var(--border); }
 .message-thread-header-row .mobile-thread-back { display:none; }
 .messages-thread-inner { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
-.message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; }
+.message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .message-thread-header .message-thread-profile-btn {
     background: transparent;
     border: none;
@@ -626,6 +629,8 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 }
 .message-thread-header .message-thread-title-row { display:flex; align-items:center; gap:6px; font-weight:800; }
 .message-thread-header .message-thread-subtitle { color:var(--text-muted); font-size:0.9rem; }
+.message-header-shell { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; }
+.message-header-actions { margin-left:auto; display:flex; align-items:center; gap:8px; }
 .message-header-tools { display:flex; gap:8px; align-items:center; padding:5px 1rem 0.5rem; }
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
@@ -674,6 +679,13 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-bubble.other { background: var(--bg-hover); border:1px solid var(--border); margin-right:auto; }
 .message-meta-time { font-size:0.75rem; color:var(--text-muted); text-align:left; opacity:0; transition:opacity 0.15s ease; position:absolute; top:100%; left:0; margin-top:2px; pointer-events:none; }
 .message-meta-time.self { text-align:right; left:auto; right:0; }
+
+@media (min-width: 821px) {
+    .message-bubble-wrap { padding-bottom: 0; }
+    .message-meta-time { top: 50%; transform: translateY(-50%); margin-top: 0; left: auto; right: auto; }
+    .message-meta-time.other { left: calc(100% + 8px); right: auto; text-align: left; }
+    .message-meta-time.self { right: calc(100% + 8px); left: auto; text-align: right; }
+}
 .message-sender-label { font-size:0.75rem; color:var(--text-muted); margin-bottom:4px; }
 .message-status { font-size:0.8rem; color:var(--text-muted); margin-top:-6px; margin-bottom:8px; }
 .message-status.self { text-align:right; }

@@ -140,6 +140,14 @@
     gap: 10px;
   }
 
+  .message-header-shell {
+    justify-content: flex-start;
+  }
+
+  .message-header-actions {
+    margin-left: 0;
+  }
+
   .mobile-thread-back {
     display: inline-flex;
     align-items: center;

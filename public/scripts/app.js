@@ -2013,6 +2013,8 @@ window.navigateTo = function (viewId, pushToStack = true) {
     const targetView = document.getElementById('view-' + viewId);
     if (targetView) targetView.style.display = 'block';
 
+    document.body.classList.toggle('sidebar-home', viewId === 'feed');
+
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
         document.querySelectorAll('.nav-item').forEach(function (el) { el.classList.remove('active'); });
@@ -5641,7 +5643,7 @@ function renderMessageHeader(convo = {}) {
         ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
         : 'class="message-thread-profile-btn" type="button" disabled';
 
-    header.innerHTML = `<div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+    header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
             ${avatar}
             <div>
@@ -5649,7 +5651,9 @@ function renderMessageHeader(convo = {}) {
                 <div class="message-thread-subtitle">${subtitle}</div>
             </div>
         </button>
-        <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')"><i class="ph ph-dots-three-outline"></i></button>
+        <div class="message-header-actions">
+            <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"><i class="ph ph-dots-three-outline"></i></button>
+        </div>
     </div>`;
 }
 
@@ -5712,19 +5716,31 @@ function renderMessages(msgs = [], convo = {}) {
         bubble.dataset.messageId = msg.id;
         const senderLabel = !isSelf && msg.senderUsername ? `<div class="message-sender-label">${escapeHtml(msg.senderUsername)}</div>` : '';
         const replyHeaderNeeded = msg.replyToMessageId || msg.replyToSnippet;
-        let content = escapeHtml(msg.text || '');
-        if (msg.type === 'image' && msg.mediaURL) {
-            content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
-        } else if (msg.type === 'video' && msg.mediaURL) {
-            content = `<video src="${msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
-        } else if (msg.type === 'post_ref') {
-            const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
-            content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${escapeHtml(msg.text || '')}</div>${refBtn}</div>`;
-        }
-        if (searchTerm && (msg.text || '').toLowerCase().includes(searchTerm)) {
+        const baseTextRaw = msg.text || '';
+        const hasSearchMatch = searchTerm && baseTextRaw.toLowerCase().includes(searchTerm);
+        let textMarkup = escapeHtml(baseTextRaw);
+        if (hasSearchMatch) {
             conversationSearchHits.push(msg.id);
             const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')})`, 'ig');
-            content = escapeHtml(msg.text || '').replace(regex, '<mark>$1</mark>');
+            textMarkup = escapeHtml(baseTextRaw).replace(regex, '<mark>$1</mark>');
+        }
+
+        let content = textMarkup;
+        if (msg.type === 'post_ref') {
+            const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
+            content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${textMarkup}</div>${refBtn}</div>`;
+        }
+
+        const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];
+        if (msg.mediaURL && !attachments.length) {
+            attachments.push({ url: msg.mediaURL, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
+        }
+        const hasMediaAttachment = attachments.length > 0;
+
+        if (!hasMediaAttachment && msg.type === 'image' && msg.mediaURL) {
+            content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
+        } else if (!hasMediaAttachment && msg.type === 'video' && msg.mediaURL) {
+            content = `<video src="${msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
         }
 
         const forwardedTag = (msg.forwardedFromSenderId || msg.forwardedFromConversationId)
@@ -5740,11 +5756,6 @@ function renderMessages(msgs = [], convo = {}) {
             replyHeader.innerHTML = `<strong>${escapeHtml(msg.replyToSenderId || 'Reply')}</strong> — ${escapeHtml((msg.replyToSnippet || '').slice(0, 140))}`;
             replyHeader.onclick = function () { scrollToMessageById(msg.replyToMessageId); };
             bubble.appendChild(replyHeader);
-        }
-
-        const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];
-        if (msg.mediaURL && !attachments.length) {
-            attachments.push({ url: msg.mediaURL, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
         }
 
         if (attachments.length) {
@@ -6044,7 +6055,7 @@ async function toggleMessagePin(conversationId, messageId) {
     } catch (e) { console.warn('Pin toggle failed', e?.message || e); }
 }
 
-function showReactionPicker(conversationId, messageId) {
+function showReactionPicker(conversationId, messageId, anchor) {
     const menu = document.createElement('div');
     menu.className = 'message-actions-menu menu-surface';
     REACTION_EMOJIS.forEach(function (emoji) {
@@ -6056,9 +6067,14 @@ function showReactionPicker(conversationId, messageId) {
     closeMessageActionsMenu();
     messageActionsMenuEl = menu;
     document.body.appendChild(menu);
-    menu.style.position = 'fixed';
-    menu.style.right = '20px';
-    menu.style.bottom = '90px';
+    const rect = anchor?.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const top = rect ? (rect.bottom + window.scrollY + 6) : (window.scrollY + (window.innerHeight / 2) - (menuRect.height / 2));
+    const desiredLeft = rect ? (rect.left + window.scrollX) : (window.scrollX + (window.innerWidth / 2) - (menuRect.width / 2));
+    const boundedLeft = Math.min(window.innerWidth - menuRect.width - 8, Math.max(8, desiredLeft));
+    menu.style.top = `${top}px`;
+    menu.style.left = `${boundedLeft}px`;
+    document.addEventListener('click', closeMessageActionsMenu, { once: true });
 }
 
 function toggleReaction(conversationId, messageId, emoji, remove = false) {
@@ -6084,7 +6100,7 @@ function showMessageActionsMenu(message, anchor, convo = {}) {
         { label: 'Reply', handler: function () { setReplyContext(message, 'reply', convo.id); } },
         { label: 'Quote', handler: function () { setReplyContext(message, 'quote', convo.id); } },
         { label: 'Forward', handler: function () { startForwardFlow(message); } },
-        { label: 'React', handler: function () { showReactionPicker(convo.id || activeConversationId, message.id); } }
+        { label: 'React', handler: function () { showReactionPicker(convo.id || activeConversationId, message.id, anchor); } }
     ];
     if (message.senderId === currentUser?.uid) {
         actions.push({ label: 'Edit', handler: function () { setReplyContext(message, 'edit', convo.id); } });
