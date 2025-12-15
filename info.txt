@@ -50,6 +50,22 @@ Known limitations / follow-ups
 - Stream health depends on IVS Broadcast SDK capabilities; stats view falls back to basic status when metrics APIs are unavailable.
 - Additional UI polish (e.g., tab interactivity, richer mixer controls) can be layered without altering the current binding/state model.
 
+2024-07-01 Go Live Basic correctness + private key guardrails
+- Files changed: public/scripts/GoLive.js, public/style.css, firestore.rules, public/pages/feed.html (layout/style hooks reused), info.txt.
+- What changed:
+  * Go Live container now scrolls smoothly inside the viewport with the top bar sticking; action buttons align and keep consistent enabled/disabled styling.
+  * Input mode selection is normalized (camera/screen/external), logs the chosen API (getUserMedia vs getDisplayMedia), and stops prior tracks when switching to prevent webcam leakage when screen is selected.
+  * Visibility pills act as a segmented control and propagate to the start payload; start logs include visibility/latency/autoRecord/inputMode.
+  * Auto-record switch keeps modern styling; Basic mode enforces latency NORMAL and autoRecord false while hiding those controls.
+  * Firestore rules now explicitly allow only the stream owner to read/write liveStreams/{sessionId}/private/* docs, removing permission-denied errors when persisting private stream keys without exposing them publicly.
+- How to test Basic vs Advanced:
+  1) Open Go Live Setup, confirm scroll works; top bar remains visible while scrolling.
+  2) Toggle UI Config between Basic/Advanced; forms stay in sync and visibility pills stay active.
+  3) Switch input mode to Screen Share and start a preview; console logs show inputMode and getDisplayMedia usage, and preview shows screen tracks.
+  4) Verify Basic hides latency/recording controls and shows only the chat placeholder beneath the preview; Advanced shows full controls.
+- Private key verification:
+  * Start a private stream; the write to liveStreams/{sessionId}/private/keys should succeed (no permission-denied) and only the authenticated owner can read/write that subcollection per firestore.rules.
+
 Go Live usability + control binding fixes (scrolling, mode switch, source/visibility/recording/latency wiring, private key persistence)
 - Canonical selectors/IDs: go-live-root/go-live-studio wrap the studio; go-live-ui-config is the single UI mode dropdown; basic controls use stream-title/stream-category/stream-tags/input-mode/latency-mode/auto-record-toggle with visibility pills basic-visibility-public|basic-visibility-private; advanced controls mirror via adv-stream-title/adv-stream-category/adv-stream-tags/adv-input-mode/adv-latency-mode/adv-auto-record with visibility pills adv-visibility-public|adv-visibility-private. Back button id: go-live-back-button.
 - Layout/scrolling: go-live-studio is fixed full-viewport with go-live-views as the internal scroll container (overflow-y:auto, touch scrolling). Body gains class go-live-open while the studio is open to lock background scrolling; removed automatically when leaving via navigation or the Back button.
@@ -85,3 +101,16 @@ Go Live Basic UI cleanup (status indicators, chat placeholder, controls, scroll,
 - Buttons: Start/End buttons use go-live-action-btn with state-driven classes (btn-primary for enabled start, btn-danger for enabled end, btn-disabled otherwise) and stay aligned in a flex row.
 - Private key persistence: persistPrivateStreamKey now no-ops unless visibility is private and logs non-blocking warnings on failure so permission-denied errors do not break start.
 - Manual test steps: open Go Live Basic, scroll through panels, confirm only two live indicators (outside pill blue when live, inside preview red). Start with camera and screen inputs; public/private toggles update pill active state; latency/auto-record hidden and payload defaults to NORMAL/false. Start/End buttons enable per state (Start disabled when live, End red and enabled). Chat placeholder visible instead of session details. Advanced view still loads with logs/session info.
+
+Advanced OBS-like interaction polish (layout, tabs, scenes/sources, mixer)
+- Files: public/pages/feed.html (Advanced markup), public/style.css (scene/source badges, tab docking, mixer faders, live indicator colors), public/scripts/GoLive.js (tabs, scenes/sources state, encoder bridge/metering).
+- Layout: Preview monitor now lives on the left and Program on the right; live badge only turns red when state === live. The docked tabs row (Logs/Chat/Stream Events/Encoder) is part of the layout grid instead of floating and supports keyboard-accessible tab switching (ARIA tablist/tab/tabpanel with hidden panels).
+- Scenes & Sources: Scene list shows preview/program state, clicking a scene selects it for preview, and Cut/Fade/Auto transitions push it to Program. Source list toggles camera/screen/external; selecting while idle re-primes preview capture and updates form inputMode. Add Scene/Source buttons surface a “coming soon” modal.
+- External encoder bridge: Basic view hides “external” option and offers a “Use OBS / External encoder (Advanced)” link that switches UI Config to Advanced and sets inputMode=external. Encoder tab shows ingest/key readiness when external is chosen.
+- Mixer: Each channel gets a fader, mute toggle with active styling, and lightweight meter animation (UI-only) without affecting broadcast stability.
+- Manual verification (Advanced):
+  1) Switch UI Config between Basic/Advanced to confirm layout changes and external link path.
+  2) Tabs: selecting Logs/Chat/Stream Events/Encoder swaps visible panel; default is Logs and no overlay blocks interaction.
+  3) Preview/Program order: preview left (with preview scene pill), program right (program pill); LIVE badge only red when live.
+  4) Scenes/Sources: selecting sources changes preview capture when idle; Cut/Fade/Auto sets the selected preview scene as program.
+  5) External encoder: choosing External shows ingest/key info in encoder tab/OBS panel; Basic link jumps to Advanced external mode.

@@ -80,6 +80,27 @@ export class NexeraGoLiveController {
 
         this.studioRoot = null;
 
+        this.scenes = [
+            { id: "scene-main", name: "Main", sources: ["source-camera"] },
+            { id: "scene-screen", name: "Screen Share", sources: ["source-screen"] },
+            { id: "scene-external", name: "External Encoder", sources: ["source-external"] },
+        ];
+        this.sources = [
+            { id: "source-camera", name: "Camera", type: "camera" },
+            { id: "source-screen", name: "Screen Capture", type: "screen" },
+            { id: "source-external", name: "External Encoder", type: "external" },
+        ];
+        this.activePreviewSceneId = this.scenes[0].id;
+        this.activeProgramSceneId = this.scenes[0].id;
+        this.selectedSourceId = this.sources[0].id;
+        this.mixerState = {
+            mic: { muted: false, gain: 100 },
+            system: { muted: false, gain: 100 },
+            music: { muted: false, gain: 70 },
+            aux: { muted: false, gain: 70 },
+        };
+        this.meterTimer = null;
+
         this.session = null;
         this.client = null;
         this.stream = null;
@@ -94,6 +115,43 @@ export class NexeraGoLiveController {
         this.uiMode = storedMode === "advanced" ? "advanced" : "basic";
         this.logEntries = [];
         this.audioGains = this.loadAudioGains();
+    }
+
+    normalizeInputMode(value) {
+        const mode = (value || "").toString().toLowerCase();
+        if (mode === "screen") return "screen";
+        if (mode === "external") return "external";
+        return "camera";
+    }
+
+    setVisibility(nextVisibility) {
+        const visibility = nextVisibility === "private" ? "private" : "public";
+        this.formState.visibility = visibility;
+        this.updateVisibilityButtons();
+    }
+
+    handleInputModeChange(nextMode) {
+        const normalized = this.normalizeInputMode(nextMode);
+        const previous = this.inputMode;
+        this.formState.inputMode = normalized;
+        this.inputMode = normalized;
+
+        const matchingSource = this.sources.find((src) => src.type === normalized);
+        if (matchingSource) {
+            this.selectedSourceId = matchingSource.id;
+        }
+
+        if (previous !== normalized && this.stream) {
+            this.stream.getTracks().forEach((t) => t.stop());
+            this.stream = null;
+            if (this.previewVideo) this.previewVideo.srcObject = null;
+        }
+
+        this.writeStateIntoBasicForm();
+        this.writeStateIntoAdvancedForm();
+        this.syncSceneForInput();
+        this.renderSources();
+        this.updateEncoderTab();
     }
 
     // ----------------------------------------------
@@ -295,7 +353,7 @@ export class NexeraGoLiveController {
         if (!titleEl && !categoryEl && !tagsEl) return false;
 
         let latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
-        const inputMode = inputModeEl?.value || "camera";
+        const inputMode = this.normalizeInputMode(inputModeEl?.value || "camera");
         const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
         let autoRecord = !!autoRecordEl?.checked;
 
@@ -338,7 +396,7 @@ export class NexeraGoLiveController {
         if (!titleEl && !categoryEl && !tagsEl && !inputModeEl && !latencyEl) return false;
 
         const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
-        const inputMode = inputModeEl?.value || "camera";
+        const inputMode = this.normalizeInputMode(inputModeEl?.value || "camera");
         const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
 
         this.formState = {
@@ -374,7 +432,10 @@ export class NexeraGoLiveController {
         if (titleEl) titleEl.value = this.formState.title || "";
         if (categoryEl) categoryEl.value = this.formState.category || "";
         if (tagsEl) tagsEl.value = Array.isArray(this.formState.tags) ? this.formState.tags.join(", ") : this.formState.tags || "";
-        if (inputModeEl) inputModeEl.value = this.formState.inputMode || "camera";
+        if (inputModeEl) {
+            const nextMode = this.formState.inputMode === "external" ? "camera" : this.formState.inputMode;
+            inputModeEl.value = nextMode || "camera";
+        }
         if (latencyEl) latencyEl.value = (this.formState.latencyMode || "NORMAL").toUpperCase();
         if (autoRecordEl) autoRecordEl.checked = !!this.formState.autoRecord;
 
@@ -457,6 +518,9 @@ export class NexeraGoLiveController {
             this.writeStateIntoBasicForm();
         }
 
+        this.syncSceneForInput();
+        this.renderSources();
+
         if (!options.skipLog) {
             this.log(`UI mode: ${nextMode}`);
         }
@@ -538,9 +602,7 @@ export class NexeraGoLiveController {
 
         if (basicInputMode)
             basicInputMode.addEventListener("change", (e) => {
-                this.formState.inputMode = e.target.value || "camera";
-                this.inputMode = this.formState.inputMode;
-                this.writeStateIntoAdvancedForm();
+                this.handleInputModeChange(e.target.value || "camera");
             });
 
         if (basicLatency)
@@ -559,15 +621,13 @@ export class NexeraGoLiveController {
 
         if (basicPublic)
             basicPublic.addEventListener("click", () => {
-                this.formState.visibility = "public";
-                this.updateVisibilityButtons();
+                this.setVisibility("public");
                 this.writeStateIntoAdvancedForm();
             });
 
         if (basicPrivate)
             basicPrivate.addEventListener("click", () => {
-                this.formState.visibility = "private";
-                this.updateVisibilityButtons();
+                this.setVisibility("private");
                 this.writeStateIntoAdvancedForm();
             });
 
@@ -613,9 +673,7 @@ export class NexeraGoLiveController {
 
         if (advInputMode)
             advInputMode.addEventListener("change", (e) => {
-                this.formState.inputMode = e.target.value || "camera";
-                this.inputMode = this.formState.inputMode;
-                this.writeStateIntoBasicForm();
+                this.handleInputModeChange(e.target.value || "camera");
             });
 
         if (advLatency)
@@ -634,15 +692,13 @@ export class NexeraGoLiveController {
 
         if (advPublic)
             advPublic.addEventListener("click", () => {
-                this.formState.visibility = "public";
-                this.updateVisibilityButtons();
+                this.setVisibility("public");
                 this.writeStateIntoBasicForm();
             });
 
         if (advPrivate)
             advPrivate.addEventListener("click", () => {
-                this.formState.visibility = "private";
-                this.updateVisibilityButtons();
+                this.setVisibility("private");
                 this.writeStateIntoBasicForm();
             });
 
@@ -688,25 +744,10 @@ export class NexeraGoLiveController {
                 else if (window.navigateTo) window.navigateTo("feed");
             });
 
-        const micGain = document.getElementById("mixer-mic");
-        if (micGain) {
-            micGain.value = this.audioGains.mic;
-            micGain.onchange = (e) => {
-                const mic = Number(e.target.value);
-                this.persistAudioGains({ mic });
-                this.persistStudioSnapshot({ audio: { micGain: mic, systemGain: this.audioGains.system } });
-            };
-        }
-
-        const systemGain = document.getElementById("mixer-system");
-        if (systemGain) {
-            systemGain.value = this.audioGains.system;
-            systemGain.onchange = (e) => {
-                const system = Number(e.target.value);
-                this.persistAudioGains({ system });
-                this.persistStudioSnapshot({ audio: { micGain: this.audioGains.mic, systemGain: system } });
-            };
-        }
+        this.bindTabs();
+        this.bindSceneAndSources();
+        this.bindMixerControls();
+        this.bindExternalBridge();
 
         this.applyUIMode(this.uiMode, { skipPersist: true });
         this.syncControls();
@@ -726,6 +767,9 @@ export class NexeraGoLiveController {
         const helperAdv = document.getElementById("go-live-status-text-secondary-adv");
         const topStatus = document.getElementById("go-live-top-status");
         const liveOutside = document.getElementById("go-live-status");
+        const liveIndicator = document.getElementById("program-live-indicator");
+        const liveLabel = document.getElementById("program-live-label");
+        const programNotes = document.getElementById("program-notes");
 
         const labels = {
             idle: "Idle",
@@ -773,6 +817,17 @@ export class NexeraGoLiveController {
         if (liveOutside) {
             liveOutside.classList.toggle("is-live", state === "live");
             liveOutside.classList.toggle("is-idle", state !== "live");
+        }
+
+        if (liveIndicator) {
+            liveIndicator.classList.toggle("is-live", state === "live");
+            liveIndicator.classList.toggle("is-idle", state !== "live");
+        }
+        if (liveLabel) {
+            liveLabel.textContent = state === "live" ? "LIVE" : state === "starting" ? "Starting" : "Idle";
+        }
+        if (programNotes) {
+            programNotes.textContent = detail;
         }
 
         if (previous !== state || message) {
@@ -917,6 +972,9 @@ export class NexeraGoLiveController {
             const el = document.getElementById(id);
             if (el) el.textContent = value ?? "—";
         });
+
+        const programTimer = document.getElementById("program-timer");
+        if (programTimer) programTimer.textContent = duration;
     }
 
     startStatsPolling() {
@@ -978,10 +1036,274 @@ export class NexeraGoLiveController {
     }
 
     applyAudioGains() {
-        const micGain = document.getElementById("mixer-mic");
-        const systemGain = document.getElementById("mixer-system");
-        if (micGain) micGain.value = this.audioGains.mic;
-        if (systemGain) systemGain.value = this.audioGains.system;
+        const micGain = document.getElementById("mixer-mic-fader");
+        const systemGain = document.getElementById("mixer-system-fader");
+        this.mixerState.mic.gain = this.audioGains.mic ?? this.mixerState.mic.gain;
+        this.mixerState.system.gain = this.audioGains.system ?? this.mixerState.system.gain;
+        if (micGain) micGain.value = this.mixerState.mic.gain;
+        if (systemGain) systemGain.value = this.mixerState.system.gain;
+        this.updateMixerUi();
+    }
+
+    bindExternalBridge() {
+        const externalLink = document.getElementById("go-advanced-external");
+        if (externalLink) {
+            externalLink.addEventListener("click", () => {
+                this.applyUIMode("advanced");
+                this.handleInputModeChange("external");
+                this.writeStateIntoAdvancedForm();
+                this.persistUiSnapshot();
+                this.log("Switched to advanced for external encoder");
+                const advancedView = document.getElementById("go-live-advanced-view");
+                if (advancedView && typeof advancedView.scrollIntoView === "function") {
+                    advancedView.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+            });
+        }
+    }
+
+    bindTabs() {
+        const tabs = Array.from(document.querySelectorAll("[data-tab-target]"));
+        const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+        if (!tabs.length || !panels.length) return;
+
+        const activateTab = (target) => {
+            tabs.forEach((tab) => {
+                const isActive = tab.dataset.tabTarget === target;
+                tab.classList.toggle("active", isActive);
+                tab.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+            panels.forEach((panel) => {
+                const match = panel.dataset.tabPanel === target;
+                panel.classList.toggle("show", match);
+                panel.toggleAttribute("hidden", !match);
+                panel.setAttribute("aria-hidden", match ? "false" : "true");
+            });
+        };
+
+        tabs.forEach((tab) => {
+            tab.addEventListener("click", () => activateTab(tab.dataset.tabTarget));
+            tab.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    activateTab(tab.dataset.tabTarget);
+                }
+            });
+        });
+
+        const defaultTab = tabs.find((t) => t.classList.contains("active"))?.dataset.tabTarget || tabs[0]?.dataset.tabTarget;
+        if (defaultTab) activateTab(defaultTab);
+    }
+
+    bindSceneAndSources() {
+        this.sceneListEl = document.getElementById("scene-list");
+        this.sourceListEl = document.getElementById("source-list");
+        const addSceneBtn = document.getElementById("add-scene-btn");
+        const addSourceBtn = document.getElementById("add-source-btn");
+        const cutBtn = document.getElementById("transition-cut");
+        const fadeBtn = document.getElementById("transition-fade");
+        const autoBtn = document.getElementById("transition-auto");
+
+        if (addSceneBtn)
+            addSceneBtn.addEventListener("click", () => {
+                alert("Scene creation coming soon.");
+            });
+        if (addSourceBtn)
+            addSourceBtn.addEventListener("click", () => {
+                alert("Source picker coming soon.");
+            });
+        if (cutBtn)
+            cutBtn.addEventListener("click", () => {
+                this.applyTransition("cut");
+            });
+        if (fadeBtn)
+            fadeBtn.addEventListener("click", () => {
+                this.applyTransition("fade");
+            });
+        if (autoBtn)
+            autoBtn.addEventListener("click", () => {
+                this.applyTransition("auto");
+            });
+
+        this.syncSceneForInput();
+        this.renderScenes();
+        this.renderSources();
+    }
+
+    bindMixerControls() {
+        const faders = document.querySelectorAll(".mixer-fader");
+        faders.forEach((fader) => {
+            const channel = fader.dataset.channel;
+            if (!channel || !this.mixerState[channel]) return;
+            fader.value = this.mixerState[channel].gain;
+            fader.addEventListener("input", (e) => {
+                const next = Number(e.target.value);
+                this.mixerState[channel].gain = next;
+                if (channel === "mic" || channel === "system") {
+                    this.persistAudioGains({ [channel]: next });
+                }
+                this.updateMixerUi();
+            });
+        });
+
+        const muteButtons = document.querySelectorAll(".mixer-mute");
+        muteButtons.forEach((btn) => {
+            const channel = btn.dataset.channel;
+            if (!channel || !this.mixerState[channel]) return;
+            btn.addEventListener("click", () => {
+                this.mixerState[channel].muted = !this.mixerState[channel].muted;
+                this.updateMixerUi();
+            });
+        });
+
+        this.updateMixerUi();
+        this.startMeterAnimation();
+    }
+
+    updateMixerUi() {
+        Object.entries(this.mixerState).forEach(([channel, state]) => {
+            const strip = document.querySelector(`.mixer-strip[data-channel="${channel}"]`);
+            if (!strip) return;
+            const fader = strip.querySelector(".mixer-fader");
+            const meter = strip.querySelector(".meter-fill");
+            const muteBtn = strip.querySelector(".mixer-mute");
+            if (fader) {
+                fader.value = state.gain;
+            }
+            if (meter) {
+                const width = state.muted ? 0 : Math.min(100, state.gain);
+                meter.style.width = `${width}%`;
+                meter.style.opacity = state.muted ? "0.3" : "1";
+            }
+            if (muteBtn) {
+                muteBtn.classList.toggle("active", state.muted);
+                muteBtn.textContent = state.muted ? "Unmute" : "Mute";
+            }
+        });
+    }
+
+    startMeterAnimation() {
+        if (this.meterTimer) return;
+        this.meterTimer = window.setInterval(() => {
+            Object.entries(this.mixerState).forEach(([channel, state]) => {
+                if (state.muted) return;
+                const fill = document.querySelector(`.mixer-strip[data-channel="${channel}"] .meter-fill`);
+                if (fill) {
+                    const jitter = Math.max(5, Math.min(100, state.gain + Math.random() * 10 - 5));
+                    fill.style.width = `${jitter}%`;
+                }
+            });
+        }, 800);
+    }
+
+    stopMeterAnimation() {
+        if (this.meterTimer) {
+            window.clearInterval(this.meterTimer);
+            this.meterTimer = null;
+        }
+    }
+
+    syncSceneForInput() {
+        const mode = this.inputMode;
+        if (mode === "external") {
+            this.activePreviewSceneId = "scene-external";
+        } else if (mode === "screen") {
+            this.activePreviewSceneId = "scene-screen";
+        } else {
+            this.activePreviewSceneId = "scene-main";
+        }
+        this.renderScenes();
+    }
+
+    renderScenes() {
+        if (!this.sceneListEl) return;
+        this.sceneListEl.innerHTML = "";
+        this.scenes.forEach((scene) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "scene-row";
+            row.dataset.sceneId = scene.id;
+            const statusLabel =
+                scene.id === this.activeProgramSceneId
+                    ? "Program"
+                    : scene.id === this.activePreviewSceneId
+                    ? "Preview"
+                    : "Standby";
+            if (scene.id === this.activePreviewSceneId) row.classList.add("active");
+            if (scene.id === this.activeProgramSceneId) row.classList.add("program");
+            row.innerHTML = `<span>${scene.name}</span><span class="muted">${statusLabel}</span>`;
+            row.addEventListener("click", () => this.setPreviewScene(scene.id));
+            this.sceneListEl.appendChild(row);
+        });
+        this.updateSceneBadges();
+    }
+
+    renderSources() {
+        if (!this.sourceListEl) return;
+        this.sourceListEl.innerHTML = "";
+        this.sources.forEach((source) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "source-row";
+            row.dataset.sourceId = source.id;
+            const isActive = this.selectedSourceId === source.id;
+            row.classList.toggle("active", isActive);
+            row.textContent = source.name;
+            row.addEventListener("click", () => this.handleSourceSelect(source.id));
+            this.sourceListEl.appendChild(row);
+        });
+    }
+
+    setPreviewScene(sceneId) {
+        const exists = this.scenes.some((s) => s.id === sceneId);
+        if (!exists) return;
+        this.activePreviewSceneId = sceneId;
+        this.renderScenes();
+    }
+
+    updateSceneBadges() {
+        const previewLabel = document.getElementById("preview-scene-label");
+        const programLabel = document.getElementById("program-scene-label");
+        const previewScene = this.scenes.find((s) => s.id === this.activePreviewSceneId);
+        const programScene = this.scenes.find((s) => s.id === this.activeProgramSceneId);
+        if (previewLabel) previewLabel.textContent = previewScene?.name || "Preview";
+        if (programLabel) programLabel.textContent = programScene?.name || "Program";
+    }
+
+    applyTransition(mode = "cut") {
+        this.activeProgramSceneId = this.activePreviewSceneId;
+        this.renderScenes();
+        const notes = document.getElementById("program-notes");
+        if (notes) notes.textContent = mode === "fade" ? "Fade transition applied." : "Scene pushed live.";
+    }
+
+    handleSourceSelect(sourceId) {
+        const source = this.sources.find((s) => s.id === sourceId);
+        if (!source) return;
+        if (this.state === "live") {
+            this.log("Stop stream to change source while live.");
+            const notes = document.getElementById("program-notes");
+            if (notes) notes.textContent = "Stop stream to change source.";
+            return;
+        }
+        this.selectedSourceId = sourceId;
+        this.handleInputModeChange(source.type);
+        this.syncSceneForInput();
+        if (!this.stream || this.stream.getTracks().every((track) => track.readyState === "ended")) {
+            this.primeMediaCaptureFromUserGesture().catch((err) => this.log(err?.message || String(err)));
+        }
+    }
+
+    updateEncoderTab() {
+        const encoderPlaceholder = document.getElementById("encoder-tab-placeholder");
+        if (!encoderPlaceholder) return;
+        if (this.inputMode === "external") {
+            const ingest = this.session?.ingestEndpoint || "Ingest pending…";
+            const keyState = this.session?.streamKey ? "Stream key ready" : "Stream key pending";
+            encoderPlaceholder.textContent = `RTMP ingest: ${ingest} · ${keyState}`;
+        } else {
+            encoderPlaceholder.textContent = "Encoder configuration placeholder.";
+        }
     }
 
     settingsPayload(overrides = {}) {
@@ -1105,7 +1427,9 @@ export class NexeraGoLiveController {
             this.stream = null;
         }
 
-        this.log(`Preparing media capture for inputMode=${mode} (pre-flight)`);
+        const api = mode === "screen" ? "getDisplayMedia" : "getUserMedia";
+        this.log(`Preparing media capture for inputMode=${mode} using ${api} (pre-flight)`);
+        console.info("[GoLive] capture selection", { mode, api });
 
         const stream =
             mode === "screen"
@@ -1176,7 +1500,9 @@ export class NexeraGoLiveController {
             visibility,
         };
 
-        this.log(`Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}`);
+        this.log(
+            `Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}, inputMode:${state.inputMode}`
+        );
         this.log(`Calling createEphemeralChannel with ${JSON.stringify(payload)}`);
 
         const response = await fetch(
@@ -1225,6 +1551,7 @@ export class NexeraGoLiveController {
         this.log("createEphemeralChannel response received");
 
         this.renderSessionDetails();
+        this.updateEncoderTab();
 
         await this.persistLiveSnapshot({
             title,
@@ -1272,7 +1599,9 @@ export class NexeraGoLiveController {
         if (this.stream) {
             this.log(`Using pre-captured media for inputMode=${this.inputMode}`);
         } else {
-            this.log(`Preparing media capture for inputMode=${this.inputMode}`);
+            const api = this.inputMode === "screen" ? "getDisplayMedia" : "getUserMedia";
+            this.log(`Preparing media capture for inputMode=${this.inputMode} using ${api}`);
+            console.info("[GoLive] broadcast capture", { mode: this.inputMode, api });
             this.stream =
                 this.inputMode === "screen"
                     ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
@@ -1336,6 +1665,8 @@ export class NexeraGoLiveController {
             </div>
         `;
 
+        this.updateEncoderTab();
+
         this.unsubscribeLiveDoc = onSnapshot(doc(this.db, "liveStreams", this.session.sessionId), (snap) => {
             if (snap.exists() && snap.data().isLive) {
                 this.setStatus("live");
@@ -1390,8 +1721,11 @@ export class NexeraGoLiveController {
         this.session = null;
         this.liveStartTime = null;
         this.stopStatsPolling();
+        this.stopMeterAnimation();
+        this.startMeterAnimation();
         this.renderSessionDetails();
         this.renderStats({ note: "Idle" });
+        this.updateEncoderTab();
     }
 }
 
