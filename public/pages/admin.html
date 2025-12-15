@@ -15,6 +15,7 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="../style.css">
+    <link rel="stylesheet" href="../stylemobile.css">
     <link rel="icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
     <link rel="shortcut icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
     <link rel="apple-touch-icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
@@ -561,7 +562,6 @@
                 </div>
             </div>
             <div class="topbar-right">
-                <div class="gl-pill status-pill ready topbar-status-chip" id="go-live-top-status">Ready</div>
                 <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
                 <select id="go-live-ui-config" class="go-live-select form-input">
                     <option value="basic">Basic</option>
@@ -577,7 +577,7 @@
                             <div class="preview-pane-header">
                                 <div class="status-chip-row">
                                     <div class="gl-pill go-live-status-outside" id="go-live-status">Ready</div>
-                                    <div class="gl-pill subtle" id="go-live-visibility-pill">Preview</div>
+                                    <div class="gl-pill go-live-visibility-pill subtle" id="go-live-visibility-pill">Preview</div>
                                 </div>
                                 <div class="stream-health">
                                     <span class="muted">Stream Health</span>
@@ -589,25 +589,15 @@
                                     <video id="live-preview" autoplay muted playsinline></video>
                                     <div class="preview-overlay">
                                         <div class="state-callout preview-corner-status" id="go-live-state-chip">Idle</div>
-                                        <div class="overlay-meta basic-overlay-strip">
-                                            <div class="overlay-label">Status</div>
-                                            <div class="overlay-text" id="go-live-status-text">Idle</div>
-                                            <div class="overlay-label">Notes</div>
-                                            <div class="overlay-text">Stream will appear here once started.</div>
-                                        </div>
                                     </div>
                                 </div>
                             </div>
                             <div class="preview-footer">
                                 <div class="preview-note">Use this preview to verify audio/video before you go live.</div>
                             </div>
-                            <div class="gl-panel subtle-panel chat-placeholder" aria-label="Live chat placeholder">
-                                <div class="section-heading">Live Chat</div>
-                                <div class="chat-body-placeholder">Chat will appear here when enabled.</div>
-                                <div class="chat-composer-placeholder">
-                                    <input class="form-input" placeholder="Chat coming soon…" disabled>
-                                    <button class="icon-pill" type="button" disabled>Send</button>
-                                </div>
+                            <div class="gl-panel subtle-panel chat-placeholder" aria-label="Stream chat placeholder">
+                                <div class="section-heading">Stream Chat</div>
+                                <div class="chat-body-placeholder">Chat will appear here soon.</div>
                             </div>
                         </div>
                     </div>
@@ -637,8 +627,10 @@
                                         <select id="input-mode" class="form-input">
                                             <option value="camera">Camera</option>
                                             <option value="screen">Screen Share</option>
-                                            <option value="external">External Encoder</option>
                                         </select>
+                                    </div>
+                                    <div class="helper-link-row">
+                                        <button class="text-link" type="button" id="go-advanced-external">Use OBS / External encoder (Advanced)</button>
                                     </div>
                                     <div id="obs-panel-slot-basic">
                                         <div id="obs-panel" class="obs-panel">

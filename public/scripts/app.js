@@ -571,6 +571,7 @@ let commentFilterQuery = '';
 // --- Navigation Stack ---
 let navStack = [];
 let currentViewId = 'feed';
+const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
 
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
@@ -2028,7 +2029,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'saved') { renderSaved(); }
     if (viewId === 'profile') renderProfile();
     if (viewId === 'discover') { renderDiscover(); }
-    if (viewId === 'messages') { initConversations(); }
+    if (viewId === 'messages') { initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') {
         ensureLiveDiscoverRoot();
@@ -2047,7 +2048,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
 
     currentViewId = viewId;
     updateMobileNavState(viewId);
-    const lockScroll = viewId === 'messages' || viewId === 'conversation-settings';
+    const lockScroll = ((viewId === 'messages' && !isMobileViewport()) || viewId === 'conversation-settings');
     const goLiveLock = viewId === 'live-setup';
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     document.body.classList.toggle('go-live-open', goLiveLock);
@@ -2078,6 +2079,43 @@ function updateMobileNavState(viewId = 'feed') {
     document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.view === viewId);
     });
+}
+
+function isMobileViewport() {
+    return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
+}
+
+function syncMobileMessagesShell() {
+    const backBtn = document.getElementById('mobile-thread-back');
+    const shouldShowThread = isMobileViewport() && !!activeConversationId;
+    document.body.classList.toggle('mobile-thread-open', shouldShowThread);
+    if (backBtn) backBtn.style.display = isMobileViewport() ? 'inline-flex' : 'none';
+}
+
+function bindMobileMessageGestures() {
+    const thread = document.querySelector('.messages-thread');
+    if (!thread || thread.dataset.gestureBound) return;
+    let startX = 0;
+    let startY = 0;
+    thread.addEventListener('touchstart', function(e) {
+        const touch = e.touches[0];
+        startX = touch.clientX;
+        startY = touch.clientY;
+    });
+    thread.addEventListener('touchend', function(e) {
+        if (!isMobileViewport()) return;
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - startX;
+        const dy = Math.abs(touch.clientY - startY);
+        if (startX < 40 && dx > 60 && dy < 40) {
+            window.mobileMessagesBack();
+        }
+    });
+    thread.dataset.gestureBound = 'true';
+}
+
+if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+    MOBILE_VIEWPORT.addEventListener('change', syncMobileMessagesShell);
 }
 
 function bindMobileNav() {
@@ -5765,6 +5803,11 @@ function navigateConversationSearch(step = 0) {
     scrollToMessageById(targetId);
 }
 
+window.mobileMessagesBack = function() {
+    if (!isMobileViewport()) return;
+    document.body.classList.remove('mobile-thread-open');
+};
+
 function clearReplyContext() {
     activeReplyContext = null;
     editingMessageId = null;
@@ -6158,6 +6201,11 @@ async function openConversation(conversationId) {
         return;
     }
 
+    if (isMobileViewport()) {
+        document.body.classList.add('mobile-thread-open');
+    }
+    syncMobileMessagesShell();
+
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
     renderTypingIndicator(convo);
@@ -6169,6 +6217,7 @@ async function openConversation(conversationId) {
 
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
+    bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
     conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
@@ -8712,8 +8761,23 @@ window.triggerComposerPost = function() {
     syncPostButtonState();
 };
 
+function bindMobileScrollHelper() {
+    const btn = document.getElementById('mobile-scroll-top');
+    if (!btn) return;
+    const handler = function() {
+        const shouldShow = isMobileViewport() && window.scrollY > 200;
+        btn.classList.toggle('show', shouldShow);
+    };
+    handler();
+    window.addEventListener('scroll', handler, { passive: true });
+    if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+        MOBILE_VIEWPORT.addEventListener('change', handler);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     bindMobileNav();
+    bindMobileScrollHelper();
     syncMobileComposerState();
     bindAuthFormShortcuts();
     const title = document.getElementById('postTitle');
