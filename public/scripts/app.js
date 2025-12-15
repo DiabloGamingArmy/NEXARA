@@ -670,6 +670,10 @@ let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
 
+function isMobileViewport() {
+    return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
+}
+
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
     { id: 'l1', title: '🔴 Mars Rover Landing Watch Party', viewerCount: '12.5k', author: 'SpaceX_Fan', category: 'STEM', color: '#00f2ea' },
@@ -2188,10 +2192,6 @@ function releaseScrollLockIfSafe() {
         document.body.classList.remove('no-scroll', 'modal-open');
         document.documentElement.classList.remove('no-scroll', 'modal-open');
     }
-}
-
-function isMobileViewport() {
-    return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
 function syncMobileMessagesShell() {
