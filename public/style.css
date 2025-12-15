@@ -1512,10 +1512,29 @@ body.go-live-open {
 
 .go-live-status-outside {
     color: var(--gl-muted);
+    background: rgba(255, 255, 255, 0.06);
 }
 
-.go-live-status-outside.is-live {
-    color: var(--gl-accent);
+.go-live-status-outside.is-live,
+.go-live-status-outside.active-live {
+    color: #050608;
+    background: var(--primary);
+    box-shadow: 0 0 0 1px rgba(0, 210, 255, 0.35);
+}
+
+.go-live-status-outside.is-idle,
+.go-live-status-outside:not(.active-live) {
+    color: var(--gl-muted);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.go-live-visibility-pill {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.go-live-visibility-pill.is-active {
+    color: var(--gl-text);
+    border: 1px solid var(--gl-border);
 }
 
 .stream-health {
@@ -1581,7 +1600,7 @@ body.go-live-open {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.15) 45%, rgba(0, 0, 0, 0.65));
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.1) 45%, rgba(0, 0, 0, 0.6));
 }
 
 .state-callout {
@@ -1604,16 +1623,6 @@ body.go-live-open {
 
 .preview-corner-status:not(.is-live) {
     color: var(--gl-muted);
-}
-
-.overlay-meta {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
-}
-
-.go-live-studio.ui-basic .basic-overlay-strip {
-    display: none !important;
 }
 
 .overlay-label {
@@ -1789,7 +1798,7 @@ body.go-live-open {
     display: flex;
     gap: 10px;
     flex-wrap: nowrap;
-    align-items: stretch;
+    align-items: center;
 }
 
 .go-live-action-btn {

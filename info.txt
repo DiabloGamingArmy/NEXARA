@@ -114,3 +114,17 @@ Advanced OBS-like interaction polish (layout, tabs, scenes/sources, mixer)
   3) Preview/Program order: preview left (with preview scene pill), program right (program pill); LIVE badge only red when live.
   4) Scenes/Sources: selecting sources changes preview capture when idle; Cut/Fade/Auto sets the selected preview scene as program.
   5) External encoder: choosing External shows ingest/key info in encoder tab/OBS panel; Basic link jumps to Advanced external mode.
+
+Go Live status/UI consistency follow-up (status chips, back button, capture logging)
+- Files: public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (removed top-bar status pill, cleaned preview overlay, chat placeholder copy), public/style.css (status chip colors, preview overlay cleanup, hidden latency/recording sections in Basic, aligned control row), public/scripts/GoLive.js (status rendering, Basic defaults on start, capture summary logging, back button fallback, button state guarding).
+- Status system: removed the top-right status chip; the outside Live/Preview chips are the primary indicator (Live turns Nexera blue when streaming, Preview stays neutral when idle). In-monitor label (go-live-state-chip) shows red LIVE only when state === live and neutral Idle/Starting otherwise. Advanced live badge mirrors this behavior.
+- Basic view tweaks: overlay strip (“STATUS/NOTES…”) removed, latency/auto-record sections hidden and payload forces latency=NORMAL/autoRecord=false with a log line. Basic bottom panel is a Stream Chat placeholder (“Chat will appear here soon.”). Start/End buttons share alignment with disabled styling when idle/starting and red End when live.
+- Navigation: Go Live back button now uses goBack() if present, otherwise history.back(), then navigateTo('feed'), then hash fallback without forcing a full reload.
+- Capture integrity: Screen vs Camera selection continues to call getDisplayMedia/getUserMedia respectively; every capture logs a summary of inputMode, API, and track labels. Start/Stop are idempotent when already starting/live or idle.
+- Advanced cleanup: monitor overlays/status strips removed; LIVE badge no longer renders red while idle.
+
+Manual smoke checklist for this change set
+- Basic status rendering: open Go Live Basic, confirm no top-right pill; Live/Preview chips show Preview neutral while idle and Live turns blue when streaming; in-monitor label is neutral Idle and switches to red LIVE when live.
+- Start/End controls: when idle, Start is blue/enabled and End is gray/disabled; when live, Start disables and End turns red; buttons stay horizontally aligned and ignore rapid repeat clicks while starting/live.
+- Back navigation: clicking the Back button returns to the previous SPA view (goBack/history.navigate/navigateTo feed) without a full reload; if live, confirmation appears and stop occurs before exit.
+- Screen share capture: switching Input mode to Screen triggers getDisplayMedia (log line shows inputMode/capture API/track labels) and the IVS preview displays the screen instead of the webcam.

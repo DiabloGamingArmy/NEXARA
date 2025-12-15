@@ -93,6 +93,7 @@ export class NexeraGoLiveController {
         this.activePreviewSceneId = this.scenes[0].id;
         this.activeProgramSceneId = this.scenes[0].id;
         this.selectedSourceId = this.sources[0].id;
+        this.advancedPreferences = { latencyMode: "NORMAL", autoRecord: false };
         this.mixerState = {
             mic: { muted: false, gain: 100 },
             system: { muted: false, gain: 100 },
@@ -414,6 +415,11 @@ export class NexeraGoLiveController {
         this.latencyMode = this.formState.latencyMode;
         this.autoRecord = this.formState.autoRecord;
 
+        this.advancedPreferences = {
+            latencyMode: this.formState.latencyMode,
+            autoRecord: this.formState.autoRecord,
+        };
+
         if (!quiet) {
             this.writeStateIntoBasicForm();
         }
@@ -497,10 +503,22 @@ export class NexeraGoLiveController {
         if (modeSelect) modeSelect.value = nextMode;
 
         if (nextMode === "basic") {
+            this.advancedPreferences = {
+                latencyMode: this.formState.latencyMode || this.advancedPreferences.latencyMode,
+                autoRecord:
+                    typeof this.formState.autoRecord === "boolean"
+                        ? this.formState.autoRecord
+                        : this.advancedPreferences.autoRecord,
+            };
             this.formState.latencyMode = "NORMAL";
             this.formState.autoRecord = false;
             this.latencyMode = "NORMAL";
             this.autoRecord = false;
+        } else {
+            this.formState.latencyMode = this.advancedPreferences.latencyMode || "NORMAL";
+            this.formState.autoRecord = !!this.advancedPreferences.autoRecord;
+            this.latencyMode = this.formState.latencyMode;
+            this.autoRecord = this.formState.autoRecord;
         }
 
         if (!options.skipPersist) {
@@ -734,6 +752,7 @@ export class NexeraGoLiveController {
                     } finally {
                         document.body.classList.remove("go-live-open");
                         if (window.goBack) window.goBack();
+                        else if (window.history?.length > 1) window.history.back();
                         else if (window.navigateTo) window.navigateTo("feed");
                     }
                     return;
@@ -741,7 +760,9 @@ export class NexeraGoLiveController {
 
                 document.body.classList.remove("go-live-open");
                 if (window.goBack) window.goBack();
+                else if (window.history?.length > 1) window.history.back();
                 else if (window.navigateTo) window.navigateTo("feed");
+                else window.location.hash = "#feed";
             });
 
         this.bindTabs();
@@ -757,16 +778,11 @@ export class NexeraGoLiveController {
     setStatus(state, message = "") {
         const previous = this.state;
         this.state = state;
-        const chip = document.getElementById("go-live-state-chip");
-        const status = document.getElementById("go-live-status");
-        const pill = document.getElementById("go-live-visibility-pill");
-        const dot = document.getElementById("status-dot-indicator");
-        const dotLabel = document.getElementById("status-dot-label");
-        const overlayText = document.getElementById("go-live-status-text");
+        const monitorChip = document.getElementById("go-live-state-chip");
+        const liveChip = document.getElementById("go-live-status");
+        const previewChip = document.getElementById("go-live-visibility-pill");
         const helper = document.getElementById("go-live-status-text-secondary");
         const helperAdv = document.getElementById("go-live-status-text-secondary-adv");
-        const topStatus = document.getElementById("go-live-top-status");
-        const liveOutside = document.getElementById("go-live-status");
         const liveIndicator = document.getElementById("program-live-indicator");
         const liveLabel = document.getElementById("program-live-label");
         const programNotes = document.getElementById("program-notes");
@@ -781,42 +797,39 @@ export class NexeraGoLiveController {
 
         const label = labels[state] || "Idle";
         const detail = message ? `${label} – ${message}` : label;
+        const isLive = state === "live";
+        const isStarting = state === "starting";
 
-        if (chip) {
-            chip.textContent = state === "live" ? "LIVE" : label;
-            chip.classList.toggle("is-live", state === "live");
+        if (monitorChip) {
+            monitorChip.textContent = isLive ? "LIVE" : isStarting ? "Starting" : "Idle";
+            monitorChip.classList.toggle("is-live", isLive);
+            monitorChip.classList.toggle("is-idle", !isLive);
         }
-        if (status) {
-            status.textContent = label;
-            status.classList.toggle("is-live", state === "live");
-            status.classList.toggle("is-idle", state !== "live");
+        if (liveChip) {
+            liveChip.textContent = "Live";
+            liveChip.classList.toggle("is-live", isLive);
+            liveChip.classList.toggle("is-idle", !isLive);
+            liveChip.classList.toggle("active-live", isLive);
         }
-        if (overlayText) overlayText.textContent = detail;
-        if (pill) pill.textContent = this.inputMode === "external" ? "External Software" : "Preview";
-        if (dotLabel) dotLabel.textContent = label;
+        if (previewChip) {
+            previewChip.textContent = this.inputMode === "external" ? "External" : "Preview";
+            const previewActive = !isLive;
+            previewChip.classList.toggle("is-active", previewActive);
+            previewChip.classList.toggle("is-idle", previewActive);
+            previewChip.classList.toggle("active-live", false);
+        }
         if (helper) helper.textContent = message || (state === "live" ? "Streaming to your audience." : "Ready to preview.");
         if (helperAdv) helperAdv.textContent = detail;
-        if (topStatus) topStatus.textContent = detail;
 
-        [chip, status, dot, topStatus].forEach((el) => {
-            if (!el) return;
-            el.classList.remove("state-idle", "state-preview", "state-starting", "state-live", "state-error");
-            const cls =
-                state === "live"
-                    ? "state-live"
-                    : state === "starting"
-                    ? "state-starting"
-                    : state === "error"
-                    ? "state-error"
-                    : state === "previewing"
-                    ? "state-preview"
-                    : "state-idle";
-            el.classList.add(cls);
-        });
-
-        if (liveOutside) {
-            liveOutside.classList.toggle("is-live", state === "live");
-            liveOutside.classList.toggle("is-idle", state !== "live");
+        if (liveIndicator) {
+            liveIndicator.classList.toggle("is-live", isLive);
+            liveIndicator.classList.toggle("is-idle", !isLive);
+        }
+        if (liveLabel) {
+            liveLabel.textContent = isLive ? "LIVE" : isStarting ? "Starting" : "Idle";
+        }
+        if (programNotes) {
+            programNotes.textContent = detail;
         }
 
         if (liveIndicator) {
@@ -855,7 +868,8 @@ export class NexeraGoLiveController {
         const advEnd = document.getElementById("adv-end-stream");
 
         const startDisabled = this.state === "starting" || this.state === "live";
-        const endDisabled = this.state === "idle" || this.state === "error" || this.state === "previewing";
+        const endDisabled =
+            this.state === "idle" || this.state === "error" || this.state === "previewing" || this.state === "starting";
 
         if (startBtn) startBtn.disabled = startDisabled;
         if (advStart) advStart.disabled = startDisabled;
@@ -885,6 +899,13 @@ export class NexeraGoLiveController {
         if (this.logEntries.length > 200) this.logEntries.shift();
         console.log("[GoLive]", message);
         this.renderLogEntries();
+    }
+
+    describeTracks(stream) {
+        if (!stream) return { video: "none", audio: "none" };
+        const videoLabel = stream.getVideoTracks?.()[0]?.label || "none";
+        const audioLabel = stream.getAudioTracks?.()[0]?.label || "none";
+        return { video: videoLabel, audio: audioLabel };
     }
 
     renderLogEntries() {
@@ -1437,12 +1458,18 @@ export class NexeraGoLiveController {
                 : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
         this.stream = stream;
+        const summary = this.describeTracks(stream);
+        this.log(`Capture summary: mode=${mode} api=${api} video=${summary.video} audio=${summary.audio}`);
         if (this.previewVideo) {
             this.previewVideo.srcObject = stream;
         }
     }
 
     async safeStart() {
+        if (this.state === "starting" || this.state === "live") {
+            this.log("Start ignored: already starting or live");
+            return;
+        }
         this.setStatus("starting");
         this.log("Starting stream request");
         try {
@@ -1463,15 +1490,23 @@ export class NexeraGoLiveController {
             this.readBasicFormIntoState();
         }
 
+        const effectiveLatency =
+            this.uiMode === "basic"
+                ? "NORMAL"
+                : (this.formState.latencyMode || this.advancedPreferences.latencyMode || "NORMAL").toUpperCase() === "LOW"
+                ? "LOW"
+                : "NORMAL";
+        const effectiveAutoRecord = this.uiMode === "basic" ? false : !!this.formState.autoRecord;
+
         if (this.uiMode === "basic") {
-            this.formState.latencyMode = "NORMAL";
-            this.formState.autoRecord = false;
+            this.log("[GoLive] Basic mode start: forcing latency=NORMAL autoRecord=false");
         }
 
         const state = {
             ...this.formState,
-            latencyMode: (this.formState.latencyMode || "NORMAL").toUpperCase() === "LOW" ? "LOW" : "NORMAL",
+            latencyMode: effectiveLatency,
             inputMode: this.formState.inputMode || "camera",
+            autoRecord: effectiveAutoRecord,
             tags: Array.isArray(this.formState.tags) ? this.formState.tags : this.parseTags(this.formState.tags),
         };
 
@@ -1606,6 +1641,8 @@ export class NexeraGoLiveController {
                 this.inputMode === "screen"
                     ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
                     : await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            const summary = this.describeTracks(this.stream);
+            this.log(`Capture summary: mode=${this.inputMode} api=${api} video=${summary.video} audio=${summary.audio}`);
         }
 
         this.previewVideo.srcObject = this.stream;
@@ -1678,6 +1715,10 @@ export class NexeraGoLiveController {
     // Stop Stream
     // ----------------------------------------------
     async safeStop() {
+        if (this.state === "idle" || this.state === "error") {
+            this.log("Stop ignored: already idle");
+            return;
+        }
         this.log("Stopping stream");
         try {
             await this.stop();
