@@ -50,6 +50,22 @@ Known limitations / follow-ups
 - Stream health depends on IVS Broadcast SDK capabilities; stats view falls back to basic status when metrics APIs are unavailable.
 - Additional UI polish (e.g., tab interactivity, richer mixer controls) can be layered without altering the current binding/state model.
 
+2024-07-01 Go Live Basic correctness + private key guardrails
+- Files changed: public/scripts/GoLive.js, public/style.css, firestore.rules, public/pages/feed.html (layout/style hooks reused), info.txt.
+- What changed:
+  * Go Live container now scrolls smoothly inside the viewport with the top bar sticking; action buttons align and keep consistent enabled/disabled styling.
+  * Input mode selection is normalized (camera/screen/external), logs the chosen API (getUserMedia vs getDisplayMedia), and stops prior tracks when switching to prevent webcam leakage when screen is selected.
+  * Visibility pills act as a segmented control and propagate to the start payload; start logs include visibility/latency/autoRecord/inputMode.
+  * Auto-record switch keeps modern styling; Basic mode enforces latency NORMAL and autoRecord false while hiding those controls.
+  * Firestore rules now explicitly allow only the stream owner to read/write liveStreams/{sessionId}/private/* docs, removing permission-denied errors when persisting private stream keys without exposing them publicly.
+- How to test Basic vs Advanced:
+  1) Open Go Live Setup, confirm scroll works; top bar remains visible while scrolling.
+  2) Toggle UI Config between Basic/Advanced; forms stay in sync and visibility pills stay active.
+  3) Switch input mode to Screen Share and start a preview; console logs show inputMode and getDisplayMedia usage, and preview shows screen tracks.
+  4) Verify Basic hides latency/recording controls and shows only the chat placeholder beneath the preview; Advanced shows full controls.
+- Private key verification:
+  * Start a private stream; the write to liveStreams/{sessionId}/private/keys should succeed (no permission-denied) and only the authenticated owner can read/write that subcollection per firestore.rules.
+
 Go Live usability + control binding fixes (scrolling, mode switch, source/visibility/recording/latency wiring, private key persistence)
 - Canonical selectors/IDs: go-live-root/go-live-studio wrap the studio; go-live-ui-config is the single UI mode dropdown; basic controls use stream-title/stream-category/stream-tags/input-mode/latency-mode/auto-record-toggle with visibility pills basic-visibility-public|basic-visibility-private; advanced controls mirror via adv-stream-title/adv-stream-category/adv-stream-tags/adv-input-mode/adv-latency-mode/adv-auto-record with visibility pills adv-visibility-public|adv-visibility-private. Back button id: go-live-back-button.
 - Layout/scrolling: go-live-studio is fixed full-viewport with go-live-views as the internal scroll container (overflow-y:auto, touch scrolling). Body gains class go-live-open while the studio is open to lock background scrolling; removed automatically when leaving via navigation or the Back button.

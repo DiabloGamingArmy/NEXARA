@@ -96,6 +96,35 @@ export class NexeraGoLiveController {
         this.audioGains = this.loadAudioGains();
     }
 
+    normalizeInputMode(value) {
+        const mode = (value || "").toString().toLowerCase();
+        if (mode === "screen") return "screen";
+        if (mode === "external") return "external";
+        return "camera";
+    }
+
+    setVisibility(nextVisibility) {
+        const visibility = nextVisibility === "private" ? "private" : "public";
+        this.formState.visibility = visibility;
+        this.updateVisibilityButtons();
+    }
+
+    handleInputModeChange(nextMode) {
+        const normalized = this.normalizeInputMode(nextMode);
+        const previous = this.inputMode;
+        this.formState.inputMode = normalized;
+        this.inputMode = normalized;
+
+        if (previous !== normalized && this.stream) {
+            this.stream.getTracks().forEach((t) => t.stop());
+            this.stream = null;
+            if (this.previewVideo) this.previewVideo.srcObject = null;
+        }
+
+        this.writeStateIntoBasicForm();
+        this.writeStateIntoAdvancedForm();
+    }
+
     // ----------------------------------------------
     // UI Bootstrapping
     // ----------------------------------------------
@@ -295,7 +324,7 @@ export class NexeraGoLiveController {
         if (!titleEl && !categoryEl && !tagsEl) return false;
 
         let latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
-        const inputMode = inputModeEl?.value || "camera";
+        const inputMode = this.normalizeInputMode(inputModeEl?.value || "camera");
         const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
         let autoRecord = !!autoRecordEl?.checked;
 
@@ -338,7 +367,7 @@ export class NexeraGoLiveController {
         if (!titleEl && !categoryEl && !tagsEl && !inputModeEl && !latencyEl) return false;
 
         const latencyMode = (latencyEl?.value || "NORMAL").toUpperCase();
-        const inputMode = inputModeEl?.value || "camera";
+        const inputMode = this.normalizeInputMode(inputModeEl?.value || "camera");
         const visibility = this.resolveVisibilityFromDom(this.formState.visibility || "public");
 
         this.formState = {
@@ -538,9 +567,7 @@ export class NexeraGoLiveController {
 
         if (basicInputMode)
             basicInputMode.addEventListener("change", (e) => {
-                this.formState.inputMode = e.target.value || "camera";
-                this.inputMode = this.formState.inputMode;
-                this.writeStateIntoAdvancedForm();
+                this.handleInputModeChange(e.target.value || "camera");
             });
 
         if (basicLatency)
@@ -559,15 +586,13 @@ export class NexeraGoLiveController {
 
         if (basicPublic)
             basicPublic.addEventListener("click", () => {
-                this.formState.visibility = "public";
-                this.updateVisibilityButtons();
+                this.setVisibility("public");
                 this.writeStateIntoAdvancedForm();
             });
 
         if (basicPrivate)
             basicPrivate.addEventListener("click", () => {
-                this.formState.visibility = "private";
-                this.updateVisibilityButtons();
+                this.setVisibility("private");
                 this.writeStateIntoAdvancedForm();
             });
 
@@ -613,9 +638,7 @@ export class NexeraGoLiveController {
 
         if (advInputMode)
             advInputMode.addEventListener("change", (e) => {
-                this.formState.inputMode = e.target.value || "camera";
-                this.inputMode = this.formState.inputMode;
-                this.writeStateIntoBasicForm();
+                this.handleInputModeChange(e.target.value || "camera");
             });
 
         if (advLatency)
@@ -634,15 +657,13 @@ export class NexeraGoLiveController {
 
         if (advPublic)
             advPublic.addEventListener("click", () => {
-                this.formState.visibility = "public";
-                this.updateVisibilityButtons();
+                this.setVisibility("public");
                 this.writeStateIntoBasicForm();
             });
 
         if (advPrivate)
             advPrivate.addEventListener("click", () => {
-                this.formState.visibility = "private";
-                this.updateVisibilityButtons();
+                this.setVisibility("private");
                 this.writeStateIntoBasicForm();
             });
 
@@ -1105,7 +1126,9 @@ export class NexeraGoLiveController {
             this.stream = null;
         }
 
-        this.log(`Preparing media capture for inputMode=${mode} (pre-flight)`);
+        const api = mode === "screen" ? "getDisplayMedia" : "getUserMedia";
+        this.log(`Preparing media capture for inputMode=${mode} using ${api} (pre-flight)`);
+        console.info("[GoLive] capture selection", { mode, api });
 
         const stream =
             mode === "screen"
@@ -1176,7 +1199,9 @@ export class NexeraGoLiveController {
             visibility,
         };
 
-        this.log(`Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}`);
+        this.log(
+            `Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}, inputMode:${state.inputMode}`
+        );
         this.log(`Calling createEphemeralChannel with ${JSON.stringify(payload)}`);
 
         const response = await fetch(
@@ -1272,7 +1297,9 @@ export class NexeraGoLiveController {
         if (this.stream) {
             this.log(`Using pre-captured media for inputMode=${this.inputMode}`);
         } else {
-            this.log(`Preparing media capture for inputMode=${this.inputMode}`);
+            const api = this.inputMode === "screen" ? "getDisplayMedia" : "getUserMedia";
+            this.log(`Preparing media capture for inputMode=${this.inputMode} using ${api}`);
+            console.info("[GoLive] broadcast capture", { mode: this.inputMode, api });
             this.stream =
                 this.inputMode === "screen"
                     ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
