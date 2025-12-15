@@ -2128,7 +2128,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'saved') { renderSaved(); }
     if (viewId === 'profile') renderProfile();
     if (viewId === 'discover') { renderDiscover(); }
-    if (viewId === 'messages') { initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
+    if (viewId === 'messages') { releaseScrollLockIfSafe(); initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') {
         ensureLiveDiscoverRoot();
@@ -2178,6 +2178,16 @@ function updateMobileNavState(viewId = 'feed') {
     document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.view === viewId);
     });
+}
+
+function releaseScrollLockIfSafe() {
+    const modalOpen = document.querySelector('.modal.show, .modal[open], .overlay.active, .go-live-studio.active');
+    if (!modalOpen) {
+        document.body.style.overflow = '';
+        document.documentElement.style.overflow = '';
+        document.body.classList.remove('no-scroll', 'modal-open');
+        document.documentElement.classList.remove('no-scroll', 'modal-open');
+    }
 }
 
 function isMobileViewport() {
