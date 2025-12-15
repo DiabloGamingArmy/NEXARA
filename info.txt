@@ -101,3 +101,16 @@ Go Live Basic UI cleanup (status indicators, chat placeholder, controls, scroll,
 - Buttons: Start/End buttons use go-live-action-btn with state-driven classes (btn-primary for enabled start, btn-danger for enabled end, btn-disabled otherwise) and stay aligned in a flex row.
 - Private key persistence: persistPrivateStreamKey now no-ops unless visibility is private and logs non-blocking warnings on failure so permission-denied errors do not break start.
 - Manual test steps: open Go Live Basic, scroll through panels, confirm only two live indicators (outside pill blue when live, inside preview red). Start with camera and screen inputs; public/private toggles update pill active state; latency/auto-record hidden and payload defaults to NORMAL/false. Start/End buttons enable per state (Start disabled when live, End red and enabled). Chat placeholder visible instead of session details. Advanced view still loads with logs/session info.
+
+Advanced OBS-like interaction polish (layout, tabs, scenes/sources, mixer)
+- Files: public/pages/feed.html (Advanced markup), public/style.css (scene/source badges, tab docking, mixer faders, live indicator colors), public/scripts/GoLive.js (tabs, scenes/sources state, encoder bridge/metering).
+- Layout: Preview monitor now lives on the left and Program on the right; live badge only turns red when state === live. The docked tabs row (Logs/Chat/Stream Events/Encoder) is part of the layout grid instead of floating and supports keyboard-accessible tab switching (ARIA tablist/tab/tabpanel with hidden panels).
+- Scenes & Sources: Scene list shows preview/program state, clicking a scene selects it for preview, and Cut/Fade/Auto transitions push it to Program. Source list toggles camera/screen/external; selecting while idle re-primes preview capture and updates form inputMode. Add Scene/Source buttons surface a “coming soon” modal.
+- External encoder bridge: Basic view hides “external” option and offers a “Use OBS / External encoder (Advanced)” link that switches UI Config to Advanced and sets inputMode=external. Encoder tab shows ingest/key readiness when external is chosen.
+- Mixer: Each channel gets a fader, mute toggle with active styling, and lightweight meter animation (UI-only) without affecting broadcast stability.
+- Manual verification (Advanced):
+  1) Switch UI Config between Basic/Advanced to confirm layout changes and external link path.
+  2) Tabs: selecting Logs/Chat/Stream Events/Encoder swaps visible panel; default is Logs and no overlay blocks interaction.
+  3) Preview/Program order: preview left (with preview scene pill), program right (program pill); LIVE badge only red when live.
+  4) Scenes/Sources: selecting sources changes preview capture when idle; Cut/Fade/Auto sets the selected preview scene as program.
+  5) External encoder: choosing External shows ingest/key info in encoder tab/OBS panel; Basic link jumps to Advanced external mode.
