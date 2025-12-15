@@ -116,6 +116,55 @@ export class NexeraGoLiveController {
         this.uiMode = storedMode === "advanced" ? "advanced" : "basic";
         this.logEntries = [];
         this.audioGains = this.loadAudioGains();
+
+        this.mobileMedia = window.matchMedia ? window.matchMedia("(max-width: 820px)") : null;
+        this.isMobile = !!this.mobileMedia?.matches;
+        if (this.mobileMedia?.addEventListener) {
+            this.mobileMedia.addEventListener("change", (e) => {
+                this.isMobile = e.matches;
+                if (this.isMobile && this.uiMode === "advanced") {
+                    this.applyUIMode("basic", { skipPersist: false });
+                }
+                this.filterInputOptions();
+            });
+        }
+    }
+
+    normalizeInputMode(value) {
+        const mode = (value || "").toString().toLowerCase();
+        if (mode === "screen") return "screen";
+        if (mode === "external") return "external";
+        return "camera";
+    }
+
+    setVisibility(nextVisibility) {
+        const visibility = nextVisibility === "private" ? "private" : "public";
+        this.formState.visibility = visibility;
+        this.updateVisibilityButtons();
+    }
+
+    handleInputModeChange(nextMode) {
+        const normalized = this.normalizeInputMode(nextMode);
+        const previous = this.inputMode;
+        this.formState.inputMode = normalized;
+        this.inputMode = normalized;
+
+        const matchingSource = this.sources.find((src) => src.type === normalized);
+        if (matchingSource) {
+            this.selectedSourceId = matchingSource.id;
+        }
+
+        if (previous !== normalized && this.stream) {
+            this.stream.getTracks().forEach((t) => t.stop());
+            this.stream = null;
+            if (this.previewVideo) this.previewVideo.srcObject = null;
+        }
+
+        this.writeStateIntoBasicForm();
+        this.writeStateIntoAdvancedForm();
+        this.syncSceneForInput();
+        this.renderSources();
+        this.updateEncoderTab();
     }
 
     normalizeInputMode(value) {
@@ -168,6 +217,7 @@ export class NexeraGoLiveController {
         if (studio) {
             this.studioRoot = studio;
             this.bindExistingUI();
+            this.filterInputOptions();
             this.applyUIMode(this.uiMode, { skipPersist: true });
             this.setStatus(this.state);
             this.applyAudioGains();
@@ -466,6 +516,34 @@ export class NexeraGoLiveController {
         this.updateVisibilityButtons();
     }
 
+    filterInputOptions() {
+        const allowExternal = !this.isMobile;
+        ["input-mode", "adv-input-mode"].forEach((id) => {
+            const select = document.getElementById(id);
+            if (!select) return;
+            Array.from(select.options || []).forEach((opt) => {
+                if (opt.value === "external") {
+                    opt.disabled = !allowExternal;
+                    opt.title = allowExternal ? "" : "External encoder is desktop-only";
+                }
+            });
+            if (!allowExternal && select.value === "external") {
+                select.value = "camera";
+                this.formState.inputMode = "camera";
+                this.inputMode = "camera";
+                this.syncSceneForInput();
+            }
+        });
+        const gate = document.getElementById("go-advanced-external");
+        if (gate) gate.disabled = !allowExternal;
+        const configSelect = document.getElementById("go-live-ui-config");
+        if (configSelect) {
+            const adv = configSelect.querySelector('option[value="advanced"]');
+            if (adv) adv.disabled = !allowExternal;
+            if (!allowExternal) configSelect.value = "basic";
+        }
+    }
+
     resolveVisibilityFromDom(fallback = "public") {
         const active = document.querySelector("[data-go-live-visibility].active");
         return active?.dataset?.goLiveVisibility || fallback;
@@ -482,7 +560,8 @@ export class NexeraGoLiveController {
     }
 
     applyUIMode(mode, options = {}) {
-        const nextMode = mode === "advanced" ? "advanced" : "basic";
+        const requestedMode = mode === "advanced" ? "advanced" : "basic";
+        const nextMode = this.isMobile && requestedMode === "advanced" ? "basic" : requestedMode;
         this.uiMode = nextMode;
 
         const basicView = document.getElementById("go-live-basic-view");
@@ -827,17 +906,6 @@ export class NexeraGoLiveController {
         }
         if (liveLabel) {
             liveLabel.textContent = isLive ? "LIVE" : isStarting ? "Starting" : "Idle";
-        }
-        if (programNotes) {
-            programNotes.textContent = detail;
-        }
-
-        if (liveIndicator) {
-            liveIndicator.classList.toggle("is-live", state === "live");
-            liveIndicator.classList.toggle("is-idle", state !== "live");
-        }
-        if (liveLabel) {
-            liveLabel.textContent = state === "live" ? "LIVE" : state === "starting" ? "Starting" : "Idle";
         }
         if (programNotes) {
             programNotes.textContent = detail;

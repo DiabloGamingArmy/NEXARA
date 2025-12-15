@@ -15,6 +15,7 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="../style.css">
+    <link rel="stylesheet" href="../stylemobile.css">
     <link rel="icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
     <link rel="shortcut icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
     <link rel="apple-touch-icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
@@ -908,7 +909,12 @@
                     <div id="conversation-list" class="conversation-list"></div>
                 </div>
                 <div class="messages-thread">
-                    <div id="message-header" class="message-thread-header">Select a conversation</div>
+                    <div class="message-thread-header-row">
+                        <button id="mobile-thread-back" class="mobile-thread-back" type="button" onclick="window.mobileMessagesBack()" aria-label="Back to conversations" style="display:none;">
+                            <i class="ph ph-arrow-left"></i> Back
+                        </button>
+                        <div id="message-header" class="message-thread-header">Select a conversation</div>
+                    </div>
                     <div class="message-header-tools">
                         <input id="conversation-search" class="form-input" placeholder="Search in conversation" oninput="window.handleConversationSearch(this.value)">
                         <div class="search-nav">
@@ -1058,6 +1064,10 @@
 
 <button id="mobile-fab" class="mobile-fab" aria-label="Create" onclick="window.openMobileComposer()">
     <i class="ph ph-plus"></i>
+</button>
+
+<button id="mobile-scroll-top" aria-label="Scroll to top" onclick="window.scrollTo({top:0, behavior:'smooth'});">
+    <i class="ph ph-arrow-up"></i>
 </button>
 
 <div id="mobile-action-sheet" class="mobile-action-sheet" role="dialog" aria-modal="true">

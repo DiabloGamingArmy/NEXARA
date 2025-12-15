@@ -128,3 +128,14 @@ Manual smoke checklist for this change set
 - Start/End controls: when idle, Start is blue/enabled and End is gray/disabled; when live, Start disables and End turns red; buttons stay horizontally aligned and ignore rapid repeat clicks while starting/live.
 - Back navigation: clicking the Back button returns to the previous SPA view (goBack/history.navigate/navigateTo feed) without a full reload; if live, confirmation appears and stop occurs before exit.
 - Screen share capture: switching Input mode to Screen triggers getDisplayMedia (log line shows inputMode/capture API/track labels) and the IVS preview displays the screen instead of the webcam.
+
+Mobile UI overhaul
+- Files: public/stylemobile.css (new responsive overrides), public/style.css (message header row, base tweaks), public/pages/*.html (added stylemobile.css link, mobile scroll-to-top button, message thread back control), public/scripts/app.js (mobile state helpers, swipe/back handling, scroll helper), public/scripts/GoLive.js (mobile gating for Advanced/external encoder).
+- Behavior: On screens up to 820px, sidebars hide and content stacks into a single column with the bottom nav pinned above safe areas. Messages use a drill-in pattern (list -> thread) with a Back button and swipe-from-left gesture; the composer is sticky and message history scrolls independently. Feed topics scroll horizontally with touch-friendly chips and a floating scroll-to-top helper appears after scrolling. Profile, Discover, and Go Live layouts stack vertically with sticky headers where appropriate, and Go Live on mobile defaults to Basic with only camera/screen inputs (external encoder gated to desktop).
+
+How to test (mobile focus)
+- Resize to <= 820px or use a phone simulator. Verify left/right sidebars hide, bottom nav stays fixed with safe-area padding, and pages scroll normally.
+- Messages: open Messages view; list shows full screen. Tap a conversation to enter the thread; Back button or swipe from left edge returns to list without reload. Composer stays visible while scrolling; sending messages still works.
+- Feed: cards are single column; topic bar scrolls horizontally; the scroll-to-top button appears after scrolling down and returns to the top smoothly.
+- Profile/Discover: layouts collapse to single column; tabs/quick filters remain sticky and scrollable horizontally; follow buttons remain tappable (44px+ touch targets).
+- Go Live: defaults to Basic on mobile with only Camera/Screen options. Advanced option is disabled; external encoder link is disabled. Controls and preview stack vertically and remain scrollable without blocking the bottom nav; start/stop still function.

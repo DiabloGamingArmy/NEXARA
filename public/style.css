@@ -585,7 +585,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 #view-messages, #view-conversation-settings { display:flex; flex-direction:column; min-height: 100vh; flex:1; padding-bottom:0; height:100%; max-height:100vh; overflow:hidden; }
 .messages-layout { display:grid; grid-template-columns: 320px 1fr; flex:1; min-height: 0; height:100%; max-height:100vh; min-height: calc(100vh - 0px); }
 .messages-sidebar { border-right:1px solid var(--border); padding:1rem; overflow-y:auto; }
-.messages-thread { display:flex; flex-direction:column; min-height:0; height:100%; overflow:hidden; }
+.messages-thread { display:flex; flex-direction:column; min-height:0; height:100%; overflow:hidden; position:relative; }
+.message-thread-header-row { display:flex; align-items:center; gap:10px; padding:1rem; border-bottom:1px solid var(--border); }
+.message-thread-header-row .mobile-thread-back { display:none; }
 .messages-thread-inner { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
 .message-thread-header { padding:1rem; border-bottom:1px solid var(--border); font-weight:700; }
 .message-thread-header .message-thread-profile-btn {
