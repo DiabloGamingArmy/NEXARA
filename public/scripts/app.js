@@ -5579,10 +5579,7 @@ function formatTimeGapDivider(currentDate) {
     return currentDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function isMobileViewport() {
-    if (typeof window === 'undefined') return false;
-    return window.matchMedia && window.matchMedia('(max-width: 820px)').matches;
-}
+
 
 function isNearBottom(el, threshold = 80) {
     if (!el) return false;
