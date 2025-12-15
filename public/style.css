@@ -644,7 +644,21 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
 .message-scroll-region { flex: 1 1 auto; display:flex; flex-direction:column; overflow-y:auto; overflow-x: hidden; padding:0 1rem 1rem; gap:10px; min-height:0; -webkit-overflow-scrolling: touch; }
-.message-thread-body { flex: 1 1 auto; display:flex; flex-direction:column; gap:10px; padding:0; justify-content:flex-end; min-height:0; overflow:visible; }
+.message-thread-body {
+    /* Let content define height so Chrome computes scrollHeight correctly */
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0;
+
+    /* Keeps short conversations pinned to the bottom without breaking scroll */
+    margin-top: auto;
+
+    /* Optional, but safe: don't create a second scroll context here */
+    overflow: visible;
+    min-height: auto;
+}
 .pinned-messages { padding:0 1rem 0.5rem; display:flex; flex-direction:column; gap:6px; }
 .pinned-messages .pinned-row { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:8px; cursor:pointer; }
 .pinned-messages .pinned-row:hover { background:var(--hover); }
