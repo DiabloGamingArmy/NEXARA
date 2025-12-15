@@ -634,7 +634,7 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-header-tools { display:flex; gap:8px; align-items:center; padding:5px 1rem 0.5rem; }
 .message-header-tools .form-input { flex:1; }
 .search-nav { display:flex; gap:6px; }
-.message-scroll-region { flex:1; display:flex; flex-direction:column; overflow:hidden; padding:0 1rem 1rem; gap:10px; min-height:0; }
+.message-scroll-region { flex:1; display:flex; flex-direction:column; overflow-y:auto; overflow-x: hidden; padding:0 1rem 1rem; gap:10px; min-height:0; }
 .message-thread-body { flex:1; display:flex; flex-direction:column; gap:10px; padding:0; justify-content:flex-end; min-height:0; overflow-y:auto; }
 .pinned-messages { padding:0 1rem 0.5rem; display:flex; flex-direction:column; gap:6px; }
 .pinned-messages .pinned-row { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:8px; cursor:pointer; }
