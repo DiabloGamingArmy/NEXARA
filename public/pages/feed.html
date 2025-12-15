@@ -15,6 +15,7 @@
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="../style.css">
+    <link rel="stylesheet" href="../stylemobile.css">
     <link rel="icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
     <link rel="shortcut icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
     <link rel="apple-touch-icon" href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
@@ -561,7 +562,6 @@
                 </div>
             </div>
             <div class="topbar-right">
-                <div class="gl-pill status-pill ready topbar-status-chip" id="go-live-top-status">Ready</div>
                 <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
                 <select id="go-live-ui-config" class="go-live-select form-input">
                     <option value="basic">Basic</option>
@@ -577,7 +577,7 @@
                             <div class="preview-pane-header">
                                 <div class="status-chip-row">
                                     <div class="gl-pill go-live-status-outside" id="go-live-status">Ready</div>
-                                    <div class="gl-pill subtle" id="go-live-visibility-pill">Preview</div>
+                                    <div class="gl-pill go-live-visibility-pill subtle" id="go-live-visibility-pill">Preview</div>
                                 </div>
                                 <div class="stream-health">
                                     <span class="muted">Stream Health</span>
@@ -589,25 +589,15 @@
                                     <video id="live-preview" autoplay muted playsinline></video>
                                     <div class="preview-overlay">
                                         <div class="state-callout preview-corner-status" id="go-live-state-chip">Idle</div>
-                                        <div class="overlay-meta basic-overlay-strip">
-                                            <div class="overlay-label">Status</div>
-                                            <div class="overlay-text" id="go-live-status-text">Idle</div>
-                                            <div class="overlay-label">Notes</div>
-                                            <div class="overlay-text">Stream will appear here once started.</div>
-                                        </div>
                                     </div>
                                 </div>
                             </div>
                             <div class="preview-footer">
                                 <div class="preview-note">Use this preview to verify audio/video before you go live.</div>
                             </div>
-                            <div class="gl-panel subtle-panel chat-placeholder" aria-label="Live chat placeholder">
-                                <div class="section-heading" style="padding-left:15px; padding-top:15px;">Live Chat</div>
-                                <div class="chat-body-placeholder">Chat will appear here when enabled.</div>
-                                <div class="chat-composer-placeholder">
-                                    <input class="form-input" placeholder="Chat coming soon…" disabled>
-                                    <button class="icon-pill" type="button" disabled>Send</button>
-                                </div>
+                            <div class="gl-panel subtle-panel chat-placeholder" aria-label="Stream chat placeholder">
+                                <div class="section-heading" style="padding-left:15px; padding-top:15px;">Stream Chat</div>
+                                <div class="chat-body-placeholder">Chat will appear here soon.</div>
                             </div>
                         </div>
                     </div>
@@ -637,8 +627,10 @@
                                         <select id="input-mode" class="form-input">
                                             <option value="camera">Camera</option>
                                             <option value="screen">Screen Share</option>
-                                            <option value="external">External Encoder</option>
                                         </select>
+                                    </div>
+                                    <div class="helper-link-row">
+                                        <button class="text-link" type="button" id="go-advanced-external">Use OBS / External encoder (Advanced)</button>
                                     </div>
                                     <div id="obs-panel-slot-basic">
                                         <div id="obs-panel" class="obs-panel">
@@ -760,57 +752,40 @@
                             <div class="gl-panel-header">
                                 <div class="section-heading">Scenes &amp; Sources</div>
                                 <div class="scene-actions">
-                                    <button class="icon-pill ghost" type="button"><i class="ph ph-plus"></i> Scene</button>
-                                    <button class="icon-pill ghost" type="button"><i class="ph ph-plus"></i> Source</button>
+                                    <button class="icon-pill ghost" type="button" id="add-scene-btn"><i class="ph ph-plus"></i> Scene</button>
+                                    <button class="icon-pill ghost" type="button" id="add-source-btn"><i class="ph ph-plus"></i> Source</button>
                                 </div>
                             </div>
                             <div class="scene-search">
                                 <input class="form-input" type="text" placeholder="Search scenes">
                             </div>
-                            <div class="scene-list">
-                                <div class="scene-row active">
-                                    <span>Scene 1 – Main</span>
-                                    <span class="muted">Live</span>
-                                </div>
-                                <div class="scene-row">
-                                    <span>Scene 2 – Intermission</span>
-                                    <span class="muted">Standby</span>
-                                </div>
-                                <div class="scene-row">
-                                    <span>Scene 3 – BRB</span>
-                                    <span class="muted">Standby</span>
-                                </div>
-                            </div>
+                            <div class="scene-list" id="scene-list"></div>
                             <div class="source-subpanel">
                                 <div class="section-subheading">Sources</div>
-                                <div class="source-list">
-                                    <div class="source-row">Camera 1</div>
-                                    <div class="source-row">Screen Capture</div>
-                                    <div class="source-row">Overlay: Alerts</div>
-                                </div>
+                                <div class="source-list" id="source-list"></div>
                             </div>
                         </div>
                         <div class="gl-panel advanced-card program-card">
                             <div class="program-grid">
-                                <div class="monitor program-monitor">
-                                    <div class="monitor-label">PROGRAM</div>
-                                    <div class="monitor-body"></div>
-                                </div>
                                 <div class="monitor preview-monitor">
-                                    <div class="monitor-label">PREVIEW</div>
+                                    <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span></div>
                                     <div class="monitor-body" id="live-preview-slot-advanced"></div>
+                                </div>
+                                <div class="monitor program-monitor">
+                                    <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span></div>
+                                    <div class="monitor-body program-body"></div>
                                 </div>
                             </div>
                             <div class="program-meta">
-                                <div class="live-indicator">LIVE</div>
-                                <div class="program-timer">00:00:00</div>
-                                <div class="program-notes">Program/preview monitors ready for switching.</div>
+                                <div class="live-indicator" id="program-live-indicator"><span id="program-live-label">Idle</span></div>
+                                <div class="program-timer" id="program-timer">00:00:00</div>
+                                <div class="program-notes" id="program-notes">Program/preview monitors ready for switching.</div>
                             </div>
                             <div class="transition-strip">
                                 <div class="transition-buttons">
-                                    <button class="icon-pill ghost" type="button">Cut</button>
-                                    <button class="icon-pill ghost" type="button">Fade</button>
-                                    <button class="icon-pill ghost" type="button">Auto</button>
+                                    <button class="icon-pill ghost" type="button" id="transition-cut">Cut</button>
+                                    <button class="icon-pill ghost" type="button" id="transition-fade">Fade</button>
+                                    <button class="icon-pill ghost" type="button" id="transition-auto">Auto</button>
                                 </div>
                                 <div class="transition-duration">Transition duration: 1.5s</div>
                             </div>
@@ -821,36 +796,36 @@
                                     <div class="section-heading">Audio Mixer</div>
                                 </div>
                                 <div class="mixer-grid">
-                                    <div class="mixer-strip">
+                                    <div class="mixer-strip" data-channel="mic">
                                         <div class="mixer-title">Mic</div>
                                         <div class="meter"><span class="meter-fill"></span></div>
+                                        <input type="range" min="0" max="100" value="100" class="mixer-fader" id="mixer-mic-fader" data-channel="mic">
                                         <div class="mixer-actions">
-                                            <button class="icon-pill ghost" type="button">Mute</button>
-                                            <button class="icon-pill ghost" type="button">Solo</button>
+                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="mic">Mute</button>
                                         </div>
                                     </div>
-                                    <div class="mixer-strip">
+                                    <div class="mixer-strip" data-channel="system">
                                         <div class="mixer-title">System</div>
                                         <div class="meter"><span class="meter-fill"></span></div>
+                                        <input type="range" min="0" max="100" value="100" class="mixer-fader" id="mixer-system-fader" data-channel="system">
                                         <div class="mixer-actions">
-                                            <button class="icon-pill ghost" type="button">Mute</button>
-                                            <button class="icon-pill ghost" type="button">Solo</button>
+                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="system">Mute</button>
                                         </div>
                                     </div>
-                                    <div class="mixer-strip">
+                                    <div class="mixer-strip" data-channel="music">
                                         <div class="mixer-title">Music</div>
                                         <div class="meter"><span class="meter-fill"></span></div>
+                                        <input type="range" min="0" max="100" value="70" class="mixer-fader" id="mixer-music-fader" data-channel="music">
                                         <div class="mixer-actions">
-                                            <button class="icon-pill ghost" type="button">Mute</button>
-                                            <button class="icon-pill ghost" type="button">Solo</button>
+                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="music">Mute</button>
                                         </div>
                                     </div>
-                                    <div class="mixer-strip">
+                                    <div class="mixer-strip" data-channel="aux">
                                         <div class="mixer-title">Aux</div>
                                         <div class="meter"><span class="meter-fill"></span></div>
+                                        <input type="range" min="0" max="100" value="70" class="mixer-fader" id="mixer-aux-fader" data-channel="aux">
                                         <div class="mixer-actions">
-                                            <button class="icon-pill ghost" type="button">Mute</button>
-                                            <button class="icon-pill ghost" type="button">Solo</button>
+                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="aux">Mute</button>
                                         </div>
                                     </div>
                                 </div>
@@ -892,25 +867,25 @@
                             </div>
                         </div>
                     </div>
-                    <div class="gl-panel advanced-tabs">
-                        <div class="tab-row">
-                            <button class="tab active" type="button">Logs</button>
-                            <button class="tab" type="button">Chat</button>
-                            <button class="tab" type="button">Stream Events</button>
-                            <button class="tab" type="button">Encoder</button>
+                    <div class="gl-panel advanced-tabs" id="advanced-tabs">
+                        <div class="tab-row" role="tablist" aria-label="Go Live docked panels">
+                            <button class="tab active" type="button" role="tab" aria-selected="true" data-tab-target="logs">Logs</button>
+                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="chat">Chat</button>
+                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="events">Stream Events</button>
+                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="encoder">Encoder</button>
                         </div>
                         <div class="tab-panels">
-                            <div class="tab-panel show">
+                            <div class="tab-panel show" data-tab-panel="logs" role="tabpanel" aria-label="Logs">
                                 <pre class="log-feed" id="go-live-log-advanced">Awaiting logs...</pre>
                             </div>
-                            <div class="tab-panel">
-                                <div class="placeholder-block">Chat will appear here.</div>
+                            <div class="tab-panel" data-tab-panel="chat" role="tabpanel" aria-label="Chat" aria-hidden="true">
+                                <div class="placeholder-block">Chat coming soon.</div>
                             </div>
-                            <div class="tab-panel">
+                            <div class="tab-panel" data-tab-panel="events" role="tabpanel" aria-label="Stream Events" aria-hidden="true">
                                 <div class="placeholder-block">Track stream events here.</div>
                             </div>
-                            <div class="tab-panel">
-                                <div class="placeholder-block">Encoder configuration placeholder.</div>
+                            <div class="tab-panel" data-tab-panel="encoder" role="tabpanel" aria-label="Encoder" aria-hidden="true">
+                                <div class="placeholder-block" id="encoder-tab-placeholder">Encoder configuration placeholder.</div>
                             </div>
                         </div>
                     </section>
@@ -934,7 +909,12 @@
                     <div id="conversation-list" class="conversation-list"></div>
                 </div>
                 <div class="messages-thread">
-                    <div id="message-header" class="message-thread-header">Select a conversation</div>
+                        <div class="message-thread-header-row">
+                            <button id="mobile-thread-back" class="mobile-thread-back" type="button" onclick="window.mobileMessagesBack()" aria-label="Back to conversations" style="display:none;">
+                                <i class="ph ph-arrow-left"></i> Back
+                            </button>
+                            <div id="message-header" class="message-thread-header">Select a conversation</div>
+                    </div>
                     <div class="message-header-tools">
                         <input id="conversation-search" class="form-input" placeholder="Search in conversation" oninput="window.handleConversationSearch(this.value)">
                         <div class="search-nav">
@@ -942,22 +922,23 @@
                             <button class="icon-pill" onclick="window.navigateConversationSearch(1)"><i class="ph ph-caret-down"></i></button>
                         </div>
                     </div>
-                    <div class="messages-thread-inner">
-                        <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
-                        <div class="message-scroll-region">
-                            <div id="message-thread" class="message-thread-body"></div>
-                            <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                        <div class="messages-thread-inner">
+                            <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
+                            <div class="message-scroll-region">
+                                <div id="message-thread" class="message-thread-body"></div>
+                                <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                            </div>
                         </div>
-                    </div>
-                    <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
-                    <div class="message-compose">
-                        <input type="file" id="message-media" accept="image/*" style="display:none;">
+                        <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
+                        <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;"></div>
+                        <div class="message-compose">
+                        <input type="file" id="message-media" accept="image/*,video/*" multiple style="display:none;" onchange="window.handleMessageFileChange(event)">
                         <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i class="ph ph-image"></i></button>
                         <input id="message-input" class="form-input" placeholder="Message" />
                         <button class="create-btn-sidebar" style="width:auto;" onclick="window.sendMessage()">Send</button>
+                        </div>
                     </div>
                 </div>
-            </div>
         </div>
 
         <div id="view-conversation-settings" class="view-section" style="display:none;">
@@ -1084,6 +1065,10 @@
 
 <button id="mobile-fab" class="mobile-fab" aria-label="Create" onclick="window.openMobileComposer()">
     <i class="ph ph-plus"></i>
+</button>
+
+<button id="mobile-scroll-top" aria-label="Scroll to top" onclick="window.scrollTo({top:0, behavior:'smooth'});">
+    <i class="ph ph-arrow-up"></i>
 </button>
 
 <div id="mobile-action-sheet" class="mobile-action-sheet" role="dialog" aria-modal="true">

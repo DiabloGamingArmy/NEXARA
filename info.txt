@@ -50,6 +50,22 @@ Known limitations / follow-ups
 - Stream health depends on IVS Broadcast SDK capabilities; stats view falls back to basic status when metrics APIs are unavailable.
 - Additional UI polish (e.g., tab interactivity, richer mixer controls) can be layered without altering the current binding/state model.
 
+2024-07-01 Go Live Basic correctness + private key guardrails
+- Files changed: public/scripts/GoLive.js, public/style.css, firestore.rules, public/pages/feed.html (layout/style hooks reused), info.txt.
+- What changed:
+  * Go Live container now scrolls smoothly inside the viewport with the top bar sticking; action buttons align and keep consistent enabled/disabled styling.
+  * Input mode selection is normalized (camera/screen/external), logs the chosen API (getUserMedia vs getDisplayMedia), and stops prior tracks when switching to prevent webcam leakage when screen is selected.
+  * Visibility pills act as a segmented control and propagate to the start payload; start logs include visibility/latency/autoRecord/inputMode.
+  * Auto-record switch keeps modern styling; Basic mode enforces latency NORMAL and autoRecord false while hiding those controls.
+  * Firestore rules now explicitly allow only the stream owner to read/write liveStreams/{sessionId}/private/* docs, removing permission-denied errors when persisting private stream keys without exposing them publicly.
+- How to test Basic vs Advanced:
+  1) Open Go Live Setup, confirm scroll works; top bar remains visible while scrolling.
+  2) Toggle UI Config between Basic/Advanced; forms stay in sync and visibility pills stay active.
+  3) Switch input mode to Screen Share and start a preview; console logs show inputMode and getDisplayMedia usage, and preview shows screen tracks.
+  4) Verify Basic hides latency/recording controls and shows only the chat placeholder beneath the preview; Advanced shows full controls.
+- Private key verification:
+  * Start a private stream; the write to liveStreams/{sessionId}/private/keys should succeed (no permission-denied) and only the authenticated owner can read/write that subcollection per firestore.rules.
+
 Go Live usability + control binding fixes (scrolling, mode switch, source/visibility/recording/latency wiring, private key persistence)
 - Canonical selectors/IDs: go-live-root/go-live-studio wrap the studio; go-live-ui-config is the single UI mode dropdown; basic controls use stream-title/stream-category/stream-tags/input-mode/latency-mode/auto-record-toggle with visibility pills basic-visibility-public|basic-visibility-private; advanced controls mirror via adv-stream-title/adv-stream-category/adv-stream-tags/adv-input-mode/adv-latency-mode/adv-auto-record with visibility pills adv-visibility-public|adv-visibility-private. Back button id: go-live-back-button.
 - Layout/scrolling: go-live-studio is fixed full-viewport with go-live-views as the internal scroll container (overflow-y:auto, touch scrolling). Body gains class go-live-open while the studio is open to lock background scrolling; removed automatically when leaving via navigation or the Back button.
@@ -85,3 +101,53 @@ Go Live Basic UI cleanup (status indicators, chat placeholder, controls, scroll,
 - Buttons: Start/End buttons use go-live-action-btn with state-driven classes (btn-primary for enabled start, btn-danger for enabled end, btn-disabled otherwise) and stay aligned in a flex row.
 - Private key persistence: persistPrivateStreamKey now no-ops unless visibility is private and logs non-blocking warnings on failure so permission-denied errors do not break start.
 - Manual test steps: open Go Live Basic, scroll through panels, confirm only two live indicators (outside pill blue when live, inside preview red). Start with camera and screen inputs; public/private toggles update pill active state; latency/auto-record hidden and payload defaults to NORMAL/false. Start/End buttons enable per state (Start disabled when live, End red and enabled). Chat placeholder visible instead of session details. Advanced view still loads with logs/session info.
+
+Advanced OBS-like interaction polish (layout, tabs, scenes/sources, mixer)
+- Files: public/pages/feed.html (Advanced markup), public/style.css (scene/source badges, tab docking, mixer faders, live indicator colors), public/scripts/GoLive.js (tabs, scenes/sources state, encoder bridge/metering).
+- Layout: Preview monitor now lives on the left and Program on the right; live badge only turns red when state === live. The docked tabs row (Logs/Chat/Stream Events/Encoder) is part of the layout grid instead of floating and supports keyboard-accessible tab switching (ARIA tablist/tab/tabpanel with hidden panels).
+- Scenes & Sources: Scene list shows preview/program state, clicking a scene selects it for preview, and Cut/Fade/Auto transitions push it to Program. Source list toggles camera/screen/external; selecting while idle re-primes preview capture and updates form inputMode. Add Scene/Source buttons surface a “coming soon” modal.
+- External encoder bridge: Basic view hides “external” option and offers a “Use OBS / External encoder (Advanced)” link that switches UI Config to Advanced and sets inputMode=external. Encoder tab shows ingest/key readiness when external is chosen.
+- Mixer: Each channel gets a fader, mute toggle with active styling, and lightweight meter animation (UI-only) without affecting broadcast stability.
+- Manual verification (Advanced):
+  1) Switch UI Config between Basic/Advanced to confirm layout changes and external link path.
+  2) Tabs: selecting Logs/Chat/Stream Events/Encoder swaps visible panel; default is Logs and no overlay blocks interaction.
+  3) Preview/Program order: preview left (with preview scene pill), program right (program pill); LIVE badge only red when live.
+  4) Scenes/Sources: selecting sources changes preview capture when idle; Cut/Fade/Auto sets the selected preview scene as program.
+  5) External encoder: choosing External shows ingest/key info in encoder tab/OBS panel; Basic link jumps to Advanced external mode.
+
+Go Live status/UI consistency follow-up (status chips, back button, capture logging)
+- Files: public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (removed top-bar status pill, cleaned preview overlay, chat placeholder copy), public/style.css (status chip colors, preview overlay cleanup, hidden latency/recording sections in Basic, aligned control row), public/scripts/GoLive.js (status rendering, Basic defaults on start, capture summary logging, back button fallback, button state guarding).
+- Status system: removed the top-right status chip; the outside Live/Preview chips are the primary indicator (Live turns Nexera blue when streaming, Preview stays neutral when idle). In-monitor label (go-live-state-chip) shows red LIVE only when state === live and neutral Idle/Starting otherwise. Advanced live badge mirrors this behavior.
+- Basic view tweaks: overlay strip (“STATUS/NOTES…”) removed, latency/auto-record sections hidden and payload forces latency=NORMAL/autoRecord=false with a log line. Basic bottom panel is a Stream Chat placeholder (“Chat will appear here soon.”). Start/End buttons share alignment with disabled styling when idle/starting and red End when live.
+- Navigation: Go Live back button now uses goBack() if present, otherwise history.back(), then navigateTo('feed'), then hash fallback without forcing a full reload.
+- Capture integrity: Screen vs Camera selection continues to call getDisplayMedia/getUserMedia respectively; every capture logs a summary of inputMode, API, and track labels. Start/Stop are idempotent when already starting/live or idle.
+- Advanced cleanup: monitor overlays/status strips removed; LIVE badge no longer renders red while idle.
+
+Manual smoke checklist for this change set
+- Basic status rendering: open Go Live Basic, confirm no top-right pill; Live/Preview chips show Preview neutral while idle and Live turns blue when streaming; in-monitor label is neutral Idle and switches to red LIVE when live.
+- Start/End controls: when idle, Start is blue/enabled and End is gray/disabled; when live, Start disables and End turns red; buttons stay horizontally aligned and ignore rapid repeat clicks while starting/live.
+- Back navigation: clicking the Back button returns to the previous SPA view (goBack/history.navigate/navigateTo feed) without a full reload; if live, confirmation appears and stop occurs before exit.
+- Screen share capture: switching Input mode to Screen triggers getDisplayMedia (log line shows inputMode/capture API/track labels) and the IVS preview displays the screen instead of the webcam.
+
+Mobile UI overhaul
+- Files: public/stylemobile.css (new responsive overrides), public/style.css (message header row, base tweaks), public/pages/*.html (added stylemobile.css link, mobile scroll-to-top button, message thread back control), public/scripts/app.js (mobile state helpers, swipe/back handling, scroll helper), public/scripts/GoLive.js (mobile gating for Advanced/external encoder).
+- Behavior: On screens up to 820px, sidebars hide and content stacks into a single column with the bottom nav pinned above safe areas. Messages use a drill-in pattern (list -> thread) with a Back button and swipe-from-left gesture; the composer is sticky and message history scrolls independently. Feed topics scroll horizontally with touch-friendly chips and a floating scroll-to-top helper appears after scrolling. Profile, Discover, and Go Live layouts stack vertically with sticky headers where appropriate, and Go Live on mobile defaults to Basic with only camera/screen inputs (external encoder gated to desktop).
+
+How to test (mobile focus)
+- Resize to <= 820px or use a phone simulator. Verify left/right sidebars hide, bottom nav stays fixed with safe-area padding, and pages scroll normally.
+- Messages: open Messages view; list shows full screen. Tap a conversation to enter the thread; Back button or swipe from left edge returns to list without reload. Composer stays visible while scrolling; sending messages still works.
+- Feed: cards are single column; topic bar scrolls horizontally; the scroll-to-top button appears after scrolling down and returns to the top smoothly.
+- Profile/Discover: layouts collapse to single column; tabs/quick filters remain sticky and scrollable horizontally; follow buttons remain tappable (44px+ touch targets).
+- Go Live: defaults to Basic on mobile with only Camera/Screen options. Advanced option is disabled; external encoder link is disabled. Controls and preview stack vertically and remain scrollable without blocking the bottom nav; start/stop still function.
+
+Discussion replies, timestamps, verified badge, and messaging polish (current)
+- Files: public/scripts/app.js (reply pagination, timestamp formatter, verified badge icon, message rendering/attachments/time dividers), public/style.css (reply spacing/thread line, message hover time, attachments styling, verified badge color), public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (message composer preview + file input updates).
+- Replies: replies collapse by default with “View replies (N)” and lazy loading 4 at a time with optional “View more” and “Hide replies”; tighter indentation with a subtle thread line and compact spacing.
+- Timestamps: posts/comments/replies now show date + time consistently via formatDateTime().
+- Verified badge: replaced with a clean check-circle glyph using theme primary color across feed, comments, and messages.
+- Messages: hover time now sits outside bubbles, reactions hide when empty, 3+ hour/day gaps insert time dividers, attachments support multiple files with pre-send preview/removal and render as thumbnails with fullscreen open; file inputs accept images/video and allow multiple selection; time labels and actions don’t reserve bubble space.
+- Manual checks:
+  1) Open a discussion: replies are collapsed; clicking “View replies (N)” loads 4 at a time and shows “View more replies” until exhausted; “Hide replies” collapses without reload.
+  2) Confirm post/comment/reply timestamps display date + time everywhere.
+  3) Verified users show the new badge beside their names in feed headers, comments, and message headers.
+  4) Messages: hover shows time outside bubble (no empty gap), reactions only render when counts > 0, attachments preview before sending and can be removed; sent messages render attachments and clicking opens fullscreen; time dividers appear when gaps >= 3 hours or day changes.
