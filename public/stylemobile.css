@@ -1,1 +1,300 @@
+/* Mobile-first overrides for Nexera (max-width: 820px) */
+@media (max-width: 820px) {
+  :root {
+    --bottom-nav-height: 68px;
+  }
 
+  body {
+    min-height: 100dvh;
+    height: auto;
+    padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+    overflow-x: hidden;
+  }
+
+  .app-layout {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .sidebar-left,
+  .sidebar-right {
+    display: none !important;
+  }
+
+  .mobile-app-bar {
+    display: flex;
+    position: sticky;
+    top: 0;
+    z-index: 60;
+  }
+
+  .main-feed,
+  .view-section {
+    padding: 0 8px calc(var(--bottom-nav-height) + 70px);
+    box-sizing: border-box;
+  }
+
+  .mobile-bottom-nav {
+    display: flex;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-bottom-nav .mobile-nav-btn {
+    min-height: 44px;
+  }
+
+  .mobile-fab,
+  #mobile-scroll-top {
+    display: none !important;
+  }
+
+  /* Scroll to top helper removed in favor of top-bar action */
+
+  /* Feed cards */
+  .social-card {
+    border-radius: 14px;
+    margin: 10px 0;
+    width: 100%;
+    border-left: none !important;
+    box-shadow: 0 18px 28px -20px rgba(0, 242, 234, 0.35);
+  }
+
+  .card-actions {
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 8px 10px 4px;
+  }
+
+  .card-actions .action-btn {
+    flex: 0 0 auto;
+    justify-content: center;
+    padding: 10px;
+    min-width: 44px;
+  }
+
+  .card-actions .action-label {
+    display: none;
+  }
+
+  .card-header,
+  .card-content {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .card-content {
+    padding-bottom: 14px;
+  }
+
+  .post-body-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .top-filter-row {
+    overflow-x: auto;
+    gap: 10px;
+    padding: 0 4px 6px;
+  }
+
+  .topic-chip,
+  .filter-chip,
+  .sort-chip {
+    min-height: 36px;
+  }
+
+  /* Messages mobile drill-in */
+  .messages-layout {
+    flex-direction: column;
+    gap: 12px;
+    height: calc(100dvh - var(--bottom-nav-height) - 90px);
+    width: 100%;
+    overflow-x: hidden;
+  }
+
+  .messages-sidebar {
+    width: 100%;
+    border-right: none;
+  }
+
+  .messages-thread {
+    width: 100%;
+    display: none;
+    flex-direction: column;
+    min-height: 60vh;
+  }
+
+  body.mobile-thread-open .messages-sidebar {
+    display: none;
+  }
+
+  body.mobile-thread-open .messages-thread {
+    display: flex;
+  }
+
+  .message-thread-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .message-header-shell {
+    justify-content: flex-start;
+  }
+
+  .message-header-actions {
+    margin-left: 0;
+  }
+
+  .mobile-thread-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: var(--text-main);
+  }
+
+  .message-header-tools {
+    display: none;
+  }
+
+  .messages-thread-inner {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .message-scroll-region {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: calc(var(--bottom-nav-height) + 110px);
+  }
+
+  .message-compose {
+    position: sticky;
+    bottom: 0;
+    background: rgba(10, 10, 12, 0.95);
+    backdrop-filter: blur(10px);
+    padding: 10px 8px calc(12px + env(safe-area-inset-bottom));
+    gap: 8px;
+  }
+
+  .message-compose .form-input {
+    min-height: 44px;
+  }
+
+  /* Messages list full-height */
+  #conversation-list {
+    max-height: none;
+  }
+
+  /* Swipe affordance */
+  .messages-thread::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  /* Profile single column */
+  .profile-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .profile-tabs {
+    position: sticky;
+    top: 52px;
+    z-index: 40;
+    background: rgba(8, 9, 10, 0.95);
+    padding: 8px 0;
+    overflow-x: auto;
+  }
+
+  .profile-grid,
+  .media-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Discover topics */
+  .discover-quick-filters {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 0 4px 8px;
+  }
+
+  .topic-card {
+    width: 100%;
+  }
+
+  /* Go Live mobile stacking */
+  .go-live-studio {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .go-live-main-grid,
+  .go-live-grid,
+  .go-live-panels {
+    grid-template-columns: 1fr;
+  }
+
+  .go-live-preview-card,
+  .go-live-panel,
+  .go-live-form,
+  .go-live-controls-row {
+    width: 100%;
+  }
+
+  .go-live-controls-row {
+    position: sticky;
+    bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+    background: rgba(12, 12, 14, 0.95);
+    backdrop-filter: blur(10px);
+    padding: 10px;
+    z-index: 30;
+  }
+
+  .go-live-basic-only .advanced-only,
+  .mobile-hide-advanced,
+  .go-live-studio.ui-basic .advanced-only {
+    display: none !important;
+  }
+
+  .go-live-accordion {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .go-live-accordion summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 12px;
+    background: var(--bg-hover);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .go-live-accordion .accordion-body {
+    padding: 12px;
+  }
+
+  /* Touch feedback */
+  button:active,
+  .action-btn:active,
+  .mobile-nav-btn:active,
+  .icon-pill:active {
+    transform: scale(0.97);
+    transition: transform 120ms ease;
+  }
+}
