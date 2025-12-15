@@ -210,7 +210,9 @@ function renderPostActions(post, {
     discussionOnclick = null,
     includeReview = true,
     extraClass = '',
-    idPrefix = 'post'
+    idPrefix = 'post',
+    showCounts = true,
+    showLabels = true
 } = {}) {
     const actions = [];
     const likeCount = post.likes || 0;
@@ -218,19 +220,108 @@ function renderPostActions(post, {
     const computedReview = reviewDisplay || getReviewDisplay(window.myReviewCache ? window.myReviewCache[post.id] : null);
 
     const prefix = idPrefix ? `${idPrefix}-` : '';
+    const labelFlag = showLabels !== false;
+    const countFlag = showCounts !== false;
 
-    actions.push(`<button id="${prefix}like-btn-${post.id}" data-post-id="${post.id}" data-action="like" class="action-btn" aria-label="Like (${likeCount})" onclick="window.toggleLike('${post.id}', event)" style="color: ${isLiked ? '#00f2ea' : 'inherit'}"><i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:${iconSize};"></i><span class="action-label"> Like ${likeCount}</span></button>`);
-    actions.push(`<button id="${prefix}dislike-btn-${post.id}" data-post-id="${post.id}" data-action="dislike" class="action-btn" aria-label="Dislike (${dislikeCount})" onclick="window.toggleDislike('${post.id}', event)" style="color: ${isDisliked ? '#ff3d3d' : 'inherit'}"><i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:${iconSize};"></i><span class="action-label"> Dislike ${dislikeCount}</span></button>`);
+    function buildActionButton({ id, action, label, iconClass, count = null, onclick, color = 'inherit', extraClasses = '' }) {
+        const countMarkup = (!labelFlag && countFlag && typeof count === 'number') ? `<span class="action-count">${count}</span>` : '';
+        const labelMarkup = labelFlag ? `<span class="action-label"> ${label}${countFlag && typeof count === 'number' ? ` ${count}` : ''}</span>` : '';
+        const aria = countFlag && typeof count === 'number' ? `${label} (${count})` : label;
+        return `<button id="${id}" data-post-id="${post.id}" data-action="${action}" data-show-labels="${labelFlag}" data-show-counts="${countFlag}" data-icon-size="${iconSize}" class="action-btn${extraClasses ? ' ' + extraClasses : ''}" aria-label="${aria}" onclick="${onclick}" style="color: ${color}"><i class="${iconClass}" style="font-size:${iconSize};"></i>${labelMarkup}${countMarkup}</button>`;
+    }
+
+    actions.push(buildActionButton({
+        id: `${prefix}like-btn-${post.id}`,
+        action: 'like',
+        label: 'Like',
+        iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`,
+        count: likeCount,
+        onclick: `window.toggleLike('${post.id}', event)`,
+        color: isLiked ? '#00f2ea' : 'inherit'
+    }));
+    actions.push(buildActionButton({
+        id: `${prefix}dislike-btn-${post.id}`,
+        action: 'dislike',
+        label: 'Dislike',
+        iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`,
+        count: dislikeCount,
+        onclick: `window.toggleDislike('${post.id}', event)`,
+        color: isDisliked ? '#ff3d3d' : 'inherit'
+    }));
     const discussionTarget = discussionOnclick || `window.openThread('${post.id}')`;
-    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="discuss" aria-label="${discussionLabel}" onclick="${discussionTarget}"><i class="ph ph-chat-circle" style="font-size:${iconSize};"></i><span class="action-label"> ${discussionLabel}</span></button>`);
-    actions.push(`<button class="action-btn" data-post-id="${post.id}" data-action="share" aria-label="Share" onclick="event.stopPropagation(); window.sharePost('${post.id}', event)"><i class="ph ph-paper-plane-tilt" style="font-size:${iconSize};"></i><span class="action-label"> Share</span></button>`);
-    actions.push(`<button id="${prefix}save-btn-${post.id}" data-post-id="${post.id}" data-action="save" class="action-btn" aria-label="${isSaved ? 'Saved' : 'Save'}" onclick="window.toggleSave('${post.id}', event)" style="color: ${isSaved ? '#00f2ea' : 'inherit'}"><i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:${iconSize};"></i><span class="action-label"> ${isSaved ? 'Saved' : 'Save'}</span></button>`);
+    actions.push(buildActionButton({
+        id: `${prefix}discuss-btn-${post.id}`,
+        action: 'discuss',
+        label: discussionLabel,
+        iconClass: 'ph ph-chat-circle',
+        count: null,
+        onclick: discussionTarget
+    }));
+    actions.push(buildActionButton({
+        id: `${prefix}share-btn-${post.id}`,
+        action: 'share',
+        label: 'Share',
+        iconClass: 'ph ph-paper-plane-tilt',
+        count: null,
+        onclick: `event.stopPropagation(); window.sharePost('${post.id}', event)`
+    }));
+    actions.push(buildActionButton({
+        id: `${prefix}save-btn-${post.id}`,
+        action: 'save',
+        label: isSaved ? 'Saved' : 'Save',
+        iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`,
+        count: null,
+        onclick: `window.toggleSave('${post.id}', event)`,
+        color: isSaved ? '#00f2ea' : 'inherit'
+    }));
 
     if (includeReview) {
-        actions.push(`<button id="${prefix}review-btn-${post.id}" class="action-btn review-action ${computedReview.className}" data-post-id="${post.id}" data-icon-size="${iconSize}" aria-label="${computedReview.label}" onclick="event.stopPropagation(); window.openPeerReview('${post.id}')"><i class="ph ph-scales" style="font-size:${iconSize};"></i><span class="action-label"> ${computedReview.label}</span></button>`);
+        actions.push(buildActionButton({
+            id: `${prefix}review-btn-${post.id}`,
+            action: 'review',
+            label: computedReview.label,
+            iconClass: 'ph ph-scales',
+            count: null,
+            onclick: `event.stopPropagation(); window.openPeerReview('${post.id}')`,
+            extraClasses: `review-action ${computedReview.className}`
+        }));
     }
 
     return `<div class="card-actions${extraClass ? ' ' + extraClass : ''}">${actions.join('')}</div>`;
+}
+
+function renderDiscussionActionsMobile(post, {
+    isLiked = false,
+    isDisliked = false,
+    isSaved = false,
+    reviewDisplay = null
+} = {}) {
+    const likeCount = post.likes || 0;
+    const dislikeCount = post.dislikes || 0;
+    const commentCount = typeof post.comments === 'number' ? post.comments : (Array.isArray(post.comments) ? post.comments.length : (post.commentCount ?? post.commentsCount ?? 0));
+    const shareCount = typeof post.shares === 'number' ? post.shares : (post.shareCount ?? 0);
+    const saveCount = typeof post.saves === 'number' ? post.saves : (post.saveCount ?? 0);
+    const computedReview = reviewDisplay || getReviewDisplay(window.myReviewCache ? window.myReviewCache[post.id] : null);
+
+    function build(idSuffix, label, iconClass, count, onclick, { activeColor = null, extraClasses = '' } = {}) {
+        const aria = typeof count === 'number' && count !== null ? `${label} (${count})` : label;
+        const colorStyle = activeColor ? ` style="color:${activeColor}"` : '';
+        const countMarkup = typeof count === 'number' ? `<span class="action-count">${count}</span>` : '<span class="action-count"></span>';
+        return `<button id="thread-${idSuffix}-${post.id}" class="discussion-action-btn${extraClasses ? ' ' + extraClasses : ''}" data-show-labels="true" data-show-counts="true" data-icon-size="1.2rem" onclick="${onclick}" aria-label="${aria}"${colorStyle}><i class="${iconClass}"></i><span class="action-label"> ${label}</span>${countMarkup}</button>`;
+    }
+
+    return `<div class="discussion-actions">
+        <div class="discussion-action-row">
+            ${build('like-btn', 'Like', `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, likeCount, `window.toggleLike('${post.id}', event)`, { activeColor: isLiked ? '#00f2ea' : null })}
+            ${build('dislike-btn', 'Dislike', `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, dislikeCount, `window.toggleDislike('${post.id}', event)`, { activeColor: isDisliked ? '#ff3d3d' : null })}
+            ${build('share-btn', 'Share', 'ph ph-paper-plane-tilt', shareCount, `event.stopPropagation(); window.sharePost('${post.id}', event)`)}
+        </div>
+        <div class="discussion-action-row">
+            ${build('discuss-btn', 'Comment', 'ph ph-chat-circle', commentCount, `document.getElementById('thread-input').focus()`)}
+            ${build('save-btn', isSaved ? 'Saved' : 'Save', `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, saveCount, `window.toggleSave('${post.id}', event)`, { activeColor: isSaved ? '#00f2ea' : null })}
+            ${build('review-btn', computedReview.label, 'ph ph-scales', null, `event.stopPropagation(); window.openPeerReview('${post.id}')`, { extraClasses: computedReview.className })}
+        </div>
+    </div>`;
 }
 
 function applyReviewButtonState(buttonEl, reviewValue) {
@@ -239,7 +330,12 @@ function applyReviewButtonState(buttonEl, reviewValue) {
     const iconSize = buttonEl.dataset.iconSize || '1.1rem';
     buttonEl.classList.remove(...REVIEW_CLASSES);
     if (className) buttonEl.classList.add(className);
-    buttonEl.innerHTML = `<i class="ph ph-scales" style="font-size:${iconSize};"></i> ${label}`;
+    const showLabels = buttonEl.dataset.showLabels !== 'false';
+    const showCounts = buttonEl.dataset.showCounts !== 'false';
+    const labelMarkup = showLabels ? `<span class="action-label"> ${label}</span>` : '';
+    const countMarkup = (!showLabels && showCounts) ? `<span class="action-count"></span>` : '';
+    buttonEl.innerHTML = `<i class="ph ph-scales" style="font-size:${iconSize};"></i>${labelMarkup}${countMarkup}`;
+    buttonEl.setAttribute('aria-label', label);
 }
 
 function applyMyReviewStylesToDOM() {
@@ -2531,8 +2627,11 @@ function getPostHTML(post) {
         const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
         const reviewDisplay = getReviewDisplay(myReview);
 
+        const accentColor = THEMES[post.category] || THEMES[currentCategory] || THEMES['For You'];
+        const mobileView = isMobileViewport();
+
         return `
-            <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid ${THEMES['For You']};">
+            <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
                         ${avatarHtml}
@@ -2562,7 +2661,7 @@ function getPostHTML(post) {
                     ${commentPreviewHtml}
                     ${savedTagHtml}
                 </div>
-                ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay })}
+                ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, showCounts: !mobileView, showLabels: !mobileView })}
             </div>`;
     } catch (e) {
         console.error("Error generating post HTML", e);
@@ -2646,34 +2745,36 @@ function refreshSinglePostUI(postId) {
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
-    if(likeBtn) {
-        likeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}`;
-        likeBtn.style.color = isLiked ? '#00f2ea' : 'inherit';
+    function renderActionButton(btn, { iconClass, label, count = null, activeColor = 'inherit' }) {
+        if (!btn) return;
+        const showLabels = btn.dataset.showLabels !== 'false';
+        const showCounts = btn.dataset.showCounts !== 'false';
+        const icon = `<i class="${iconClass}" style="font-size:${btn.dataset.iconSize || '1.1rem'};"></i>`;
+        const countMarkup = (!showLabels && showCounts && typeof count === 'number') ? `<span class="action-count">${count}</span>` : '';
+        const labelMarkup = showLabels ? `<span class="action-label"> ${label}${showCounts && typeof count === 'number' ? ` ${count}` : ''}</span>` : '';
+        const aria = showCounts && typeof count === 'number' ? `${label} (${count})` : label;
+        btn.innerHTML = `${icon}${labelMarkup}${countMarkup}`;
+        btn.style.color = activeColor;
+        btn.setAttribute('aria-label', aria);
     }
-    if(dislikeBtn) {
-        dislikeBtn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}`;
-        dislikeBtn.style.color = isDisliked ? '#ff3d3d' : 'inherit';
-    }
-    if(saveBtn) { 
-        // FIX: Ensure text toggles between Save and Saved
-        saveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}`; 
-        saveBtn.style.color = isSaved ? '#00f2ea' : 'inherit'; 
-    }
-    if(reviewBtn) {
+
+    renderActionButton(likeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
+    renderActionButton(dislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
+    renderActionButton(saveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', activeColor: isSaved ? '#00f2ea' : 'inherit' });
+    if (reviewBtn) {
         applyReviewButtonState(reviewBtn, myReview);
     }
 
     document.querySelectorAll(`[data-post-id="${postId}"]`).forEach(function(btn) {
         const action = btn.dataset.action;
-        if(action === 'like') {
-            btn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up" style="font-size:1.1rem;"></i> ${post.likes || 0}`;
-            btn.style.color = isLiked ? '#00f2ea' : 'inherit';
-        } else if(action === 'dislike') {
-            btn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down" style="font-size:1.1rem;"></i> ${post.dislikes || 0}`;
-            btn.style.color = isDisliked ? '#ff3d3d' : 'inherit';
-        } else if(action === 'save') {
-            btn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple" style="font-size:1.1rem;"></i> ${isSaved ? 'Saved' : 'Save'}`;
-            btn.style.color = isSaved ? '#00f2ea' : 'inherit';
+        if (action === 'like') {
+            renderActionButton(btn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
+        } else if (action === 'dislike') {
+            renderActionButton(btn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
+        } else if (action === 'save') {
+            renderActionButton(btn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', activeColor: isSaved ? '#00f2ea' : 'inherit' });
+        } else if (action === 'review') {
+            applyReviewButtonState(btn, myReview);
         }
     });
 
@@ -2683,20 +2784,25 @@ function refreshSinglePostUI(postId) {
     const threadSaveBtn = document.getElementById(`thread-save-btn-${postId}`);
     const threadTitle = document.getElementById('thread-view-title');
     const threadReviewBtn = document.getElementById(`thread-review-btn-${postId}`);
+    const threadSaveCount = post.saveCount ?? post.saves ?? null;
+
+    function updateThreadAction(btn, { iconClass, label, count = null, color = 'inherit' }) {
+        if (!btn) return;
+        const showLabels = btn.dataset.showLabels !== 'false';
+        const showCounts = btn.dataset.showCounts !== 'false';
+        const icon = `<i class="${iconClass}" style="font-size:${btn.dataset.iconSize || '1rem'};"></i>`;
+        const countMarkup = (!showLabels && showCounts && typeof count === 'number') ? `<span class="action-count">${count}</span>` : '';
+        const labelMarkup = showLabels ? `<span class="action-label"> ${label}${showCounts && typeof count === 'number' ? ` ${count}` : ''}</span>` : '';
+        const aria = showCounts && typeof count === 'number' ? `${label} (${count})` : label;
+        btn.innerHTML = `${icon}${labelMarkup}${countMarkup}`;
+        btn.style.color = color;
+        btn.setAttribute('aria-label', aria);
+    }
 
     if(threadTitle && threadTitle.dataset.postId === postId) {
-        if(threadLikeBtn) {
-            threadLikeBtn.innerHTML = `<i class="${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up"></i> <span style="font-size:1rem; margin-left:5px;">${post.likes || 0}</span>`;
-            threadLikeBtn.style.color = isLiked ? '#00f2ea' : 'inherit';
-        }
-        if(threadDislikeBtn) {
-            threadDislikeBtn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span style="font-size:1rem; margin-left:5px;">${post.dislikes || 0}</span>`;
-            threadDislikeBtn.style.color = isDisliked ? '#ff3d3d' : 'inherit';
-        }
-        if(threadSaveBtn) {
-            threadSaveBtn.innerHTML = `<i class="${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple"></i> <span style="font-size:1rem; margin-left:5px;">${isSaved ? 'Saved' : 'Save'}</span>`;
-            threadSaveBtn.style.color = isSaved ? '#00f2ea' : 'inherit';
-        }
+        updateThreadAction(threadLikeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, color: isLiked ? '#00f2ea' : 'inherit' });
+        updateThreadAction(threadDislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, color: isDisliked ? '#ff3d3d' : 'inherit' });
+        updateThreadAction(threadSaveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', count: threadSaveCount, color: isSaved ? '#00f2ea' : 'inherit' });
         if(threadReviewBtn) {
             applyReviewButtonState(threadReviewBtn, myReview);
         }
@@ -4083,6 +4189,10 @@ function renderThreadMainPost(postId) {
 
     const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
     const reviewDisplay = getReviewDisplay(myReview);
+    const mobileView = isMobileViewport();
+    const actionsHtml = mobileView
+        ? renderDiscussionActionsMobile(post, { isLiked, isDisliked, isSaved, reviewDisplay })
+        : renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1.2rem', discussionLabel: 'Comment', discussionOnclick: "document.getElementById('thread-input').focus()", extraClass: 'thread-action-row', idPrefix: 'thread' });
 
     // Updated Layout for Thread Main Post to match Feed Header logic
     container.innerHTML = `
@@ -4112,7 +4222,7 @@ function renderThreadMainPost(postId) {
             ${pollBlock}
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}</div>
-                        ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1.2rem', discussionLabel: 'Comment', discussionOnclick: "document.getElementById('thread-input').focus()", extraClass: 'thread-action-row', idPrefix: 'thread' })}
+                        ${actionsHtml}
 </div>
         </div>`;
 
@@ -4572,8 +4682,10 @@ window.renderDiscover = async function() {
                 const reviewDisplay = getReviewDisplay(myReview);
                 const locationBadge = renderLocationBadge(post.location);
                 const pollBlock = renderPollBlock(post);
+                const accentColor = THEMES[post.category] || THEMES['For You'];
+                const mobileView = isMobileViewport();
                 container.innerHTML += `
-                    <div class="social-card" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'}; cursor:pointer;" onclick="window.openThread('${post.id}')">
+                    <div class="social-card" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor}; cursor:pointer;" onclick="window.openThread('${post.id}')">
                         <div class="card-content" style="padding:1rem;">
                             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
                                 <div class="category-badge">${post.category}</div>
@@ -4586,7 +4698,7 @@ window.renderDiscover = async function() {
                             <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
                             ${locationBadge}
                             ${pollBlock}
-                            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem' })}
+                            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem', showCounts: !mobileView, showLabels: !mobileView })}
                         </div>
                     </div>`;
             });
@@ -4639,8 +4751,9 @@ window.renderDiscover = async function() {
                 const followLabel = isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic';
                 const followClass = isFollowingTopic ? 'following' : '';
                 const followButton = `<button class="follow-btn js-follow-topic-${topicClass} ${followClass}" data-topic="${escapeHtml(topicLabel)}" onclick="event.stopPropagation(); window.toggleFollow('${topicArg}', event)" style="padding:8px 12px;">${followLabel}</button>`;
+                const accentColor = cat.verified ? '#00f2ea' : 'var(--border)';
                 container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid ${cat.verified ? '#00f2ea' : 'var(--border)'};">
+                    <div class="social-card" style="padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
                         <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
                         <div style="flex:1;">
                             <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
@@ -4832,9 +4945,11 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     const bodyPreview = compact
         ? `<p class="profile-card-body post-body-text">${formattedBody}</p>`
         : `<p class="post-body-text">${formattedBody}</p>`;
+    const accentColor = THEMES[post.category] || THEMES[currentCategory] || THEMES['For You'];
+    const mobileView = isMobileViewport();
 
     return `
-        <div class="${cardClass}" style="border-left: 2px solid ${THEMES[post.category] || 'transparent'};${compact ? 'min-width:260px;' : ''}">
+        <div class="${cardClass}" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};${compact ? 'min-width:260px;' : ''}">
             <div class="card-content" style="padding-top:1rem; cursor: pointer;" onclick="window.openThread('${post.id}')">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
                     <div class="category-badge">${escapeHtml(post.category || '')}</div>
@@ -4851,7 +4966,7 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
                 ${pollBlock}
                 ${mediaContent}
             </div>
-            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: compact ? '0.95rem' : '1rem', idPrefix })}
+            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: compact ? '0.95rem' : '1rem', idPrefix, showCounts: !mobileView, showLabels: !mobileView })}
         </div>
     `;
 }
@@ -5413,6 +5528,16 @@ function formatDateTime(ts) {
     return formatted.replace(', ', ' ');
 }
 
+function formatMessageHoverTimestamp(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return '';
+    const now = new Date();
+    if (isSameDay(date, now)) {
+        return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    return formatDateTime(date);
+}
+
 function isSameDay(a, b) {
     return a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
@@ -5432,18 +5557,21 @@ function formatMessageTimeLabel(ts) {
     return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function needsGapDivider(prevDate, currentDate) {
-    if (!prevDate || !currentDate) return true;
-    const isNewDay = !isSameDay(prevDate, currentDate);
+function needsTimeGapDivider(prevDate, currentDate) {
+    if (!prevDate || !currentDate) return false;
+    if (!isSameDay(prevDate, currentDate)) return false;
     const diff = currentDate.getTime() - prevDate.getTime();
-    return isNewDay || diff >= 3 * 60 * 60 * 1000;
+    return diff >= 3 * 60 * 60 * 1000;
 }
 
-function formatGapDivider(prevDate, currentDate) {
+function formatTimeGapDivider(currentDate) {
     if (!currentDate) return '';
-    const isNewDay = prevDate ? !isSameDay(prevDate, currentDate) : true;
-    if (isNewDay) return formatDateTime(currentDate);
     return currentDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function isMobileViewport() {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia && window.matchMedia('(max-width: 820px)').matches;
 }
 
 function isNearBottom(el, threshold = 80) {
@@ -5665,6 +5793,7 @@ function renderMessages(msgs = [], convo = {}) {
     body.innerHTML = '';
 
     let lastTimestamp = null;
+    let lastDateDivider = null;
     let lastSenderId = null;
     let latestSelfMessage = null;
     const fragment = document.createDocumentFragment();
@@ -5674,17 +5803,25 @@ function renderMessages(msgs = [], convo = {}) {
 
     msgs.forEach(function (msg, idx) {
         const createdDate = toDateSafe(msg.createdAt) || new Date();
-        if (!lastTimestamp || needsGapDivider(lastTimestamp, createdDate)) {
+        const isNewDay = !lastDateDivider || !isSameDay(lastDateDivider, createdDate);
+        if (isNewDay) {
+            const dateDivider = document.createElement('div');
+            dateDivider.className = 'message-date-divider';
+            dateDivider.textContent = formatChatDateLabel(createdDate);
+            fragment.appendChild(dateDivider);
+            lastDateDivider = createdDate;
+        } else if (needsTimeGapDivider(lastTimestamp, createdDate)) {
             const divider = document.createElement('div');
             divider.className = 'message-time-divider';
-            divider.textContent = formatGapDivider(lastTimestamp, createdDate);
+            divider.textContent = formatTimeGapDivider(createdDate);
             fragment.appendChild(divider);
         }
         lastTimestamp = createdDate;
 
         const nextMsg = msgs[idx + 1];
         const nextDate = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()) : null;
-        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || (nextDate && needsGapDivider(createdDate, nextDate)));
+        const nextIsNewDay = nextDate ? !isSameDay(createdDate, nextDate) : false;
+        const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || nextIsNewDay || (nextDate && needsTimeGapDivider(createdDate, nextDate)));
         const isSelf = msg.senderId === currentUser?.uid;
         const row = document.createElement('div');
         row.className = 'message-row ' + (isSelf ? 'self' : 'other');
@@ -5754,7 +5891,7 @@ function renderMessages(msgs = [], convo = {}) {
             const replyHeader = document.createElement('div');
             replyHeader.className = 'reply-header';
             replyHeader.innerHTML = `<strong>${escapeHtml(msg.replyToSenderId || 'Reply')}</strong> — ${escapeHtml((msg.replyToSnippet || '').slice(0, 140))}`;
-            replyHeader.onclick = function () { scrollToMessageById(msg.replyToMessageId); };
+            replyHeader.onclick = function (e) { e.stopPropagation(); scrollToMessageById(msg.replyToMessageId); };
             bubble.appendChild(replyHeader);
         }
 
@@ -5775,7 +5912,7 @@ function renderMessages(msgs = [], convo = {}) {
                 } else {
                     tile.innerHTML = '<div class="attachment-icon"><i class="ph ph-paperclip"></i></div>';
                 }
-                tile.onclick = function () { openFullscreenMedia(att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
+                tile.onclick = function (e) { e.stopPropagation(); openFullscreenMedia(att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
                 attachmentRow.appendChild(tile);
             });
             bubble.appendChild(attachmentRow);
@@ -5783,12 +5920,7 @@ function renderMessages(msgs = [], convo = {}) {
 
         bubble.appendChild(contentWrap);
 
-        const actionsBtn = document.createElement('button');
-        actionsBtn.className = 'message-actions-button';
-        actionsBtn.setAttribute('aria-label', 'Message actions');
-        actionsBtn.innerHTML = '<i class="ph ph-dots-three"></i>';
-        actionsBtn.onclick = function (e) { e.stopPropagation(); showMessageActionsMenu(msg, actionsBtn, convo); };
-        bubble.appendChild(actionsBtn);
+        bubble.onclick = function (e) { e.stopPropagation(); showMessageActionsMenu(msg, bubble, convo); };
 
         const reactions = msg.reactions || {};
         const reactionTotal = Object.keys(reactions || {}).reduce(function (acc, emoji) { return acc + (reactions[emoji]?.length || 0); }, 0);
@@ -5802,7 +5934,7 @@ function renderMessages(msgs = [], convo = {}) {
                 const youReacted = users.includes(currentUser?.uid);
                 pill.className = 'reaction-pill' + (youReacted ? ' active' : '');
                 pill.textContent = `${emoji} ${users.length}`;
-                pill.onclick = function () { toggleReaction(convo.id || activeConversationId, msg.id, emoji, youReacted); };
+                pill.onclick = function (e) { e.stopPropagation(); toggleReaction(convo.id || activeConversationId, msg.id, emoji, youReacted); };
                 reactionRow.appendChild(pill);
             });
             bubbleWrap.appendChild(reactionRow);
@@ -5811,7 +5943,7 @@ function renderMessages(msgs = [], convo = {}) {
         const editedLabel = msg.editedAt ? ' · edited' : '';
         const time = document.createElement('div');
         time.className = 'message-meta-time ' + (isSelf ? 'self' : 'other');
-        time.textContent = `${formatDateTime(msg.createdAt) || ''}${editedLabel}`;
+        time.textContent = `${formatMessageHoverTimestamp(msg.createdAt) || ''}${editedLabel}`;
 
         row.oncontextmenu = function (e) { e.preventDefault(); showMessageActionsMenu(msg, bubble, convo); };
 
@@ -5861,17 +5993,24 @@ function deriveMessageStatus(convo = {}, message = {}) {
     const readMap = convo.lastReadAt || {};
     const deliveredMap = convo.lastDeliveredAt || {};
 
-    const allRead = others.every(function (uid) {
-        const ts = toDateSafe(readMap[uid]);
-        return ts && ts.getTime() >= msgTs;
-    });
-    if (allRead) return 'Read';
+    const readTimestamps = others.map(function (uid) { return toDateSafe(readMap[uid]); }).filter(Boolean);
+    const deliveredTimestamps = others.map(function (uid) { return toDateSafe(deliveredMap[uid]); }).filter(Boolean);
 
-    const allDelivered = others.every(function (uid) {
-        const ts = toDateSafe(deliveredMap[uid]);
-        return ts && ts.getTime() >= msgTs;
-    });
-    return allDelivered ? 'Delivered' : 'Sent';
+    const allRead = readTimestamps.length === others.length && readTimestamps.every(function (ts) { return ts.getTime() >= msgTs; });
+    if (allRead) {
+        const latestRead = new Date(Math.max.apply(null, readTimestamps.map(function (ts) { return ts.getTime(); })));
+        const label = formatDateTime(latestRead);
+        return label ? `Read at ${label}` : 'Read';
+    }
+
+    const allDelivered = deliveredTimestamps.length === others.length && deliveredTimestamps.every(function (ts) { return ts.getTime() >= msgTs; });
+    if (allDelivered) {
+        const latestDelivered = new Date(Math.max.apply(null, deliveredTimestamps.map(function (ts) { return ts.getTime(); })));
+        const label = formatDateTime(latestDelivered);
+        return label ? `Delivered at ${label}` : 'Delivered';
+    }
+
+    return 'Sent';
 }
 
 function scrollToMessageById(messageId) {
@@ -6092,16 +6231,30 @@ function closeMessageActionsMenu() {
     }
 }
 
+function resolvePrimaryImageAttachment(message = {}) {
+    if (message.type === 'image' && message.mediaURL) return { url: message.mediaURL, type: 'image' };
+    const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const imageAttachment = attachments.find(function (att) { return (att.type || '').includes('image') && att.url; });
+    if (imageAttachment) return { url: imageAttachment.url, type: 'image' };
+    if (message.mediaURL && ((message.mediaType || message.type || '').includes('image'))) return { url: message.mediaURL, type: 'image' };
+    return null;
+}
+
 function showMessageActionsMenu(message, anchor, convo = {}) {
     closeMessageActionsMenu();
     const menu = document.createElement('div');
     menu.className = 'message-actions-menu menu-surface';
-    const actions = [
+    const actions = [];
+    const primaryImage = resolvePrimaryImageAttachment(message);
+    if (primaryImage) {
+        actions.push({ label: 'View image', handler: function () { openFullscreenMedia(primaryImage.url, 'image'); } });
+    }
+    actions.push(
         { label: 'Reply', handler: function () { setReplyContext(message, 'reply', convo.id); } },
         { label: 'Quote', handler: function () { setReplyContext(message, 'quote', convo.id); } },
         { label: 'Forward', handler: function () { startForwardFlow(message); } },
         { label: 'React', handler: function () { showReactionPicker(convo.id || activeConversationId, message.id, anchor); } }
-    ];
+    );
     if (message.senderId === currentUser?.uid) {
         actions.push({ label: 'Edit', handler: function () { setReplyContext(message, 'edit', convo.id); } });
         actions.push({ label: 'Delete', handler: function () { deleteMessage(convo.id || activeConversationId, message.id); } });

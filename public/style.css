@@ -234,6 +234,12 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .action-btn { background: none; border: 1px solid transparent; color: var(--text-muted); cursor: pointer; display: flex; gap: 6px; font-weight: 600; align-items: center; padding: 6px 12px; border-radius: 8px; transition: 0.22s ease; position: relative; overflow: hidden; }
 .action-btn:hover { background: radial-gradient(circle at 20% 20%, rgba(0, 242, 234, 0.07), transparent 55%), var(--bg-hover); color: var(--primary); border-color: rgba(0, 242, 234, 0.25); box-shadow: 0 12px 24px rgba(0, 100, 130, 0.18); transform: translateY(-1px); }
 .action-btn:active { transform: translateY(0); box-shadow: 0 0 0 4px rgba(0, 242, 234, 0.08); }
+.action-count { font-size: 0.9rem; color: var(--text-muted); display: inline-flex; align-items: center; }
+.discussion-actions { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+.discussion-action-row { display:flex; gap:10px; flex-wrap:wrap; }
+.discussion-action-btn { display:inline-flex; align-items:center; gap:6px; background: var(--bg-hover); border:1px solid var(--border); border-radius:12px; padding:8px 10px; cursor:pointer; color: var(--text-main); }
+.discussion-action-btn .action-label { display:inline-flex; align-items:center; gap:4px; }
+.discussion-action-btn i { font-size:1.1rem; }
 
 .action-btn {
     background: none;
@@ -657,6 +663,14 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-compose .form-input { margin-bottom:0; height: 44px; display:flex; align-items:center; flex:1; }
 .message-compose .create-btn-sidebar { margin-top:0; height:44px; display:inline-flex; align-items:center; justify-content:center; padding: 0 16px; }
 .message-compose .icon-pill { height:44px; display:inline-flex; align-items:center; justify-content:center; padding:0 12px; }
+.message-header-actions .icon-pill { margin-left:auto; }
+
+@media (min-width: 821px) {
+    .message-thread-header-row { border-bottom: none; padding-bottom: 0.5rem; }
+    .message-header-tools { border-top:1px solid var(--border); margin: 0 1rem; padding-top: 0.75rem; }
+    .message-thread-header { border-bottom: none; }
+}
+.message-header-actions .icon-pill { margin-left:auto; }
 .conversation-item { padding:10px; border-radius:10px; cursor:pointer; display:flex; gap:10px; align-items:flex-start; border:1px solid var(--border); margin-bottom:8px; }
 .conversation-item.active { border-color: var(--primary); background: rgba(0,242,234,0.05); }
 .conversation-avatar-slot { flex:0 0 42px; display:flex; align-items:center; justify-content:center; }
@@ -677,15 +691,9 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
 .message-bubble { padding:10px 12px; border-radius:12px; max-width:100%; display:flex; flex-direction:column; gap:6px; position:relative; }
 .message-bubble.self { background: rgba(0,242,234,0.12); border:1px solid rgba(0,242,234,0.3); margin-left:auto; }
 .message-bubble.other { background: var(--bg-hover); border:1px solid var(--border); margin-right:auto; }
-.message-meta-time { font-size:0.75rem; color:var(--text-muted); text-align:left; opacity:0; transition:opacity 0.15s ease; position:absolute; top:100%; left:0; margin-top:2px; pointer-events:none; height: 50px; width: 300px; }
-.message-meta-time.self { text-align:right; left:auto; right:0; }
-
-@media (min-width: 821px) {
-    .message-bubble-wrap { padding-bottom: 0; }
-    .message-meta-time { top: 50%; transform: translateY(-50%); margin-top: 0; left: auto; right: auto; }
-    .message-meta-time.other { left: calc(100% + 8px); right: auto; text-align: left; }
-    .message-meta-time.self { right: calc(100% + 8px); left: auto; text-align: right; }
-}
+.message-meta-time { font-size:0.75rem; color:var(--text-muted); text-align:left; opacity:0; transition:opacity 0.15s ease; position:absolute; top:50%; transform: translateY(-50%); pointer-events:none; height:auto; width: 260px; display:flex; align-items:center; }
+.message-meta-time.other { left: calc(100% + 8px); right: auto; text-align: left; }
+.message-meta-time.self { right: calc(100% + 8px); left: auto; text-align: right; }
 .message-sender-label { font-size:0.75rem; color:var(--text-muted); margin-bottom:4px; }
 .message-status { font-size:0.8rem; color:var(--text-muted); margin-top:-6px; margin-bottom:8px; }
 .message-status.self { text-align:right; }
