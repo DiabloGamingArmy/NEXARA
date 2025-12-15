@@ -447,6 +447,7 @@
         </div>
     </div>
     <div class="mobile-app-bar__actions">
+        <button class="icon-btn" onclick="window.scrollTo({top:0, behavior:'smooth'});" aria-label="Scroll to top"><i class="ph ph-arrow-up"></i></button>
         <button class="icon-btn" onclick="window.toggleDiscoverSearch()" aria-label="Search"><i class="ph ph-magnifying-glass"></i></button>
         <button class="icon-btn" onclick="window.openMobileActionSheet()" aria-label="Create"><i class="ph ph-plus"></i></button>
         <button class="icon-btn" onclick="window.navigateTo('profile')" aria-label="Profile"><i class="ph ph-user"></i></button>
@@ -1062,14 +1063,6 @@
     <button class="mobile-nav-btn" data-view="messages"><i class="ph ph-chats"></i><span>Chats</span></button>
     <button class="mobile-nav-btn" data-view="profile"><i class="ph ph-user"></i><span>Profile</span></button>
 </nav>
-
-<button id="mobile-fab" class="mobile-fab" aria-label="Create" onclick="window.openMobileComposer()">
-    <i class="ph ph-plus"></i>
-</button>
-
-<button id="mobile-scroll-top" aria-label="Scroll to top" onclick="window.scrollTo({top:0, behavior:'smooth'});">
-    <i class="ph ph-arrow-up"></i>
-</button>
 
 <div id="mobile-action-sheet" class="mobile-action-sheet" role="dialog" aria-modal="true">
     <div class="mobile-sheet-backdrop" onclick="window.closeMobileActionSheet()"></div>

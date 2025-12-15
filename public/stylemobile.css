@@ -30,7 +30,8 @@
 
   .main-feed,
   .view-section {
-    padding: 0 12px 90px;
+    padding: 0 8px calc(var(--bottom-nav-height) + 70px);
+    box-sizing: border-box;
   }
 
   .mobile-bottom-nav {
@@ -42,37 +43,54 @@
     min-height: 44px;
   }
 
-  .mobile-fab {
-    display: flex;
-  }
-
-  /* Scroll to top helper */
+  .mobile-fab,
   #mobile-scroll-top {
-    position: fixed;
-    bottom: calc(var(--bottom-nav-height) + 24px);
-    right: 18px;
-    width: 46px;
-    height: 46px;
-    border-radius: 50%;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 242, 234, 0.15);
-    color: var(--primary);
-    border: 1px solid var(--border);
-    z-index: 85;
-    backdrop-filter: blur(10px);
+    display: none !important;
   }
 
-  #mobile-scroll-top.show {
-    display: inline-flex;
-  }
+  /* Scroll to top helper removed in favor of top-bar action */
 
   /* Feed cards */
   .social-card {
-    border-radius: 16px;
-    padding: 14px;
-    margin: 10px 8px;
+    border-radius: 14px;
+    margin: 10px 0;
+    width: 100%;
+    border-left: none !important;
+    box-shadow: 0 18px 28px -20px rgba(0, 242, 234, 0.35);
+  }
+
+  .card-actions {
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 8px 10px 4px;
+  }
+
+  .card-actions .action-btn {
+    flex: 0 0 auto;
+    justify-content: center;
+    padding: 10px;
+    min-width: 44px;
+  }
+
+  .card-actions .action-label {
+    display: none;
+  }
+
+  .card-header,
+  .card-content {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .card-content {
+    padding-bottom: 14px;
+  }
+
+  .post-body-text {
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 
   .top-filter-row {
@@ -92,6 +110,8 @@
     flex-direction: column;
     gap: 12px;
     height: calc(100dvh - var(--bottom-nav-height) - 90px);
+    width: 100%;
+    overflow-x: hidden;
   }
 
   .messages-sidebar {
@@ -147,7 +167,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding-bottom: calc(var(--bottom-nav-height) + 72px);
+    padding-bottom: calc(var(--bottom-nav-height) + 110px);
   }
 
   .message-compose {
@@ -155,7 +175,7 @@
     bottom: 0;
     background: rgba(10, 10, 12, 0.95);
     backdrop-filter: blur(10px);
-    padding: 10px 8px;
+    padding: 10px 8px calc(12px + env(safe-area-inset-bottom));
     gap: 8px;
   }
 

@@ -151,3 +151,9 @@ Discussion replies, timestamps, verified badge, and messaging polish (current)
   2) Confirm post/comment/reply timestamps display date + time everywhere.
   3) Verified users show the new badge beside their names in feed headers, comments, and message headers.
   4) Messages: hover shows time outside bubble (no empty gap), reactions only render when counts > 0, attachments preview before sending and can be removed; sent messages render attachments and clicking opens fullscreen; time dividers appear when gaps >= 3 hours or day changes.
+
+Mobile layout polishing (latest)
+- Files: public/stylemobile.css (mobile spacing overrides, action-row changes, composer safe-area padding), public/scripts/app.js (action label accessibility tweaks), public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (mobile app bar actions, removed floating FAB/scroll helper), info.txt.
+- Changes: removed the bottom-right mobile FAB and scroll helper; added a scroll-to-top icon in the mobile app bar; feed cards go edge-to-edge on mobile with the left accent suppressed and a soft bottom glow; post action buttons are icon-only in a single horizontal row using hidden .action-label spans for mobile; message layouts stay single column with sticky composer padding that accounts for the bottom nav and safe areas.
+- Classes/IDs: .action-label (text span hidden on mobile), body.mobile-thread-open (controls messages list/thread swap), .mobile-app-bar actions now include an arrow-up button; #mobile-fab/#mobile-scroll-top remain unused/hidden on mobile.
+- Manual mobile test notes: verify no floating + or scroll button blocks the bottom nav; use the new top-bar arrow to scroll to top; feed cards hug the viewport with intact formatting (white-space: pre-wrap); message composer remains visible while scrolling threads; desktop layouts stay unchanged.
