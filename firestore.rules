@@ -299,7 +299,12 @@ service cloud.firestore {
       }
 
       match /private/{docId} {
-        allow read, write: if isSignedIn() && liveStreamOwner(streamId) == request.auth.uid;
+        allow read, write: if isSignedIn() && (
+          (exists(/databases/$(database)/documents/liveStreams/$(streamId))
+            && get(/databases/$(database)/documents/liveStreams/$(streamId)).data.uid == request.auth.uid)
+          || (exists(resource) && resource.data.uid == request.auth.uid)
+          || (request.resource.data.uid == request.auth.uid)
+        );
       }
     }
 

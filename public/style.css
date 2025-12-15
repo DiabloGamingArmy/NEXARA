@@ -1313,7 +1313,6 @@ body { font-family: var(--font-main); background-color: var(--bg-body); color: v
     flex-direction: column;
     padding: 20px;
     gap: 16px;
-    overflow: hidden;
     min-height: 0;
     color: var(--text-main);
 }
@@ -1334,6 +1333,8 @@ body.go-live-open {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 
 #view-live-setup {
@@ -1438,7 +1439,7 @@ body.go-live-open {
     flex-direction: column;
     min-height: 0;
     gap: 14px;
-    overflow-y: auto;
+    overflow: visible;
     -webkit-overflow-scrolling: touch;
     padding-right: 6px;
 }
@@ -1511,10 +1512,29 @@ body.go-live-open {
 
 .go-live-status-outside {
     color: var(--gl-muted);
+    background: rgba(255, 255, 255, 0.06);
 }
 
-.go-live-status-outside.is-live {
-    color: var(--gl-accent);
+.go-live-status-outside.is-live,
+.go-live-status-outside.active-live {
+    color: #050608;
+    background: var(--primary);
+    box-shadow: 0 0 0 1px rgba(0, 210, 255, 0.35);
+}
+
+.go-live-status-outside.is-idle,
+.go-live-status-outside:not(.active-live) {
+    color: var(--gl-muted);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.go-live-visibility-pill {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.go-live-visibility-pill.is-active {
+    color: var(--gl-text);
+    border: 1px solid var(--gl-border);
 }
 
 .stream-health {
@@ -1580,7 +1600,7 @@ body.go-live-open {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.15) 45%, rgba(0, 0, 0, 0.65));
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.25), rgba(0, 0, 0, 0.1) 45%, rgba(0, 0, 0, 0.6));
 }
 
 .state-callout {
@@ -1603,16 +1623,6 @@ body.go-live-open {
 
 .preview-corner-status:not(.is-live) {
     color: var(--gl-muted);
-}
-
-.overlay-meta {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px;
-}
-
-.go-live-studio.ui-basic .basic-overlay-strip {
-    display: none !important;
 }
 
 .overlay-label {
@@ -1787,13 +1797,20 @@ body.go-live-open {
 .control-row {
     display: flex;
     gap: 10px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
 }
 
 .go-live-action-btn {
     min-height: 44px;
     align-items: center;
+    display: inline-flex;
+    justify-content: center;
+    width: auto;
+}
+
+.control-row .go-live-action-btn {
+    flex: 1;
 }
 
 .go-live-action-btn.btn-primary {
@@ -1943,6 +1960,10 @@ body.go-live-open {
     background: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.04) 6px, transparent 6px, transparent 12px);
 }
 
+.program-body {
+    background: repeating-linear-gradient(135deg, rgba(0, 200, 255, 0.05), rgba(0, 200, 255, 0.05) 6px, transparent 6px, transparent 12px);
+}
+
 .program-meta {
     display: flex;
     justify-content: space-between;
@@ -1954,10 +1975,19 @@ body.go-live-open {
 .live-indicator {
     padding: 6px 12px;
     border-radius: 999px;
-    background: linear-gradient(90deg, #ff3d5e, #ff7b7b);
-    color: white;
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--gl-text);
     font-weight: 800;
     letter-spacing: 0.3px;
+}
+
+.live-indicator.is-live {
+    background: linear-gradient(90deg, #ff3d5e, #ff7b7b);
+    color: #fff;
+}
+
+.live-indicator.is-idle {
+    color: var(--gl-muted);
 }
 
 .program-timer {
@@ -1978,6 +2008,35 @@ body.go-live-open {
     flex-wrap: wrap;
     border-top: 1px solid var(--gl-border);
     padding-top: 10px;
+}
+
+.scene-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 0.85rem;
+    color: var(--gl-muted);
+    margin-left: 6px;
+}
+
+.helper-link-row {
+    margin-top: 8px;
+}
+
+.text-link {
+    background: none;
+    border: none;
+    color: var(--gl-accent);
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    font-weight: 600;
+}
+
+.text-link:hover {
+    color: #69dfff;
 }
 
 .transition-buttons {
@@ -2026,6 +2085,7 @@ body.go-live-open {
     justify-content: space-between;
     align-items: center;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    cursor: pointer;
 }
 
 .scene-row:last-child,
@@ -2036,6 +2096,14 @@ body.go-live-open {
 .scene-row.active {
     background: rgba(255, 255, 255, 0.06);
     border-left: 3px solid var(--gl-accent);
+}
+
+.scene-row.program {
+    border-left-color: #ff5d7a;
+}
+
+.source-row.active {
+    background: rgba(0, 200, 255, 0.08);
 }
 
 .source-subpanel {
@@ -2084,6 +2152,16 @@ body.go-live-open {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+.mixer-fader {
+    width: 100%;
+    accent-color: var(--gl-accent);
+}
+
+.mixer-mute.active {
+    border-color: var(--gl-accent);
+    color: var(--gl-accent);
 }
 
 .stats-grid {
@@ -2158,6 +2236,8 @@ body.go-live-open {
     display: flex;
     flex-direction: column;
     gap: 10px;
+    position: static;
+    grid-column: 1 / -1;
 }
 
 .tab-row {
@@ -2190,6 +2270,10 @@ body.go-live-open {
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.35);
     padding: 12px;
+}
+
+.tab-panel[hidden] {
+    display: none;
 }
 
 .tab-panel:not(.show) {
