@@ -167,43 +167,6 @@ export class NexeraGoLiveController {
         this.updateEncoderTab();
     }
 
-    normalizeInputMode(value) {
-        const mode = (value || "").toString().toLowerCase();
-        if (mode === "screen") return "screen";
-        if (mode === "external") return "external";
-        return "camera";
-    }
-
-    setVisibility(nextVisibility) {
-        const visibility = nextVisibility === "private" ? "private" : "public";
-        this.formState.visibility = visibility;
-        this.updateVisibilityButtons();
-    }
-
-    handleInputModeChange(nextMode) {
-        const normalized = this.normalizeInputMode(nextMode);
-        const previous = this.inputMode;
-        this.formState.inputMode = normalized;
-        this.inputMode = normalized;
-
-        const matchingSource = this.sources.find((src) => src.type === normalized);
-        if (matchingSource) {
-            this.selectedSourceId = matchingSource.id;
-        }
-
-        if (previous !== normalized && this.stream) {
-            this.stream.getTracks().forEach((t) => t.stop());
-            this.stream = null;
-            if (this.previewVideo) this.previewVideo.srcObject = null;
-        }
-
-        this.writeStateIntoBasicForm();
-        this.writeStateIntoAdvancedForm();
-        this.syncSceneForInput();
-        this.renderSources();
-        this.updateEncoderTab();
-    }
-
     // ----------------------------------------------
     // UI Bootstrapping
     // ----------------------------------------------

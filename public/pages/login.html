@@ -926,7 +926,12 @@
                     <div id="conversation-list" class="conversation-list"></div>
                 </div>
                 <div class="messages-thread">
-                    <div id="message-header" class="message-thread-header">Select a conversation</div>
+                    <div class="message-thread-header-row">
+                        <button id="mobile-thread-back" class="mobile-thread-back" type="button" onclick="window.mobileMessagesBack()" aria-label="Back to conversations" style="display:none;">
+                            <i class="ph ph-arrow-left"></i> Back
+                        </button>
+                        <div id="message-header" class="message-thread-header">Select a conversation</div>
+                    </div>
                     <div class="message-header-tools">
                         <input id="conversation-search" class="form-input" placeholder="Search in conversation" oninput="window.handleConversationSearch(this.value)">
                         <div class="search-nav">
@@ -942,8 +947,9 @@
                         </div>
                     </div>
                     <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
+                    <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;"></div>
                     <div class="message-compose">
-                        <input type="file" id="message-media" accept="image/*" style="display:none;">
+                        <input type="file" id="message-media" accept="image/*,video/*" multiple style="display:none;" onchange="window.handleMessageFileChange(event)">
                         <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i class="ph ph-image"></i></button>
                         <input id="message-input" class="form-input" placeholder="Message" />
                         <button class="create-btn-sidebar" style="width:auto;" onclick="window.sendMessage()">Send</button>

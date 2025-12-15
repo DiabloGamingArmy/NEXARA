@@ -139,3 +139,15 @@ How to test (mobile focus)
 - Feed: cards are single column; topic bar scrolls horizontally; the scroll-to-top button appears after scrolling down and returns to the top smoothly.
 - Profile/Discover: layouts collapse to single column; tabs/quick filters remain sticky and scrollable horizontally; follow buttons remain tappable (44px+ touch targets).
 - Go Live: defaults to Basic on mobile with only Camera/Screen options. Advanced option is disabled; external encoder link is disabled. Controls and preview stack vertically and remain scrollable without blocking the bottom nav; start/stop still function.
+
+Discussion replies, timestamps, verified badge, and messaging polish (current)
+- Files: public/scripts/app.js (reply pagination, timestamp formatter, verified badge icon, message rendering/attachments/time dividers), public/style.css (reply spacing/thread line, message hover time, attachments styling, verified badge color), public/pages/feed.html, public/pages/admin.html, public/pages/login.html, public/pages/profile.html (message composer preview + file input updates).
+- Replies: replies collapse by default with “View replies (N)” and lazy loading 4 at a time with optional “View more” and “Hide replies”; tighter indentation with a subtle thread line and compact spacing.
+- Timestamps: posts/comments/replies now show date + time consistently via formatDateTime().
+- Verified badge: replaced with a clean check-circle glyph using theme primary color across feed, comments, and messages.
+- Messages: hover time now sits outside bubbles, reactions hide when empty, 3+ hour/day gaps insert time dividers, attachments support multiple files with pre-send preview/removal and render as thumbnails with fullscreen open; file inputs accept images/video and allow multiple selection; time labels and actions don’t reserve bubble space.
+- Manual checks:
+  1) Open a discussion: replies are collapsed; clicking “View replies (N)” loads 4 at a time and shows “View more replies” until exhausted; “Hide replies” collapses without reload.
+  2) Confirm post/comment/reply timestamps display date + time everywhere.
+  3) Verified users show the new badge beside their names in feed headers, comments, and message headers.
+  4) Messages: hover shows time outside bubble (no empty gap), reactions only render when counts > 0, attachments preview before sending and can be removed; sent messages render attachments and clicking opens fullscreen; time dividers appear when gaps >= 3 hours or day changes.
