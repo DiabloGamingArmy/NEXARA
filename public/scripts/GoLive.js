@@ -103,7 +103,14 @@ export class NexeraGoLiveController {
             music: { muted: false, gain: 70 },
             aux: { muted: false, gain: 70 },
         };
-        this.meterTimer = null;
+        this.meterRaf = null;
+        this.audioContext = null;
+        this.meterAnalyser = null;
+        this.meterSourceNode = null;
+        this.meterGainNode = null;
+        this.meterDestination = null;
+        this.processedAudioStream = null;
+        this.activeMeterChannel = null;
 
         this.session = null;
         this.client = null;
@@ -154,6 +161,7 @@ export class NexeraGoLiveController {
         const previous = this.inputMode;
         this.formState.inputMode = normalized;
         this.inputMode = normalized;
+        this.activeMeterChannel = this.getActiveAudioChannel();
 
         const matchingSource = this.sources.find((src) => src.type === normalized);
         if (matchingSource) {
@@ -163,6 +171,8 @@ export class NexeraGoLiveController {
         if (previous !== normalized && this.stream) {
             this.stream.getTracks().forEach((t) => t.stop());
             this.stream = null;
+            this.teardownAudioGraph();
+            this.renderMeterLevels();
             if (this.previewVideo) this.previewVideo.srcObject = null;
         }
 
@@ -171,6 +181,12 @@ export class NexeraGoLiveController {
         this.syncSceneForInput();
         this.renderSources();
         this.updateEncoderTab();
+
+        if (this.stream) {
+            this.setupAudioPipeline(this.stream);
+        } else {
+            this.renderMeterLevels();
+        }
     }
 
     // ----------------------------------------------
@@ -1111,6 +1127,70 @@ export class NexeraGoLiveController {
         if (micGain) micGain.value = this.mixerState.mic.gain;
         if (systemGain) systemGain.value = this.mixerState.system.gain;
         this.updateMixerUi();
+        this.applyAudioGainToGraph();
+    }
+
+    async setupAudioPipeline(stream) {
+        this.teardownAudioGraph();
+        const track = stream?.getAudioTracks?.()[0];
+        this.activeMeterChannel = this.getActiveAudioChannel();
+        if (!track || !this.activeMeterChannel) {
+            this.renderMeterLevels();
+            return;
+        }
+
+        this.audioContext = this.audioContext || new AudioContext();
+        if (this.audioContext.state === "suspended") {
+            try {
+                await this.audioContext.resume();
+            } catch (_) {
+                // ignore resume failures; meters will remain idle
+            }
+        }
+
+        const source = this.audioContext.createMediaStreamSource(new MediaStream([track]));
+        const gainNode = this.audioContext.createGain();
+        const analyser = this.audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        const destination = this.audioContext.createMediaStreamDestination();
+
+        source.connect(gainNode);
+        gainNode.connect(analyser);
+        analyser.connect(destination);
+
+        this.meterSourceNode = source;
+        this.meterGainNode = gainNode;
+        this.meterAnalyser = analyser;
+        this.meterDestination = destination;
+        this.processedAudioStream = destination.stream;
+
+        this.applyAudioGainToGraph();
+        this.startMeterAnimation();
+    }
+
+    teardownAudioGraph() {
+        this.stopMeterAnimation();
+        [this.meterSourceNode, this.meterGainNode, this.meterAnalyser].forEach((node) => {
+            try {
+                node?.disconnect?.();
+            } catch (_) {
+                /* noop */
+            }
+        });
+        if (this.meterDestination?.stream) {
+            this.meterDestination.stream.getTracks().forEach((t) => t.stop());
+        }
+        this.meterSourceNode = null;
+        this.meterGainNode = null;
+        this.meterAnalyser = null;
+        this.meterDestination = null;
+        this.processedAudioStream = null;
+        this.activeMeterChannel = null;
+    }
+
+    getBroadcastAudioTrack(fallbackTrack) {
+        const processed = this.processedAudioStream?.getAudioTracks?.()[0];
+        return processed || fallbackTrack || null;
     }
 
     bindExternalBridge() {
@@ -1219,6 +1299,7 @@ export class NexeraGoLiveController {
                     this.persistAudioGains({ [channel]: next });
                 }
                 this.updateMixerUi();
+                this.applyAudioGainToGraph();
             });
         });
 
@@ -1229,11 +1310,33 @@ export class NexeraGoLiveController {
             btn.addEventListener("click", () => {
                 this.mixerState[channel].muted = !this.mixerState[channel].muted;
                 this.updateMixerUi();
+                this.applyAudioGainToGraph();
             });
         });
 
         this.updateMixerUi();
+        this.applyAudioGainToGraph();
         this.startMeterAnimation();
+    }
+
+    getActiveAudioChannel() {
+        if (this.inputMode === "screen") return "system";
+        if (this.inputMode === "external") return null;
+        return "mic";
+    }
+
+    renderMeterLevels(levels = {}) {
+        const defaults = { mic: 0, system: 0, music: 0, aux: 0 };
+        const merged = { ...defaults, ...levels };
+        Object.entries(merged).forEach(([channel, value]) => {
+            const fill = document.querySelector(`.mixer-strip[data-channel="${channel}"] .meter-fill`);
+            const state = this.mixerState[channel] || {};
+            if (!fill) return;
+            const clamped = Math.max(0, Math.min(100, value));
+            const effective = state.muted ? 0 : clamped;
+            fill.style.setProperty("--meter-fill", `${effective}%`);
+            fill.style.opacity = state.muted ? "0.3" : "1";
+        });
     }
 
     updateMixerUi() {
@@ -1241,42 +1344,71 @@ export class NexeraGoLiveController {
             const strip = document.querySelector(`.mixer-strip[data-channel="${channel}"]`);
             if (!strip) return;
             const fader = strip.querySelector(".mixer-fader");
-            const meter = strip.querySelector(".meter-fill");
             const muteBtn = strip.querySelector(".mixer-mute");
             if (fader) {
                 fader.value = state.gain;
-            }
-            if (meter) {
-                const width = state.muted ? 0 : Math.min(100, state.gain);
-                meter.style.setProperty("--meter-fill", `${width}%`);
-                meter.style.opacity = state.muted ? "0.3" : "1";
             }
             if (muteBtn) {
                 muteBtn.classList.toggle("active", state.muted);
                 muteBtn.textContent = state.muted ? "Unmute" : "Mute";
             }
         });
+        this.renderMeterLevels();
+    }
+
+    applyAudioGainToGraph() {
+        const channel = this.activeMeterChannel || this.getActiveAudioChannel();
+        const state = channel ? this.mixerState[channel] : null;
+        if (this.meterGainNode && state) {
+            this.meterGainNode.gain.value = state.muted ? 0 : (state.gain ?? 100) / 100;
+        }
     }
 
     startMeterAnimation() {
-        if (this.meterTimer) return;
-        this.meterTimer = window.setInterval(() => {
-            Object.entries(this.mixerState).forEach(([channel, state]) => {
-                if (state.muted) return;
-                const fill = document.querySelector(`.mixer-strip[data-channel="${channel}"] .meter-fill`);
-                if (fill) {
-                    const jitter = Math.max(5, Math.min(100, state.gain + Math.random() * 10 - 5));
-                    fill.style.setProperty("--meter-fill", `${jitter}%`);
-                }
+        this.stopMeterAnimation();
+        const analyser = this.meterAnalyser;
+        const activeChannel = this.getActiveAudioChannel();
+        if (!analyser || !activeChannel) {
+            this.renderMeterLevels();
+            return;
+        }
+
+        const buffer = new Uint8Array(analyser.fftSize || 512);
+        const animate = () => {
+            if (!this.meterAnalyser) {
+                this.renderMeterLevels();
+                return;
+            }
+            this.meterAnalyser.getByteTimeDomainData(buffer);
+            let sumSquares = 0;
+            buffer.forEach((v) => {
+                const normalized = (v - 128) / 128;
+                sumSquares += normalized * normalized;
             });
-        }, 800);
+            const rms = Math.sqrt(sumSquares / buffer.length);
+            const level = Math.min(100, Math.max(0, rms * 140));
+            const state = this.mixerState[activeChannel] || {};
+            const adjusted = state.muted ? 0 : level * (state.gain ?? 100) / 100;
+
+            this.renderMeterLevels({
+                mic: activeChannel === "mic" ? adjusted : 0,
+                system: activeChannel === "system" ? adjusted : 0,
+                music: 0,
+                aux: 0,
+            });
+
+            this.meterRaf = window.requestAnimationFrame(animate);
+        };
+
+        animate();
     }
 
     stopMeterAnimation() {
-        if (this.meterTimer) {
-            window.clearInterval(this.meterTimer);
-            this.meterTimer = null;
+        if (this.meterRaf) {
+            window.cancelAnimationFrame(this.meterRaf);
+            this.meterRaf = null;
         }
+        this.renderMeterLevels();
     }
 
     syncSceneForInput() {
@@ -1656,6 +1788,8 @@ export class NexeraGoLiveController {
         if (this.previewVideo) {
             this.previewVideo.srcObject = stream;
         }
+
+        await this.setupAudioPipeline(stream);
     }
 
     async safeStart() {
@@ -1840,6 +1974,8 @@ export class NexeraGoLiveController {
 
         this.previewVideo.srcObject = this.stream;
 
+        await this.setupAudioPipeline(this.stream);
+
         // Split tracks into clean MediaStreams for IVS SDK
         const vTrack = this.stream.getVideoTracks()[0] || null;
         const aTrack = this.stream.getAudioTracks()[0] || null;
@@ -1849,7 +1985,8 @@ export class NexeraGoLiveController {
         }
 
         const videoStream = new MediaStream([vTrack]);
-        const audioStream = aTrack ? new MediaStream([aTrack]) : null;
+        const broadcastAudio = this.getBroadcastAudioTrack(aTrack);
+        const audioStream = broadcastAudio ? new MediaStream([broadcastAudio]) : null;
 
         // IMPORTANT: provide a name AND a VideoComposition
         await this.client.addVideoInputDevice(videoStream, "video1", { index: 0 });
@@ -1935,6 +2072,8 @@ export class NexeraGoLiveController {
             this.stream = null;
         }
 
+        this.teardownAudioGraph();
+
         if (this.unsubscribeLiveDoc) {
             this.unsubscribeLiveDoc();
             this.unsubscribeLiveDoc = null;
@@ -1956,7 +2095,6 @@ export class NexeraGoLiveController {
         this.liveStartTime = null;
         this.stopStatsPolling();
         this.stopMeterAnimation();
-        this.startMeterAnimation();
         this.renderSessionDetails();
         this.renderStats({ note: "Idle" });
         this.updateEncoderTab();

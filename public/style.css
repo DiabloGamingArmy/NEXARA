@@ -2013,37 +2013,6 @@ body.go-live-open {
     gap: 12px;
     flex: 1 1 auto;
     min-height: 0;
-    align-items: stretch;
-    grid-auto-rows: minmax(0, auto);
-}
-
-.advanced-main-grid > .gl-panel {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-.advanced-grid-scenes { grid-area: scenes; }
-.advanced-grid-sources { grid-area: sources; }
-.advanced-grid-mixer { grid-area: mixer; }
-.advanced-grid-stats { grid-area: stats; }
-.advanced-grid-controls { grid-area: controls; }
-.advanced-grid-session { grid-area: session; }
-.advanced-grid-tabs { grid-area: tabs; }
-
-.go-live-studio.ui-advanced .advanced-config {
-    width: 100%;
-    margin: 0;
-}
-
-.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
-    height: 240px;
-    min-height: 220px;
-    max-height: 280px;
-    position: relative;
-    z-index: auto;
-    overflow: hidden;
 }
 
 .session-body {
