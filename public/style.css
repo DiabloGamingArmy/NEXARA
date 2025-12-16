@@ -1977,60 +1977,45 @@ body.go-live-open {
 }
 
 .advanced-layout {
-    display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr) 220px;
-    gap: 12px;
-    flex: 0 0 auto;
-    min-height: auto;
-}
-
-.advanced-stage,
-.go-live-studio.ui-advanced .advanced-config,
-.go-live-studio.ui-advanced .advanced-grid,
-.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
-    grid-column: 1 / -1;
-}
-
-.advanced-stage {
-    min-height: 0;
-    height: 100%;
-}
-
-.advanced-stage,
-.go-live-studio.ui-advanced .advanced-config,
-.go-live-studio.ui-advanced .advanced-grid,
-.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
-    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
 }
 
 .advanced-stage {
     min-height: 0;
 }
 
-.advanced-grid {
+.advanced-main-grid {
     display: grid;
-    grid-template-columns: 1.1fr 1fr;
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+        "scenes mixer"
+        "sources stats"
+        "controls session"
+        "tabs tabs";
+    gap: 14px;
     min-height: 0;
     align-items: start;
 }
 
-.go-live-studio.ui-advanced .advanced-config {
-    grid-row: 2;
-    max-width: 780px;
-    width: 100%;
-    margin: 0 auto;
-}
+.advanced-grid-scenes { grid-area: scenes; }
+.advanced-grid-sources { grid-area: sources; }
+.advanced-grid-mixer { grid-area: mixer; }
+.advanced-grid-stats { grid-area: stats; }
+.advanced-grid-controls { grid-area: controls; }
+.advanced-grid-session { grid-area: session; }
+.advanced-grid-tabs { grid-area: tabs; }
 
-.go-live-studio.ui-advanced .advanced-grid {
-    grid-row: 3;
-    min-height: 0;
+.go-live-studio.ui-advanced .advanced-config {
+    width: 100%;
+    margin: 0;
 }
 
 .go-live-studio.ui-advanced #advanced-tabs-gl-pane {
-    grid-row: 4;
-    height: 100%;
-    min-height: 0;
+    height: 240px;
+    min-height: 220px;
+    max-height: 280px;
     position: relative;
     z-index: auto;
     overflow: hidden;
@@ -2082,7 +2067,8 @@ body.go-live-open {
     border: 1px solid var(--gl-border);
     border-radius: 12px;
     position: relative;
-    min-height: 230px;
+    aspect-ratio: 16 / 9;
+    min-height: 260px;
     overflow: hidden;
 }
 
