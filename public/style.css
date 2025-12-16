@@ -1526,6 +1526,18 @@ body.go-live-open {
     padding-right: 6px;
 }
 
+.go-live-studio.ui-advanced {
+    overflow: hidden;
+}
+
+.go-live-studio.ui-advanced .go-live-views,
+.go-live-studio.ui-advanced #go-live-advanced-view {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
 .go-live-studio.ui-basic .topbar-status-chip {
     display: none;
 }
@@ -1968,11 +1980,12 @@ body.go-live-open {
 }
 
 .advanced-layout {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) 220px;
     gap: 12px;
     flex: 1;
     min-height: 0;
+    height: 100%;
 }
 
 .advanced-grid {
@@ -1980,6 +1993,24 @@ body.go-live-open {
     grid-template-columns: 0.9fr 1.4fr 0.95fr;
     gap: 12px;
     min-height: 0;
+}
+
+.go-live-studio.ui-advanced .advanced-config {
+    grid-row: 1;
+}
+
+.go-live-studio.ui-advanced .advanced-grid {
+    grid-row: 2;
+    min-height: 0;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
+    grid-row: 3;
+    height: 100%;
+    min-height: 0;
+    position: relative;
+    z-index: auto;
+    overflow: hidden;
 }
 
 .advanced-card {
@@ -2320,6 +2351,7 @@ body.go-live-open {
     gap: 10px;
     position: static;
     grid-column: 1 / -1;
+    min-height: 0;
 }
 
 .tab-row {
@@ -2347,11 +2379,22 @@ body.go-live-open {
     gap: 10px;
 }
 
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panels {
+    min-height: 0;
+    flex: 1;
+    grid-auto-rows: 1fr;
+}
+
 .tab-panel {
     border: 1px solid var(--gl-border);
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.35);
     padding: 12px;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panel {
+    height: 100%;
+    overflow: auto;
 }
 
 .tab-panel[hidden] {
@@ -2369,6 +2412,11 @@ body.go-live-open {
     color: var(--gl-muted);
     max-height: 200px;
     overflow: auto;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane .log-feed {
+    height: 100%;
+    max-height: none;
 }
 
 .placeholder-block {
