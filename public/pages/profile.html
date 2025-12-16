@@ -563,6 +563,7 @@
                 </div>
             </div>
             <div class="topbar-right">
+                <button class="icon-pill ghost" type="button" id="refresh-permissions-btn">Refresh Web Permissions</button>
                 <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
                 <select id="go-live-ui-config" class="go-live-select form-input">
                     <option value="basic">Basic</option>
@@ -622,13 +623,14 @@
                                 <div class="config-section">
                                     <div class="section-heading">Source</div>
                                     <p class="helper-text">Choose what you want to share. You can swap inputs while previewing.</p>
-                                    <div class="gl-field">
-                                        <label class="gl-label" for="input-mode">Input mode</label>
-                                        <select id="input-mode" class="form-input">
-                                            <option value="camera">Camera</option>
-                                            <option value="screen">Screen Share</option>
-                                        </select>
-                                    </div>
+                            <div class="gl-field">
+                                <label class="gl-label" for="input-mode">Input mode</label>
+                                <select id="input-mode" class="form-input">
+                                    <option value="camera">Camera</option>
+                                    <option value="screen">Screen Share</option>
+                                    <option value="program">Preview/Program</option>
+                                </select>
+                            </div>
                                     <div class="helper-link-row">
                                         <button class="text-link" type="button" id="go-advanced-external">Use OBS / External encoder (Advanced)</button>
                                     </div>
@@ -695,12 +697,14 @@
         <div class="gl-panel advanced-card program-card advanced-stage">
             <div class="program-grid">
                 <div class="monitor preview-monitor">
-                    <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span></div>
+                    <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span><span class="scene-pill monitor-badge" id="preview-source-label">Source</span></div>
                     <div class="monitor-body" id="live-preview-slot-advanced"></div>
                 </div>
                 <div class="monitor program-monitor">
-                    <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span></div>
-                    <div class="monitor-body program-body"></div>
+                    <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span><span class="scene-pill monitor-badge" id="program-source-label">Source</span></div>
+                    <div class="monitor-body program-body" id="program-monitor-body">
+                        <video id="program-output" autoplay muted playsinline></video>
+                    </div>
                 </div>
             </div>
             <div class="program-meta">
@@ -822,6 +826,7 @@
                             <option value="camera">Camera</option>
                             <option value="screen">Screen Share</option>
                             <option value="external">External Encoder</option>
+                            <option value="program">Preview/Program</option>
                         </select>
                     </div>
                     <div class="gl-field">

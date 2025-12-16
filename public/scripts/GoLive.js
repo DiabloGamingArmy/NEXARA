@@ -96,6 +96,7 @@ export class NexeraGoLiveController {
         this.activeProgramSceneId = this.scenes[0].id;
         this.selectedSceneId = this.scenes[0].id;
         this.selectedSourceId = this.sources[0].id;
+        this.activeProgramSourceId = this.sources[0].id;
         this.advancedPreferences = { latencyMode: "NORMAL", autoRecord: false };
         this.mixerState = {
             mic: { muted: false, gain: 100 },
@@ -117,8 +118,10 @@ export class NexeraGoLiveController {
         this.stream = null;
         this.previewVideo = null;
         this.previewShell = null;
+        this.programVideo = null;
         this.previewSlots = { basic: null, advanced: null };
         this.obsSlots = { basic: null, advanced: null };
+        this.programStream = null;
         this.unsubscribeLiveDoc = null;
 
         const storedMode =
@@ -144,6 +147,7 @@ export class NexeraGoLiveController {
         const mode = (value || "").toString().toLowerCase();
         if (mode === "screen") return "screen";
         if (mode === "external") return "external";
+        if (mode === "program") return "program";
         return "camera";
     }
 
@@ -181,6 +185,7 @@ export class NexeraGoLiveController {
         this.syncSceneForInput();
         this.renderSources();
         this.updateEncoderTab();
+        this.updateMonitorBadges();
 
         if (this.stream) {
             this.setupAudioPipeline(this.stream);
@@ -529,6 +534,17 @@ export class NexeraGoLiveController {
         }
     }
 
+    async refreshWebPermissions() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+            stream.getTracks().forEach((track) => track.stop());
+            await navigator.mediaDevices.enumerateDevices();
+            this.log("Permissions refreshed; devices reloaded.");
+        } catch (error) {
+            this.log(`Permissions refresh failed: ${error?.message || error}`);
+        }
+    }
+
     resolveVisibilityFromDom(fallback = "public") {
         const active = document.querySelector("[data-go-live-visibility].active");
         const choice = active?.dataset?.goLiveVisibility || fallback;
@@ -631,6 +647,7 @@ export class NexeraGoLiveController {
         if (this.uiBound) return;
         this.previewVideo = document.getElementById("live-preview");
         this.previewShell = document.getElementById("live-preview-shell");
+        this.programVideo = document.getElementById("program-output");
         this.previewSlots = {
             basic: document.getElementById("live-preview-slot-basic"),
             advanced: document.getElementById("live-preview-slot-advanced"),
@@ -639,6 +656,8 @@ export class NexeraGoLiveController {
             basic: document.getElementById("obs-panel-slot-basic"),
             advanced: document.getElementById("obs-panel-slot-advanced"),
         };
+        this.previewBadge = document.getElementById("preview-source-label");
+        this.programBadge = document.getElementById("program-source-label");
         this.studioRoot = this.studioRoot || (this.root?.classList?.contains("go-live-studio") ? this.root : document.querySelector(".go-live-studio"));
 
         this.hydrateFormStateFromDom();
@@ -654,6 +673,11 @@ export class NexeraGoLiveController {
                 this.applyUIMode(e.target.value);
                 this.persistUiSnapshot();
             });
+        }
+
+        const refreshPermissionsBtn = document.getElementById("refresh-permissions-btn");
+        if (refreshPermissionsBtn) {
+            refreshPermissionsBtn.addEventListener("click", () => this.refreshWebPermissions());
         }
 
         const legacyToggle = document.getElementById("go-live-mode-toggle-btn");
@@ -930,7 +954,9 @@ export class NexeraGoLiveController {
         const advStart = document.getElementById("adv-start-stream");
         const advEnd = document.getElementById("adv-end-stream");
 
-        const startDisabled = this.state === "starting" || this.state === "live";
+        const needsProgram = this.inputMode === "program";
+        const hasProgram = !!(this.programStream?.getVideoTracks?.().length);
+        const startDisabled = this.state === "starting" || this.state === "live" || (needsProgram && !hasProgram);
         const endDisabled =
             this.state === "idle" || this.state === "error" || this.state === "previewing" || this.state === "starting";
 
@@ -938,6 +964,11 @@ export class NexeraGoLiveController {
         if (advStart) advStart.disabled = startDisabled;
         if (endBtn) endBtn.disabled = endDisabled;
         if (advEnd) advEnd.disabled = endDisabled;
+
+        const helperAdv = document.getElementById("go-live-status-text-secondary-adv");
+        if (helperAdv && needsProgram && !hasProgram && this.uiMode === "advanced") {
+            helperAdv.textContent = "Program has no active video source.";
+        }
 
         const decorate = (btn, activeClass) => {
             if (!btn) return;
@@ -1614,13 +1645,31 @@ export class NexeraGoLiveController {
         const programScene = this.scenes.find((s) => s.id === this.activeProgramSceneId);
         if (previewLabel) previewLabel.textContent = previewScene?.name || "Preview";
         if (programLabel) programLabel.textContent = programScene?.name || "Program";
+        this.updateMonitorBadges();
+    }
+
+    updateMonitorBadges() {
+        const previewSource = this.sources.find((s) => s.id === this.selectedSourceId) || this.sources[0];
+        const programSource = this.sources.find((s) => s.id === this.activeProgramSourceId) || previewSource;
+        if (this.previewBadge) {
+            this.previewBadge.textContent = previewSource?.name || "Source";
+        }
+        if (this.programBadge) {
+            this.programBadge.textContent = programSource?.name || "Program Source";
+        }
     }
 
     applyTransition(mode = "cut") {
         this.activeProgramSceneId = this.activePreviewSceneId;
+        this.activeProgramSourceId = this.selectedSourceId;
+        this.programStream = this.stream || this.programStream;
+        if (this.programVideo && this.programStream) {
+            this.programVideo.srcObject = this.programStream;
+        }
         this.renderScenes();
         const notes = document.getElementById("program-notes");
         if (notes) notes.textContent = mode === "fade" ? "Fade transition applied." : "Scene pushed live.";
+        this.updateMonitorBadges();
     }
 
     handleSourceSelect(sourceId) {
@@ -1638,6 +1687,7 @@ export class NexeraGoLiveController {
         if (!this.stream || this.stream.getTracks().every((track) => track.readyState === "ended")) {
             this.primeMediaCaptureFromUserGesture().catch((err) => this.log(err?.message || String(err)));
         }
+        this.updateMonitorBadges();
     }
 
     updateEncoderTab() {
@@ -1862,6 +1912,10 @@ export class NexeraGoLiveController {
             visibility,
         };
 
+        if (this.inputMode === "program" && (!this.programStream || !this.programStream.getVideoTracks().length)) {
+            throw new Error("Program has no active video source");
+        }
+
         this.log(
             `Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}, inputMode:${state.inputMode}`
         );
@@ -1977,7 +2031,8 @@ export class NexeraGoLiveController {
         await this.setupAudioPipeline(this.stream);
 
         // Split tracks into clean MediaStreams for IVS SDK
-        const vTrack = this.stream.getVideoTracks()[0] || null;
+        const outboundVideoStream = this.inputMode === "program" ? this.programStream : this.stream;
+        const vTrack = outboundVideoStream?.getVideoTracks?.()[0] || null;
         const aTrack = this.stream.getAudioTracks()[0] || null;
 
         if (!vTrack) {
@@ -2070,6 +2125,15 @@ export class NexeraGoLiveController {
         if (this.stream) {
             this.stream.getTracks().forEach((t) => t.stop());
             this.stream = null;
+        }
+
+        if (this.programStream) {
+            this.programStream.getTracks().forEach((t) => t.stop());
+            this.programStream = null;
+        }
+
+        if (this.programVideo) {
+            this.programVideo.srcObject = null;
         }
 
         this.teardownAudioGraph();
