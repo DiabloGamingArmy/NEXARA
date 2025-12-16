@@ -1993,6 +1993,18 @@ body.go-live-open {
 
 .advanced-stage {
     min-height: 0;
+    height: 100%;
+}
+
+.advanced-stage,
+.go-live-studio.ui-advanced .advanced-config,
+.go-live-studio.ui-advanced .advanced-grid,
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
+    grid-column: 1 / -1;
+}
+
+.advanced-stage {
+    min-height: 0;
 }
 
 .advanced-grid {
