@@ -1989,12 +1989,29 @@ body.go-live-open {
 .advanced-main-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr)) auto;
     grid-template-areas:
         "scenes mixer"
         "sources stats"
         "controls session"
         "tabs tabs";
     gap: 14px;
+    min-height: 0;
+    align-items: stretch;
+}
+
+.advanced-main-grid > .gl-panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.gl-panel .panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1 1 auto;
     min-height: 0;
     align-items: stretch;
     grid-auto-rows: minmax(0, auto);
@@ -2005,6 +2022,32 @@ body.go-live-open {
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+.advanced-grid-scenes { grid-area: scenes; }
+.advanced-grid-sources { grid-area: sources; }
+.advanced-grid-mixer { grid-area: mixer; }
+.advanced-grid-stats { grid-area: stats; }
+.advanced-grid-controls { grid-area: controls; }
+.advanced-grid-session { grid-area: session; }
+.advanced-grid-tabs { grid-area: tabs; }
+
+.go-live-studio.ui-advanced .advanced-config {
+    width: 100%;
+    margin: 0;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
+    height: 240px;
+    min-height: 220px;
+    max-height: 280px;
+    position: relative;
+    z-index: auto;
+    overflow: hidden;
+}
+
+.session-body {
+    overflow: auto;
 }
 
 .advanced-grid-scenes { grid-area: scenes; }
@@ -2276,11 +2319,14 @@ body.go-live-open {
 
 .mixer-grid,
 .stats-grid,
-.session-grid,
 .advanced-controls-list,
 .advanced-tabs .tab-panels {
     flex: 1 1 auto;
     min-height: 0;
+    overflow: auto;
+}
+
+.mixer-body {
     overflow: auto;
 }
 
@@ -2367,6 +2413,8 @@ body.go-live-open {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px;
+    align-items: start;
+    align-content: start;
 }
 
 .mixer-strip {
@@ -2431,17 +2479,20 @@ body.go-live-open {
 
 .session-grid {
     display: grid;
-    gap: 8px;
+    grid-template-columns: 1fr auto;
+    gap: 8px 12px;
 }
 
 .session-grid.compact {
-    gap: 6px;
+    row-gap: 6px;
 }
 
 .session-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 4px;
     font-size: 0.95rem;
 }
 

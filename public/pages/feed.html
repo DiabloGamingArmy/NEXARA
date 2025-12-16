@@ -735,7 +735,8 @@
                 <div class="gl-panel-header">
                     <div class="section-heading">Audio Mixer</div>
                 </div>
-                <div class="mixer-grid">
+                <div class="panel-body mixer-body">
+                    <div class="mixer-grid">
                     <div class="mixer-strip" data-channel="mic">
                         <div class="mixer-title">Mic</div>
                         <div class="meter"><span class="meter-fill"></span></div>
@@ -767,6 +768,7 @@
                         <div class="mixer-actions">
                             <button class="icon-pill ghost mixer-mute" type="button" data-channel="aux">Mute</button>
                         </div>
+                    </div>
                     </div>
                 </div>
             </div>
@@ -854,15 +856,17 @@
                 <div class="gl-panel-header">
                     <div class="section-heading">Live Session</div>
                 </div>
-                <div class="session-grid compact">
-                    <div class="session-row"><span class="muted">Session ID</span><span id="session-id-advanced">—</span></div>
-                    <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-advanced">—</span></div>
-                    <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-advanced" class="muted">—</span></div>
-                    <div class="session-row"><span class="muted">Playback</span><span id="session-playback-advanced" class="muted">—</span></div>
-                    <div class="session-row"><span class="muted">Latency</span><span id="session-latency-advanced" class="muted">—</span></div>
-                    <div class="session-row"><span class="muted">Mode</span><span id="session-mode-advanced" class="muted">—</span></div>
+                <div class="panel-body session-body">
+                    <div class="session-grid compact">
+                        <div class="session-row"><span class="muted">Session ID</span><span id="session-id-advanced">—</span></div>
+                        <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-advanced">—</span></div>
+                        <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-advanced" class="muted">—</span></div>
+                        <div class="session-row"><span class="muted">Playback</span><span id="session-playback-advanced" class="muted">—</span></div>
+                        <div class="session-row"><span class="muted">Latency</span><span id="session-latency-advanced" class="muted">—</span></div>
+                        <div class="session-row"><span class="muted">Mode</span><span id="session-mode-advanced" class="muted">—</span></div>
+                    </div>
+                    <div class="obs-slot subtle-panel" id="obs-panel-advanced" aria-live="polite">OBS ingest coordinates will appear here.</div>
                 </div>
-                <div class="obs-slot subtle-panel" id="obs-panel-advanced" aria-live="polite">OBS ingest coordinates will appear here.</div>
             </div>
             <div class="gl-panel advanced-card advanced-tabs advanced-grid-tabs" id="advanced-tabs-gl-pane">
                 <div class="tab-row" role="tablist">
