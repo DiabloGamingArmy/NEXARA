@@ -78,6 +78,8 @@ export class NexeraGoLiveController {
             autoRecord: false,
         };
 
+        this.visibilityChoice = this.formState.visibility;
+
         this.studioRoot = null;
 
         this.scenes = [
@@ -92,6 +94,7 @@ export class NexeraGoLiveController {
         ];
         this.activePreviewSceneId = this.scenes[0].id;
         this.activeProgramSceneId = this.scenes[0].id;
+        this.selectedSceneId = this.scenes[0].id;
         this.selectedSourceId = this.sources[0].id;
         this.advancedPreferences = { latencyMode: "NORMAL", autoRecord: false };
         this.mixerState = {
@@ -100,7 +103,14 @@ export class NexeraGoLiveController {
             music: { muted: false, gain: 70 },
             aux: { muted: false, gain: 70 },
         };
-        this.meterTimer = null;
+        this.meterRaf = null;
+        this.audioContext = null;
+        this.meterAnalyser = null;
+        this.meterSourceNode = null;
+        this.meterGainNode = null;
+        this.meterDestination = null;
+        this.processedAudioStream = null;
+        this.activeMeterChannel = null;
 
         this.session = null;
         this.client = null;
@@ -138,7 +148,10 @@ export class NexeraGoLiveController {
     }
 
     setVisibility(nextVisibility) {
-        const visibility = nextVisibility === "private" ? "private" : "public";
+        const requested = nextVisibility === "private" ? "followers" : nextVisibility;
+        const choice = ["public", "followers", "unlisted"].includes(requested) ? requested : "public";
+        this.visibilityChoice = choice;
+        const visibility = choice === "public" ? "public" : "private";
         this.formState.visibility = visibility;
         this.updateVisibilityButtons();
     }
@@ -148,6 +161,7 @@ export class NexeraGoLiveController {
         const previous = this.inputMode;
         this.formState.inputMode = normalized;
         this.inputMode = normalized;
+        this.activeMeterChannel = this.getActiveAudioChannel();
 
         const matchingSource = this.sources.find((src) => src.type === normalized);
         if (matchingSource) {
@@ -157,6 +171,8 @@ export class NexeraGoLiveController {
         if (previous !== normalized && this.stream) {
             this.stream.getTracks().forEach((t) => t.stop());
             this.stream = null;
+            this.teardownAudioGraph();
+            this.renderMeterLevels();
             if (this.previewVideo) this.previewVideo.srcObject = null;
         }
 
@@ -165,6 +181,12 @@ export class NexeraGoLiveController {
         this.syncSceneForInput();
         this.renderSources();
         this.updateEncoderTab();
+
+        if (this.stream) {
+            this.setupAudioPipeline(this.stream);
+        } else {
+            this.renderMeterLevels();
+        }
     }
 
     // ----------------------------------------------
@@ -509,12 +531,15 @@ export class NexeraGoLiveController {
 
     resolveVisibilityFromDom(fallback = "public") {
         const active = document.querySelector("[data-go-live-visibility].active");
-        return active?.dataset?.goLiveVisibility || fallback;
+        const choice = active?.dataset?.goLiveVisibility || fallback;
+        const normalizedChoice = choice === "private" ? "followers" : choice;
+        this.visibilityChoice = normalizedChoice;
+        return normalizedChoice === "public" ? "public" : "private";
     }
 
     updateVisibilityButtons() {
-        const isPublic = (this.formState.visibility || "public") === "public";
-        const target = isPublic ? "public" : "private";
+        const fallback = this.formState.visibility === "public" ? "public" : "followers";
+        const target = this.visibilityChoice || fallback;
         document.querySelectorAll("[data-go-live-visibility]").forEach((btn) => {
             const isActive = btn.dataset?.goLiveVisibility === target;
             btn.classList.toggle("active", isActive);
@@ -721,7 +746,8 @@ export class NexeraGoLiveController {
         const advStart = document.getElementById("adv-start-stream");
         const advEnd = document.getElementById("adv-end-stream");
         const advPublic = document.getElementById("adv-visibility-public");
-        const advPrivate = document.getElementById("adv-visibility-private");
+        const advFollowers = document.getElementById("adv-visibility-followers");
+        const advUnlisted = document.getElementById("adv-visibility-unlisted");
 
         [advTitle, advCategory, advTags].forEach((el) => {
             if (!el) return;
@@ -756,9 +782,15 @@ export class NexeraGoLiveController {
                 this.writeStateIntoBasicForm();
             });
 
-        if (advPrivate)
-            advPrivate.addEventListener("click", () => {
-                this.setVisibility("private");
+        if (advFollowers)
+            advFollowers.addEventListener("click", () => {
+                this.setVisibility("followers");
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advUnlisted)
+            advUnlisted.addEventListener("click", () => {
+                this.setVisibility("unlisted");
                 this.writeStateIntoBasicForm();
             });
 
@@ -1095,6 +1127,70 @@ export class NexeraGoLiveController {
         if (micGain) micGain.value = this.mixerState.mic.gain;
         if (systemGain) systemGain.value = this.mixerState.system.gain;
         this.updateMixerUi();
+        this.applyAudioGainToGraph();
+    }
+
+    async setupAudioPipeline(stream) {
+        this.teardownAudioGraph();
+        const track = stream?.getAudioTracks?.()[0];
+        this.activeMeterChannel = this.getActiveAudioChannel();
+        if (!track || !this.activeMeterChannel) {
+            this.renderMeterLevels();
+            return;
+        }
+
+        this.audioContext = this.audioContext || new AudioContext();
+        if (this.audioContext.state === "suspended") {
+            try {
+                await this.audioContext.resume();
+            } catch (_) {
+                // ignore resume failures; meters will remain idle
+            }
+        }
+
+        const source = this.audioContext.createMediaStreamSource(new MediaStream([track]));
+        const gainNode = this.audioContext.createGain();
+        const analyser = this.audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        const destination = this.audioContext.createMediaStreamDestination();
+
+        source.connect(gainNode);
+        gainNode.connect(analyser);
+        analyser.connect(destination);
+
+        this.meterSourceNode = source;
+        this.meterGainNode = gainNode;
+        this.meterAnalyser = analyser;
+        this.meterDestination = destination;
+        this.processedAudioStream = destination.stream;
+
+        this.applyAudioGainToGraph();
+        this.startMeterAnimation();
+    }
+
+    teardownAudioGraph() {
+        this.stopMeterAnimation();
+        [this.meterSourceNode, this.meterGainNode, this.meterAnalyser].forEach((node) => {
+            try {
+                node?.disconnect?.();
+            } catch (_) {
+                /* noop */
+            }
+        });
+        if (this.meterDestination?.stream) {
+            this.meterDestination.stream.getTracks().forEach((t) => t.stop());
+        }
+        this.meterSourceNode = null;
+        this.meterGainNode = null;
+        this.meterAnalyser = null;
+        this.meterDestination = null;
+        this.processedAudioStream = null;
+        this.activeMeterChannel = null;
+    }
+
+    getBroadcastAudioTrack(fallbackTrack) {
+        const processed = this.processedAudioStream?.getAudioTracks?.()[0];
+        return processed || fallbackTrack || null;
     }
 
     bindExternalBridge() {
@@ -1151,19 +1247,17 @@ export class NexeraGoLiveController {
         this.sceneListEl = document.getElementById("scene-list");
         this.sourceListEl = document.getElementById("source-list");
         const addSceneBtn = document.getElementById("add-scene-btn");
+        const removeSceneBtn = document.getElementById("remove-scene-btn");
         const addSourceBtn = document.getElementById("add-source-btn");
+        const removeSourceBtn = document.getElementById("remove-source-btn");
         const cutBtn = document.getElementById("transition-cut");
         const fadeBtn = document.getElementById("transition-fade");
         const autoBtn = document.getElementById("transition-auto");
 
-        if (addSceneBtn)
-            addSceneBtn.addEventListener("click", () => {
-                alert("Scene creation coming soon.");
-            });
-        if (addSourceBtn)
-            addSourceBtn.addEventListener("click", () => {
-                alert("Source picker coming soon.");
-            });
+        if (addSceneBtn) addSceneBtn.addEventListener("click", () => this.addScene());
+        if (removeSceneBtn) removeSceneBtn.addEventListener("click", () => this.removeScene());
+        if (addSourceBtn) addSourceBtn.addEventListener("click", () => this.addSource());
+        if (removeSourceBtn) removeSourceBtn.addEventListener("click", () => this.removeSource());
         if (cutBtn)
             cutBtn.addEventListener("click", () => {
                 this.applyTransition("cut");
@@ -1177,6 +1271,16 @@ export class NexeraGoLiveController {
                 this.applyTransition("auto");
             });
 
+        if (!this.sceneMenuOutsideHandler) {
+            this.sceneMenuOutsideHandler = (event) => {
+                if (!event.target.closest(".scene-menu") && !event.target.closest(".scene-menu-trigger")) {
+                    this.closeSceneMenus();
+                }
+            };
+            document.addEventListener("click", this.sceneMenuOutsideHandler);
+        }
+
+        this.selectedSceneId = this.activePreviewSceneId;
         this.syncSceneForInput();
         this.renderScenes();
         this.renderSources();
@@ -1195,6 +1299,7 @@ export class NexeraGoLiveController {
                     this.persistAudioGains({ [channel]: next });
                 }
                 this.updateMixerUi();
+                this.applyAudioGainToGraph();
             });
         });
 
@@ -1205,11 +1310,33 @@ export class NexeraGoLiveController {
             btn.addEventListener("click", () => {
                 this.mixerState[channel].muted = !this.mixerState[channel].muted;
                 this.updateMixerUi();
+                this.applyAudioGainToGraph();
             });
         });
 
         this.updateMixerUi();
+        this.applyAudioGainToGraph();
         this.startMeterAnimation();
+    }
+
+    getActiveAudioChannel() {
+        if (this.inputMode === "screen") return "system";
+        if (this.inputMode === "external") return null;
+        return "mic";
+    }
+
+    renderMeterLevels(levels = {}) {
+        const defaults = { mic: 0, system: 0, music: 0, aux: 0 };
+        const merged = { ...defaults, ...levels };
+        Object.entries(merged).forEach(([channel, value]) => {
+            const fill = document.querySelector(`.mixer-strip[data-channel="${channel}"] .meter-fill`);
+            const state = this.mixerState[channel] || {};
+            if (!fill) return;
+            const clamped = Math.max(0, Math.min(100, value));
+            const effective = state.muted ? 0 : clamped;
+            fill.style.setProperty("--meter-fill", `${effective}%`);
+            fill.style.opacity = state.muted ? "0.3" : "1";
+        });
     }
 
     updateMixerUi() {
@@ -1217,42 +1344,71 @@ export class NexeraGoLiveController {
             const strip = document.querySelector(`.mixer-strip[data-channel="${channel}"]`);
             if (!strip) return;
             const fader = strip.querySelector(".mixer-fader");
-            const meter = strip.querySelector(".meter-fill");
             const muteBtn = strip.querySelector(".mixer-mute");
             if (fader) {
                 fader.value = state.gain;
-            }
-            if (meter) {
-                const width = state.muted ? 0 : Math.min(100, state.gain);
-                meter.style.width = `${width}%`;
-                meter.style.opacity = state.muted ? "0.3" : "1";
             }
             if (muteBtn) {
                 muteBtn.classList.toggle("active", state.muted);
                 muteBtn.textContent = state.muted ? "Unmute" : "Mute";
             }
         });
+        this.renderMeterLevels();
+    }
+
+    applyAudioGainToGraph() {
+        const channel = this.activeMeterChannel || this.getActiveAudioChannel();
+        const state = channel ? this.mixerState[channel] : null;
+        if (this.meterGainNode && state) {
+            this.meterGainNode.gain.value = state.muted ? 0 : (state.gain ?? 100) / 100;
+        }
     }
 
     startMeterAnimation() {
-        if (this.meterTimer) return;
-        this.meterTimer = window.setInterval(() => {
-            Object.entries(this.mixerState).forEach(([channel, state]) => {
-                if (state.muted) return;
-                const fill = document.querySelector(`.mixer-strip[data-channel="${channel}"] .meter-fill`);
-                if (fill) {
-                    const jitter = Math.max(5, Math.min(100, state.gain + Math.random() * 10 - 5));
-                    fill.style.width = `${jitter}%`;
-                }
+        this.stopMeterAnimation();
+        const analyser = this.meterAnalyser;
+        const activeChannel = this.getActiveAudioChannel();
+        if (!analyser || !activeChannel) {
+            this.renderMeterLevels();
+            return;
+        }
+
+        const buffer = new Uint8Array(analyser.fftSize || 512);
+        const animate = () => {
+            if (!this.meterAnalyser) {
+                this.renderMeterLevels();
+                return;
+            }
+            this.meterAnalyser.getByteTimeDomainData(buffer);
+            let sumSquares = 0;
+            buffer.forEach((v) => {
+                const normalized = (v - 128) / 128;
+                sumSquares += normalized * normalized;
             });
-        }, 800);
+            const rms = Math.sqrt(sumSquares / buffer.length);
+            const level = Math.min(100, Math.max(0, rms * 140));
+            const state = this.mixerState[activeChannel] || {};
+            const adjusted = state.muted ? 0 : level * (state.gain ?? 100) / 100;
+
+            this.renderMeterLevels({
+                mic: activeChannel === "mic" ? adjusted : 0,
+                system: activeChannel === "system" ? adjusted : 0,
+                music: 0,
+                aux: 0,
+            });
+
+            this.meterRaf = window.requestAnimationFrame(animate);
+        };
+
+        animate();
     }
 
     stopMeterAnimation() {
-        if (this.meterTimer) {
-            window.clearInterval(this.meterTimer);
-            this.meterTimer = null;
+        if (this.meterRaf) {
+            window.cancelAnimationFrame(this.meterRaf);
+            this.meterRaf = null;
         }
+        this.renderMeterLevels();
     }
 
     syncSceneForInput() {
@@ -1264,17 +1420,23 @@ export class NexeraGoLiveController {
         } else {
             this.activePreviewSceneId = "scene-main";
         }
+        this.selectedSceneId = this.activePreviewSceneId;
         this.renderScenes();
     }
 
     renderScenes() {
         if (!this.sceneListEl) return;
         this.sceneListEl.innerHTML = "";
-        this.scenes.forEach((scene) => {
-            const row = document.createElement("button");
-            row.type = "button";
+        if (!this.selectedSceneId && this.scenes.length) {
+            this.selectedSceneId = this.scenes[0].id;
+        }
+
+        this.scenes.forEach((scene, index) => {
+            const row = document.createElement("div");
             row.className = "scene-row";
             row.dataset.sceneId = scene.id;
+            row.setAttribute("role", "button");
+            row.tabIndex = 0;
             const statusLabel =
                 scene.id === this.activeProgramSceneId
                     ? "Program"
@@ -1283,16 +1445,119 @@ export class NexeraGoLiveController {
                     : "Standby";
             if (scene.id === this.activePreviewSceneId) row.classList.add("active");
             if (scene.id === this.activeProgramSceneId) row.classList.add("program");
-            row.innerHTML = `<span>${scene.name}</span><span class="muted">${statusLabel}</span>`;
-            row.addEventListener("click", () => this.setPreviewScene(scene.id));
+            if (scene.id === this.selectedSceneId) row.classList.add("selected");
+
+            const labels = document.createElement("div");
+            labels.className = "scene-labels";
+            labels.innerHTML = `<span>${scene.name}</span><span class="muted">${statusLabel}</span>`;
+
+            const menuTrigger = document.createElement("button");
+            menuTrigger.type = "button";
+            menuTrigger.className = "scene-menu-trigger";
+            menuTrigger.setAttribute("aria-label", `Scene ${index + 1} options`);
+            menuTrigger.innerHTML = "⋯";
+
+            const menu = document.createElement("div");
+            menu.className = "scene-menu";
+            const renameBtn = document.createElement("button");
+            renameBtn.type = "button";
+            renameBtn.textContent = "Rename";
+            renameBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.renameScene(scene.id);
+                this.closeSceneMenus();
+            });
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.removeScene(scene.id);
+                this.closeSceneMenus();
+            });
+            menu.append(renameBtn, deleteBtn);
+
+            menuTrigger.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.toggleSceneMenu(menu);
+            });
+
+            row.addEventListener("click", () => {
+                this.selectedSceneId = scene.id;
+                this.setPreviewScene(scene.id);
+                this.closeSceneMenus();
+            });
+
+            row.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    this.selectedSceneId = scene.id;
+                    this.setPreviewScene(scene.id);
+                    this.closeSceneMenus();
+                }
+            });
+
+            row.append(labels, menuTrigger, menu);
             this.sceneListEl.appendChild(row);
         });
+        this.updateSceneBadges();
+    }
+
+    toggleSceneMenu(menu) {
+        if (!menu) return;
+        const isOpen = menu.classList.contains("open");
+        this.closeSceneMenus();
+        menu.classList.toggle("open", !isOpen);
+    }
+
+    closeSceneMenus() {
+        document.querySelectorAll(".scene-menu.open").forEach((menu) => menu.classList.remove("open"));
+    }
+
+    renameScene(sceneId) {
+        const scene = this.scenes.find((s) => s.id === sceneId);
+        if (!scene) return;
+        const nextName = prompt("Rename scene", scene.name);
+        if (!nextName) return;
+        scene.name = nextName.trim();
+        this.renderScenes();
+        this.updateSceneBadges();
+    }
+
+    addScene() {
+        const nextIndex = this.scenes.length + 1;
+        const id = `scene-${Date.now()}`;
+        this.scenes.push({ id, name: `Scene ${nextIndex}`, sources: [] });
+        this.activePreviewSceneId = this.activePreviewSceneId || id;
+        this.selectedSceneId = id;
+        this.renderScenes();
+        this.updateSceneBadges();
+    }
+
+    removeScene(sceneId = this.selectedSceneId || this.activePreviewSceneId) {
+        if (!sceneId) return;
+        if (this.scenes.length <= 1) {
+            alert("Keep at least one scene available.");
+            return;
+        }
+        const scene = this.scenes.find((s) => s.id === sceneId);
+        if (!scene) return;
+        const shouldDelete = confirm("Are you sure?");
+        if (!shouldDelete) return;
+        this.scenes = this.scenes.filter((s) => s.id !== sceneId);
+        if (this.activePreviewSceneId === sceneId) this.activePreviewSceneId = this.scenes[0]?.id || null;
+        if (this.activeProgramSceneId === sceneId) this.activeProgramSceneId = this.scenes[0]?.id || null;
+        if (this.selectedSceneId === sceneId) this.selectedSceneId = this.scenes[0]?.id || null;
+        this.renderScenes();
         this.updateSceneBadges();
     }
 
     renderSources() {
         if (!this.sourceListEl) return;
         this.sourceListEl.innerHTML = "";
+        if (!this.selectedSourceId && this.sources.length) {
+            this.selectedSourceId = this.sources[0].id;
+        }
         this.sources.forEach((source) => {
             const row = document.createElement("button");
             row.type = "button";
@@ -1304,6 +1569,35 @@ export class NexeraGoLiveController {
             row.addEventListener("click", () => this.handleSourceSelect(source.id));
             this.sourceListEl.appendChild(row);
         });
+    }
+
+    addSource() {
+        const nextIndex = this.sources.length + 1;
+        const id = `source-${Date.now()}`;
+        this.sources.push({ id, name: `Source ${nextIndex}`, type: "camera" });
+        this.selectedSourceId = id;
+        this.handleSourceSelect(id);
+    }
+
+    removeSource(sourceId = this.selectedSourceId) {
+        if (!sourceId || this.sources.length <= 1) {
+            alert("Keep at least one source available.");
+            return;
+        }
+        const source = this.sources.find((s) => s.id === sourceId);
+        if (!source) return;
+        const shouldDelete = confirm("Are you sure?");
+        if (!shouldDelete) return;
+        this.sources = this.sources.filter((s) => s.id !== sourceId);
+        if (this.selectedSourceId === sourceId) {
+            const fallback = this.sources[0];
+            this.selectedSourceId = fallback?.id || null;
+            if (fallback) {
+                this.handleSourceSelect(fallback.id);
+                return;
+            }
+        }
+        this.renderSources();
     }
 
     setPreviewScene(sceneId) {
@@ -1494,6 +1788,8 @@ export class NexeraGoLiveController {
         if (this.previewVideo) {
             this.previewVideo.srcObject = stream;
         }
+
+        await this.setupAudioPipeline(stream);
     }
 
     async safeStart() {
@@ -1678,6 +1974,8 @@ export class NexeraGoLiveController {
 
         this.previewVideo.srcObject = this.stream;
 
+        await this.setupAudioPipeline(this.stream);
+
         // Split tracks into clean MediaStreams for IVS SDK
         const vTrack = this.stream.getVideoTracks()[0] || null;
         const aTrack = this.stream.getAudioTracks()[0] || null;
@@ -1687,7 +1985,8 @@ export class NexeraGoLiveController {
         }
 
         const videoStream = new MediaStream([vTrack]);
-        const audioStream = aTrack ? new MediaStream([aTrack]) : null;
+        const broadcastAudio = this.getBroadcastAudioTrack(aTrack);
+        const audioStream = broadcastAudio ? new MediaStream([broadcastAudio]) : null;
 
         // IMPORTANT: provide a name AND a VideoComposition
         await this.client.addVideoInputDevice(videoStream, "video1", { index: 0 });
@@ -1773,6 +2072,8 @@ export class NexeraGoLiveController {
             this.stream = null;
         }
 
+        this.teardownAudioGraph();
+
         if (this.unsubscribeLiveDoc) {
             this.unsubscribeLiveDoc();
             this.unsubscribeLiveDoc = null;
@@ -1794,7 +2095,6 @@ export class NexeraGoLiveController {
         this.liveStartTime = null;
         this.stopStatsPolling();
         this.stopMeterAnimation();
-        this.startMeterAnimation();
         this.renderSessionDetails();
         this.renderStats({ note: "Idle" });
         this.updateEncoderTab();

@@ -1526,6 +1526,15 @@ body.go-live-open {
     padding-right: 6px;
 }
 
+.go-live-studio.ui-advanced .go-live-views,
+.go-live-studio.ui-advanced #go-live-advanced-view {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: auto;
+    overflow: visible;
+}
+
 .go-live-studio.ui-basic .topbar-status-chip {
     display: none;
 }
@@ -1970,26 +1979,98 @@ body.go-live-open {
 .advanced-layout {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    flex: 1;
+    gap: 16px;
+}
+
+.advanced-stage {
     min-height: 0;
 }
 
-.advanced-grid {
+.advanced-main-grid {
     display: grid;
-    grid-template-columns: 0.9fr 1.4fr 0.95fr;
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr)) auto;
+    grid-template-areas:
+        "scenes mixer"
+        "sources stats"
+        "controls session"
+        "tabs tabs";
+    gap: 14px;
     min-height: 0;
+    align-items: stretch;
+}
+
+.advanced-main-grid > .gl-panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.gl-panel .panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.session-body {
+    overflow: auto;
+}
+
+.advanced-grid-scenes { grid-area: scenes; }
+.advanced-grid-sources { grid-area: sources; }
+.advanced-grid-mixer { grid-area: mixer; }
+.advanced-grid-stats { grid-area: stats; }
+.advanced-grid-controls { grid-area: controls; }
+.advanced-grid-session { grid-area: session; }
+.advanced-grid-tabs { grid-area: tabs; }
+
+.go-live-studio.ui-advanced .advanced-config {
+    width: 100%;
+    margin: 0;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
+    height: 240px;
+    min-height: 220px;
+    max-height: 280px;
+    position: relative;
+    z-index: auto;
+    overflow: hidden;
 }
 
 .advanced-card {
     gap: 12px;
 }
 
+.scenes-panel,
+.sources-panel,
+.mixer-card,
+.stats-card,
+.session-card,
+.advanced-grid-controls {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
 .advanced-config {
     display: flex;
     flex-direction: column;
     gap: 14px;
+}
+
+.advanced-controls-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.advanced-controls-list .gl-field,
+.advanced-controls-list .gl-row {
+    width: 100%;
 }
 
 .config-grid {
@@ -2017,7 +2098,8 @@ body.go-live-open {
     border: 1px solid var(--gl-border);
     border-radius: 12px;
     position: relative;
-    min-height: 230px;
+    aspect-ratio: 16 / 9;
+    min-height: 260px;
     overflow: hidden;
 }
 
@@ -2148,6 +2230,13 @@ body.go-live-open {
     gap: 8px;
 }
 
+.scenes-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+
 .scene-search input {
     background: rgba(255, 255, 255, 0.04);
 }
@@ -2156,8 +2245,11 @@ body.go-live-open {
 .source-list {
     border: 1px solid var(--gl-border);
     border-radius: 12px;
-    overflow: hidden;
+    overflow: auto;
     background: rgba(255, 255, 255, 0.02);
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
 }
 
 .scene-row,
@@ -2166,8 +2258,12 @@ body.go-live-open {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     cursor: pointer;
+    text-align: left;
+    width: 100%;
+    position: relative;
 }
 
 .scene-row:last-child,
@@ -2175,17 +2271,106 @@ body.go-live-open {
     border-bottom: none;
 }
 
-.scene-row.active {
+.scene-row.active,
+.scene-row.selected {
     background: rgba(255, 255, 255, 0.06);
-    border-left: 3px solid var(--gl-accent);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 
 .scene-row.program {
-    border-left-color: #ff5d7a;
+    box-shadow: inset 0 0 0 1px rgba(255, 93, 122, 0.6);
+}
+
+.source-actions-row,
+.scene-actions-row {
+    flex: 0 0 auto;
+}
+
+.mixer-grid,
+.stats-grid,
+.advanced-controls-list,
+.advanced-tabs .tab-panels {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.mixer-body {
+    overflow: auto;
+}
+
+.advanced-tabs {
+    min-height: 0;
 }
 
 .source-row.active {
     background: rgba(0, 200, 255, 0.08);
+}
+
+.scene-labels {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+
+.scene-actions-row,
+.source-actions-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+
+.scene-actions-row .icon-pill,
+.source-actions-row .icon-pill {
+    flex: 1;
+    justify-content: center;
+}
+
+.scene-menu-trigger {
+    background: none;
+    border: none;
+    color: var(--gl-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 6px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.scene-menu-trigger:focus-visible {
+    outline: 2px solid var(--gl-accent);
+}
+
+.scene-menu {
+    position: absolute;
+    right: 10px;
+    top: 36px;
+    background: var(--gl-surface-strong);
+    border: 1px solid var(--gl-border);
+    border-radius: 10px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+    padding: 6px;
+    display: none;
+    min-width: 140px;
+    z-index: 2;
+}
+
+.scene-menu.open {
+    display: grid;
+    gap: 4px;
+}
+
+.scene-menu button {
+    background: transparent;
+    color: var(--gl-text);
+    border: 1px solid var(--gl-border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    text-align: left;
+    cursor: pointer;
 }
 
 .source-subpanel {
@@ -2197,6 +2382,8 @@ body.go-live-open {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 12px;
+    align-items: start;
+    align-content: start;
 }
 
 .mixer-strip {
@@ -2226,8 +2413,10 @@ body.go-live-open {
     left: 0;
     top: 0;
     bottom: 0;
-    width: 68%;
+    width: 100%;
     background: linear-gradient(90deg, #1bf2d6, #ffd166, #ff7b7b);
+    clip-path: inset(0 calc(100% - var(--meter-fill, 0%)) 0 0);
+    transition: clip-path 120ms ease, opacity 120ms ease;
 }
 
 .mixer-actions {
@@ -2259,17 +2448,20 @@ body.go-live-open {
 
 .session-grid {
     display: grid;
-    gap: 8px;
+    grid-template-columns: 1fr auto;
+    gap: 8px 12px;
 }
 
 .session-grid.compact {
-    gap: 6px;
+    row-gap: 6px;
 }
 
 .session-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 4px;
     font-size: 0.95rem;
 }
 
@@ -2320,6 +2512,8 @@ body.go-live-open {
     gap: 10px;
     position: static;
     grid-column: 1 / -1;
+    min-height: 0;
+    height: 100%;
 }
 
 .tab-row {
@@ -2347,11 +2541,22 @@ body.go-live-open {
     gap: 10px;
 }
 
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panels {
+    min-height: 0;
+    flex: 1;
+    grid-auto-rows: 1fr;
+}
+
 .tab-panel {
     border: 1px solid var(--gl-border);
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.35);
     padding: 12px;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panel {
+    height: 100%;
+    overflow: auto;
 }
 
 .tab-panel[hidden] {
@@ -2369,6 +2574,11 @@ body.go-live-open {
     color: var(--gl-muted);
     max-height: 200px;
     overflow: auto;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane .log-feed {
+    height: 100%;
+    max-height: none;
 }
 
 .placeholder-block {
