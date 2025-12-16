@@ -1996,7 +1996,15 @@ body.go-live-open {
         "tabs tabs";
     gap: 14px;
     min-height: 0;
-    align-items: start;
+    align-items: stretch;
+    grid-auto-rows: minmax(0, auto);
+}
+
+.advanced-main-grid > .gl-panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .advanced-grid-scenes { grid-area: scenes; }
@@ -2023,6 +2031,17 @@ body.go-live-open {
 
 .advanced-card {
     gap: 12px;
+}
+
+.scenes-panel,
+.sources-panel,
+.mixer-card,
+.stats-card,
+.session-card,
+.advanced-grid-controls {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .advanced-config {
@@ -2218,6 +2237,7 @@ body.go-live-open {
     background: rgba(255, 255, 255, 0.02);
     min-height: 0;
     max-height: none;
+    flex: 1 1 auto;
 }
 
 .scene-row,
@@ -2247,6 +2267,25 @@ body.go-live-open {
 
 .scene-row.program {
     box-shadow: inset 0 0 0 1px rgba(255, 93, 122, 0.6);
+}
+
+.source-actions-row,
+.scene-actions-row {
+    flex: 0 0 auto;
+}
+
+.mixer-grid,
+.stats-grid,
+.session-grid,
+.advanced-controls-list,
+.advanced-tabs .tab-panels {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.advanced-tabs {
+    min-height: 0;
 }
 
 .source-row.active {
