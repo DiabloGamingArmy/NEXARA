@@ -563,6 +563,7 @@
                 </div>
             </div>
             <div class="topbar-right">
+                <button class="icon-pill ghost" type="button" id="refresh-permissions-btn">Refresh Web Permissions</button>
                 <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
                 <select id="go-live-ui-config" class="go-live-select form-input">
                     <option value="basic">Basic</option>
@@ -589,7 +590,6 @@
                                 <div id="live-preview-shell" class="preview-visual">
                                     <video id="live-preview" autoplay muted playsinline></video>
                                     <div class="preview-overlay">
-                                        <div class="state-callout preview-corner-status" id="go-live-state-chip">Idle</div>
                                     </div>
                                 </div>
                             </div>
@@ -623,13 +623,14 @@
                                 <div class="config-section">
                                     <div class="section-heading">Source</div>
                                     <p class="helper-text">Choose what you want to share. You can swap inputs while previewing.</p>
-                                    <div class="gl-field">
-                                        <label class="gl-label" for="input-mode">Input mode</label>
-                                        <select id="input-mode" class="form-input">
-                                            <option value="camera">Camera</option>
-                                            <option value="screen">Screen Share</option>
-                                        </select>
-                                    </div>
+                            <div class="gl-field">
+                                <label class="gl-label" for="input-mode">Input mode</label>
+                                <select id="input-mode" class="form-input">
+                                    <option value="camera">Camera</option>
+                                    <option value="screen">Screen Share</option>
+                                    <option value="program">Preview/Program</option>
+                                </select>
+                            </div>
                                     <div class="helper-link-row">
                                         <button class="text-link" type="button" id="go-advanced-external">Use OBS / External encoder (Advanced)</button>
                                     </div>
@@ -692,208 +693,222 @@
                 </div>
             </section>
             <section id="go-live-advanced-view" class="go-live-view">
-                <div class="advanced-layout">
-                    <div class="gl-panel advanced-card advanced-config">
-                        <div class="gl-panel-header">
-                            <div class="section-heading">Stream Controls</div>
-                            <div class="status-helper" id="go-live-status-text-secondary-adv">Manage settings before going live.</div>
-                        </div>
-                        <div class="config-grid">
-                            <div class="gl-field">
-                                <label class="gl-label" for="adv-stream-title">Title</label>
-                                <input id="adv-stream-title" class="form-input" placeholder="Name your stream">
-                            </div>
-                            <div class="gl-field">
-                                <label class="gl-label" for="adv-stream-category">Category</label>
-                                <input id="adv-stream-category" class="form-input" placeholder="Gaming, IRL, Podcast...">
-                            </div>
-                            <div class="gl-field">
-                                <label class="gl-label" for="adv-stream-tags">Tags</label>
-                                <input id="adv-stream-tags" class="form-input" placeholder="Add tags separated by commas">
-                            </div>
-                            <div class="gl-field">
-                                <label class="gl-label" for="adv-input-mode">Input mode</label>
-                                <select id="adv-input-mode" class="form-input">
-                                    <option value="camera">Camera</option>
-                                    <option value="screen">Screen Share</option>
-                                    <option value="external">External Encoder</option>
-                                </select>
-                            </div>
-                            <div class="gl-field">
-                                <label class="gl-label" for="adv-latency-mode">Latency profile</label>
-                                <select id="adv-latency-mode" class="form-input">
-                                    <option value="NORMAL">Normal</option>
-                                    <option value="LOW">Low Latency</option>
-                                </select>
-                            </div>
-                            <div class="gl-row align-center">
-                                <div class="gl-label">Auto-record</div>
-                                <label class="switch" aria-label="Toggle auto recording in advanced view">
-                                    <input type="checkbox" id="adv-auto-record">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                        </div>
-                        <div class="advanced-actions">
-                            <div class="gl-row align-center gap-8">
-                                <div class="gl-label muted">Visibility</div>
-                                <div class="pill-row">
-                                    <button class="ghost-pill active" type="button" id="adv-visibility-public" data-go-live-visibility="public">Public</button>
-                                    <button class="ghost-pill" type="button" id="adv-visibility-private" data-go-live-visibility="private">Private</button>
-                                </div>
-                            </div>
-                            <div class="control-row">
-                                <button class="create-btn-sidebar primary" id="adv-start-stream">Start Stream</button>
-                                <button class="icon-pill destructive" id="adv-end-stream" disabled>End Stream</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="advanced-grid">
-                        <div class="gl-panel advanced-card scenes-panel">
-                            <div class="gl-panel-header">
-                                <div class="section-heading">Scenes &amp; Sources</div>
-                                <div class="scene-actions">
-                                    <button class="icon-pill ghost" type="button" id="add-scene-btn"><i class="ph ph-plus"></i> Scene</button>
-                                    <button class="icon-pill ghost" type="button" id="add-source-btn"><i class="ph ph-plus"></i> Source</button>
-                                </div>
-                            </div>
-                            <div class="scene-search">
-                                <input class="form-input" type="text" placeholder="Search scenes">
-                            </div>
-                            <div class="scene-list" id="scene-list"></div>
-                            <div class="source-subpanel">
-                                <div class="section-subheading">Sources</div>
-                                <div class="source-list" id="source-list"></div>
-                            </div>
-                        </div>
-                        <div class="gl-panel advanced-card program-card">
-                            <div class="program-grid">
-                                <div class="monitor preview-monitor">
-                                    <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span></div>
-                                    <div class="monitor-body" id="live-preview-slot-advanced"></div>
-                                </div>
-                                <div class="monitor program-monitor">
-                                    <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span></div>
-                                    <div class="monitor-body program-body"></div>
-                                </div>
-                            </div>
-                            <div class="program-meta">
-                                <div class="live-indicator" id="program-live-indicator"><span id="program-live-label">Idle</span></div>
-                                <div class="program-timer" id="program-timer">00:00:00</div>
-                                <div class="program-notes" id="program-notes">Program/preview monitors ready for switching.</div>
-                            </div>
-                            <div class="transition-strip">
-                                <div class="transition-buttons">
-                                    <button class="icon-pill ghost" type="button" id="transition-cut">Cut</button>
-                                    <button class="icon-pill ghost" type="button" id="transition-fade">Fade</button>
-                                    <button class="icon-pill ghost" type="button" id="transition-auto">Auto</button>
-                                </div>
-                                <div class="transition-duration">Transition duration: 1.5s</div>
-                            </div>
-                        </div>
-                        <div class="advanced-right">
-                            <div class="gl-panel advanced-card mixer-card">
-                                <div class="gl-panel-header">
-                                    <div class="section-heading">Audio Mixer</div>
-                                </div>
-                                <div class="mixer-grid">
-                                    <div class="mixer-strip" data-channel="mic">
-                                        <div class="mixer-title">Mic</div>
-                                        <div class="meter"><span class="meter-fill"></span></div>
-                                        <input type="range" min="0" max="100" value="100" class="mixer-fader" id="mixer-mic-fader" data-channel="mic">
-                                        <div class="mixer-actions">
-                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="mic">Mute</button>
-                                        </div>
-                                    </div>
-                                    <div class="mixer-strip" data-channel="system">
-                                        <div class="mixer-title">System</div>
-                                        <div class="meter"><span class="meter-fill"></span></div>
-                                        <input type="range" min="0" max="100" value="100" class="mixer-fader" id="mixer-system-fader" data-channel="system">
-                                        <div class="mixer-actions">
-                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="system">Mute</button>
-                                        </div>
-                                    </div>
-                                    <div class="mixer-strip" data-channel="music">
-                                        <div class="mixer-title">Music</div>
-                                        <div class="meter"><span class="meter-fill"></span></div>
-                                        <input type="range" min="0" max="100" value="70" class="mixer-fader" id="mixer-music-fader" data-channel="music">
-                                        <div class="mixer-actions">
-                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="music">Mute</button>
-                                        </div>
-                                    </div>
-                                    <div class="mixer-strip" data-channel="aux">
-                                        <div class="mixer-title">Aux</div>
-                                        <div class="meter"><span class="meter-fill"></span></div>
-                                        <input type="range" min="0" max="100" value="70" class="mixer-fader" id="mixer-aux-fader" data-channel="aux">
-                                        <div class="mixer-actions">
-                                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="aux">Mute</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="gl-panel advanced-card stats-card">
-                                <div class="gl-panel-header">
-                                    <div class="section-heading">Stream Stats</div>
-                                </div>
-                                <div class="stats-grid">
-                                    <div class="stat-row"><span>Ingest</span><span class="muted" id="adv-stat-ingest">—</span></div>
-                                    <div class="stat-row"><span>Bitrate</span><span class="muted" id="adv-stat-bitrate">—</span></div>
-                                    <div class="stat-row"><span>RTT</span><span class="muted" id="adv-stat-rtt">—</span></div>
-                                    <div class="stat-row"><span>Dropped Frames</span><span class="muted" id="adv-stat-dropped">—</span></div>
-                                    <div class="stat-row"><span>CPU</span><span class="muted" id="adv-stat-cpu">—</span></div>
-                                    <div class="stat-row"><span>Duration</span><span class="muted" id="adv-stat-duration">00:00:00</span></div>
-                                    <div class="stat-row"><span>Tracks</span><span class="muted" id="adv-stat-tracks">—</span></div>
-                                    <div class="stat-row"><span>Input</span><span class="muted" id="adv-stat-mode">—</span></div>
-                                    <div class="stat-row"><span>Health</span><span class="muted" id="adv-stat-health">Monitoring</span></div>
-                                </div>
-                            </div>
-                            <div class="gl-panel advanced-card session-card">
-                                <div class="gl-panel-header">
-                                    <div class="section-heading">Live Session</div>
-                                </div>
-                                <div class="session-grid compact">
-                                    <div class="session-row"><span class="muted">Session ID</span><span id="session-id-advanced">—</span></div>
-                                    <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-advanced">—</span></div>
-                                    <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-advanced" class="muted">—</span></div>
-                                    <div class="session-row"><span class="muted">Playback</span><span id="session-playback-advanced" class="muted">—</span></div>
-                                    <div class="session-row"><span class="muted">Latency</span><span id="session-latency-advanced" class="muted">—</span></div>
-                                    <div class="session-row"><span class="muted">Auto-record</span><span id="session-auto-advanced" class="muted">—</span></div>
-                                </div>
-                            </div>
-                            <div class="gl-panel advanced-card obs-advanced">
-                                <div class="gl-panel-header">
-                                    <div class="section-heading">OBS / External Encoder</div>
-                                </div>
-                                <div id="obs-panel-slot-advanced" class="obs-slot helper-text">External encoder info will appear here when selected.</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="gl-panel advanced-tabs" id="advanced-tabs">
-                        <div class="tab-row" role="tablist" aria-label="Go Live docked panels">
-                            <button class="tab active" type="button" role="tab" aria-selected="true" data-tab-target="logs">Logs</button>
-                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="chat">Chat</button>
-                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="events">Stream Events</button>
-                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="encoder">Encoder</button>
-                        </div>
-                        <div class="tab-panels">
-                            <div class="tab-panel show" data-tab-panel="logs" role="tabpanel" aria-label="Logs">
-                                <pre class="log-feed" id="go-live-log-advanced">Awaiting logs...</pre>
-                            </div>
-                            <div class="tab-panel" data-tab-panel="chat" role="tabpanel" aria-label="Chat" aria-hidden="true">
-                                <div class="placeholder-block">Chat coming soon.</div>
-                            </div>
-                            <div class="tab-panel" data-tab-panel="events" role="tabpanel" aria-label="Stream Events" aria-hidden="true">
-                                <div class="placeholder-block">Track stream events here.</div>
-                            </div>
-                            <div class="tab-panel" data-tab-panel="encoder" role="tabpanel" aria-label="Encoder" aria-hidden="true">
-                                <div class="placeholder-block" id="encoder-tab-placeholder">Encoder configuration placeholder.</div>
-                            </div>
-                        </div>
-                    </section>
+    <div class="advanced-layout">
+        <div class="gl-panel advanced-card program-card advanced-stage">
+            <div class="program-grid">
+                <div class="monitor preview-monitor">
+                    <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span><span class="scene-pill monitor-badge" id="preview-source-label">Source</span></div>
+                    <div class="monitor-body" id="live-preview-slot-advanced"></div>
                 </div>
-            </section>
+                <div class="monitor program-monitor">
+                    <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span><span class="scene-pill monitor-badge" id="program-source-label">Source</span></div>
+                    <div class="monitor-body program-body" id="program-monitor-body">
+                        <video id="program-output" autoplay muted playsinline></video>
+                    </div>
+                </div>
+            </div>
+            <div class="program-meta">
+                <div class="live-indicator" id="program-live-indicator"><span id="program-live-label">Idle</span></div>
+                <div class="program-timer" id="program-timer">00:00:00</div>
+                <div class="program-notes" id="program-notes">Program/preview monitors ready for switching.</div>
+            </div>
+            <div class="transition-strip">
+                <div class="transition-buttons">
+                    <button class="icon-pill ghost" type="button" id="transition-cut">Cut</button>
+                    <button class="icon-pill ghost" type="button" id="transition-fade">Fade</button>
+                    <button class="icon-pill ghost" type="button" id="transition-auto">Auto</button>
+                </div>
+                <div class="transition-duration">Transition duration: 1.5s</div>
+            </div>
+        </div>
+        <div class="advanced-main-grid">
+            <div class="gl-panel advanced-card scenes-panel advanced-grid-scenes">
+                <div class="gl-panel-header">
+                    <div class="section-heading">Scenes</div>
+                </div>
+                <div class="scene-search">
+                    <input class="form-input" type="text" placeholder="Search scenes">
+                </div>
+                <div class="scene-list" id="scene-list"></div>
+                <div class="scene-actions-row">
+                    <button class="icon-pill ghost" type="button" id="add-scene-btn"><i class="ph ph-plus"></i>Add</button>
+                    <button class="icon-pill ghost" type="button" id="remove-scene-btn"><i class="ph ph-minus"></i> Remove</button>
+                </div>
+            </div>
+            <div class="gl-panel advanced-card mixer-card advanced-grid-mixer">
+                <div class="gl-panel-header">
+                    <div class="section-heading">Audio Mixer</div>
+                </div>
+                <div class="panel-body mixer-body">
+                    <div class="mixer-grid">
+                    <div class="mixer-strip" data-channel="mic">
+                        <div class="mixer-title">Mic</div>
+                        <div class="meter"><span class="meter-fill"></span></div>
+                        <input type="range" min="0" max="100" value="100" class="mixer-fader" id="mixer-mic-fader" data-channel="mic">
+                        <div class="mixer-actions">
+                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="mic">Mute</button>
+                        </div>
+                    </div>
+                    <div class="mixer-strip" data-channel="system">
+                        <div class="mixer-title">System</div>
+                        <div class="meter"><span class="meter-fill"></span></div>
+                        <input type="range" min="0" max="100" value="100" class="mixer-fader" id="mixer-system-fader" data-channel="system">
+                        <div class="mixer-actions">
+                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="system">Mute</button>
+                        </div>
+                    </div>
+                    <div class="mixer-strip" data-channel="music">
+                        <div class="mixer-title">Music</div>
+                        <div class="meter"><span class="meter-fill"></span></div>
+                        <input type="range" min="0" max="100" value="70" class="mixer-fader" id="mixer-music-fader" data-channel="music">
+                        <div class="mixer-actions">
+                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="music">Mute</button>
+                        </div>
+                    </div>
+                    <div class="mixer-strip" data-channel="aux">
+                        <div class="mixer-title">Aux</div>
+                        <div class="meter"><span class="meter-fill"></span></div>
+                        <input type="range" min="0" max="100" value="70" class="mixer-fader" id="mixer-aux-fader" data-channel="aux">
+                        <div class="mixer-actions">
+                            <button class="icon-pill ghost mixer-mute" type="button" data-channel="aux">Mute</button>
+                        </div>
+                    </div>
+                    </div>
+                </div>
+            </div>
+            <div class="gl-panel advanced-card sources-panel advanced-grid-sources">
+                <div class="gl-panel-header">
+                    <div class="section-heading">Sources</div>
+                </div>
+                <div class="source-list" id="source-list"></div>
+                <div class="source-actions-row">
+                    <button class="icon-pill ghost" type="button" id="add-source-btn"><i class="ph ph-plus"></i> Add</button>
+                    <button class="icon-pill ghost" type="button" id="remove-source-btn"><i class="ph ph-minus"></i> Remove</button>
+                </div>
+            </div>
+            <div class="gl-panel advanced-card stats-card advanced-grid-stats">
+                <div class="gl-panel-header">
+                    <div class="section-heading">Stream Stats</div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-row"><span>Ingest</span><span class="muted" id="adv-stat-ingest">—</span></div>
+                    <div class="stat-row"><span>Bitrate</span><span class="muted" id="adv-stat-bitrate">—</span></div>
+                    <div class="stat-row"><span>RTT</span><span class="muted" id="adv-stat-rtt">—</span></div>
+                    <div class="stat-row"><span>Dropped Frames</span><span class="muted" id="adv-stat-dropped">—</span></div>
+                    <div class="stat-row"><span>CPU</span><span class="muted" id="adv-stat-cpu">—</span></div>
+                    <div class="stat-row"><span>Duration</span><span class="muted" id="adv-stat-duration">00:00:00</span></div>
+                    <div class="stat-row"><span>Tracks</span><span class="muted" id="adv-stat-tracks">—</span></div>
+                    <div class="stat-row"><span>Input</span><span class="muted" id="adv-stat-mode">—</span></div>
+                    <div class="stat-row"><span>Health</span><span class="muted" id="adv-stat-health">Monitoring</span></div>
+                </div>
+            </div>
+            <div class="gl-panel advanced-card advanced-config advanced-grid-controls">
+                <div class="gl-panel-header">
+                    <div class="section-heading">Stream Controls</div>
+                    <div class="status-helper" id="go-live-status-text-secondary-adv">Manage settings before going live.</div>
+                </div>
+                <div class="advanced-controls-list">
+                    <div class="gl-field">
+                        <label class="gl-label" for="adv-stream-title">Title</label>
+                        <input id="adv-stream-title" class="form-input" placeholder="Name your stream">
+                    </div>
+                    <div class="gl-field">
+                        <label class="gl-label" for="adv-stream-category">Category</label>
+                        <input id="adv-stream-category" class="form-input" placeholder="Gaming, IRL, Podcast...">
+                    </div>
+                    <div class="gl-field">
+                        <label class="gl-label" for="adv-stream-tags">Tags</label>
+                        <input id="adv-stream-tags" class="form-input" placeholder="Add tags separated by commas">
+                    </div>
+                    <div class="gl-field">
+                        <label class="gl-label" for="adv-input-mode">Input mode</label>
+                        <select id="adv-input-mode" class="form-input">
+                            <option value="camera">Camera</option>
+                            <option value="screen">Screen Share</option>
+                            <option value="external">External Encoder</option>
+                            <option value="program">Preview/Program</option>
+                        </select>
+                    </div>
+                    <div class="gl-field">
+                        <label class="gl-label" for="adv-latency-mode">Latency profile</label>
+                        <select id="adv-latency-mode" class="form-input">
+                            <option value="NORMAL">Normal</option>
+                            <option value="LOW">Low Latency</option>
+                        </select>
+                    </div>
+                    <div class="gl-row align-center">
+                        <div class="gl-label">Auto-record</div>
+                        <label class="switch" aria-label="Toggle auto recording in advanced view">
+                            <input type="checkbox" id="adv-auto-record">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="gl-field">
+                        <label class="gl-label">Visibility</label>
+                        <div class="pill-row">
+                            <button class="ghost-pill active" type="button" id="adv-visibility-public" data-go-live-visibility="public">Public</button>
+                            <button class="ghost-pill" type="button" id="adv-visibility-followers" data-go-live-visibility="followers">Followers only</button>
+                            <button class="ghost-pill" type="button" id="adv-visibility-unlisted" data-go-live-visibility="unlisted">Unlisted</button>
+                        </div>
+                    </div>
+                    <div class="control-row">
+                        <button class="create-btn-sidebar primary" id="adv-start-stream">Start Stream</button>
+                        <button class="icon-pill destructive" id="adv-end-stream" disabled>End Stream</button>
+                    </div>
+                </div>
+            </div>
+            <div class="gl-panel advanced-card session-card advanced-grid-session">
+                <div class="gl-panel-header">
+                    <div class="section-heading">Live Session</div>
+                </div>
+                <div class="panel-body session-body">
+                    <div class="session-grid compact">
+                        <div class="session-row"><span class="muted">Session ID</span><span id="session-id-advanced">—</span></div>
+                        <div class="session-row"><span class="muted">Channel ARN</span><span id="session-arn-advanced">—</span></div>
+                        <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-advanced" class="muted">—</span></div>
+                        <div class="session-row"><span class="muted">Playback</span><span id="session-playback-advanced" class="muted">—</span></div>
+                        <div class="session-row"><span class="muted">Latency</span><span id="session-latency-advanced" class="muted">—</span></div>
+                        <div class="session-row"><span class="muted">Mode</span><span id="session-mode-advanced" class="muted">—</span></div>
+                    </div>
+                    <div class="obs-slot subtle-panel" id="obs-panel-advanced" aria-live="polite">OBS ingest coordinates will appear here.</div>
+                </div>
+            </div>
+            <div class="gl-panel advanced-card advanced-tabs advanced-grid-tabs" id="advanced-tabs-gl-pane">
+                <div class="tab-row" role="tablist">
+                    <button class="tab active" data-tab-target="logs" aria-selected="true" role="tab">Logs</button>
+                    <button class="tab" data-tab-target="chat" aria-selected="false" role="tab">Chat</button>
+                    <button class="tab" data-tab-target="events" aria-selected="false" role="tab">Stream Events</button>
+                    <button class="tab" data-tab-target="encoder" aria-selected="false" role="tab">Encoder</button>
+                </div>
+                <div class="tab-panels">
+                    <div class="tab-panel show" data-tab-panel="logs" role="tabpanel">
+                        <div class="gl-row align-center" style="justify-content: space-between;">
+                            <div class="section-heading">Live Logs</div>
+                            <button class="icon-pill ghost" id="clear-log"><i class="ph ph-trash"></i> Clear</button>
+                        </div>
+                        <pre class="log-feed" id="go-live-log"></pre>
+                    </div>
+                    <div class="tab-panel" data-tab-panel="chat" role="tabpanel" aria-hidden="true" hidden>
+                        <div class="section-heading">Stream Chat</div>
+                        <div class="placeholder-block">Chat integration coming soon.</div>
+                    </div>
+                    <div class="tab-panel" data-tab-panel="events" role="tabpanel" aria-hidden="true" hidden>
+                        <div class="section-heading">Events</div>
+                        <div class="placeholder-block">Stream events will appear here.</div>
+                    </div>
+                    <div class="tab-panel" data-tab-panel="encoder" role="tabpanel" aria-hidden="true" hidden>
+                        <div class="section-heading">Encoder</div>
+                        <div class="placeholder-block" id="encoder-tab-placeholder">Encoder configuration placeholder.</div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
+</section>
+
+        </div>
+    </div>
+</div>
 
         <div id="view-videos" class="view-section" style="display:none;">
             <div id="videos-topbar"></div>
