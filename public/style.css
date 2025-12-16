@@ -1528,11 +1528,11 @@ body.go-live-open {
 
 .go-live-studio.ui-advanced .go-live-views,
 .go-live-studio.ui-advanced #go-live-advanced-view {
-    flex: 1;
+    flex: 0 0 auto;
     display: flex;
     flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
+    min-height: auto;
+    overflow: visible;
 }
 
 .go-live-studio.ui-basic .topbar-status-chip {
@@ -1980,7 +1980,18 @@ body.go-live-open {
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr) 220px;
     gap: 12px;
-    flex: 1;
+    flex: 0 0 auto;
+    min-height: auto;
+}
+
+.advanced-stage,
+.go-live-studio.ui-advanced .advanced-config,
+.go-live-studio.ui-advanced .advanced-grid,
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
+    grid-column: 1 / -1;
+}
+
+.advanced-stage {
     min-height: 0;
     height: 100%;
 }
@@ -2018,24 +2029,6 @@ body.go-live-open {
 
 .go-live-studio.ui-advanced #advanced-tabs-gl-pane {
     grid-row: 4;
-    height: 100%;
-    min-height: 0;
-    position: relative;
-    z-index: auto;
-    overflow: hidden;
-}
-
-.go-live-studio.ui-advanced .advanced-config {
-    grid-row: 1;
-}
-
-.go-live-studio.ui-advanced .advanced-grid {
-    grid-row: 2;
-    min-height: 0;
-}
-
-.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
-    grid-row: 3;
     height: 100%;
     min-height: 0;
     position: relative;
