@@ -78,6 +78,8 @@ export class NexeraGoLiveController {
             autoRecord: false,
         };
 
+        this.visibilityChoice = this.formState.visibility;
+
         this.studioRoot = null;
 
         this.scenes = [
@@ -92,6 +94,7 @@ export class NexeraGoLiveController {
         ];
         this.activePreviewSceneId = this.scenes[0].id;
         this.activeProgramSceneId = this.scenes[0].id;
+        this.selectedSceneId = this.scenes[0].id;
         this.selectedSourceId = this.sources[0].id;
         this.advancedPreferences = { latencyMode: "NORMAL", autoRecord: false };
         this.mixerState = {
@@ -138,7 +141,10 @@ export class NexeraGoLiveController {
     }
 
     setVisibility(nextVisibility) {
-        const visibility = nextVisibility === "private" ? "private" : "public";
+        const requested = nextVisibility === "private" ? "followers" : nextVisibility;
+        const choice = ["public", "followers", "unlisted"].includes(requested) ? requested : "public";
+        this.visibilityChoice = choice;
+        const visibility = choice === "public" ? "public" : "private";
         this.formState.visibility = visibility;
         this.updateVisibilityButtons();
     }
@@ -509,12 +515,15 @@ export class NexeraGoLiveController {
 
     resolveVisibilityFromDom(fallback = "public") {
         const active = document.querySelector("[data-go-live-visibility].active");
-        return active?.dataset?.goLiveVisibility || fallback;
+        const choice = active?.dataset?.goLiveVisibility || fallback;
+        const normalizedChoice = choice === "private" ? "followers" : choice;
+        this.visibilityChoice = normalizedChoice;
+        return normalizedChoice === "public" ? "public" : "private";
     }
 
     updateVisibilityButtons() {
-        const isPublic = (this.formState.visibility || "public") === "public";
-        const target = isPublic ? "public" : "private";
+        const fallback = this.formState.visibility === "public" ? "public" : "followers";
+        const target = this.visibilityChoice || fallback;
         document.querySelectorAll("[data-go-live-visibility]").forEach((btn) => {
             const isActive = btn.dataset?.goLiveVisibility === target;
             btn.classList.toggle("active", isActive);
@@ -721,7 +730,8 @@ export class NexeraGoLiveController {
         const advStart = document.getElementById("adv-start-stream");
         const advEnd = document.getElementById("adv-end-stream");
         const advPublic = document.getElementById("adv-visibility-public");
-        const advPrivate = document.getElementById("adv-visibility-private");
+        const advFollowers = document.getElementById("adv-visibility-followers");
+        const advUnlisted = document.getElementById("adv-visibility-unlisted");
 
         [advTitle, advCategory, advTags].forEach((el) => {
             if (!el) return;
@@ -756,9 +766,15 @@ export class NexeraGoLiveController {
                 this.writeStateIntoBasicForm();
             });
 
-        if (advPrivate)
-            advPrivate.addEventListener("click", () => {
-                this.setVisibility("private");
+        if (advFollowers)
+            advFollowers.addEventListener("click", () => {
+                this.setVisibility("followers");
+                this.writeStateIntoBasicForm();
+            });
+
+        if (advUnlisted)
+            advUnlisted.addEventListener("click", () => {
+                this.setVisibility("unlisted");
                 this.writeStateIntoBasicForm();
             });
 
@@ -1151,19 +1167,17 @@ export class NexeraGoLiveController {
         this.sceneListEl = document.getElementById("scene-list");
         this.sourceListEl = document.getElementById("source-list");
         const addSceneBtn = document.getElementById("add-scene-btn");
+        const removeSceneBtn = document.getElementById("remove-scene-btn");
         const addSourceBtn = document.getElementById("add-source-btn");
+        const removeSourceBtn = document.getElementById("remove-source-btn");
         const cutBtn = document.getElementById("transition-cut");
         const fadeBtn = document.getElementById("transition-fade");
         const autoBtn = document.getElementById("transition-auto");
 
-        if (addSceneBtn)
-            addSceneBtn.addEventListener("click", () => {
-                alert("Scene creation coming soon.");
-            });
-        if (addSourceBtn)
-            addSourceBtn.addEventListener("click", () => {
-                alert("Source picker coming soon.");
-            });
+        if (addSceneBtn) addSceneBtn.addEventListener("click", () => this.addScene());
+        if (removeSceneBtn) removeSceneBtn.addEventListener("click", () => this.removeScene());
+        if (addSourceBtn) addSourceBtn.addEventListener("click", () => this.addSource());
+        if (removeSourceBtn) removeSourceBtn.addEventListener("click", () => this.removeSource());
         if (cutBtn)
             cutBtn.addEventListener("click", () => {
                 this.applyTransition("cut");
@@ -1177,6 +1191,16 @@ export class NexeraGoLiveController {
                 this.applyTransition("auto");
             });
 
+        if (!this.sceneMenuOutsideHandler) {
+            this.sceneMenuOutsideHandler = (event) => {
+                if (!event.target.closest(".scene-menu") && !event.target.closest(".scene-menu-trigger")) {
+                    this.closeSceneMenus();
+                }
+            };
+            document.addEventListener("click", this.sceneMenuOutsideHandler);
+        }
+
+        this.selectedSceneId = this.activePreviewSceneId;
         this.syncSceneForInput();
         this.renderScenes();
         this.renderSources();
@@ -1224,7 +1248,7 @@ export class NexeraGoLiveController {
             }
             if (meter) {
                 const width = state.muted ? 0 : Math.min(100, state.gain);
-                meter.style.width = `${width}%`;
+                meter.style.setProperty("--meter-fill", `${width}%`);
                 meter.style.opacity = state.muted ? "0.3" : "1";
             }
             if (muteBtn) {
@@ -1242,7 +1266,7 @@ export class NexeraGoLiveController {
                 const fill = document.querySelector(`.mixer-strip[data-channel="${channel}"] .meter-fill`);
                 if (fill) {
                     const jitter = Math.max(5, Math.min(100, state.gain + Math.random() * 10 - 5));
-                    fill.style.width = `${jitter}%`;
+                    fill.style.setProperty("--meter-fill", `${jitter}%`);
                 }
             });
         }, 800);
@@ -1264,17 +1288,23 @@ export class NexeraGoLiveController {
         } else {
             this.activePreviewSceneId = "scene-main";
         }
+        this.selectedSceneId = this.activePreviewSceneId;
         this.renderScenes();
     }
 
     renderScenes() {
         if (!this.sceneListEl) return;
         this.sceneListEl.innerHTML = "";
-        this.scenes.forEach((scene) => {
-            const row = document.createElement("button");
-            row.type = "button";
+        if (!this.selectedSceneId && this.scenes.length) {
+            this.selectedSceneId = this.scenes[0].id;
+        }
+
+        this.scenes.forEach((scene, index) => {
+            const row = document.createElement("div");
             row.className = "scene-row";
             row.dataset.sceneId = scene.id;
+            row.setAttribute("role", "button");
+            row.tabIndex = 0;
             const statusLabel =
                 scene.id === this.activeProgramSceneId
                     ? "Program"
@@ -1283,16 +1313,119 @@ export class NexeraGoLiveController {
                     : "Standby";
             if (scene.id === this.activePreviewSceneId) row.classList.add("active");
             if (scene.id === this.activeProgramSceneId) row.classList.add("program");
-            row.innerHTML = `<span>${scene.name}</span><span class="muted">${statusLabel}</span>`;
-            row.addEventListener("click", () => this.setPreviewScene(scene.id));
+            if (scene.id === this.selectedSceneId) row.classList.add("selected");
+
+            const labels = document.createElement("div");
+            labels.className = "scene-labels";
+            labels.innerHTML = `<span>${scene.name}</span><span class="muted">${statusLabel}</span>`;
+
+            const menuTrigger = document.createElement("button");
+            menuTrigger.type = "button";
+            menuTrigger.className = "scene-menu-trigger";
+            menuTrigger.setAttribute("aria-label", `Scene ${index + 1} options`);
+            menuTrigger.innerHTML = "⋯";
+
+            const menu = document.createElement("div");
+            menu.className = "scene-menu";
+            const renameBtn = document.createElement("button");
+            renameBtn.type = "button";
+            renameBtn.textContent = "Rename";
+            renameBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.renameScene(scene.id);
+                this.closeSceneMenus();
+            });
+            const deleteBtn = document.createElement("button");
+            deleteBtn.type = "button";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.removeScene(scene.id);
+                this.closeSceneMenus();
+            });
+            menu.append(renameBtn, deleteBtn);
+
+            menuTrigger.addEventListener("click", (e) => {
+                e.stopPropagation();
+                this.toggleSceneMenu(menu);
+            });
+
+            row.addEventListener("click", () => {
+                this.selectedSceneId = scene.id;
+                this.setPreviewScene(scene.id);
+                this.closeSceneMenus();
+            });
+
+            row.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    this.selectedSceneId = scene.id;
+                    this.setPreviewScene(scene.id);
+                    this.closeSceneMenus();
+                }
+            });
+
+            row.append(labels, menuTrigger, menu);
             this.sceneListEl.appendChild(row);
         });
+        this.updateSceneBadges();
+    }
+
+    toggleSceneMenu(menu) {
+        if (!menu) return;
+        const isOpen = menu.classList.contains("open");
+        this.closeSceneMenus();
+        menu.classList.toggle("open", !isOpen);
+    }
+
+    closeSceneMenus() {
+        document.querySelectorAll(".scene-menu.open").forEach((menu) => menu.classList.remove("open"));
+    }
+
+    renameScene(sceneId) {
+        const scene = this.scenes.find((s) => s.id === sceneId);
+        if (!scene) return;
+        const nextName = prompt("Rename scene", scene.name);
+        if (!nextName) return;
+        scene.name = nextName.trim();
+        this.renderScenes();
+        this.updateSceneBadges();
+    }
+
+    addScene() {
+        const nextIndex = this.scenes.length + 1;
+        const id = `scene-${Date.now()}`;
+        this.scenes.push({ id, name: `Scene ${nextIndex}`, sources: [] });
+        this.activePreviewSceneId = this.activePreviewSceneId || id;
+        this.selectedSceneId = id;
+        this.renderScenes();
+        this.updateSceneBadges();
+    }
+
+    removeScene(sceneId = this.selectedSceneId || this.activePreviewSceneId) {
+        if (!sceneId) return;
+        if (this.scenes.length <= 1) {
+            alert("Keep at least one scene available.");
+            return;
+        }
+        const scene = this.scenes.find((s) => s.id === sceneId);
+        if (!scene) return;
+        const shouldDelete = confirm("Are you sure?");
+        if (!shouldDelete) return;
+        this.scenes = this.scenes.filter((s) => s.id !== sceneId);
+        if (this.activePreviewSceneId === sceneId) this.activePreviewSceneId = this.scenes[0]?.id || null;
+        if (this.activeProgramSceneId === sceneId) this.activeProgramSceneId = this.scenes[0]?.id || null;
+        if (this.selectedSceneId === sceneId) this.selectedSceneId = this.scenes[0]?.id || null;
+        this.renderScenes();
         this.updateSceneBadges();
     }
 
     renderSources() {
         if (!this.sourceListEl) return;
         this.sourceListEl.innerHTML = "";
+        if (!this.selectedSourceId && this.sources.length) {
+            this.selectedSourceId = this.sources[0].id;
+        }
         this.sources.forEach((source) => {
             const row = document.createElement("button");
             row.type = "button";
@@ -1304,6 +1437,35 @@ export class NexeraGoLiveController {
             row.addEventListener("click", () => this.handleSourceSelect(source.id));
             this.sourceListEl.appendChild(row);
         });
+    }
+
+    addSource() {
+        const nextIndex = this.sources.length + 1;
+        const id = `source-${Date.now()}`;
+        this.sources.push({ id, name: `Source ${nextIndex}`, type: "camera" });
+        this.selectedSourceId = id;
+        this.handleSourceSelect(id);
+    }
+
+    removeSource(sourceId = this.selectedSourceId) {
+        if (!sourceId || this.sources.length <= 1) {
+            alert("Keep at least one source available.");
+            return;
+        }
+        const source = this.sources.find((s) => s.id === sourceId);
+        if (!source) return;
+        const shouldDelete = confirm("Are you sure?");
+        if (!shouldDelete) return;
+        this.sources = this.sources.filter((s) => s.id !== sourceId);
+        if (this.selectedSourceId === sourceId) {
+            const fallback = this.sources[0];
+            this.selectedSourceId = fallback?.id || null;
+            if (fallback) {
+                this.handleSourceSelect(fallback.id);
+                return;
+            }
+        }
+        this.renderSources();
     }
 
     setPreviewScene(sceneId) {
