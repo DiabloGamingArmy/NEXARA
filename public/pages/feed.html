@@ -589,7 +589,6 @@
                                 <div id="live-preview-shell" class="preview-visual">
                                     <video id="live-preview" autoplay muted playsinline></video>
                                     <div class="preview-overlay">
-                                        <div class="state-callout preview-corner-status" id="go-live-state-chip">Idle</div>
                                     </div>
                                 </div>
                             </div>
@@ -691,14 +690,39 @@
                     </div>
                 </div>
             </section>
-            <section id="go-live-advanced-view" class="go-live-view">
+                        <section id="go-live-advanced-view" class="go-live-view">
                 <div class="advanced-layout">
+                    <div class="gl-panel advanced-card program-card advanced-stage">
+                        <div class="program-grid">
+                            <div class="monitor preview-monitor">
+                                <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span></div>
+                                <div class="monitor-body" id="live-preview-slot-advanced"></div>
+                            </div>
+                            <div class="monitor program-monitor">
+                                <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span></div>
+                                <div class="monitor-body program-body"></div>
+                            </div>
+                        </div>
+                        <div class="program-meta">
+                            <div class="live-indicator" id="program-live-indicator"><span id="program-live-label">Idle</span></div>
+                            <div class="program-timer" id="program-timer">00:00:00</div>
+                            <div class="program-notes" id="program-notes">Program/preview monitors ready for switching.</div>
+                        </div>
+                        <div class="transition-strip">
+                            <div class="transition-buttons">
+                                <button class="icon-pill ghost" type="button" id="transition-cut">Cut</button>
+                                <button class="icon-pill ghost" type="button" id="transition-fade">Fade</button>
+                                <button class="icon-pill ghost" type="button" id="transition-auto">Auto</button>
+                            </div>
+                            <div class="transition-duration">Transition duration: 1.5s</div>
+                        </div>
+                    </div>
                     <div class="gl-panel advanced-card advanced-config">
                         <div class="gl-panel-header">
                             <div class="section-heading">Stream Controls</div>
                             <div class="status-helper" id="go-live-status-text-secondary-adv">Manage settings before going live.</div>
                         </div>
-                        <div class="config-grid">
+                        <div class="advanced-controls-list">
                             <div class="gl-field">
                                 <label class="gl-label" for="adv-stream-title">Title</label>
                                 <input id="adv-stream-title" class="form-input" placeholder="Name your stream">
@@ -733,13 +757,12 @@
                                     <span class="slider"></span>
                                 </label>
                             </div>
-                        </div>
-                        <div class="advanced-actions">
-                            <div class="gl-row align-center gap-8">
-                                <div class="gl-label muted">Visibility</div>
+                            <div class="gl-field">
+                                <label class="gl-label">Visibility</label>
                                 <div class="pill-row">
                                     <button class="ghost-pill active" type="button" id="adv-visibility-public" data-go-live-visibility="public">Public</button>
-                                    <button class="ghost-pill" type="button" id="adv-visibility-private" data-go-live-visibility="private">Private</button>
+                                    <button class="ghost-pill" type="button" id="adv-visibility-followers" data-go-live-visibility="followers">Followers only</button>
+                                    <button class="ghost-pill" type="button" id="adv-visibility-unlisted" data-go-live-visibility="unlisted">Unlisted</button>
                                 </div>
                             </div>
                             <div class="control-row">
@@ -749,46 +772,29 @@
                         </div>
                     </div>
                     <div class="advanced-grid">
-                        <div class="gl-panel advanced-card scenes-panel">
-                            <div class="gl-panel-header">
-                                <div class="section-heading">Scenes &amp; Sources</div>
-                                <div class="scene-actions">
-                                    <button class="icon-pill ghost" type="button" id="add-scene-btn"><i class="ph ph-plus"></i> Scene</button>
-                                    <button class="icon-pill ghost" type="button" id="add-source-btn"><i class="ph ph-plus"></i> Source</button>
+                        <div class="scenes-column">
+                            <div class="gl-panel advanced-card scenes-panel">
+                                <div class="gl-panel-header">
+                                    <div class="section-heading">Scenes</div>
+                                </div>
+                                <div class="scene-search">
+                                    <input class="form-input" type="text" placeholder="Search scenes">
+                                </div>
+                                <div class="scene-list" id="scene-list"></div>
+                                <div class="scene-actions-row">
+                                    <button class="icon-pill ghost" type="button" id="add-scene-btn"><i class="ph ph-plus"></i> Add</button>
+                                    <button class="icon-pill ghost" type="button" id="remove-scene-btn"><i class="ph ph-minus"></i> Remove</button>
                                 </div>
                             </div>
-                            <div class="scene-search">
-                                <input class="form-input" type="text" placeholder="Search scenes">
-                            </div>
-                            <div class="scene-list" id="scene-list"></div>
-                            <div class="source-subpanel">
-                                <div class="section-subheading">Sources</div>
+                            <div class="gl-panel advanced-card sources-panel">
+                                <div class="gl-panel-header">
+                                    <div class="section-heading">Sources</div>
+                                </div>
                                 <div class="source-list" id="source-list"></div>
-                            </div>
-                        </div>
-                        <div class="gl-panel advanced-card program-card">
-                            <div class="program-grid">
-                                <div class="monitor preview-monitor">
-                                    <div class="monitor-label">PREVIEW <span class="scene-pill" id="preview-scene-label">Scene 1</span></div>
-                                    <div class="monitor-body" id="live-preview-slot-advanced"></div>
+                                <div class="source-actions-row">
+                                    <button class="icon-pill ghost" type="button" id="add-source-btn"><i class="ph ph-plus"></i> Add</button>
+                                    <button class="icon-pill ghost" type="button" id="remove-source-btn"><i class="ph ph-minus"></i> Remove</button>
                                 </div>
-                                <div class="monitor program-monitor">
-                                    <div class="monitor-label">PROGRAM <span class="scene-pill" id="program-scene-label">Scene 1</span></div>
-                                    <div class="monitor-body program-body"></div>
-                                </div>
-                            </div>
-                            <div class="program-meta">
-                                <div class="live-indicator" id="program-live-indicator"><span id="program-live-label">Idle</span></div>
-                                <div class="program-timer" id="program-timer">00:00:00</div>
-                                <div class="program-notes" id="program-notes">Program/preview monitors ready for switching.</div>
-                            </div>
-                            <div class="transition-strip">
-                                <div class="transition-buttons">
-                                    <button class="icon-pill ghost" type="button" id="transition-cut">Cut</button>
-                                    <button class="icon-pill ghost" type="button" id="transition-fade">Fade</button>
-                                    <button class="icon-pill ghost" type="button" id="transition-auto">Auto</button>
-                                </div>
-                                <div class="transition-duration">Transition duration: 1.5s</div>
                             </div>
                         </div>
                         <div class="advanced-right">
@@ -857,43 +863,46 @@
                                     <div class="session-row"><span class="muted">Ingest</span><span id="session-ingest-advanced" class="muted">—</span></div>
                                     <div class="session-row"><span class="muted">Playback</span><span id="session-playback-advanced" class="muted">—</span></div>
                                     <div class="session-row"><span class="muted">Latency</span><span id="session-latency-advanced" class="muted">—</span></div>
-                                    <div class="session-row"><span class="muted">Auto-record</span><span id="session-auto-advanced" class="muted">—</span></div>
+                                    <div class="session-row"><span class="muted">Mode</span><span id="session-mode-advanced" class="muted">—</span></div>
                                 </div>
-                            </div>
-                            <div class="gl-panel advanced-card obs-advanced">
-                                <div class="gl-panel-header">
-                                    <div class="section-heading">OBS / External Encoder</div>
-                                </div>
-                                <div id="obs-panel-slot-advanced" class="obs-slot helper-text">External encoder info will appear here when selected.</div>
+                                <div class="obs-slot subtle-panel" id="obs-panel-advanced" aria-live="polite">OBS ingest coordinates will appear here.</div>
                             </div>
                         </div>
                     </div>
-                    <div class="gl-panel advanced-tabs" id="advanced-tabs-gl-pane">
-                        <div class="tab-row" role="tablist" aria-label="Go Live docked panels">
-                            <button class="tab active" type="button" role="tab" aria-selected="true" data-tab-target="logs">Logs</button>
-                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="chat">Chat</button>
-                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="events">Stream Events</button>
-                            <button class="tab" type="button" role="tab" aria-selected="false" data-tab-target="encoder">Encoder</button>
+                    <div class="gl-panel advanced-card advanced-tabs" id="advanced-tabs-gl-pane">
+                        <div class="tab-row" role="tablist">
+                            <button class="tab active" data-tab-target="logs" aria-selected="true" role="tab">Logs</button>
+                            <button class="tab" data-tab-target="chat" aria-selected="false" role="tab">Chat</button>
+                            <button class="tab" data-tab-target="events" aria-selected="false" role="tab">Stream Events</button>
+                            <button class="tab" data-tab-target="encoder" aria-selected="false" role="tab">Encoder</button>
                         </div>
                         <div class="tab-panels">
-                            <div class="tab-panel show" data-tab-panel="logs" role="tabpanel" aria-label="Logs">
-                                <pre class="log-feed" id="go-live-log-advanced">Awaiting logs...</pre>
+                            <div class="tab-panel show" data-tab-panel="logs" role="tabpanel">
+                                <div class="gl-row align-center" style="justify-content: space-between;">
+                                    <div class="section-heading">Live Logs</div>
+                                    <button class="icon-pill ghost" id="clear-log"><i class="ph ph-trash"></i> Clear</button>
+                                </div>
+                                <pre class="log-feed" id="go-live-log"></pre>
                             </div>
-                            <div class="tab-panel" data-tab-panel="chat" role="tabpanel" aria-label="Chat" aria-hidden="true">
-                                <div class="placeholder-block">Chat coming soon.</div>
+                            <div class="tab-panel" data-tab-panel="chat" role="tabpanel" aria-hidden="true" hidden>
+                                <div class="section-heading">Stream Chat</div>
+                                <div class="placeholder-block">Chat integration coming soon.</div>
                             </div>
-                            <div class="tab-panel" data-tab-panel="events" role="tabpanel" aria-label="Stream Events" aria-hidden="true">
-                                <div class="placeholder-block">Track stream events here.</div>
+                            <div class="tab-panel" data-tab-panel="events" role="tabpanel" aria-hidden="true" hidden>
+                                <div class="section-heading">Events</div>
+                                <div class="placeholder-block">Stream events will appear here.</div>
                             </div>
-                            <div class="tab-panel" data-tab-panel="encoder" role="tabpanel" aria-label="Encoder" aria-hidden="true">
+                            <div class="tab-panel" data-tab-panel="encoder" role="tabpanel" aria-hidden="true" hidden>
+                                <div class="section-heading">Encoder</div>
                                 <div class="placeholder-block" id="encoder-tab-placeholder">Encoder configuration placeholder.</div>
                             </div>
                         </div>
-                    </section>
+                    </div>
                 </div>
-            </section>
+                                    </section>
         </div>
     </div>
+</div>
 
         <div id="view-videos" class="view-section" style="display:none;">
             <div id="videos-topbar"></div>
