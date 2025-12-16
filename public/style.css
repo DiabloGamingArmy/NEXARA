@@ -2025,6 +2025,24 @@ body.go-live-open {
     overflow: hidden;
 }
 
+.go-live-studio.ui-advanced .advanced-config {
+    grid-row: 1;
+}
+
+.go-live-studio.ui-advanced .advanced-grid {
+    grid-row: 2;
+    min-height: 0;
+}
+
+.go-live-studio.ui-advanced #advanced-tabs-gl-pane {
+    grid-row: 3;
+    height: 100%;
+    min-height: 0;
+    position: relative;
+    z-index: auto;
+    overflow: hidden;
+}
+
 .advanced-card {
     gap: 12px;
 }
