@@ -128,6 +128,11 @@ export class NexeraGoLiveController {
             localStorage.getItem(UI_MODE_STORAGE_KEY) || localStorage.getItem(LEGACY_UI_MODE_STORAGE_KEY) || "basic";
         this.uiMode = storedMode === "advanced" ? "advanced" : "basic";
         this.logEntries = [];
+        this.eventLogEntries = [];
+        this.chatLogEntries = [];
+        this.latestStats = { note: "Idle" };
+        this.encoderKeyVisible = false;
+        this.dockEncoderKeyVisible = false;
         this.audioGains = this.loadAudioGains();
 
         this.mobileMedia = window.matchMedia ? window.matchMedia("(max-width: 820px)") : null;
@@ -187,6 +192,16 @@ export class NexeraGoLiveController {
         this.updateEncoderTab();
         this.updateMonitorBadges();
 
+        if (normalized === "external") {
+            this.recordEvent("External encoder selected");
+            this.prepareExternalEncoderSession().catch((error) => {
+                console.error("[GoLive] external encoder prep failed", error);
+                this.log(`External encoder prep failed: ${error.message || error}`);
+            });
+        } else {
+            this.renderExternalEncoderPanel();
+        }
+
         if (this.stream) {
             this.setupAudioPipeline(this.stream);
         } else {
@@ -212,6 +227,8 @@ export class NexeraGoLiveController {
             this.setStatus(this.state);
             this.applyAudioGains();
             this.renderLogEntries();
+            this.recordChatLog("Chat log ready.");
+            this.recordEvent("Go Live UI ready");
             return;
         }
 
@@ -478,10 +495,7 @@ export class NexeraGoLiveController {
         if (titleEl) titleEl.value = this.formState.title || "";
         if (categoryEl) categoryEl.value = this.formState.category || "";
         if (tagsEl) tagsEl.value = Array.isArray(this.formState.tags) ? this.formState.tags.join(", ") : this.formState.tags || "";
-        if (inputModeEl) {
-            const nextMode = this.formState.inputMode === "external" ? "camera" : this.formState.inputMode;
-            inputModeEl.value = nextMode || "camera";
-        }
+        if (inputModeEl) inputModeEl.value = this.formState.inputMode || "camera";
         if (latencyEl) latencyEl.value = (this.formState.latencyMode || "NORMAL").toUpperCase();
         if (autoRecordEl) autoRecordEl.checked = !!this.formState.autoRecord;
 
@@ -863,13 +877,28 @@ export class NexeraGoLiveController {
                 else window.location.hash = "#feed";
             });
 
+        const toggleStreamKey = document.getElementById("toggle-stream-key");
+        const copyStreamKey = document.getElementById("copy-stream-key");
+        const dockToggleStreamKey = document.getElementById("dock-toggle-stream-key");
+        const dockCopyStreamKey = document.getElementById("dock-copy-stream-key");
+
+        if (toggleStreamKey) toggleStreamKey.addEventListener("click", () => this.toggleEncoderKeyVisibility("inline"));
+        if (dockToggleStreamKey) dockToggleStreamKey.addEventListener("click", () => this.toggleEncoderKeyVisibility("dock"));
+        if (copyStreamKey) copyStreamKey.addEventListener("click", () => this.copyEncoderKey());
+        if (dockCopyStreamKey) dockCopyStreamKey.addEventListener("click", () => this.copyEncoderKey());
+
+        this.bindBasicDock();
         this.bindTabs();
+        this.bindLogControls();
         this.bindSceneAndSources();
         this.bindMixerControls();
         this.bindExternalBridge();
 
         this.applyUIMode(this.uiMode, { skipPersist: true });
         this.syncControls();
+        this.renderDockStatus();
+        this.renderChatLog();
+        this.renderEventLog();
         this.uiBound = true;
     }
 
@@ -932,7 +961,10 @@ export class NexeraGoLiveController {
 
         if (previous !== state || message) {
             this.log(`State: ${detail}`);
+            this.recordEvent(`State changed to ${detail}`);
         }
+
+        this.renderDockStatus();
 
         if (state === "live") {
             if (!this.liveStartTime) this.liveStartTime = Date.now();
@@ -987,11 +1019,32 @@ export class NexeraGoLiveController {
         decorate(advEnd, "btn-danger");
     }
 
+    appendLogEntry(list, entry, limit = 200) {
+        list.push(entry);
+        if (list.length > limit) list.shift();
+    }
+
     log(message) {
         const entry = `${new Date().toLocaleTimeString()} – ${message}`;
-        this.logEntries.push(entry);
-        if (this.logEntries.length > 200) this.logEntries.shift();
+        this.appendLogEntry(this.logEntries, entry);
         console.log("[GoLive]", message);
+        this.renderLogEntries();
+    }
+
+    recordEvent(message) {
+        const entry = `${new Date().toLocaleTimeString()} – ${message}`;
+        this.appendLogEntry(this.eventLogEntries, entry);
+        this.renderEventLog();
+    }
+
+    recordChatLog(message) {
+        const entry = `${new Date().toLocaleTimeString()} – ${message}`;
+        this.appendLogEntry(this.chatLogEntries, entry);
+        this.renderChatLog();
+    }
+
+    clearLogs() {
+        this.logEntries = [];
         this.renderLogEntries();
     }
 
@@ -1004,6 +1057,7 @@ export class NexeraGoLiveController {
 
     renderLogEntries() {
         const logEl = document.getElementById("go-live-log");
+        const dockLog = document.getElementById("go-live-log-dock");
         const advLogEl = document.getElementById("go-live-log-advanced");
         const recent = this.logEntries.slice(-50);
 
@@ -1012,8 +1066,29 @@ export class NexeraGoLiveController {
             logEl.scrollTop = logEl.scrollHeight;
         }
 
+        if (dockLog) {
+            dockLog.innerHTML = recent.map((line) => `<div class="log-line">${line}</div>`).join("");
+            dockLog.scrollTop = dockLog.scrollHeight;
+        }
+
         if (advLogEl) {
             advLogEl.textContent = recent.join("\n");
+        }
+    }
+
+    renderEventLog() {
+        const eventsEl = document.getElementById("stream-events-log");
+        if (eventsEl) {
+            eventsEl.innerHTML = this.eventLogEntries.map((line) => `<div class="log-line">${line}</div>`).join("");
+            eventsEl.scrollTop = eventsEl.scrollHeight;
+        }
+    }
+
+    renderChatLog() {
+        const chatEl = document.getElementById("chat-log-feed");
+        if (chatEl) {
+            chatEl.innerHTML = this.chatLogEntries.map((line) => `<div class="log-line">${line}</div>`).join("");
+            chatEl.scrollTop = chatEl.scrollHeight;
         }
     }
 
@@ -1049,12 +1124,116 @@ export class NexeraGoLiveController {
             ["session-playback-advanced", details.playback],
             ["session-latency-advanced", details.latency],
             ["session-auto-advanced", details.autoRecord === true ? "On" : details.autoRecord === false ? "Off" : details.autoRecord],
+            ["dock-session-id", details.id],
+            ["dock-session-arn", details.arn],
+            ["dock-session-ingest", details.ingest],
+            ["dock-session-playback", details.playback],
+            ["dock-session-latency", details.latency],
+            ["dock-session-mode", this.formState.inputMode || this.inputMode || "—"],
         ];
 
         targets.forEach(([id, value]) => {
             const el = document.getElementById(id);
             if (el) el.textContent = value ?? "—";
         });
+
+        this.renderExternalEncoderPanel();
+    }
+
+    renderExternalEncoderPanel() {
+        const ingestUrl =
+            this.session?.rtmpsIngestUrl ||
+            (this.session?.ingestEndpoint ? `rtmps://${this.session.ingestEndpoint}:443/app/` : "");
+        const streamKey = this.session?.streamKey || "";
+        const inlinePanel = document.getElementById("external-encoder-panel");
+        const dockPanel = document.getElementById("dock-encoder-panel");
+        const showInline = this.inputMode === "external";
+
+        if (inlinePanel) inlinePanel.classList.toggle("is-hidden", !showInline);
+
+        const inlineIngest = document.getElementById("external-ingest-url");
+        if (inlineIngest) inlineIngest.textContent = ingestUrl || "—";
+
+        const inlineKey = document.getElementById("external-stream-key");
+        if (inlineKey) {
+            inlineKey.value = streamKey;
+            inlineKey.type = this.encoderKeyVisible ? "text" : "password";
+        }
+
+        const inlineToggle = document.getElementById("toggle-stream-key");
+        if (inlineToggle) inlineToggle.textContent = this.encoderKeyVisible ? "Hide" : "Show";
+
+        const dockToggle = document.getElementById("dock-toggle-stream-key");
+        if (dockToggle) dockToggle.textContent = this.dockEncoderKeyVisible ? "Hide" : "Show";
+
+        const dockIngest = document.getElementById("dock-encoder-ingest");
+        if (dockIngest) dockIngest.textContent = streamKey ? ingestUrl || "—" : "Select External Encoder to view details.";
+
+        const dockKey = document.getElementById("dock-encoder-key");
+        if (dockKey) {
+            dockKey.value = streamKey;
+            dockKey.type = this.dockEncoderKeyVisible ? "text" : "password";
+        }
+
+        if (dockPanel) {
+            dockPanel.classList.toggle("muted", !streamKey);
+        }
+    }
+
+    renderDockStatus(stats = {}) {
+        const currentStats = Object.keys(stats || {}).length ? stats : this.latestStats || {};
+        const stateLabel = this.state ? this.state.charAt(0).toUpperCase() + this.state.slice(1) : "Idle";
+        const inputLabel = this.inputMode ? this.inputMode.charAt(0).toUpperCase() + this.inputMode.slice(1) : "Camera";
+        const latencyLabel = (this.latencyMode || "NORMAL") === "LOW" ? "Low Latency" : "Normal";
+        const metricsEl = document.getElementById("dock-stream-metrics");
+        const metricsText = currentStats.available === false
+            ? currentStats.note || "Stats unavailable"
+            : currentStats.bitrate
+            ? `${Math.round(currentStats.bitrate)} kbps${currentStats.rtt ? ` · ${currentStats.rtt} ms` : ""}`
+            : currentStats.note || "No stats yet.";
+
+        const targets = [
+            ["dock-stream-state", stateLabel],
+            ["dock-stream-input", inputLabel],
+            ["dock-stream-latency", latencyLabel],
+        ];
+
+        targets.forEach(([id, value]) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value;
+        });
+
+        if (metricsEl) metricsEl.textContent = metricsText;
+    }
+
+    toggleEncoderKeyVisibility(target = "inline") {
+        if (target === "dock") {
+            this.dockEncoderKeyVisible = !this.dockEncoderKeyVisible;
+        } else {
+            this.encoderKeyVisible = !this.encoderKeyVisible;
+        }
+        this.renderExternalEncoderPanel();
+    }
+
+    async copyEncoderKey() {
+        const key = this.session?.streamKey || "";
+        if (!key) {
+            this.log("No stream key available to copy");
+            return;
+        }
+
+        try {
+            if (navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(key);
+                this.log("Stream key copied to clipboard");
+                this.recordEvent("Stream key copied");
+            } else {
+                throw new Error("Clipboard API unavailable");
+            }
+        } catch (error) {
+            console.error("[GoLive] copy stream key failed", error);
+            this.log(`Copy failed: ${error.message || error}`);
+        }
     }
 
     renderStats(stats = {}) {
@@ -1070,6 +1249,8 @@ export class NexeraGoLiveController {
         const duration = new Date(durationMs).toISOString().substring(11, 19);
         const audioTracks = this.stream?.getAudioTracks()?.length || 0;
         const videoTracks = this.stream?.getVideoTracks()?.length || 0;
+
+        this.latestStats = { ...stats, duration };
 
         const fields = {
             "adv-stat-ingest": stats.ingestEndpoint || this.session?.ingestEndpoint || "—",
@@ -1087,6 +1268,8 @@ export class NexeraGoLiveController {
             const el = document.getElementById(id);
             if (el) el.textContent = value ?? "—";
         });
+
+        this.renderDockStatus(stats);
 
         const programTimer = document.getElementById("program-timer");
         if (programTimer) programTimer.textContent = duration;
@@ -1241,18 +1424,65 @@ export class NexeraGoLiveController {
         }
     }
 
+    bindBasicDock() {
+        const dock = document.getElementById("basic-dock");
+        if (!dock) return;
+
+        const tabs = Array.from(dock.querySelectorAll(".basic-dock-tab"));
+        const panels = Array.from(dock.querySelectorAll(".basic-dock-panel"));
+
+        const activate = (targetId) => {
+            tabs.forEach((tab) => {
+                const isActive = tab.dataset.dockTab === targetId;
+                tab.classList.toggle("is-active", isActive);
+                tab.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+
+            panels.forEach((panel) => {
+                const isActive = panel.id === targetId;
+                panel.classList.toggle("is-active", isActive);
+                panel.setAttribute("aria-hidden", isActive ? "false" : "true");
+                panel.toggleAttribute("hidden", !isActive);
+            });
+        };
+
+        dock.addEventListener("click", (event) => {
+            const button = event.target.closest(".basic-dock-tab");
+            if (!button || !dock.contains(button)) return;
+            event.preventDefault();
+            const targetId = button.dataset.dockTab;
+            if (targetId) activate(targetId);
+        });
+
+        const defaultTab = tabs.find((t) => t.classList.contains("is-active"))?.dataset.dockTab || tabs[0]?.dataset.dockTab;
+        if (defaultTab) activate(defaultTab);
+    }
+
     bindTabs() {
-        const tabs = Array.from(document.querySelectorAll("[data-tab-target]"));
-        const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+        const scope = this.root || document;
+        const tabs = Array.from(scope.querySelectorAll("[data-tab-target]"));
+        const panels = Array.from(scope.querySelectorAll("[data-tab-panel]"));
         if (!tabs.length || !panels.length) return;
 
-        const activateTab = (target) => {
-            tabs.forEach((tab) => {
+        const groups = new Map();
+        const getGroup = (id) => {
+            const key = id || "default";
+            if (!groups.has(key)) groups.set(key, { tabs: [], panels: [] });
+            return groups.get(key);
+        };
+
+        tabs.forEach((tab) => getGroup(tab.dataset.tabGroup).tabs.push(tab));
+        panels.forEach((panel) => getGroup(panel.dataset.tabGroup).panels.push(panel));
+
+        const activateTab = (groupId, target) => {
+            const group = groups.get(groupId || "default");
+            if (!group) return;
+            group.tabs.forEach((tab) => {
                 const isActive = tab.dataset.tabTarget === target;
                 tab.classList.toggle("active", isActive);
                 tab.setAttribute("aria-selected", isActive ? "true" : "false");
             });
-            panels.forEach((panel) => {
+            group.panels.forEach((panel) => {
                 const match = panel.dataset.tabPanel === target;
                 panel.classList.toggle("show", match);
                 panel.toggleAttribute("hidden", !match);
@@ -1260,18 +1490,28 @@ export class NexeraGoLiveController {
             });
         };
 
-        tabs.forEach((tab) => {
-            tab.addEventListener("click", () => activateTab(tab.dataset.tabTarget));
-            tab.addEventListener("keydown", (e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    activateTab(tab.dataset.tabTarget);
-                }
+        groups.forEach((group, groupId) => {
+            group.tabs.forEach((tab) => {
+                tab.addEventListener("click", () => activateTab(groupId, tab.dataset.tabTarget));
+                tab.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        activateTab(groupId, tab.dataset.tabTarget);
+                    }
+                });
             });
-        });
 
-        const defaultTab = tabs.find((t) => t.classList.contains("active"))?.dataset.tabTarget || tabs[0]?.dataset.tabTarget;
-        if (defaultTab) activateTab(defaultTab);
+            const defaultTab =
+                group.tabs.find((t) => t.classList.contains("active"))?.dataset.tabTarget || group.tabs[0]?.dataset.tabTarget;
+            if (defaultTab) activateTab(groupId, defaultTab);
+        });
+    }
+
+    bindLogControls() {
+        [document.getElementById("clear-log"), document.getElementById("clear-log-dock")].forEach((btn) => {
+            if (!btn) return;
+            btn.addEventListener("click", () => this.clearLogs());
+        });
     }
 
     bindSceneAndSources() {
@@ -1692,14 +1932,17 @@ export class NexeraGoLiveController {
 
     updateEncoderTab() {
         const encoderPlaceholder = document.getElementById("encoder-tab-placeholder");
-        if (!encoderPlaceholder) return;
-        if (this.inputMode === "external") {
-            const ingest = this.session?.ingestEndpoint || "Ingest pending…";
-            const keyState = this.session?.streamKey ? "Stream key ready" : "Stream key pending";
-            encoderPlaceholder.textContent = `RTMP ingest: ${ingest} · ${keyState}`;
-        } else {
-            encoderPlaceholder.textContent = "Encoder configuration placeholder.";
+        if (encoderPlaceholder) {
+            if (this.inputMode === "external") {
+                const ingest = this.session?.ingestEndpoint || "Ingest pending…";
+                const keyState = this.session?.streamKey ? "Stream key ready" : "Stream key pending";
+                encoderPlaceholder.textContent = `RTMP ingest: ${ingest} · ${keyState}`;
+            } else {
+                encoderPlaceholder.textContent = "Encoder configuration placeholder.";
+            }
         }
+
+        this.renderExternalEncoderPanel();
     }
 
     settingsPayload(overrides = {}) {
@@ -1812,6 +2055,106 @@ export class NexeraGoLiveController {
     // ----------------------------------------------
     // Start Stream
     // ----------------------------------------------
+    async ensureSession(options = {}) {
+        const { reason = "start", overrides = {}, silent = false } = options;
+        const state = { ...this.formState, ...overrides };
+
+        const title = state.title || "";
+        const category = state.category || "";
+        const tags = Array.isArray(state.tags) ? state.tags : this.parseTags(state.tags);
+        const visibility = state.visibility || "public";
+        const latencyMode = (state.latencyMode || this.latencyMode || "NORMAL").toUpperCase() === "LOW" ? "LOW" : "NORMAL";
+        const autoRecord = !!state.autoRecord;
+
+        const user = this.auth?.currentUser;
+        if (!user) {
+            throw new Error("User must be signed in to start streaming");
+        }
+
+        if (this.session?.sessionId) {
+            this.session = {
+                ...this.session,
+                title,
+                category,
+                tags,
+                visibility,
+                latencyMode,
+                autoRecord,
+            };
+            await this.persistLiveSnapshot({ title, category, tags, visibility, latencyMode, autoRecord });
+            this.renderSessionDetails();
+            this.updateEncoderTab();
+            return this.session;
+        }
+
+        const idToken = await user.getIdToken();
+        const payload = { title, category, tags, latencyMode, autoRecord, visibility };
+
+        if (!silent) {
+            this.log(`Calling createEphemeralChannel (${reason}) with ${JSON.stringify(payload)}`);
+        }
+
+        const response = await fetch(
+            "https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify(payload),
+            }
+        );
+
+        const raw = await response.text();
+        let json = null;
+        try {
+            json = raw ? JSON.parse(raw) : null;
+        } catch (_) {
+            json = null;
+        }
+
+        if (!response.ok) {
+            const messageCandidate = json?.error?.message || json?.error || json?.message || raw || `HTTP ${response.status}`;
+            const message = typeof messageCandidate === "string" ? messageCandidate : JSON.stringify(messageCandidate);
+            console.error("[GoLive] createEphemeralChannel failed", { status: response.status, raw, json });
+            throw new Error(message);
+        }
+
+        const data = json ?? {};
+        this.session = {
+            sessionId: data.sessionId,
+            channelArn: data.channelArn,
+            playbackUrl: data.playbackUrl,
+            streamKey: data.streamKey,
+            visibility: data.visibility,
+            title,
+            category,
+            tags,
+            ingestEndpoint: data.ingestEndpoint,
+            rtmpsIngestUrl: data.rtmpsIngestUrl || (data.ingestEndpoint ? `rtmps://${data.ingestEndpoint}:443/app/` : ""),
+            latencyMode,
+            autoRecord,
+        };
+
+        this.renderSessionDetails();
+        this.updateEncoderTab();
+        await this.persistLiveSnapshot({ title, category, tags, visibility });
+        if (!silent) this.recordEvent(`Session created (${reason})`);
+        return this.session;
+    }
+
+    async prepareExternalEncoderSession() {
+        try {
+            await this.ensureSession({ reason: "external-select", overrides: { inputMode: "external", latencyMode: "NORMAL" }, silent: true });
+            this.renderExternalEncoderPanel();
+            this.recordEvent("External encoder session ready");
+        } catch (error) {
+            console.error("[GoLive] failed to prep external encoder", error);
+            this.log(`External encoder not ready: ${error.message || error}`);
+        }
+    }
+
     async primeMediaCaptureFromUserGesture() {
         const mode = this.formState.inputMode || "camera";
         this.inputMode = mode;
@@ -1896,22 +2239,6 @@ export class NexeraGoLiveController {
         this.latencyMode = state.latencyMode;
         this.autoRecord = !!state.autoRecord;
 
-        const user = this.auth?.currentUser;
-        if (!user) {
-            throw new Error("User must be signed in to start streaming");
-        }
-
-        const idToken = await user.getIdToken();
-
-        const payload = {
-            title,
-            category,
-            tags,
-            latencyMode: state.latencyMode,
-            autoRecord: !!state.autoRecord,
-            visibility,
-        };
-
         if (this.inputMode === "program" && (!this.programStream || !this.programStream.getVideoTracks().length)) {
             throw new Error("Program has no active video source");
         }
@@ -1919,62 +2246,9 @@ export class NexeraGoLiveController {
         this.log(
             `Start config -> visibility:${visibility}, latency:${state.latencyMode}, autoRecord:${!!state.autoRecord}, inputMode:${state.inputMode}`
         );
-        this.log(`Calling createEphemeralChannel with ${JSON.stringify(payload)}`);
+        this.recordEvent("Start requested");
 
-        const response = await fetch(
-            "https://us-central1-spike-streaming-service.cloudfunctions.net/createEphemeralChannel",
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${idToken}`,
-                },
-                body: JSON.stringify(payload),
-            }
-        );
-
-        const raw = await response.text();
-        let json = null;
-        try {
-            json = raw ? JSON.parse(raw) : null;
-        } catch (_) {
-            json = null;
-        }
-
-        if (!response.ok) {
-            const messageCandidate = json?.error?.message || json?.error || json?.message || raw || `HTTP ${response.status}`;
-            const message = typeof messageCandidate === "string" ? messageCandidate : JSON.stringify(messageCandidate);
-            console.error("[GoLive] createEphemeralChannel failed", { status: response.status, raw, json });
-            throw new Error(message);
-        }
-
-        const data = json ?? {};
-        this.session = {
-            sessionId: data.sessionId,
-            channelArn: data.channelArn,
-            playbackUrl: data.playbackUrl,
-            streamKey: data.streamKey,
-            visibility: data.visibility,
-            title,
-            category,
-            tags,
-            ingestEndpoint: data.ingestEndpoint,
-            rtmpsIngestUrl: data.rtmpsIngestUrl || (data.ingestEndpoint ? `rtmps://${data.ingestEndpoint}:443/app/` : ""),
-            latencyMode: state.latencyMode,
-            autoRecord: !!state.autoRecord,
-        };
-
-        this.log("createEphemeralChannel response received");
-
-        this.renderSessionDetails();
-        this.updateEncoderTab();
-
-        await this.persistLiveSnapshot({
-            title,
-            category,
-            tags,
-            visibility,
-        });
+        await this.ensureSession({ reason: "start", overrides: state });
 
         if (this.inputMode === "external") {
             this.setStatus("starting", "Waiting for external encoder");
@@ -2162,6 +2436,57 @@ export class NexeraGoLiveController {
         this.renderSessionDetails();
         this.renderStats({ note: "Idle" });
         this.updateEncoderTab();
+    }
+
+    async deleteEphemeralSession(sessionSnapshot, reason = "teardown") {
+        const sessionId = sessionSnapshot?.sessionId;
+        if (!sessionId) return;
+
+        try {
+            const user = this.auth?.currentUser;
+            const token = await user?.getIdToken?.();
+            if (!token) return;
+
+            const response = await fetch(
+                "https://us-central1-spike-streaming-service.cloudfunctions.net/deleteEphemeralChannel",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ sessionId, channelArn: sessionSnapshot.channelArn, reason }),
+                }
+            );
+
+            if (!response.ok) {
+                const raw = await response.text();
+                console.warn("[GoLive] deleteEphemeralChannel failed", { status: response.status, raw });
+                return;
+            }
+
+            this.log("Session cleaned up");
+        } catch (error) {
+            console.error("[GoLive] cleanup session failed", error);
+        }
+    }
+
+    async cleanupSessionOnExit(reason = "navigate-away") {
+        const snapshot = this.session ? { ...this.session } : null;
+        try {
+            await this.stop();
+            this.setStatus("idle");
+        } catch (error) {
+            console.error("[GoLive] failed to stop before cleanup", error);
+        }
+
+        if (snapshot) {
+            await this.deleteEphemeralSession(snapshot, reason);
+        }
+
+        this.session = null;
+        this.renderSessionDetails();
+        this.renderExternalEncoderPanel();
     }
 }
 
