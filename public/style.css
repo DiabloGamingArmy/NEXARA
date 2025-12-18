@@ -29,6 +29,7 @@ body.light-mode {
 html { height: 100%; }
 body { font-family: var(--font-main); background-color: var(--bg-body); color: var(--text-main); overflow-x: hidden; width: 100vw; min-height: 100vh; height: 100%; }
 .messages-scroll-lock { overflow: hidden; }
+.is-hidden { display: none !important; }
 
 /* --- NEXARA GRADIENTS & ANIMATIONS --- */
 @keyframes gradientFlow {
@@ -1568,14 +1569,46 @@ body.go-live-open {
 .basic-layout {
     display: grid;
     grid-template-columns: minmax(520px, 1.2fr) minmax(380px, 0.8fr);
+    grid-template-rows: auto auto;
+    grid-template-areas:
+        "preview chat"
+        "details .";
     gap: 18px;
     flex: 1;
     min-height: 0;
+    align-items: stretch;
 }
 
-.basic-preview-column,
-.basic-config-column {
+.basic-preview-pane {
+    grid-area: preview;
     min-height: 0;
+}
+
+.basic-chat-pane {
+    grid-area: chat;
+    min-height: 0;
+}
+
+.basic-config-shell {
+    grid-area: details;
+    min-height: 0;
+}
+
+.chat-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+
+.chat-feed {
+    flex: 1;
+    min-height: 0;
+    border: 1px dashed var(--gl-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.02);
+    overflow: auto;
 }
 
 .preview-pane,
@@ -2508,6 +2541,39 @@ body.go-live-open {
     flex: 1;
 }
 
+.encoder-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border: 1px dashed var(--gl-border);
+    border-radius: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.encoder-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.encoder-key {
+    flex: 1;
+    min-width: 0;
+}
+
+.encoder-key-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.encoder-key-actions .icon-pill {
+    width: 100%;
+}
+
 .session-details.subtle-panel {
     background: rgba(255, 255, 255, 0.02);
     border: 1px dashed var(--gl-border);
@@ -2574,6 +2640,27 @@ body.go-live-open {
     overflow: auto;
 }
 
+.basic-dock {
+    grid-column: 1 / -1;
+    min-height: 220px;
+    max-height: 280px;
+}
+
+.basic-dock .tab-panels {
+    min-height: 0;
+    grid-auto-rows: 1fr;
+}
+
+.basic-dock .tab-panel {
+    height: 100%;
+    overflow: auto;
+}
+
+.basic-dock .log-feed {
+    height: 100%;
+    max-height: none;
+}
+
 .tab-panel[hidden] {
     display: none;
 }
@@ -2589,6 +2676,12 @@ body.go-live-open {
     color: var(--gl-muted);
     max-height: 200px;
     overflow: auto;
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
 }
 
 .go-live-studio.ui-advanced #advanced-tabs-gl-pane .log-feed {
@@ -2621,6 +2714,11 @@ body.go-live-open {
 @media (max-width: 1000px) {
     .basic-layout {
         grid-template-columns: 1fr;
+        grid-template-areas:
+            "preview"
+            "chat"
+            "details";
+        grid-template-rows: auto;
     }
 }
 
