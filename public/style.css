@@ -1540,58 +1540,66 @@ body.go-live-open {
     display: none;
 }
 
-.go-live-view {
+#view-live-setup .go-live-view {
     flex: 1;
     display: none;
     min-height: 0;
 }
 
-.go-live-view.is-active {
+#view-live-setup .go-live-view.is-active {
     display: flex;
 }
 
-.go-live-studio.ui-basic #go-live-basic-view {
+#view-live-setup .go-live-studio.ui-basic #go-live-basic-view {
     display: flex;
 }
 
-.go-live-studio.ui-basic #go-live-advanced-view {
+#view-live-setup .go-live-studio.ui-basic #go-live-advanced-view {
     display: none;
 }
 
-.go-live-studio.ui-advanced #go-live-basic-view {
+#view-live-setup .go-live-studio.ui-advanced #go-live-basic-view {
     display: none;
 }
 
-.go-live-studio.ui-advanced #go-live-advanced-view {
+#view-live-setup .go-live-studio.ui-advanced #go-live-advanced-view {
     display: flex;
 }
 
-.basic-layout {
+#view-live-setup .basic-live-layout {
     display: grid;
     grid-template-columns: minmax(520px, 1.2fr) minmax(380px, 0.8fr);
-    grid-template-rows: auto auto;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
-        "preview chat"
-        "details .";
+        "preview details"
+        "chat details";
     gap: 18px;
     flex: 1;
     min-height: 0;
     align-items: stretch;
+    grid-auto-rows: minmax(0, 1fr);
 }
 
-.basic-preview-pane {
+#view-live-setup .basic-preview-pane {
     grid-area: preview;
     min-height: 0;
+    height: 100%;
 }
 
-.basic-chat-pane {
+#view-live-setup .basic-chat-pane {
     grid-area: chat;
+    height: 100%;
     min-height: 0;
 }
 
-.basic-config-shell {
+#view-live-setup .basic-config-shell {
     grid-area: details;
     min-height: 0;
+    height: 100%;
+}
+
+#view-live-setup .basic-chat-pane .chat-feed {
+    max-height: none;
 }
 
 .chat-panel {
@@ -2597,13 +2605,13 @@ body.go-live-open {
     height: 100%;
 }
 
-.go-live-studio .tab-row {
+#view-live-setup .go-live-studio .tab-row {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
 }
 
-.go-live-studio .tab {
+#view-live-setup .go-live-studio .tab {
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid var(--gl-border);
     padding: 8px 12px;
@@ -2612,61 +2620,87 @@ body.go-live-open {
     cursor: default;
 }
 
-.go-live-studio .tab.active {
+#view-live-setup .go-live-studio .tab.active {
     background: rgba(255, 255, 255, 0.12);
     border-color: var(--gl-accent);
 }
 
-.go-live-studio .tab-panels {
+#view-live-setup .go-live-studio .tab-panels {
     display: grid;
     gap: 10px;
 }
 
-.go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panels {
+#view-live-setup .go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panels {
     min-height: 0;
     flex: 1;
     grid-auto-rows: 1fr;
 }
 
-.go-live-studio .tab-panel {
+#view-live-setup .go-live-studio .tab-panel {
     border: 1px solid var(--gl-border);
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.35);
     padding: 12px;
 }
 
-.go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panel {
+#view-live-setup .go-live-studio.ui-advanced #advanced-tabs-gl-pane .tab-panel {
     height: 100%;
     overflow: auto;
 }
 
-.go-live-studio .basic-dock {
+#view-live-setup .basic-dock {
     grid-column: 1 / -1;
     min-height: 220px;
     max-height: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
-.go-live-studio .basic-dock .tab-panels {
+#view-live-setup .basic-dock-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+#view-live-setup .basic-dock-tab {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--gl-border);
+    padding: 8px 12px;
+    border-radius: 10px;
+    color: var(--gl-text);
+    cursor: default;
+}
+
+#view-live-setup .basic-dock-tab.is-active {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--gl-accent);
+}
+
+#view-live-setup .basic-dock-body {
+    display: grid;
+    gap: 10px;
     min-height: 0;
+    flex: 1;
     grid-auto-rows: 1fr;
 }
 
-.go-live-studio .basic-dock .tab-panel {
+#view-live-setup .basic-dock-panel {
+    border: 1px solid var(--gl-border);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.35);
+    padding: 12px;
     height: 100%;
     overflow: auto;
 }
 
-.go-live-studio .basic-dock .log-feed {
+#view-live-setup .basic-dock .log-feed {
     height: 100%;
     max-height: none;
 }
 
-.go-live-studio .tab-panel[hidden] {
+#view-live-setup .basic-dock-panel:not(.is-active) {
     display: none;
-}
-
-.go-live-studio .tab-panel:not(.show) {
-    opacity: 0.6;
 }
 
 .log-feed {
@@ -2712,7 +2746,7 @@ body.go-live-open {
 }
 
 @media (max-width: 1000px) {
-    .basic-layout {
+    #view-live-setup .basic-live-layout {
         grid-template-columns: 1fr;
         grid-template-areas:
             "preview"

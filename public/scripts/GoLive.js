@@ -887,6 +887,7 @@ export class NexeraGoLiveController {
         if (copyStreamKey) copyStreamKey.addEventListener("click", () => this.copyEncoderKey());
         if (dockCopyStreamKey) dockCopyStreamKey.addEventListener("click", () => this.copyEncoderKey());
 
+        this.bindBasicDock();
         this.bindTabs();
         this.bindLogControls();
         this.bindSceneAndSources();
@@ -1423,9 +1424,44 @@ export class NexeraGoLiveController {
         }
     }
 
+    bindBasicDock() {
+        const dock = document.getElementById("basic-dock");
+        if (!dock) return;
+
+        const tabs = Array.from(dock.querySelectorAll(".basic-dock-tab"));
+        const panels = Array.from(dock.querySelectorAll(".basic-dock-panel"));
+
+        const activate = (targetId) => {
+            tabs.forEach((tab) => {
+                const isActive = tab.dataset.dockTab === targetId;
+                tab.classList.toggle("is-active", isActive);
+                tab.setAttribute("aria-selected", isActive ? "true" : "false");
+            });
+
+            panels.forEach((panel) => {
+                const isActive = panel.id === targetId;
+                panel.classList.toggle("is-active", isActive);
+                panel.setAttribute("aria-hidden", isActive ? "false" : "true");
+                panel.toggleAttribute("hidden", !isActive);
+            });
+        };
+
+        dock.addEventListener("click", (event) => {
+            const button = event.target.closest(".basic-dock-tab");
+            if (!button || !dock.contains(button)) return;
+            event.preventDefault();
+            const targetId = button.dataset.dockTab;
+            if (targetId) activate(targetId);
+        });
+
+        const defaultTab = tabs.find((t) => t.classList.contains("is-active"))?.dataset.dockTab || tabs[0]?.dataset.dockTab;
+        if (defaultTab) activate(defaultTab);
+    }
+
     bindTabs() {
-        const tabs = Array.from(document.querySelectorAll("[data-tab-target]"));
-        const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+        const scope = this.root || document;
+        const tabs = Array.from(scope.querySelectorAll("[data-tab-target]"));
+        const panels = Array.from(scope.querySelectorAll("[data-tab-panel]"));
         if (!tabs.length || !panels.length) return;
 
         const groups = new Map();
@@ -2400,6 +2436,57 @@ export class NexeraGoLiveController {
         this.renderSessionDetails();
         this.renderStats({ note: "Idle" });
         this.updateEncoderTab();
+    }
+
+    async deleteEphemeralSession(sessionSnapshot, reason = "teardown") {
+        const sessionId = sessionSnapshot?.sessionId;
+        if (!sessionId) return;
+
+        try {
+            const user = this.auth?.currentUser;
+            const token = await user?.getIdToken?.();
+            if (!token) return;
+
+            const response = await fetch(
+                "https://us-central1-spike-streaming-service.cloudfunctions.net/deleteEphemeralChannel",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ sessionId, channelArn: sessionSnapshot.channelArn, reason }),
+                }
+            );
+
+            if (!response.ok) {
+                const raw = await response.text();
+                console.warn("[GoLive] deleteEphemeralChannel failed", { status: response.status, raw });
+                return;
+            }
+
+            this.log("Session cleaned up");
+        } catch (error) {
+            console.error("[GoLive] cleanup session failed", error);
+        }
+    }
+
+    async cleanupSessionOnExit(reason = "navigate-away") {
+        const snapshot = this.session ? { ...this.session } : null;
+        try {
+            await this.stop();
+            this.setStatus("idle");
+        } catch (error) {
+            console.error("[GoLive] failed to stop before cleanup", error);
+        }
+
+        if (snapshot) {
+            await this.deleteEphemeralSession(snapshot, reason);
+        }
+
+        this.session = null;
+        this.renderSessionDetails();
+        this.renderExternalEncoderPanel();
     }
 }
 

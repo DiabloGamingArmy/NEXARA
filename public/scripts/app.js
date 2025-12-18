@@ -2091,6 +2091,14 @@ window.navigateTo = function (viewId, pushToStack = true) {
         }
     }
 
+    if (viewId !== 'live-setup' && currentViewId === 'live-setup') {
+        if (window.__goLiveController?.cleanupSessionOnExit) {
+            window.__goLiveController.cleanupSessionOnExit('navigate-away').catch((error) =>
+                console.error('[GoLive] cleanup on navigate failed', error)
+            );
+        }
+    }
+
     if (viewId !== 'staff') {
         ListenerRegistry.unregister('staff:verificationRequests');
         ListenerRegistry.unregister('staff:reports');

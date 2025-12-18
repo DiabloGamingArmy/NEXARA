@@ -573,7 +573,7 @@
         </div>
         <div class="go-live-views">
             <section id="go-live-basic-view" class="go-live-view is-active">
-                <div class="basic-layout">
+                <div class="basic-layout basic-live-layout">
                     <div class="preview-pane gl-panel basic-preview-pane">
                         <div class="preview-pane-header">
                             <div class="status-chip-row">
@@ -711,28 +711,28 @@
                         </div>
                     </div>
                 </div>
-                <div class="gl-panel advanced-tabs basic-dock" id="basic-dock">
-                    <div class="tab-row" role="tablist">
-                        <button class="tab active" data-tab-group="basic-dock" data-tab-target="dock-logs" aria-selected="true" role="tab">Stream Logs</button>
-                        <button class="tab" data-tab-group="basic-dock" data-tab-target="dock-chat" aria-selected="false" role="tab">Chat Logs</button>
-                        <button class="tab" data-tab-group="basic-dock" data-tab-target="dock-status" aria-selected="false" role="tab">Stream Status</button>
-                        <button class="tab" data-tab-group="basic-dock" data-tab-target="dock-session" aria-selected="false" role="tab">Live Session</button>
-                        <button class="tab" data-tab-group="basic-dock" data-tab-target="dock-encoder" aria-selected="false" role="tab">Encoder</button>
-                        <button class="tab" data-tab-group="basic-dock" data-tab-target="dock-events" aria-selected="false" role="tab">Stream Events</button>
+                <div class="gl-panel basic-dock" id="basic-dock">
+                    <div class="basic-dock-tabs" role="tablist">
+                        <button class="basic-dock-tab is-active" data-dock-tab="dock-logs" aria-selected="true" type="button">Stream Logs</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-chat" aria-selected="false" type="button">Chat Logs</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-status" aria-selected="false" type="button">Stream Status</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-session" aria-selected="false" type="button">Live Session</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-encoder" aria-selected="false" type="button">Encoder</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-events" aria-selected="false" type="button">Stream Events</button>
                     </div>
-                    <div class="tab-panels">
-                        <div class="tab-panel show" data-tab-group="basic-dock" data-tab-panel="dock-logs" role="tabpanel">
+                    <div class="basic-dock-body">
+                        <section class="basic-dock-panel is-active" id="dock-logs" role="tabpanel" aria-hidden="false">
                             <div class="gl-row align-center" style="justify-content: space-between;">
                                 <div class="section-heading">Stream Logs</div>
                                 <button class="icon-pill ghost" id="clear-log-dock"><i class="ph ph-trash"></i> Clear</button>
                             </div>
                             <pre class="log-feed" id="go-live-log-dock"></pre>
-                        </div>
-                        <div class="tab-panel" data-tab-group="basic-dock" data-tab-panel="dock-chat" role="tabpanel" aria-hidden="true" hidden>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-chat" role="tabpanel" aria-hidden="true">
                             <div class="section-heading">Chat Logs</div>
                             <div class="log-feed" id="chat-log-feed"></div>
-                        </div>
-                        <div class="tab-panel" data-tab-group="basic-dock" data-tab-panel="dock-status" role="tabpanel" aria-hidden="true" hidden>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-status" role="tabpanel" aria-hidden="true">
                             <div class="section-heading">Stream Status</div>
                             <div class="status-grid">
                                 <div>
@@ -752,8 +752,8 @@
                                     <div class="muted" id="dock-stream-metrics">No stats yet.</div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="tab-panel" data-tab-group="basic-dock" data-tab-panel="dock-session" role="tabpanel" aria-hidden="true" hidden>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-session" role="tabpanel" aria-hidden="true">
                             <div class="section-heading">Live Session</div>
                             <div class="session-grid compact">
                                 <div class="session-row"><span class="muted">Session ID</span><span id="dock-session-id">—</span></div>
@@ -763,8 +763,8 @@
                                 <div class="session-row"><span class="muted">Latency</span><span id="dock-session-latency" class="muted">—</span></div>
                                 <div class="session-row"><span class="muted">Mode</span><span id="dock-session-mode" class="muted">—</span></div>
                             </div>
-                        </div>
-                        <div class="tab-panel" data-tab-group="basic-dock" data-tab-panel="dock-encoder" role="tabpanel" aria-hidden="true" hidden>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-encoder" role="tabpanel" aria-hidden="true">
                             <div class="section-heading">Encoder</div>
                             <div class="encoder-panel subtle-panel" id="dock-encoder-panel">
                                 <div class="encoder-row">
@@ -784,11 +784,11 @@
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="tab-panel" data-tab-group="basic-dock" data-tab-panel="dock-events" role="tabpanel" aria-hidden="true" hidden>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-events" role="tabpanel" aria-hidden="true">
                             <div class="section-heading">Stream Events</div>
                             <div class="log-feed" id="stream-events-log"></div>
-                        </div>
+                        </section>
                     </div>
                 </div>
             </section>
