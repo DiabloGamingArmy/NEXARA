@@ -564,8 +564,8 @@
             </div>
             <div class="topbar-right">
                 <button class="icon-pill ghost" type="button" id="refresh-permissions-btn">Refresh Web Permissions</button>
-                <label for="go-live-ui-config" class="topbar-label">UI Config:</label>
-                <select id="go-live-ui-config" class="go-live-select form-input">
+                <label for="go-live-ui-config" class="topbar-label is-hidden">UI Config:</label>
+                <select id="go-live-ui-config" class="go-live-select form-input is-hidden">
                     <option value="basic">Basic</option>
                     <option value="advanced">Advanced</option>
                 </select>
@@ -573,38 +573,39 @@
         </div>
         <div class="go-live-views">
             <section id="go-live-basic-view" class="go-live-view is-active">
-                <div class="basic-layout">
-                    <div class="basic-preview-column">
-                        <div class="preview-pane gl-panel">
-                            <div class="preview-pane-header">
-                                <div class="status-chip-row">
-                                    <div class="gl-pill go-live-status-outside" id="go-live-status">Ready</div>
-                                    <div class="gl-pill go-live-visibility-pill subtle" id="go-live-visibility-pill">Preview</div>
-                                </div>
-                                <div class="stream-health">
-                                    <span class="muted">Stream Health</span>
-                                    <div class="health-dot good"></div>
-                                </div>
+                <div class="basic-layout basic-live-layout">
+                    <div class="preview-pane gl-panel basic-preview-pane">
+                        <div class="preview-pane-header">
+                            <div class="status-chip-row">
+                                <div class="gl-pill go-live-status-outside" id="go-live-status">Ready</div>
+                                <div class="gl-pill go-live-visibility-pill subtle" id="go-live-visibility-pill">Preview</div>
                             </div>
-                            <div class="preview-video-frame" id="live-preview-slot-basic">
-                                <div id="live-preview-shell" class="preview-visual">
-                                    <video id="live-preview" autoplay muted playsinline></video>
-                                    <div class="preview-overlay">
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="preview-footer">
-                                <div class="preview-note">Use this preview to verify audio/video before you go live.</div>
-                            </div>
-                            <div class="gl-panel subtle-panel chat-placeholder" aria-label="Stream chat placeholder">
-                                <div class="section-heading">Stream Chat</div>
-                                <div class="chat-body-placeholder">Chat will appear here soon.</div>
+                            <div class="stream-health">
+                                <span class="muted">Stream Health</span>
+                                <div class="health-dot good"></div>
                             </div>
                         </div>
+                        <div class="preview-video-frame" id="live-preview-slot-basic">
+                            <div id="live-preview-shell" class="preview-visual">
+                                <video id="live-preview" autoplay muted playsinline></video>
+                                <div class="preview-overlay">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="preview-footer">
+                            <div class="preview-note">Use this preview to verify audio/video before you go live.</div>
+                        </div>
                     </div>
-                    <div class="basic-config-column">
-                        <div class="config-shell gl-panel">
-                            <div class="config-scroll">
+                    <div class="gl-panel chat-panel basic-chat-pane" aria-label="Stream chat placeholder">
+                        <div class="section-heading">Stream Chat</div>
+                        <div class="chat-feed chat-body-placeholder" id="basic-chat-feed">Chat will appear here soon.</div>
+                        <div class="chat-composer-placeholder">
+                            <input class="form-input" type="text" placeholder="Type a message" disabled>
+                            <button class="icon-pill" type="button" disabled><i class="ph ph-paper-plane-tilt"></i> Send</button>
+                        </div>
+                    </div>
+                    <div class="config-shell gl-panel basic-config-shell">
+                        <div class="config-scroll">
                                 <div class="config-section">
                                     <div class="section-heading">Stream Details</div>
                                     <div class="gl-field">
@@ -620,17 +621,36 @@
                                           <input id="stream-tags" class="form-input" placeholder="Add tags separated by commas">
                                       </div>
                                   </div>
-                                <div class="config-section">
-                                    <div class="section-heading">Source</div>
-                                    <p class="helper-text">Choose what you want to share. You can swap inputs while previewing.</p>
-                            <div class="gl-field">
-                                <label class="gl-label" for="input-mode">Input mode</label>
-                                <select id="input-mode" class="form-input">
-                                    <option value="camera">Camera</option>
-                                    <option value="screen">Screen Share</option>
-                                    <option value="program">Preview/Program</option>
-                                </select>
-                            </div>
+                            <div class="config-section">
+                                <div class="section-heading">Source</div>
+                                <p class="helper-text">Choose what you want to share. You can swap inputs while previewing.</p>
+                        <div class="gl-field">
+                            <label class="gl-label" for="input-mode">Input mode</label>
+                            <select id="input-mode" class="form-input">
+                                <option value="camera">Camera</option>
+                                <option value="screen">Screen Share</option>
+                                <option value="external">External Encoder</option>
+                                <option value="program">Preview/Program</option>
+                            </select>
+                        </div>
+                                <div class="encoder-panel subtle-panel is-hidden" id="external-encoder-panel" aria-live="polite">
+                                    <div class="encoder-row">
+                                        <div>
+                                            <div class="gl-label">Ingest Server</div>
+                                            <div class="muted" id="external-ingest-url">—</div>
+                                        </div>
+                                    </div>
+                                    <div class="encoder-row">
+                                        <div class="encoder-key">
+                                            <div class="gl-label">Stream Key</div>
+                                            <input class="form-input" type="password" id="external-stream-key" readonly value="">
+                                        </div>
+                                        <div class="encoder-key-actions">
+                                            <button class="icon-pill ghost" type="button" id="toggle-stream-key">Show</button>
+                                            <button class="icon-pill ghost" type="button" id="copy-stream-key">Copy</button>
+                                        </div>
+                                    </div>
+                                </div>
                                     <div class="helper-link-row">
                                         <button class="text-link" type="button" id="go-advanced-external">Use OBS / External encoder (Advanced)</button>
                                     </div>
@@ -689,6 +709,86 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+                <div class="gl-panel basic-dock" id="basic-dock">
+                    <div class="basic-dock-tabs" role="tablist">
+                        <button class="basic-dock-tab is-active" data-dock-tab="dock-logs" aria-selected="true" type="button">Stream Logs</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-chat" aria-selected="false" type="button">Chat Logs</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-status" aria-selected="false" type="button">Stream Status</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-session" aria-selected="false" type="button">Live Session</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-encoder" aria-selected="false" type="button">Encoder</button>
+                        <button class="basic-dock-tab" data-dock-tab="dock-events" aria-selected="false" type="button">Stream Events</button>
+                    </div>
+                    <div class="basic-dock-body">
+                        <section class="basic-dock-panel is-active" id="dock-logs" role="tabpanel" aria-hidden="false">
+                            <div class="gl-row align-center" style="justify-content: space-between;">
+                                <div class="section-heading">Stream Logs</div>
+                                <button class="icon-pill ghost" id="clear-log-dock"><i class="ph ph-trash"></i> Clear</button>
+                            </div>
+                            <pre class="log-feed" id="go-live-log-dock"></pre>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-chat" role="tabpanel" aria-hidden="true">
+                            <div class="section-heading">Chat Logs</div>
+                            <div class="log-feed" id="chat-log-feed"></div>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-status" role="tabpanel" aria-hidden="true">
+                            <div class="section-heading">Stream Status</div>
+                            <div class="status-grid">
+                                <div>
+                                    <div class="gl-label muted">State</div>
+                                    <div id="dock-stream-state">Idle</div>
+                                </div>
+                                <div>
+                                    <div class="gl-label muted">Input Mode</div>
+                                    <div id="dock-stream-input">Camera</div>
+                                </div>
+                                <div>
+                                    <div class="gl-label muted">Latency</div>
+                                    <div id="dock-stream-latency">Normal</div>
+                                </div>
+                                <div>
+                                    <div class="gl-label muted">Metrics</div>
+                                    <div class="muted" id="dock-stream-metrics">No stats yet.</div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-session" role="tabpanel" aria-hidden="true">
+                            <div class="section-heading">Live Session</div>
+                            <div class="session-grid compact">
+                                <div class="session-row"><span class="muted">Session ID</span><span id="dock-session-id">—</span></div>
+                                <div class="session-row"><span class="muted">Channel ARN</span><span id="dock-session-arn">—</span></div>
+                                <div class="session-row"><span class="muted">Ingest</span><span id="dock-session-ingest" class="muted">—</span></div>
+                                <div class="session-row"><span class="muted">Playback</span><span id="dock-session-playback" class="muted">—</span></div>
+                                <div class="session-row"><span class="muted">Latency</span><span id="dock-session-latency" class="muted">—</span></div>
+                                <div class="session-row"><span class="muted">Mode</span><span id="dock-session-mode" class="muted">—</span></div>
+                            </div>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-encoder" role="tabpanel" aria-hidden="true">
+                            <div class="section-heading">Encoder</div>
+                            <div class="encoder-panel subtle-panel" id="dock-encoder-panel">
+                                <div class="encoder-row">
+                                    <div>
+                                        <div class="gl-label">Ingest Server</div>
+                                        <div class="muted" id="dock-encoder-ingest">Select External Encoder to view details.</div>
+                                    </div>
+                                </div>
+                                <div class="encoder-row">
+                                    <div class="encoder-key">
+                                        <div class="gl-label">Stream Key</div>
+                                        <input class="form-input" type="password" id="dock-encoder-key" readonly value="">
+                                    </div>
+                                    <div class="encoder-key-actions">
+                                        <button class="icon-pill ghost" type="button" id="dock-toggle-stream-key">Show</button>
+                                        <button class="icon-pill ghost" type="button" id="dock-copy-stream-key">Copy</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="basic-dock-panel" id="dock-events" role="tabpanel" aria-hidden="true">
+                            <div class="section-heading">Stream Events</div>
+                            <div class="log-feed" id="stream-events-log"></div>
+                        </section>
                     </div>
                 </div>
             </section>
@@ -875,28 +975,28 @@
             </div>
             <div class="gl-panel advanced-card advanced-tabs advanced-grid-tabs" id="advanced-tabs-gl-pane">
                 <div class="tab-row" role="tablist">
-                    <button class="tab active" data-tab-target="logs" aria-selected="true" role="tab">Logs</button>
-                    <button class="tab" data-tab-target="chat" aria-selected="false" role="tab">Chat</button>
-                    <button class="tab" data-tab-target="events" aria-selected="false" role="tab">Stream Events</button>
-                    <button class="tab" data-tab-target="encoder" aria-selected="false" role="tab">Encoder</button>
+                    <button class="tab active" data-tab-group="advanced-tabs" data-tab-target="logs" aria-selected="true" role="tab">Logs</button>
+                    <button class="tab" data-tab-group="advanced-tabs" data-tab-target="chat" aria-selected="false" role="tab">Chat</button>
+                    <button class="tab" data-tab-group="advanced-tabs" data-tab-target="events" aria-selected="false" role="tab">Stream Events</button>
+                    <button class="tab" data-tab-group="advanced-tabs" data-tab-target="encoder" aria-selected="false" role="tab">Encoder</button>
                 </div>
                 <div class="tab-panels">
-                    <div class="tab-panel show" data-tab-panel="logs" role="tabpanel">
+                    <div class="tab-panel show" data-tab-group="advanced-tabs" data-tab-panel="logs" role="tabpanel">
                         <div class="gl-row align-center" style="justify-content: space-between;">
                             <div class="section-heading">Live Logs</div>
                             <button class="icon-pill ghost" id="clear-log"><i class="ph ph-trash"></i> Clear</button>
                         </div>
                         <pre class="log-feed" id="go-live-log"></pre>
                     </div>
-                    <div class="tab-panel" data-tab-panel="chat" role="tabpanel" aria-hidden="true" hidden>
+                    <div class="tab-panel" data-tab-group="advanced-tabs" data-tab-panel="chat" role="tabpanel" aria-hidden="true" hidden>
                         <div class="section-heading">Stream Chat</div>
                         <div class="placeholder-block">Chat integration coming soon.</div>
                     </div>
-                    <div class="tab-panel" data-tab-panel="events" role="tabpanel" aria-hidden="true" hidden>
+                    <div class="tab-panel" data-tab-group="advanced-tabs" data-tab-panel="events" role="tabpanel" aria-hidden="true" hidden>
                         <div class="section-heading">Events</div>
                         <div class="placeholder-block">Stream events will appear here.</div>
                     </div>
-                    <div class="tab-panel" data-tab-panel="encoder" role="tabpanel" aria-hidden="true" hidden>
+                    <div class="tab-panel" data-tab-group="advanced-tabs" data-tab-panel="encoder" role="tabpanel" aria-hidden="true" hidden>
                         <div class="section-heading">Encoder</div>
                         <div class="placeholder-block" id="encoder-tab-placeholder">Encoder configuration placeholder.</div>
                     </div>
