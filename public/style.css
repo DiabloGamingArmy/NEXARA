@@ -2597,13 +2597,13 @@ body.go-live-open {
     height: 100%;
 }
 
-.tab-row {
+.go-live-studio .tab-row {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
 }
 
-.tab {
+.go-live-studio .tab {
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid var(--gl-border);
     padding: 8px 12px;
@@ -2612,12 +2612,12 @@ body.go-live-open {
     cursor: default;
 }
 
-.tab.active {
+.go-live-studio .tab.active {
     background: rgba(255, 255, 255, 0.12);
     border-color: var(--gl-accent);
 }
 
-.tab-panels {
+.go-live-studio .tab-panels {
     display: grid;
     gap: 10px;
 }
@@ -2628,7 +2628,7 @@ body.go-live-open {
     grid-auto-rows: 1fr;
 }
 
-.tab-panel {
+.go-live-studio .tab-panel {
     border: 1px solid var(--gl-border);
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.35);
@@ -2640,32 +2640,32 @@ body.go-live-open {
     overflow: auto;
 }
 
-.basic-dock {
+.go-live-studio .basic-dock {
     grid-column: 1 / -1;
     min-height: 220px;
     max-height: 280px;
 }
 
-.basic-dock .tab-panels {
+.go-live-studio .basic-dock .tab-panels {
     min-height: 0;
     grid-auto-rows: 1fr;
 }
 
-.basic-dock .tab-panel {
+.go-live-studio .basic-dock .tab-panel {
     height: 100%;
     overflow: auto;
 }
 
-.basic-dock .log-feed {
+.go-live-studio .basic-dock .log-feed {
     height: 100%;
     max-height: none;
 }
 
-.tab-panel[hidden] {
+.go-live-studio .tab-panel[hidden] {
     display: none;
 }
 
-.tab-panel:not(.show) {
+.go-live-studio .tab-panel:not(.show) {
     opacity: 0.6;
 }
 
