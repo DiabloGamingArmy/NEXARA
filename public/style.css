@@ -2342,24 +2342,24 @@ body.go-live-open {
     flex: 0 0 auto;
 }
 
-.mixer-grid,
-.stats-grid,
-.advanced-controls-list,
-.advanced-tabs .tab-panels {
+#view-live-setup .mixer-grid,
+#view-live-setup .stats-grid,
+#view-live-setup .advanced-controls-list,
+#view-live-setup .advanced-tabs .tab-panels {
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
 }
 
-.mixer-body {
+#view-live-setup .mixer-body {
     overflow: auto;
 }
 
-.advanced-tabs {
+#view-live-setup .advanced-tabs {
     min-height: 0;
 }
 
-.source-row.active {
+#view-live-setup .source-row.active {
     background: rgba(0, 200, 255, 0.08);
 }
 
