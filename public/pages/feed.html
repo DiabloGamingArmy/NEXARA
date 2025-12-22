@@ -493,6 +493,67 @@
             <div id="saved-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
         </div>
 
+        <div id="view-videos" class="view-section" style="display:none;">
+           <div id="videos-header" style="padding:1rem; border-bottom:1px solid var(--border);">
+               <h2 style="font-weight:800; font-size:1.5rem;">Videos</h2>
+           </div>
+           <div id="videos-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
+        </div>
+
+        <div id="view-messages" class="view-section" style="display:none; height:100vh;">
+            <div id="messages-layout" class="messages-layout" style="display:flex; height:100%;">
+                <div class="messages-sidebar" style="width:320px; border-right:1px solid var(--border); overflow-y:auto; background:var(--bg-body);">
+                    <div style="padding:1rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+                        <h2 style="font-weight:800; font-size:1.25rem;">Messages</h2>
+                         <button onclick="window.toggleNewChatModal(true)" class="icon-btn"><i class="ph ph-note-pencil"></i></button>
+                    </div>
+                    <div style="padding:10px;">
+                        <input type="text" class="form-input" placeholder="Search direct messages..." oninput="window.filterConversations(this.value)">
+                    </div>
+                    <div id="conversations-list"></div>
+                </div>
+                <div class="messages-main" style="flex:1; display:flex; flex-direction:column; background:var(--bg-card);">
+                    <div id="chat-thread-header" style="padding:1rem; border-bottom:1px solid var(--border); display:none; justify-content:space-between; align-items:center;">
+                        <div id="active-chat-user" style="font-weight:700;">Select a conversation</div>
+                        <button id="chat-settings-btn" class="icon-btn" onclick="window.toggleChatSettings()"><i class="ph ph-info"></i></button>
+                    </div>
+                     <div id="chat-thread-messages" style="flex:1; overflow-y:auto; padding:1rem; display:flex; flex-direction:column-reverse;">
+                        <div style="margin:auto; text-align:center; color:var(--text-muted);">
+                            <div style="font-size:3rem; margin-bottom:1rem;"><i class="ph ph-chats-circle"></i></div>
+                            <p>Select a message to start chatting</p>
+                            <button onclick="window.toggleNewChatModal(true)" class="create-btn-sidebar" style="margin-top:1rem; width:auto;">Start a chat</button>
+                        </div>
+                     </div>
+                     <div id="chat-input-area" style="padding:1rem; border-top:1px solid var(--border); display:none;">
+                        <div style="display:flex; gap:10px; align-items:flex-end;">
+                            <button class="icon-btn" onclick="document.getElementById('msg-file').click()"><i class="ph ph-image"></i></button>
+                            <input type="file" id="msg-file" style="display:none;" accept="image/*" onchange="window.handleMessageAttachment(this)">
+                             <textarea id="message-input" class="form-input" rows="1" placeholder="Send a message..." style="margin:0; resize:none; border-radius:20px;"></textarea>
+                            <button id="send-message-btn" onclick="window.sendMessage()" class="icon-btn" style="color:var(--primary);"><i class="ph ph-paper-plane-right"></i></button>
+                        </div>
+                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-staff" class="view-section" style="display:none;">
+             <div style="padding:2rem; max-width:800px; margin:0 auto;">
+                <h2 style="font-weight:800; font-size:2rem; margin-bottom:1rem; color: #ff3d3d;">Staff Dashboard</h2>
+                <div class="glass-panel" style="padding:1rem; margin-bottom:1rem;">
+                    <h3 style="margin-bottom:1rem;">Pending Verification Requests</h3>
+                    <div id="staff-verifications-list">Loading...</div>
+                </div>
+                <div class="glass-panel" style="padding:1rem; margin-bottom:1rem;">
+                    <h3 style="margin-bottom:1rem;">Report Queue</h3>
+                    <div id="staff-reports-list">Loading...</div>
+                </div>
+                 <div class="glass-panel" style="padding:1rem;">
+                    <h3 style="margin-bottom:1rem;">System Logs</h3>
+                    <div id="staff-logs-list" style="font-family:monospace; font-size:0.85rem; color:var(--text-muted);"></div>
+                </div>
+            </div>
+        </div>
+
         <div id="view-thread" class="view-section" style="display:none;">
             <div class="glass-panel" style="position: sticky; top: 0; z-index: 20; padding: 1rem; display: flex; align-items: center; gap: 15px;">
                  <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;">
