@@ -1,0 +1,137 @@
+Update Notes (Dec 22) — Full Change History for This Conversation
+===============================================================
+
+Overview
+--------
+This document enumerates, in precise detail, every code change made during this conversation, in chronological order, including changes that were later reverted. The changes were limited to the following files in the `public/` web app plus this note file:
+
+- public/pages/admin.html
+- public/pages/feed.html
+- public/pages/login.html
+- public/pages/profile.html
+- public/scripts/GoLive.js
+- public/scripts/app.js
+- public/style.css
+- updateNotesDec22.txt
+
+Change Set 1 — “Fix view nesting so messages and videos render” (commit 875cbba)
+-------------------------------------------------------------------------------
+Purpose stated at the time: attempt to fix Messages/Videos content not rendering by changing Live Setup markup boundaries. This change set modified HTML structure, JavaScript wiring, and CSS across multiple pages.
+
+### HTML edits (public/pages/*.html)
+Files:
+- public/pages/admin.html
+- public/pages/feed.html
+- public/pages/login.html
+- public/pages/profile.html
+
+Detailed structural changes applied across all four files:
+1) **Live Setup container closure moved earlier**
+   - The closing tags for the Live Setup container hierarchy were inserted **before** the Messages and Videos view sections.
+   - This change was applied by moving or inserting closing `</div>` wrappers so that:
+     - The Live Setup markup stopped enclosing `#view-messages` and `#view-videos`.
+     - The Messages and Videos sections were intended to become top-level siblings to the Live Setup section rather than nested children.
+
+2) **Messages and Videos view placement changed**
+   - The `#view-messages` and `#view-videos` blocks were repositioned to follow immediately after the Live Setup section’s closing tags.
+   - This introduced large multi-hunk edits with significant insertions and deletions due to DOM reordering.
+
+3) **Markup duplication and reorder**
+   - The diff indicated multiple large edits per file (several hunks), reflecting repeated reordering of HTML blocks, not just a single-line fix.
+   - Some sections were removed and reinserted later in the file to ensure Messages/Videos appeared outside the Live Setup wrapper.
+
+Net effect (as attempted): The Messages and Videos views were intended to be un-nested from the Live Setup container by explicit closure of the Live Setup DOM tree prior to those sections.
+
+### JavaScript edits (public/scripts/GoLive.js)
+File:
+- public/scripts/GoLive.js
+
+Detailed changes included:
+1) **Added session cleanup hooks**
+   - Introduced logic to clean up the live session on exit from the Live Setup view.
+   - Added or modified functions to ensure the session was torn down when leaving the view.
+
+2) **Added/modified external encoder/session provisioning helpers**
+   - Added helpers intended to provision sessions without going live, and refactored some flow into helper functions.
+
+3) **Additional logging/status wiring**
+   - Extended and appended logging and status-related logic to support dock panels and external encoder display.
+
+Net effect (as attempted): additional logic to create sessions without going live, track dock/encoder state, and cleanup on exit.
+
+### JavaScript edits (public/scripts/app.js)
+File:
+- public/scripts/app.js
+
+Detailed change:
+1) **Navigation lifecycle hook change**
+   - Added a new hook/handler to trigger cleanup when navigating away from the Live Setup view.
+
+Net effect (as attempted): ensure live setup cleanup occurs on navigation away from that view.
+
+### CSS edits (public/style.css)
+File:
+- public/style.css
+
+Detailed changes:
+1) **Go Live dock + layout CSS**
+   - Added a set of dock-related class styles for layout, scroll, and visibility.
+   - Introduced styling for dock tabs and panels.
+
+2) **Additional layout adjustments**
+   - Added or adjusted layout styles intended for the Live Setup view and its inner panels.
+
+Net effect (as attempted): styling to support dock tabs/panels and layout adjustments.
+
+Change Set 2 — Revert of the above change set (commit 34bba46)
+---------------------------------------------------------------
+Purpose stated at the time: revert to the pre-change HTML/JS/CSS state because multiple pages broke and the request was to restore the original behavior.
+
+This revert commit **fully reversed** the modifications from Change Set 1, with the following precise impacts:
+
+### HTML reversions (public/pages/*.html)
+Files:
+- public/pages/admin.html
+- public/pages/feed.html
+- public/pages/login.html
+- public/pages/profile.html
+
+Reverted changes:
+1) **Restored original Live Setup container boundaries**
+   - Re-applied the original placement of Live Setup closing tags so that the DOM structure returned to its prior, known-good layout.
+
+2) **Restored original Messages/Videos view placement**
+   - Moved `#view-messages` and `#view-videos` sections back to their original locations in each file.
+
+3) **Removed large HTML reorderings**
+   - Deleted the reinserted and reordered chunks introduced in Change Set 1.
+
+### JavaScript reversions
+Files:
+- public/scripts/GoLive.js
+- public/scripts/app.js
+
+Reverted changes:
+1) **Removed new cleanup hooks**
+   - Deleted the new session cleanup wiring added in Change Set 1.
+
+2) **Removed new provisioning helpers**
+   - Reverted the added helper functions and logic intended to prepare external encoder sessions.
+
+3) **Removed added logging/status/dock wiring**
+   - Reverted additions related to dock/encoder status tracking introduced in Change Set 1.
+
+### CSS reversions
+File:
+- public/style.css
+
+Reverted changes:
+1) **Removed dock/layout additions**
+   - Deleted the styles added for dock tabs/panels and layout adjustments.
+
+Net effect: The codebase returned to the state immediately before Change Set 1.
+
+Change Set 3 — This document (updateNotesDec22.txt)
+---------------------------------------------------
+Purpose: Provide a complete, precise accounting of changes made during this conversation, including reverted changes.
+
