@@ -169,6 +169,12 @@ body {
     width: 320px;
     border-left: 1px solid var(--border);
     display: none;
+    position: fixed;
+    right: 0;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 2rem 1.5rem;
 }
 
 /* NEXARA FEED BACKGROUND */
@@ -5474,13 +5480,11 @@ body.go-live-open {
 /* --- Messages Page Layout --- */
 .messages-layout {
     display: flex;
-    height: calc(100vh - 60px);
-    /* Adjusted for nav bar */
-    background: var(--bg-body);
-    /* border: 1px solid var(--border); */
-    /* border-radius: 12px; */
+    height: 100vh;
+    /* Fill entire viewport */
+    background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
+    /* Match app gradient */
     overflow: hidden;
-    /* margin: 1rem; */
 }
 
 .messages-sidebar {
@@ -5489,7 +5493,8 @@ body.go-live-open {
     display: flex;
     flex-direction: column;
     padding: 16px;
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(0, 242, 234, 0.03);
+    /* Subtle cyan tint to match theme */
 }
 
 .messages-thread {
