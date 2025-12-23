@@ -995,11 +995,11 @@ function initApp(onReady) {
                 currentUser = null;
                 updateAuthClaims({});
                 if (followedTopicsUnsubscribe) {
-                    try { followedTopicsUnsubscribe(); } catch (err) {}
+                    try { followedTopicsUnsubscribe(); } catch (err) { }
                     followedTopicsUnsubscribe = null;
                 }
                 if (followingUnsubscribe) {
-                    try { followingUnsubscribe(); } catch (err) {}
+                    try { followingUnsubscribe(); } catch (err) { }
                     followingUnsubscribe = null;
                 }
                 followedCategories = new Set();
@@ -1406,7 +1406,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
 
         if (currentUser) {
-            const ownLocs = allPosts.filter(function(p) { return p.userId === currentUser.uid && p.location; }).map(function(p) { return p.location; });
+            const ownLocs = allPosts.filter(function (p) { return p.userId === currentUser.uid && p.location; }).map(function (p) { return p.location; });
             const merged = new Set([...(recentLocations || []), ...ownLocs]);
             recentLocations = Array.from(merged).slice(-10);
         }
@@ -2187,7 +2187,7 @@ function updateMobileNavState(viewId = 'feed') {
     const label = MOBILE_SECTION_LABELS[viewId] || 'Explore';
     const labelEl = document.getElementById('mobile-section-label');
     if (labelEl) labelEl.textContent = label;
-    document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
+    document.querySelectorAll('.mobile-nav-btn').forEach(function (btn) {
         btn.classList.toggle('active', btn.dataset.view === viewId);
     });
 }
@@ -2214,12 +2214,12 @@ function bindMobileMessageGestures() {
     if (!thread || thread.dataset.gestureBound) return;
     let startX = 0;
     let startY = 0;
-    thread.addEventListener('touchstart', function(e) {
+    thread.addEventListener('touchstart', function (e) {
         const touch = e.touches[0];
         startX = touch.clientX;
         startY = touch.clientY;
     });
-    thread.addEventListener('touchend', function(e) {
+    thread.addEventListener('touchend', function (e) {
         if (!isMobileViewport()) return;
         const touch = e.changedTouches[0];
         const dx = touch.clientX - startX;
@@ -2236,14 +2236,14 @@ if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
 }
 
 function bindMobileNav() {
-    document.querySelectorAll('.mobile-nav-btn').forEach(function(btn) {
-        btn.addEventListener('click', function() {
+    document.querySelectorAll('.mobile-nav-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
             const view = btn.dataset.view;
             if (view) window.navigateTo(view);
         });
     });
     const fab = document.getElementById('mobile-fab');
-    if (fab) fab.onclick = function() { window.openMobileComposer(); };
+    if (fab) fab.onclick = function () { window.openMobileComposer(); };
 }
 
 window.goBack = function () {
@@ -2549,7 +2549,7 @@ function syncFollowButtonsForKnownUsers() {
 
 async function hydrateFollowingState(uid, profileData = {}) {
     if (followingUnsubscribe) {
-        try { followingUnsubscribe(); } catch (err) {}
+        try { followingUnsubscribe(); } catch (err) { }
         followingUnsubscribe = null;
     }
 
@@ -2703,7 +2703,7 @@ function renderFeed(targetId = 'feed-content') {
         return true;
     });
 
-    displayPosts = displayPosts.filter(function(post) {
+    displayPosts = displayPosts.filter(function (post) {
         if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
         return true;
     });
@@ -2722,7 +2722,7 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     if (currentCategory === 'For You') {
-        displayPosts = displayPosts.slice().sort(function(a, b) {
+        displayPosts = displayPosts.slice().sort(function (a, b) {
             const scoreDiff = getPostAffinityScore(b) - getPostAffinityScore(a);
             if (scoreDiff !== 0) return scoreDiff;
             return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
@@ -2750,7 +2750,7 @@ function renderFeed(targetId = 'feed-content') {
 
 
 function refreshSinglePostUI(postId) {
-    const post = allPosts.find(function(p) { return p.id === postId; });
+    const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
 
     const likeBtn = document.getElementById(`post-like-btn-${postId}`);
@@ -2783,7 +2783,7 @@ function refreshSinglePostUI(postId) {
         applyReviewButtonState(reviewBtn, myReview);
     }
 
-    document.querySelectorAll(`[data-post-id="${postId}"]`).forEach(function(btn) {
+    document.querySelectorAll(`[data-post-id="${postId}"]`).forEach(function (btn) {
         const action = btn.dataset.action;
         if (action === 'like') {
             renderActionButton(btn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
@@ -2817,23 +2817,23 @@ function refreshSinglePostUI(postId) {
         btn.setAttribute('aria-label', aria);
     }
 
-    if(threadTitle && threadTitle.dataset.postId === postId) {
+    if (threadTitle && threadTitle.dataset.postId === postId) {
         updateThreadAction(threadLikeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, color: isLiked ? '#00f2ea' : 'inherit' });
         updateThreadAction(threadDislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, color: isDisliked ? '#ff3d3d' : 'inherit' });
         updateThreadAction(threadSaveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', count: threadSaveCount, color: isSaved ? '#00f2ea' : 'inherit' });
-        if(threadReviewBtn) {
+        if (threadReviewBtn) {
             applyReviewButtonState(threadReviewBtn, myReview);
         }
     }
 }
 
 // --- Interaction Functions ---
-window.toggleLike = async function(postId, event) {
-    if(event) event.stopPropagation();
-    if(!currentUser) return alert("Please log in to like posts.");
+window.toggleLike = async function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!currentUser) return alert("Please log in to like posts.");
 
-    const post = allPosts.find(function(p) { return p.id === postId; });
-    if(!post) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post) return;
 
     const wasLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
     const hadDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
@@ -2841,14 +2841,14 @@ window.toggleLike = async function(postId, event) {
     // Optimistic Update
     if (wasLiked) {
         post.likes = Math.max(0, (post.likes || 0) - 1); // Prevent negative likes
-        post.likedBy = post.likedBy.filter(function(uid) { return uid !== currentUser.uid; });
+        post.likedBy = post.likedBy.filter(function (uid) { return uid !== currentUser.uid; });
     } else {
         post.likes = (post.likes || 0) + 1;
         if (!post.likedBy) post.likedBy = [];
         post.likedBy.push(currentUser.uid);
         if (hadDisliked) {
             post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
-            post.dislikedBy = (post.dislikedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
+            post.dislikedBy = (post.dislikedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
         }
     }
 
@@ -2858,7 +2858,7 @@ window.toggleLike = async function(postId, event) {
     const postRef = doc(db, 'posts', postId);
 
     try {
-        if(wasLiked) {
+        if (wasLiked) {
             await updateDoc(postRef, { likes: increment(-1), likedBy: arrayRemove(currentUser.uid) });
         } else {
             const updatePayload = { likes: increment(1), likedBy: arrayUnion(currentUser.uid) };
@@ -2868,22 +2868,22 @@ window.toggleLike = async function(postId, event) {
             }
             await updateDoc(postRef, updatePayload);
         }
-    } catch(e) {
+    } catch (e) {
         console.error("Like error:", e);
         // Revert on error would go here, or just reload on demand
         loadFeedData();
     }
 }
 
-window.toggleSave = async function(postId, event) {
-    if(event) event.stopPropagation();
-    if(!currentUser) return alert("Please log in to save posts.");
+window.toggleSave = async function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!currentUser) return alert("Please log in to save posts.");
 
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
 
     // Optimistic Update
-    if(isSaved) {
-        userProfile.savedPosts = userProfile.savedPosts.filter(function(id) { return id !== postId; });
+    if (isSaved) {
+        userProfile.savedPosts = userProfile.savedPosts.filter(function (id) { return id !== postId; });
     } else {
         userProfile.savedPosts.push(postId);
     }
@@ -2893,9 +2893,9 @@ window.toggleSave = async function(postId, event) {
 
     const userRef = doc(db, 'users', currentUser.uid);
     try {
-        if(isSaved) await updateDoc(userRef, { savedPosts: arrayRemove(postId) });
+        if (isSaved) await updateDoc(userRef, { savedPosts: arrayRemove(postId) });
         else await updateDoc(userRef, { savedPosts: arrayUnion(postId) });
-    } catch(e) { console.error("Save error:", e); }
+    } catch (e) { console.error("Save error:", e); }
 }
 
 // --- Creation & Upload ---
@@ -3191,7 +3191,7 @@ window.addComposerTag = addComposerTag;
 window.removeComposerTag = removeComposerTag;
 window.handleTagInputKey = handleTagInputKey;
 window.filterTagSuggestions = filterTagSuggestions;
-window.toggleMentionInput = function(show) {
+window.toggleMentionInput = function (show) {
     const row = document.getElementById('mention-input-row');
     if (!row) return;
     const nextState = show !== undefined ? show : row.style.display !== 'flex';
@@ -3218,17 +3218,17 @@ function escapeRegex(str = '') {
 
 function renderTagList(tags = []) {
     if (!tags.length) return '';
-    return `<div style="margin-top:8px;">${tags.map(function(tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
+    return `<div style="margin-top:8px;">${tags.map(function (tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
 }
 
 function renderPollBlock(post) {
     const poll = normalizePollPayload(post?.poll);
     if (!poll) return '';
     const votes = poll.votes || {};
-    const counts = poll.options.map(function(_, idx) { return Object.values(votes).filter(function(v) { return Number(v) === idx; }).length; });
-    const total = counts.reduce(function(sum, c) { return sum + c; }, 0) || 1;
+    const counts = poll.options.map(function (_, idx) { return Object.values(votes).filter(function (v) { return Number(v) === idx; }).length; });
+    const total = counts.reduce(function (sum, c) { return sum + c; }, 0) || 1;
     const userChoice = currentUser ? votes[currentUser.uid] : null;
-    const optionsHtml = poll.options.map(function(opt, idx) {
+    const optionsHtml = poll.options.map(function (opt, idx) {
         const pct = Math.round((counts[idx] / total) * 100);
         const selected = Number(userChoice) === idx;
         return `<button type="button" class="poll-option ${selected ? 'selected' : ''}" onclick="window.voteInPoll('${post.id}', ${idx}, event)"><span>${escapeHtml(opt)}</span><span class="poll-count">${counts[idx]} (${pct}%)</span></button>`;
@@ -3247,11 +3247,11 @@ function getMentionHandles(mentions = []) {
 function formatContent(text = '', tags = [], mentions = []) {
     let safe = escapeHtml(cleanText(text));
     const mentionSet = new Set(getMentionHandles(mentions));
-    mentionSet.forEach(function(handle) {
+    mentionSet.forEach(function (handle) {
         const regex = new RegExp('@' + escapeRegex(handle), 'gi');
         safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
     });
-    (tags || []).forEach(function(tag) {
+    (tags || []).forEach(function (tag) {
         const regex = new RegExp('#' + escapeRegex(tag), 'gi');
         safe = safe.replace(regex, `<span class="tag-chip">#${escapeHtml(tag)}</span>`);
     });
@@ -3263,7 +3263,7 @@ async function resolveMentionProfiles(mentions = []) {
     const cleaned = Array.from(new Set(handles));
     const results = [];
     for (const handle of cleaned) {
-        const cached = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === handle; });
+        const cached = Object.entries(userCache).find(function ([_, data]) { return (data.username || '').toLowerCase() === handle; });
         if (cached) { results.push({ uid: cached[0], handle }); continue; }
         const qSnap = await getDocs(query(collection(db, 'users'), where('username', '==', handle)));
         if (!qSnap.empty) {
@@ -3276,7 +3276,7 @@ async function resolveMentionProfiles(mentions = []) {
 }
 
 async function notifyMentionedUsers(resolved = [], postId) {
-    const tasks = resolved.map(function(entry) {
+    const tasks = resolved.map(function (entry) {
         const notifRef = collection(db, 'users', entry.uid, 'notifications');
         return addDoc(notifRef, {
             type: 'mention',
@@ -3292,7 +3292,7 @@ async function notifyMentionedUsers(resolved = [], postId) {
 function recordTagAffinity(tags = [], delta = 0) {
     if (!currentUser || !delta || !Array.isArray(tags) || tags.length === 0) return;
     const affinity = { ...(userProfile.tagAffinity || {}) };
-    tags.forEach(function(tag) {
+    tags.forEach(function (tag) {
         affinity[tag] = (affinity[tag] || 0) + delta;
     });
     userProfile.tagAffinity = affinity;
@@ -3303,13 +3303,13 @@ function recordTagAffinity(tags = [], delta = 0) {
 function getPostAffinityScore(post) {
     const affinity = userProfile.tagAffinity || {};
     const tags = Array.isArray(post.tags) ? post.tags : [];
-    return tags.reduce(function(total, tag) { return total + (affinity[tag] || 0); }, 0);
+    return tags.reduce(function (total, tag) { return total + (affinity[tag] || 0); }, 0);
 }
 
-window.voteInPoll = async function(postId, optionIndex, event) {
+window.voteInPoll = async function (postId, optionIndex, event) {
     if (event) event.stopPropagation();
     if (!requireAuth()) return;
-    const post = allPosts.find(function(p) { return p.id === postId; });
+    const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
     const poll = normalizePollPayload(post.poll || {});
     if (!poll || optionIndex < 0 || optionIndex >= poll.options.length) return;
@@ -3375,123 +3375,123 @@ function renderLocationBadge(location = '') {
     return `<div class="location-chip"><i class="ph ph-map-pin"></i> ${escapeHtml(location)}</div>`;
 }
 
-window.createPost = async function() {
-     if (!requireAuth()) return;
-     const title = document.getElementById('postTitle').value;
-     const content = document.getElementById('postContent').value;
-     const tagInput = document.getElementById('tag-input');
-     const mentionInput = document.getElementById('mention-input');
-     const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
-     const mentions = normalizeMentionsField(composerMentions || []);
-     const fileInput = document.getElementById('postFile');
-     const btn = document.getElementById('publishBtn');
-     setComposerError('');
+window.createPost = async function () {
+    if (!requireAuth()) return;
+    const title = document.getElementById('postTitle').value;
+    const content = document.getElementById('postContent').value;
+    const tagInput = document.getElementById('tag-input');
+    const mentionInput = document.getElementById('mention-input');
+    const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+    const mentions = normalizeMentionsField(composerMentions || []);
+    const fileInput = document.getElementById('postFile');
+    const btn = document.getElementById('publishBtn');
+    setComposerError('');
 
-     const pollPayload = buildPollPayloadFromComposer();
-     const scheduledFor = parseScheduleValue(composerScheduledFor);
-     const locationValue = (composerLocation || '').trim();
+    const pollPayload = buildPollPayloadFromComposer();
+    const scheduledFor = parseScheduleValue(composerScheduledFor);
+    const locationValue = (composerLocation || '').trim();
 
-     let contentType = currentEditPost?.contentType || 'text';
-     if (fileInput.files[0]) {
-         const mime = fileInput.files[0].type;
-         if (mime.startsWith('video')) contentType = 'video';
-         else if (mime.startsWith('image')) contentType = 'image';
-     }
+    let contentType = currentEditPost?.contentType || 'text';
+    if (fileInput.files[0]) {
+        const mime = fileInput.files[0].type;
+        if (mime.startsWith('video')) contentType = 'video';
+        else if (mime.startsWith('image')) contentType = 'image';
+    }
 
-     if(!title.trim() && !content.trim() && !fileInput.files[0]) {
-         return alert("Please add a title, content, or media.");
-     }
+    if (!title.trim() && !content.trim() && !fileInput.files[0]) {
+        return alert("Please add a title, content, or media.");
+    }
 
-     btn.disabled = true;
-     btn.textContent = "Uploading...";
+    btn.disabled = true;
+    btn.textContent = "Uploading...";
 
-     try {
-         const targetCategoryId = currentEditPost ? currentEditPost.categoryId : selectedCategoryId;
-         if (targetCategoryId && currentUser?.uid && !currentEditPost) {
-             const joined = await ensureJoinedCategory(targetCategoryId, currentUser.uid);
-             if (!joined) {
-                 setComposerError('Unable to join this category. Please try again.');
-                 return;
-             }
-         }
+    try {
+        const targetCategoryId = currentEditPost ? currentEditPost.categoryId : selectedCategoryId;
+        if (targetCategoryId && currentUser?.uid && !currentEditPost) {
+            const joined = await ensureJoinedCategory(targetCategoryId, currentUser.uid);
+            if (!joined) {
+                setComposerError('Unable to join this category. Please try again.');
+                return;
+            }
+        }
 
-         const mentionProfiles = await resolveMentionProfiles(mentions);
-         const notificationTargets = [];
-         const seenNotify = new Set();
-         mentionProfiles.forEach(function(m) {
-             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push(m); }
-         });
-         mentions.forEach(function(m) {
-             if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push({ uid: m.uid, handle: m.username }); }
-         });
-         const mentionUserIds = Array.from(seenNotify);
+        const mentionProfiles = await resolveMentionProfiles(mentions);
+        const notificationTargets = [];
+        const seenNotify = new Set();
+        mentionProfiles.forEach(function (m) {
+            if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push(m); }
+        });
+        mentions.forEach(function (m) {
+            if (m.uid && !seenNotify.has(m.uid)) { seenNotify.add(m.uid); notificationTargets.push({ uid: m.uid, handle: m.username }); }
+        });
+        const mentionUserIds = Array.from(seenNotify);
 
-         let mediaUrl = currentEditPost?.mediaUrl || null;
-         if(fileInput.files[0]) {
-             const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
-             mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
-         }
+        let mediaUrl = currentEditPost?.mediaUrl || null;
+        if (fileInput.files[0]) {
+            const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
+            mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+        }
 
-         const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
-         const resolvedCategoryId = currentEditPost ? currentEditPost.categoryId : (selectedCategoryId || null);
-         const visibility = 'public';
-         const postPayload = {
-             title,
-             content,
-             categoryId: resolvedCategoryId,
-             categoryName: categoryDoc ? categoryDoc.name : null,
-             categorySlug: categoryDoc ? categoryDoc.slug : null,
-             categoryVerified: categoryDoc ? !!categoryDoc.verified : false,
-             categoryType: categoryDoc ? categoryDoc.type : null,
-             visibility,
-             contentType,
-             content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: { tags, mentions } },
-             mediaUrl,
-             author: userProfile.name,
-             userId: currentUser.uid,
-             tags,
-             mentions,
-             mentionUserIds,
-             poll: pollPayload,
-             scheduledFor,
-             location: locationValue,
-             likes: currentEditPost ? currentEditPost.likes || 0 : 0,
-             likedBy: currentEditPost ? currentEditPost.likedBy || [] : [],
-             dislikes: currentEditPost ? currentEditPost.dislikes || 0 : 0,
-             dislikedBy: currentEditPost ? currentEditPost.dislikedBy || [] : [],
-             trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
-             timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
-         };
+        const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
+        const resolvedCategoryId = currentEditPost ? currentEditPost.categoryId : (selectedCategoryId || null);
+        const visibility = 'public';
+        const postPayload = {
+            title,
+            content,
+            categoryId: resolvedCategoryId,
+            categoryName: categoryDoc ? categoryDoc.name : null,
+            categorySlug: categoryDoc ? categoryDoc.slug : null,
+            categoryVerified: categoryDoc ? !!categoryDoc.verified : false,
+            categoryType: categoryDoc ? categoryDoc.type : null,
+            visibility,
+            contentType,
+            content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: { tags, mentions } },
+            mediaUrl,
+            author: userProfile.name,
+            userId: currentUser.uid,
+            tags,
+            mentions,
+            mentionUserIds,
+            poll: pollPayload,
+            scheduledFor,
+            location: locationValue,
+            likes: currentEditPost ? currentEditPost.likes || 0 : 0,
+            likedBy: currentEditPost ? currentEditPost.likedBy || [] : [],
+            dislikes: currentEditPost ? currentEditPost.dislikes || 0 : 0,
+            dislikedBy: currentEditPost ? currentEditPost.dislikedBy || [] : [],
+            trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
+            timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
+        };
 
-         if (currentEditPost) {
-             await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
-             currentEditPost = null;
-         } else {
-             const postRef = await addDoc(collection(db, 'posts'), postPayload);
-             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
-         }
+        if (currentEditPost) {
+            await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
+            currentEditPost = null;
+        } else {
+            const postRef = await addDoc(collection(db, 'posts'), postPayload);
+            if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+        }
 
-         if (locationValue) {
-             const existing = new Set(recentLocations || []);
-             existing.add(locationValue);
-             recentLocations = Array.from(existing).slice(-10);
-             try { await setDoc(doc(db, 'users', currentUser.uid), { locationHistory: recentLocations }, { merge: true }); } catch (e) { console.warn('Location history save failed', e); }
-         }
+        if (locationValue) {
+            const existing = new Set(recentLocations || []);
+            existing.add(locationValue);
+            recentLocations = Array.from(existing).slice(-10);
+            try { await setDoc(doc(db, 'users', currentUser.uid), { locationHistory: recentLocations }, { merge: true }); } catch (e) { console.warn('Location history save failed', e); }
+        }
 
-         // Reset Form
-         resetComposerState();
-         if (tagInput) tagInput.value = "";
-         if (mentionInput) mentionInput.value = "";
-         window.toggleCreateModal(false);
-         window.navigateTo('feed');
+        // Reset Form
+        resetComposerState();
+        if (tagInput) tagInput.value = "";
+        if (mentionInput) mentionInput.value = "";
+        window.toggleCreateModal(false);
+        window.navigateTo('feed');
 
-     } catch (e) {
-         console.error('Post/auto-join failed:', e);
-         setComposerError('Could not post right now. Please try again.');
-     } finally {
-         btn.disabled = false;
-         btn.textContent = "Post";
-     }
+    } catch (e) {
+        console.error('Post/auto-join failed:', e);
+        setComposerError('Could not post right now. Please try again.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Post";
+    }
 }
 
 // --- Settings & Modals ---
@@ -3538,12 +3538,12 @@ function updateSettingsAvatarPreview(src) {
 
 function syncThemeRadios(themeValue) {
     const selected = document.querySelector(`input[name="theme-choice"][value="${themeValue}"]`);
-    if(selected) selected.checked = true;
+    if (selected) selected.checked = true;
 }
 
-window.toggleCreateModal = function(show) {
+window.toggleCreateModal = function (show) {
     document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
-    if(show && currentUser) {
+    if (show && currentUser) {
         const avatarEl = document.getElementById('modal-user-avatar');
         applyAvatarToElement(avatarEl, userProfile, { size: 42 });
         setComposerError('');
@@ -3563,24 +3563,24 @@ window.toggleCreateModal = function(show) {
     }
 }
 
-window.toggleSettingsModal = function(show) {
+window.toggleSettingsModal = function (show) {
     document.getElementById('settings-modal').style.display = show ? 'flex' : 'none';
-    if(show){
-        document.getElementById('set-name').value = userProfile.name||"";
-        document.getElementById('set-real-name').value = userProfile.realName||"";
-        document.getElementById('set-username').value = userProfile.username||"";
-        document.getElementById('set-bio').value = userProfile.bio||"";
-        document.getElementById('set-website').value = userProfile.links||"";
-        document.getElementById('set-phone').value = userProfile.phone||"";
+    if (show) {
+        document.getElementById('set-name').value = userProfile.name || "";
+        document.getElementById('set-real-name').value = userProfile.realName || "";
+        document.getElementById('set-username').value = userProfile.username || "";
+        document.getElementById('set-bio').value = userProfile.bio || "";
+        document.getElementById('set-website').value = userProfile.links || "";
+        document.getElementById('set-phone').value = userProfile.phone || "";
         const genderInput = document.getElementById('set-gender');
-        if(genderInput) genderInput.value = userProfile.gender||"Prefer not to say";
-        document.getElementById('set-email').value = userProfile.email||"";
-        document.getElementById('set-nickname').value = userProfile.nickname||"";
-        document.getElementById('set-region').value = userProfile.region||"";
+        if (genderInput) genderInput.value = userProfile.gender || "Prefer not to say";
+        document.getElementById('set-email').value = userProfile.email || "";
+        document.getElementById('set-nickname').value = userProfile.nickname || "";
+        document.getElementById('set-region').value = userProfile.region || "";
         const photoUrlInput = document.getElementById('set-photo-url');
-        if(photoUrlInput) {
+        if (photoUrlInput) {
             photoUrlInput.value = userProfile.photoURL || "";
-            photoUrlInput.oninput = function(e) { return updateSettingsAvatarPreview(e.target.value); };
+            photoUrlInput.oninput = function (e) { return updateSettingsAvatarPreview(e.target.value); };
         }
         syncThemeRadios(userProfile.theme || 'system');
         updateSettingsAvatarPreview(userProfile.photoURL);
@@ -3588,48 +3588,48 @@ window.toggleSettingsModal = function(show) {
 
         const uploadInput = document.getElementById('set-pic-file');
         const cameraInput = document.getElementById('set-pic-camera');
-        if(uploadInput) uploadInput.onchange = function(e) { return handleSettingsFileChange(e.target); };
-        if(cameraInput) cameraInput.onchange = function(e) { return handleSettingsFileChange(e.target); };
+        if (uploadInput) uploadInput.onchange = function (e) { return handleSettingsFileChange(e.target); };
+        if (cameraInput) cameraInput.onchange = function (e) { return handleSettingsFileChange(e.target); };
 
-        document.querySelectorAll('input[name="theme-choice"]').forEach(function(r) {
-            r.onchange = function(e) { return persistThemePreference(e.target.value); };
+        document.querySelectorAll('input[name="theme-choice"]').forEach(function (r) {
+            r.onchange = function (e) { return persistThemePreference(e.target.value); };
         });
     }
 }
 
- window.saveSettings = async function() {
-     const name = document.getElementById('set-name').value;
-     const realName = document.getElementById('set-real-name').value;
-     const nickname = document.getElementById('set-nickname').value;
-     const username = document.getElementById('set-username').value.trim();
-     const bio = document.getElementById('set-bio').value;
-     const links = document.getElementById('set-website').value;
-     const phone = document.getElementById('set-phone').value;
-     const gender = document.getElementById('set-gender').value;
-     const email = document.getElementById('set-email').value;
-     const region = document.getElementById('set-region').value;
-     const photoUrlInput = document.getElementById('set-photo-url');
-     const manualPhoto = photoUrlInput ? photoUrlInput.value.trim() : '';
-     const themeChoice = document.querySelector('input[name="theme-choice"]:checked');
-     const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
-     const fileInput = document.getElementById('set-pic-file');
-     const cameraInput = document.getElementById('set-pic-camera');
+window.saveSettings = async function () {
+    const name = document.getElementById('set-name').value;
+    const realName = document.getElementById('set-real-name').value;
+    const nickname = document.getElementById('set-nickname').value;
+    const username = document.getElementById('set-username').value.trim();
+    const bio = document.getElementById('set-bio').value;
+    const links = document.getElementById('set-website').value;
+    const phone = document.getElementById('set-phone').value;
+    const gender = document.getElementById('set-gender').value;
+    const email = document.getElementById('set-email').value;
+    const region = document.getElementById('set-region').value;
+    const photoUrlInput = document.getElementById('set-photo-url');
+    const manualPhoto = photoUrlInput ? photoUrlInput.value.trim() : '';
+    const themeChoice = document.querySelector('input[name="theme-choice"]:checked');
+    const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
+    const fileInput = document.getElementById('set-pic-file');
+    const cameraInput = document.getElementById('set-pic-camera');
 
-     if(!username) {
-         return alert("Username is required.");
-     }
-     if(username && !/^[A-Za-z0-9._-]{3,20}$/.test(username)) {
-         return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
-     }
+    if (!username) {
+        return alert("Username is required.");
+    }
+    if (username && !/^[A-Za-z0-9._-]{3,20}$/.test(username)) {
+        return alert("Username must be 3-20 characters with letters, numbers, dots, underscores, or hyphens.");
+    }
 
     let photoURL = userProfile.photoURL;
     let photoPath = userProfile.photoPath || '';
     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
-    if(newPhoto) {
+    if (newPhoto) {
         const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
         photoURL = await uploadFileToStorage(newPhoto, path);
         photoPath = path;
-    } else if(manualPhoto) {
+    } else if (manualPhoto) {
         photoURL = manualPhoto;
         photoPath = '';
     }
@@ -3638,28 +3638,28 @@ window.toggleSettingsModal = function(show) {
     userProfile = { ...userProfile, ...updates };
     storeUserInCache(currentUser.uid, userProfile);
 
-     try {
-         await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
-         if(name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
-     } catch(e) {
-         console.error("Save failed", e);
-     }
+    try {
+        await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+        if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
+    } catch (e) {
+        console.error("Save failed", e);
+    }
 
-     await persistThemePreference(theme);
-     renderProfile();
-     renderFeed();
-     window.toggleSettingsModal(false);
- }
+    await persistThemePreference(theme);
+    renderProfile();
+    renderFeed();
+    window.toggleSettingsModal(false);
+}
 
 function handleSettingsFileChange(inputEl) {
-    if(!inputEl || !inputEl.files || !inputEl.files[0]) return;
+    if (!inputEl || !inputEl.files || !inputEl.files[0]) return;
     const reader = new FileReader();
-    reader.onload = function(e) { return updateSettingsAvatarPreview(e.target.result); };
+    reader.onload = function (e) { return updateSettingsAvatarPreview(e.target.result); };
     reader.readAsDataURL(inputEl.files[0]);
     updateRemovePhotoButtonState();
 }
 
-window.removeProfilePhoto = async function() {
+window.removeProfilePhoto = async function () {
     if (!currentUser || !auth.currentUser) return toast('You need to be signed in.', 'error');
     const ok = confirm('Remove your profile photo?');
     if (!ok) return;
@@ -3715,28 +3715,28 @@ window.removeProfilePhoto = async function() {
 }
 
 // --- Peer Review System ---
-window.openPeerReview = function(postId) { 
-    activePostId = postId; 
-    document.getElementById('review-modal').style.display = 'flex'; 
+window.openPeerReview = function (postId) {
+    activePostId = postId;
+    document.getElementById('review-modal').style.display = 'flex';
     document.getElementById('review-stats-text').textContent = "Loading data...";
 
-    const reviewsRef = collection(db, 'posts', postId, 'reviews'); 
-    const q = query(reviewsRef); 
+    const reviewsRef = collection(db, 'posts', postId, 'reviews');
+    const q = query(reviewsRef);
 
-    ListenerRegistry.register(`reviews:post:${postId}`, onSnapshot(q, function(snapshot) {
+    ListenerRegistry.register(`reviews:post:${postId}`, onSnapshot(q, function (snapshot) {
         const container = document.getElementById('review-list');
         container.innerHTML = "";
 
         let scores = { verified: 0, citation: 0, misleading: 0, total: 0 };
-        let userHasReview = false; 
+        let userHasReview = false;
         let myRatingData = null;
 
-        snapshot.forEach(function(doc) {
+        snapshot.forEach(function (doc) {
             const data = doc.data();
-            if(data.userId === currentUser.uid) { 
-                userHasReview = true; 
-                window.currentReviewId = doc.id; 
-                myRatingData = data; 
+            if (data.userId === currentUser.uid) {
+                userHasReview = true;
+                window.currentReviewId = doc.id;
+                myRatingData = data;
 
                 // Cache my review to update the feed button color
                 window.myReviewCache[activePostId] = data.rating;
@@ -3744,15 +3744,15 @@ window.openPeerReview = function(postId) {
                 applyMyReviewStylesToDOM();
             }
             const rAuthor = userCache[data.userId] || { name: "Reviewer" };
-            scores.total++; 
-            if(data.rating === 'verified') scores.verified++; 
-            if(data.rating === 'citation') scores.citation++; 
-            if(data.rating === 'misleading') scores.misleading++;
+            scores.total++;
+            if (data.rating === 'verified') scores.verified++;
+            if (data.rating === 'citation') scores.citation++;
+            if (data.rating === 'misleading') scores.misleading++;
 
-            let badge = data.rating === 'verified' 
-                ? '<i class="ph-fill ph-check-circle" style="color:#00ff00;"></i> Verified' 
-                : (data.rating === 'citation' 
-                    ? '<i class="ph-fill ph-warning-circle" style="color:#ffaa00;"></i> Citation Needed' 
+            let badge = data.rating === 'verified'
+                ? '<i class="ph-fill ph-check-circle" style="color:#00ff00;"></i> Verified'
+                : (data.rating === 'citation'
+                    ? '<i class="ph-fill ph-warning-circle" style="color:#ffaa00;"></i> Citation Needed'
                     : '<i class="ph-fill ph-x-circle" style="color:#ff3d3d;"></i> Misleading');
 
             container.innerHTML += `
@@ -3766,56 +3766,56 @@ window.openPeerReview = function(postId) {
         });
 
         // User Status UI
-        if(userHasReview) {
-            document.getElementById('review-submit-section').style.display = 'none'; 
+        if (userHasReview) {
+            document.getElementById('review-submit-section').style.display = 'none';
             document.getElementById('review-remove-section').style.display = 'block';
-            let myBadge = ""; 
+            let myBadge = "";
             let myNote = "";
-            if (myRatingData) { 
-                myBadge = myRatingData.rating === 'verified' 
-                    ? '✅ Verified Accurate' 
-                    : (myRatingData.rating === 'citation' ? '⚠️ Needs Citations' : '🚫 Misleading / False'); 
-                myNote = myRatingData.note || "(No explanation provided)"; 
+            if (myRatingData) {
+                myBadge = myRatingData.rating === 'verified'
+                    ? '✅ Verified Accurate'
+                    : (myRatingData.rating === 'citation' ? '⚠️ Needs Citations' : '🚫 Misleading / False');
+                myNote = myRatingData.note || "(No explanation provided)";
             }
             document.getElementById('review-user-status').innerHTML = `
                 <div style="margin-bottom:8px; font-size:1rem;">You rated this: ${myBadge}</div>
                 <div style="text-align:left; background:var(--bg-hover); padding:10px; border-radius:8px; font-size:0.9rem; color:var(--text-muted); border:1px solid var(--border);">
                     <strong style="color:var(--text-main); display:block; margin-bottom:4px;">Your Explanation:</strong>"${escapeHtml(myNote)}"
                 </div>`;
-        } else { 
-            document.getElementById('review-submit-section').style.display = 'block'; 
-            document.getElementById('review-remove-section').style.display = 'none'; 
+        } else {
+            document.getElementById('review-submit-section').style.display = 'block';
+            document.getElementById('review-remove-section').style.display = 'none';
         }
 
         // Stats Bar
-        if(scores.total > 0) {
-            const vP = (scores.verified / scores.total) * 100; 
-            const cP = (scores.citation / scores.total) * 100; 
+        if (scores.total > 0) {
+            const vP = (scores.verified / scores.total) * 100;
+            const cP = (scores.citation / scores.total) * 100;
             const mP = (scores.misleading / scores.total) * 100;
             document.getElementById('review-bar').innerHTML = `
                 <div style="width:${vP}%; background:#00ff00; height:8px;"></div>
                 <div style="width:${cP}%; background:#ffaa00; height:8px;"></div>
                 <div style="width:${mP}%; background:#ff0000; height:8px;"></div>`;
             document.getElementById('review-stats-text').innerHTML = `${scores.total} Reviews`;
-        } else { 
-            document.getElementById('review-bar').innerHTML = `<div style="width:100%; background:#333; height:8px;"></div>`; 
-            document.getElementById('review-stats-text').textContent = "No peer reviews yet."; 
+        } else {
+            document.getElementById('review-bar').innerHTML = `<div style="width:100%; background:#333; height:8px;"></div>`;
+            document.getElementById('review-stats-text').textContent = "No peer reviews yet.";
         }
     }));
 }
 
 // FIX: Review Submission Logic Stabilized
-window.submitReview = async function() {
-    if(!activePostId) return alert("Error: No active post selected.");
+window.submitReview = async function () {
+    if (!activePostId) return alert("Error: No active post selected.");
     const ratingEl = document.getElementById('review-rating');
     const noteEl = document.getElementById('review-note');
 
-    if(!ratingEl || !noteEl) return;
+    if (!ratingEl || !noteEl) return;
 
     const rating = ratingEl.value;
     const note = noteEl.value;
 
-    if(!note.trim()) return alert("Please add a note explaining your review.");
+    if (!note.trim()) return alert("Please add a note explaining your review.");
 
     try {
         // 1. Update Cache
@@ -3831,26 +3831,26 @@ window.submitReview = async function() {
         window.closeReview();
 
         // 4. Backend Update
-        await addDoc(collection(db, 'posts', activePostId, 'reviews'), { 
-            userId: currentUser.uid, 
-            rating, 
-            note, 
-            timestamp: serverTimestamp() 
+        await addDoc(collection(db, 'posts', activePostId, 'reviews'), {
+            userId: currentUser.uid,
+            rating,
+            note,
+            timestamp: serverTimestamp()
         });
 
         const postRef = doc(db, 'posts', activePostId);
         const scoreChange = (rating === 'verified') ? 1 : -1;
         await updateDoc(postRef, { trustScore: increment(scoreChange) });
 
-    } catch(e) { 
-        console.error("Review failed", e); 
+    } catch (e) {
+        console.error("Review failed", e);
         alert("Failed to submit review. Please try again.");
     }
 }
 
 // PATCH: Clear cache and reset UI color on remove
-window.removeReview = async function() { 
-    if(!window.currentReviewId || !activePostId) return; 
+window.removeReview = async function () {
+    if (!window.currentReviewId || !activePostId) return;
 
     // Clear from cache immediately
     if (window.myReviewCache) delete window.myReviewCache[activePostId];
@@ -3860,15 +3860,15 @@ window.removeReview = async function() {
     applyMyReviewStylesToDOM();
     window.closeReview(); // Close modal
 
-    try { 
-        await deleteDoc(doc(db, 'posts', activePostId, 'reviews', window.currentReviewId)); 
-    } catch(e) { 
-        console.error(e); 
-    } 
+    try {
+        await deleteDoc(doc(db, 'posts', activePostId, 'reviews', window.currentReviewId));
+    } catch (e) {
+        console.error(e);
+    }
 }
 
 // --- Thread & Comments ---
-window.openThread = function(postId) {
+window.openThread = function (postId) {
     activePostId = postId;
     activeReplyId = null;
     commentRootDisplayCount[postId] = 20;
@@ -3894,89 +3894,89 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function(snapshot) {
-        const comments = snapshot.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
-        const missingCommentUsers = comments.filter(function(c) { return !userCache[c.userId]; }).map(function(c) { return ({userId: c.userId}); });
-        if(missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function (snapshot) {
+        const comments = snapshot.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const missingCommentUsers = comments.filter(function (c) { return !userCache[c.userId]; }).map(function (c) { return ({ userId: c.userId }); });
+        if (missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
         threadComments = comments;
         pruneOptimisticMatches(comments);
         renderThreadComments();
-    }, function(error) {
+    }, function (error) {
         console.error('Comments load error', error);
         container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
     }));
 }
 
 function mergeOptimisticComments(base = []) {
-  const seen = new Set();
-  const merged = [];
-  optimisticThreadComments.forEach(function(c) { merged.push(c); seen.add(c.id); });
-  base.forEach(function(c) { if (!seen.has(c.id)) merged.push(c); });
-  return merged;
+    const seen = new Set();
+    const merged = [];
+    optimisticThreadComments.forEach(function (c) { merged.push(c); seen.add(c.id); });
+    base.forEach(function (c) { if (!seen.has(c.id)) merged.push(c); });
+    return merged;
 }
 
 function pruneOptimisticMatches(serverComments = []) {
-  if (!optimisticThreadComments.length) return;
-  const serverKeys = new Set(serverComments.map(function(c) { return `${c.userId || ''}::${(c.text || '').trim()}`; }));
-  optimisticThreadComments = optimisticThreadComments.filter(function(opt) {
-    const key = `${opt.userId || ''}::${(opt.text || '').trim()}`;
-    return !serverKeys.has(key);
-  });
+    if (!optimisticThreadComments.length) return;
+    const serverKeys = new Set(serverComments.map(function (c) { return `${c.userId || ''}::${(c.text || '').trim()}`; }));
+    optimisticThreadComments = optimisticThreadComments.filter(function (opt) {
+        const key = `${opt.userId || ''}::${(opt.text || '').trim()}`;
+        return !serverKeys.has(key);
+    });
 }
 
 function getCommentSortComparator() {
-  if (commentFilterMode === 'popularity') {
-    return function(a, b) {
-      const likeDiff = (b.likes || 0) - (a.likes || 0);
-      if (likeDiff !== 0) return likeDiff;
-      return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
-    };
-  }
-  if (commentFilterMode === 'datetime') {
-    return function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); };
-  }
-  return function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); };
+    if (commentFilterMode === 'popularity') {
+        return function (a, b) {
+            const likeDiff = (b.likes || 0) - (a.likes || 0);
+            if (likeDiff !== 0) return likeDiff;
+            return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
+        };
+    }
+    if (commentFilterMode === 'datetime') {
+        return function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); };
+    }
+    return function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); };
 }
 
 function filterAndSortComments(list = []) {
-  const queryVal = (commentFilterQuery || '').trim().toLowerCase();
-  let filtered = list.slice();
+    const queryVal = (commentFilterQuery || '').trim().toLowerCase();
+    let filtered = list.slice();
 
-  if (commentFilterMode === 'user' && queryVal) {
-    filtered = filtered.filter(function(c) {
-      const author = userCache[c.userId] || {};
-      const name = (author.name || '').toLowerCase();
-      const username = (author.username || '').toLowerCase();
-      return name.includes(queryVal) || username.includes(queryVal);
-    });
-  } else if (commentFilterMode === 'content' && queryVal) {
-    filtered = filtered.filter(function(c) { return (c.text || '').toLowerCase().includes(queryVal); });
-  }
+    if (commentFilterMode === 'user' && queryVal) {
+        filtered = filtered.filter(function (c) {
+            const author = userCache[c.userId] || {};
+            const name = (author.name || '').toLowerCase();
+            const username = (author.username || '').toLowerCase();
+            return name.includes(queryVal) || username.includes(queryVal);
+        });
+    } else if (commentFilterMode === 'content' && queryVal) {
+        filtered = filtered.filter(function (c) { return (c.text || '').toLowerCase().includes(queryVal); });
+    }
 
-  const sorter = getCommentSortComparator();
-  return filtered.slice().sort(sorter);
+    const sorter = getCommentSortComparator();
+    return filtered.slice().sort(sorter);
 }
 
-const renderCommentHtml = function(c, isReply) {
-  const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
-  const verifiedBadge = renderVerifiedBadge(cAuthor, 'with-gap');
+const renderCommentHtml = function (c, isReply) {
+    const cAuthor = userCache[c.userId] || { name: "User", photoURL: null };
+    const verifiedBadge = renderVerifiedBadge(cAuthor, 'with-gap');
 
-  const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
-  const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
+    const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
+    const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
 
-  const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
-  const username = cAuthor.username ? `@${escapeHtml(cAuthor.username)}` : '';
-  const timestampText = formatDateTime(c.timestamp) || 'Now';
+    const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
+    const username = cAuthor.username ? `@${escapeHtml(cAuthor.username)}` : '';
+    const timestampText = formatDateTime(c.timestamp) || 'Now';
 
-  const parentCommentId = c.parentCommentId || c.parentId;
+    const parentCommentId = c.parentCommentId || c.parentId;
 
-  const mediaHtml = c.mediaUrl
-    ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')">
+    const mediaHtml = c.mediaUrl
+        ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')">
          <img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;">
        </div>`
-    : "";
+        : "";
 
-  return `
+    return `
     <div id="comment-${c.id}" class="comment-item ${isReply ? 'reply-item' : ''}" data-parent="${parentCommentId || ''}">
       <div class="comment-thread-line"></div>
       <div class="comment-card">
@@ -4033,137 +4033,137 @@ const renderCommentHtml = function(c, isReply) {
 };
 
 function renderThreadComments(comments = mergeOptimisticComments(threadComments)) {
-  const container = document.getElementById('thread-stream');
-  if (!container) return;
+    const container = document.getElementById('thread-stream');
+    if (!container) return;
 
-  const filtered = filterAndSortComments(comments);
-  currentThreadComments = filtered;
-  const grouping = groupCommentsByParent(filtered);
-  const sorter = getCommentSortComparator();
-  const roots = grouping.roots.slice().sort(sorter);
-  const byParent = grouping.byParent;
+    const filtered = filterAndSortComments(comments);
+    currentThreadComments = filtered;
+    const grouping = groupCommentsByParent(filtered);
+    const sorter = getCommentSortComparator();
+    const roots = grouping.roots.slice().sort(sorter);
+    const byParent = grouping.byParent;
 
-  const postId = activePostId;
-  if (!commentRootDisplayCount[postId]) commentRootDisplayCount[postId] = 20;
-  const rootLimit = commentRootDisplayCount[postId];
-  const visibleRoots = roots.slice(0, rootLimit);
+    const postId = activePostId;
+    if (!commentRootDisplayCount[postId]) commentRootDisplayCount[postId] = 20;
+    const rootLimit = commentRootDisplayCount[postId];
+    const visibleRoots = roots.slice(0, rootLimit);
 
-  container.innerHTML = '';
-  visibleRoots.forEach(function(c) { container.innerHTML += renderCommentHtml(c, false); });
+    container.innerHTML = '';
+    visibleRoots.forEach(function (c) { container.innerHTML += renderCommentHtml(c, false); });
 
-  const ensureReplyState = function(parentId) {
-    if (!replyExpansionState[parentId]) {
-      replyExpansionState[parentId] = { open: false, loaded: 0 };
-    }
-    return replyExpansionState[parentId];
-  };
+    const ensureReplyState = function (parentId) {
+        if (!replyExpansionState[parentId]) {
+            replyExpansionState[parentId] = { open: false, loaded: 0 };
+        }
+        return replyExpansionState[parentId];
+    };
 
-  const renderReplies = function(parentId) {
-    const replies = (byParent[parentId] || []).slice().sort(sorter);
-    const slot = document.getElementById(`reply-slot-${parentId}`);
-    if (!slot) return;
-    const state = ensureReplyState(parentId);
-    slot.innerHTML = '';
-
-    if (!state.open && replies.length) {
-      const viewBtn = document.createElement('button');
-      viewBtn.className = 'see-more-replies';
-      viewBtn.textContent = `View replies (${replies.length})`;
-      viewBtn.onclick = function() {
-        state.open = true;
-        state.loaded = Math.min(4, replies.length);
-        renderThreadComments(currentThreadComments);
-      };
-      slot.appendChild(viewBtn);
-      return;
-    }
-
-    const limit = Math.min(state.loaded || 4, replies.length);
-    state.loaded = limit;
-    const replyStack = document.createElement('div');
-    replyStack.className = 'reply-stack';
-    replies.slice(0, limit).forEach(function(reply) {
-      replyStack.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
-      renderReplies(reply.id);
-    });
-    slot.appendChild(replyStack);
-
-    const controls = document.createElement('div');
-    controls.className = 'reply-controls';
-    if (replies.length > limit) {
-      const moreBtn = document.createElement('button');
-      moreBtn.className = 'see-more-replies';
-      moreBtn.textContent = 'View more replies';
-      moreBtn.onclick = function() {
-        state.loaded = Math.min(replies.length, state.loaded + 4);
-        renderThreadComments(currentThreadComments);
-      };
-      controls.appendChild(moreBtn);
-    }
-    if (replies.length && state.open) {
-      const hideBtn = document.createElement('button');
-      hideBtn.className = 'see-more-replies subtle';
-      hideBtn.textContent = 'Hide replies';
-      hideBtn.onclick = function() {
-        state.open = false;
+    const renderReplies = function (parentId) {
+        const replies = (byParent[parentId] || []).slice().sort(sorter);
+        const slot = document.getElementById(`reply-slot-${parentId}`);
+        if (!slot) return;
+        const state = ensureReplyState(parentId);
         slot.innerHTML = '';
-        renderThreadComments(currentThreadComments);
-      };
-      controls.appendChild(hideBtn);
+
+        if (!state.open && replies.length) {
+            const viewBtn = document.createElement('button');
+            viewBtn.className = 'see-more-replies';
+            viewBtn.textContent = `View replies (${replies.length})`;
+            viewBtn.onclick = function () {
+                state.open = true;
+                state.loaded = Math.min(4, replies.length);
+                renderThreadComments(currentThreadComments);
+            };
+            slot.appendChild(viewBtn);
+            return;
+        }
+
+        const limit = Math.min(state.loaded || 4, replies.length);
+        state.loaded = limit;
+        const replyStack = document.createElement('div');
+        replyStack.className = 'reply-stack';
+        replies.slice(0, limit).forEach(function (reply) {
+            replyStack.insertAdjacentHTML('beforeend', renderCommentHtml(reply, true));
+            renderReplies(reply.id);
+        });
+        slot.appendChild(replyStack);
+
+        const controls = document.createElement('div');
+        controls.className = 'reply-controls';
+        if (replies.length > limit) {
+            const moreBtn = document.createElement('button');
+            moreBtn.className = 'see-more-replies';
+            moreBtn.textContent = 'View more replies';
+            moreBtn.onclick = function () {
+                state.loaded = Math.min(replies.length, state.loaded + 4);
+                renderThreadComments(currentThreadComments);
+            };
+            controls.appendChild(moreBtn);
+        }
+        if (replies.length && state.open) {
+            const hideBtn = document.createElement('button');
+            hideBtn.className = 'see-more-replies subtle';
+            hideBtn.textContent = 'Hide replies';
+            hideBtn.onclick = function () {
+                state.open = false;
+                slot.innerHTML = '';
+                renderThreadComments(currentThreadComments);
+            };
+            controls.appendChild(hideBtn);
+        }
+        if (controls.childElementCount) slot.appendChild(controls);
+    };
+
+    visibleRoots.forEach(function (c) { renderReplies(c.id); });
+
+    if (roots.length > rootLimit) {
+        const moreBtn = document.createElement('button');
+        moreBtn.className = 'load-more-comments';
+        moreBtn.textContent = 'Load More Comments';
+        moreBtn.onclick = function () { commentRootDisplayCount[postId] = rootLimit + 20; renderThreadComments(currentThreadComments); };
+        container.appendChild(moreBtn);
     }
-    if (controls.childElementCount) slot.appendChild(controls);
-  };
 
-  visibleRoots.forEach(function(c) { renderReplies(c.id); });
-
-  if (roots.length > rootLimit) {
-    const moreBtn = document.createElement('button');
-    moreBtn.className = 'load-more-comments';
-    moreBtn.textContent = 'Load More Comments';
-    moreBtn.onclick = function() { commentRootDisplayCount[postId] = rootLimit + 20; renderThreadComments(currentThreadComments); };
-    container.appendChild(moreBtn);
-  }
-
-  const inputArea = document.getElementById('thread-input-area');
-  const defaultSlot = document.getElementById('thread-input-default-slot');
-  if (inputArea && !inputArea.parentElement && defaultSlot) {
-    defaultSlot.appendChild(inputArea);
-  }
-
-  if (typeof activeReplyId !== 'undefined' && activeReplyId) {
-    const slot = document.getElementById(`reply-slot-${activeReplyId}`);
-    if (slot && inputArea && !slot.contains(inputArea)) {
-      slot.appendChild(inputArea);
-      const input = document.getElementById('thread-input');
-      if (input) input.focus();
+    const inputArea = document.getElementById('thread-input-area');
+    const defaultSlot = document.getElementById('thread-input-default-slot');
+    if (inputArea && !inputArea.parentElement && defaultSlot) {
+        defaultSlot.appendChild(inputArea);
     }
-  }
+
+    if (typeof activeReplyId !== 'undefined' && activeReplyId) {
+        const slot = document.getElementById(`reply-slot-${activeReplyId}`);
+        if (slot && inputArea && !slot.contains(inputArea)) {
+            slot.appendChild(inputArea);
+            const input = document.getElementById('thread-input');
+            if (input) input.focus();
+        }
+    }
 }
 
-window.updateCommentFilterMode = function(mode = 'popularity') {
-  commentFilterMode = mode || 'popularity';
-  commentFilterQuery = '';
-  const input = document.getElementById('comment-filter-input');
-  if (input) {
-    const needsInput = mode === 'user' || mode === 'content';
-    input.style.display = needsInput ? 'block' : 'none';
-    input.placeholder = mode === 'user' ? 'Filter by username' : 'Filter by keyword';
-    input.value = '';
-  }
-  renderThreadComments();
+window.updateCommentFilterMode = function (mode = 'popularity') {
+    commentFilterMode = mode || 'popularity';
+    commentFilterQuery = '';
+    const input = document.getElementById('comment-filter-input');
+    if (input) {
+        const needsInput = mode === 'user' || mode === 'content';
+        input.style.display = needsInput ? 'block' : 'none';
+        input.placeholder = mode === 'user' ? 'Filter by username' : 'Filter by keyword';
+        input.value = '';
+    }
+    renderThreadComments();
 };
 
-window.updateCommentFilterQuery = function(value = '') {
-  commentFilterQuery = value || '';
-  renderThreadComments();
+window.updateCommentFilterQuery = function (value = '') {
+    commentFilterQuery = value || '';
+    renderThreadComments();
 };
 
 
 
 function renderThreadMainPost(postId) {
     const container = document.getElementById('thread-main-post');
-    const post = allPosts.find(function(p) { return p.id === postId; });
-    if(!post) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post) return;
 
     const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
     const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
@@ -4192,16 +4192,16 @@ function renderThreadMainPost(postId) {
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
     let mediaContent = '';
-    if (post.mediaUrl) { 
-        if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`; 
-        else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`; 
+    if (post.mediaUrl) {
+        if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`;
+        else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
     }
 
     // UPDATE: Trust Badge Logic for Thread View to match Feed
     let trustBadge = "";
-    if(post.trustScore > 2) {
+    if (post.trustScore > 2) {
         trustBadge = `<div style="font-size:0.75rem; color:#8b949e; display:flex; align-items:center; gap:4px; font-weight:600;"><i class="ph-fill ph-check-circle"></i> Publicly Verified</div>`;
-    } else if(post.trustScore < -1) {
+    } else if (post.trustScore < -1) {
         trustBadge = `<div style="font-size:0.75rem; color:#ff3d3d; display:flex; align-items:center; gap:4px; font-weight:600;"><i class="ph-fill ph-warning-circle"></i> Disputed</div>`;
     }
 
@@ -4241,32 +4241,31 @@ function renderThreadMainPost(postId) {
             ${mediaContent}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}</div>
                         ${actionsHtml}
-</div>
         </div>`;
 
     const inputPfp = document.getElementById('thread-input-pfp');
-    if(inputPfp) applyAvatarToElement(inputPfp, userProfile, { size: 40 });
+    if (inputPfp) applyAvatarToElement(inputPfp, userProfile, { size: 40 });
 
     const threadReviewBtn = document.getElementById(`thread-review-btn-${post.id}`);
     applyReviewButtonState(threadReviewBtn, myReview);
     applyMyReviewStylesToDOM();
 }
 
-window.sendComment = async function() {
+window.sendComment = async function () {
     const input = document.getElementById('thread-input');
     const fileInput = document.getElementById('thread-file');
     const text = input.value.trim();
 
-    if(!text && !fileInput.files[0]) return;
+    if (!text && !fileInput.files[0]) return;
 
     const btn = document.getElementById('thread-send-btn');
-    btn.disabled = true; 
+    btn.disabled = true;
     btn.textContent = "...";
 
     let optimisticId = null;
     try {
         let mediaUrl = null;
-        if(fileInput.files[0]) {
+        if (fileInput.files[0]) {
             const path = `comments/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
             mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
         }
@@ -4293,21 +4292,21 @@ window.sendComment = async function() {
         await addDoc(collection(db, 'posts', activePostId, 'comments'), payload);
 
         const postRef = doc(db, 'posts', activePostId);
-        await updateDoc(postRef, { 
-            previewComment: { 
-                text: text.substring(0, 80) + (text.length > 80 ? '...' : ''), 
-                author: userProfile.name, 
-                likes: 0 
-            } 
+        await updateDoc(postRef, {
+            previewComment: {
+                text: text.substring(0, 80) + (text.length > 80 ? '...' : ''),
+                author: userProfile.name,
+                likes: 0
+            }
         });
 
-        resetInputBox(); 
-        document.getElementById('attach-btn-text').textContent = "📎 Attach"; 
-        document.getElementById('attach-btn-text').style.color = "var(--text-muted)"; 
+        resetInputBox();
+        document.getElementById('attach-btn-text').textContent = "📎 Attach";
+        document.getElementById('attach-btn-text').style.color = "var(--text-muted)";
         fileInput.value = "";
-    } catch(e) {
+    } catch (e) {
         console.error(e);
-        optimisticThreadComments = optimisticThreadComments.filter(function(c) { return c.id !== optimisticId; });
+        optimisticThreadComments = optimisticThreadComments.filter(function (c) { return c.id !== optimisticId; });
         renderThreadComments();
     } finally {
         btn.disabled = false;
@@ -4339,14 +4338,14 @@ function updateCommentReactionUI(commentId, likes, dislikes, isLiked, isDisliked
     }
 }
 
-window.toggleCommentLike = async function(commentId, event) {
-    if(event) event.stopPropagation();
-    if(!activePostId || !currentUser) return;
+window.toggleCommentLike = async function (commentId, event) {
+    if (event) event.stopPropagation();
+    if (!activePostId || !currentUser) return;
     const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
     const btn = event?.currentTarget;
-    let comment = threadComments.find(function(c) { return c.id === commentId; });
+    let comment = threadComments.find(function (c) { return c.id === commentId; });
 
-    if(!comment) {
+    if (!comment) {
         try {
             const snap = await getDoc(commentRef);
             if (snap.exists()) comment = { id: commentId, ...snap.data() };
@@ -4363,13 +4362,13 @@ window.toggleCommentLike = async function(commentId, event) {
 
     if (wasLiked) {
         likes = Math.max(0, likes - 1);
-        likedBy = likedBy.filter(function(uid) { return uid !== currentUser.uid; });
+        likedBy = likedBy.filter(function (uid) { return uid !== currentUser.uid; });
     } else {
         likes = likes + 1;
         if (!likedBy.includes(currentUser.uid)) likedBy.push(currentUser.uid);
         if (hadDisliked) {
             dislikes = Math.max(0, dislikes - 1);
-            dislikedBy = dislikedBy.filter(function(uid) { return uid !== currentUser.uid; });
+            dislikedBy = dislikedBy.filter(function (uid) { return uid !== currentUser.uid; });
         }
     }
 
@@ -4395,29 +4394,29 @@ window.toggleCommentLike = async function(commentId, event) {
             }
             await updateDoc(commentRef, payload);
         }
-    } catch(e) { console.error(e); }
+    } catch (e) { console.error(e); }
 }
 
-window.toggleDislike = async function(postId, event) {
-    if(event) event.stopPropagation();
-    if(!currentUser) return alert("Please log in to dislike posts.");
+window.toggleDislike = async function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!currentUser) return alert("Please log in to dislike posts.");
 
-    const post = allPosts.find(function(p) { return p.id === postId; });
-    if(!post) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post) return;
 
     const wasDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
     const hadLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
 
     if (wasDisliked) {
         post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
-        post.dislikedBy = (post.dislikedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
+        post.dislikedBy = (post.dislikedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
     } else {
         post.dislikes = (post.dislikes || 0) + 1;
         if (!post.dislikedBy) post.dislikedBy = [];
         post.dislikedBy.push(currentUser.uid);
         if (hadLiked) {
             post.likes = Math.max(0, (post.likes || 0) - 1);
-            post.likedBy = (post.likedBy || []).filter(function(uid) { return uid !== currentUser.uid; });
+            post.likedBy = (post.likedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
         }
     }
 
@@ -4439,75 +4438,75 @@ window.toggleDislike = async function(postId, event) {
     } catch (e) { console.error('Dislike error:', e); }
 }
 
-window.toggleCommentDislike = async function(commentId, event) {
-  if (event) event.stopPropagation();
-  if (!activePostId || !currentUser) return;
+window.toggleCommentDislike = async function (commentId, event) {
+    if (event) event.stopPropagation();
+    if (!activePostId || !currentUser) return;
 
-  const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
-  const btn = event?.currentTarget;
+    const commentRef = doc(db, 'posts', activePostId, 'comments', commentId);
+    const btn = event?.currentTarget;
 
-  let comment = threadComments.find(function(c) { return c.id === commentId; });
+    let comment = threadComments.find(function (c) { return c.id === commentId; });
 
-  if (!comment) {
-    try {
-      const snap = await getDoc(commentRef);
-      if (snap.exists()) comment = { id: commentId, ...snap.data() };
-    } catch (e) { console.error(e); }
-  }
-
-  let likes = comment?.likes || 0;
-  let dislikes = comment?.dislikes || 0;
-  let likedBy = Array.isArray(comment?.likedBy) ? comment.likedBy.slice() : [];
-  let dislikedBy = Array.isArray(comment?.dislikedBy) ? comment.dislikedBy.slice() : [];
-
-  const wasDisliked = dislikedBy.includes(currentUser.uid) || (btn?.dataset.disliked === 'true');
-  const hadLiked = likedBy.includes(currentUser.uid) || (btn?.dataset.liked === 'true');
-
-  if (wasDisliked) {
-    dislikes = Math.max(0, dislikes - 1);
-    dislikedBy = dislikedBy.filter(function(uid) { return uid !== currentUser.uid; });
-  } else {
-    dislikes = dislikes + 1;
-    if (!dislikedBy.includes(currentUser.uid)) dislikedBy.push(currentUser.uid);
-
-    if (hadLiked) {
-      likes = Math.max(0, likes - 1);
-      likedBy = likedBy.filter(function(uid) { return uid !== currentUser.uid; });
+    if (!comment) {
+        try {
+            const snap = await getDoc(commentRef);
+            if (snap.exists()) comment = { id: commentId, ...snap.data() };
+        } catch (e) { console.error(e); }
     }
-  }
 
-  // update local cache + UI immediately
-  if (comment) {
-    comment.likes = likes;
-    comment.dislikes = dislikes;
-    comment.likedBy = likedBy;
-    comment.dislikedBy = dislikedBy;
-  }
+    let likes = comment?.likes || 0;
+    let dislikes = comment?.dislikes || 0;
+    let likedBy = Array.isArray(comment?.likedBy) ? comment.likedBy.slice() : [];
+    let dislikedBy = Array.isArray(comment?.dislikedBy) ? comment.dislikedBy.slice() : [];
 
-  const isLikedNow = likedBy.includes(currentUser.uid);
-  const isDislikedNow = dislikedBy.includes(currentUser.uid);
-  updateCommentReactionUI(commentId, likes, dislikes, isLikedNow, isDislikedNow);
+    const wasDisliked = dislikedBy.includes(currentUser.uid) || (btn?.dataset.disliked === 'true');
+    const hadLiked = likedBy.includes(currentUser.uid) || (btn?.dataset.liked === 'true');
 
-  try {
     if (wasDisliked) {
-      await updateDoc(commentRef, {
-        dislikes: increment(-1),
-        dislikedBy: arrayRemove(currentUser.uid)
-      });
+        dislikes = Math.max(0, dislikes - 1);
+        dislikedBy = dislikedBy.filter(function (uid) { return uid !== currentUser.uid; });
     } else {
-      const payload = {
-        dislikes: increment(1),
-        dislikedBy: arrayUnion(currentUser.uid)
-      };
-      if (hadLiked) {
-        payload.likes = increment(-1);
-        payload.likedBy = arrayRemove(currentUser.uid);
-      }
-      await updateDoc(commentRef, payload);
+        dislikes = dislikes + 1;
+        if (!dislikedBy.includes(currentUser.uid)) dislikedBy.push(currentUser.uid);
+
+        if (hadLiked) {
+            likes = Math.max(0, likes - 1);
+            likedBy = likedBy.filter(function (uid) { return uid !== currentUser.uid; });
+        }
     }
-  } catch (e) {
-    console.error(e);
-  }
+
+    // update local cache + UI immediately
+    if (comment) {
+        comment.likes = likes;
+        comment.dislikes = dislikes;
+        comment.likedBy = likedBy;
+        comment.dislikedBy = dislikedBy;
+    }
+
+    const isLikedNow = likedBy.includes(currentUser.uid);
+    const isDislikedNow = dislikedBy.includes(currentUser.uid);
+    updateCommentReactionUI(commentId, likes, dislikes, isLikedNow, isDislikedNow);
+
+    try {
+        if (wasDisliked) {
+            await updateDoc(commentRef, {
+                dislikes: increment(-1),
+                dislikedBy: arrayRemove(currentUser.uid)
+            });
+        } else {
+            const payload = {
+                dislikes: increment(1),
+                dislikedBy: arrayUnion(currentUser.uid)
+            };
+            if (hadLiked) {
+                payload.likes = increment(-1);
+                payload.likedBy = arrayRemove(currentUser.uid);
+            }
+            await updateDoc(commentRef, payload);
+        }
+    } catch (e) {
+        console.error(e);
+    }
 };
 
 
@@ -4563,7 +4562,7 @@ function renderDiscoverTopBar() {
     container.appendChild(topBar);
 }
 
-window.renderDiscover = async function() {
+window.renderDiscover = async function () {
     renderDiscoverTopBar();
     const container = document.getElementById('discover-results');
     container.innerHTML = "";
@@ -4573,7 +4572,7 @@ window.renderDiscover = async function() {
     const categoriesSelect = document.getElementById('categories-sort-select');
     if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
 
-    const categoriesDropdown = function(id = 'section') {
+    const categoriesDropdown = function (id = 'section') {
         return `<div class="discover-dropdown"><label for="categories-${id}-select">Categories:</label><select id="categories-${id}-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
             <option value="verified_first" ${discoverCategoriesMode === 'verified_first' ? 'selected' : ''}>Verified first</option>
             <option value="verified_only" ${discoverCategoriesMode === 'verified_only' ? 'selected' : ''}>Verified only</option>
@@ -4582,26 +4581,26 @@ window.renderDiscover = async function() {
         </select></div>`;
     };
 
-    const renderVideosSection = async function(onlyVideos = false) {
-        if(!videosCache.length) {
+    const renderVideosSection = async function (onlyVideos = false) {
+        if (!videosCache.length) {
             const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
-            videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+            videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
         }
         let filteredVideos = videosCache;
-        if(discoverSearchTerm) {
-            filteredVideos = filteredVideos.filter(function(v) {
+        if (discoverSearchTerm) {
+            filteredVideos = filteredVideos.filter(function (v) {
                 return (v.caption || '').toLowerCase().includes(discoverSearchTerm) ||
-                (v.hashtags || []).some(function(tag) { return (`#${tag}`).toLowerCase().includes(discoverSearchTerm); });
+                    (v.hashtags || []).some(function (tag) { return (`#${tag}`).toLowerCase().includes(discoverSearchTerm); });
             });
         }
-        if(filteredVideos.length === 0) {
-            if(onlyVideos) container.innerHTML = `<div class="empty-state"><p>No videos found.</p></div>`;
+        if (filteredVideos.length === 0) {
+            if (onlyVideos) container.innerHTML = `<div class="empty-state"><p>No videos found.</p></div>`;
             return;
         }
 
         container.innerHTML += `<div class="discover-section-header">Videos</div>`;
-        filteredVideos.forEach(function(video) {
-            const tags = (video.hashtags || []).map(function(t) { return '#' + t; }).join(' ');
+        filteredVideos.forEach(function (video) {
+            const tags = (video.hashtags || []).map(function (t) { return '#' + t; }).join(' ');
             container.innerHTML += `
                 <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;" onclick="window.navigateTo('videos');">
                     <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
@@ -4616,22 +4615,22 @@ window.renderDiscover = async function() {
         });
     };
 
-    const renderUsers = function() {
+    const renderUsers = function () {
         let matches = [];
         if (discoverSearchTerm) {
-            matches = Object.values(userCache).filter(function(u) {
+            matches = Object.values(userCache).filter(function (u) {
                 return (u.name && u.name.toLowerCase().includes(discoverSearchTerm)) ||
-                (u.username && u.username.toLowerCase().includes(discoverSearchTerm));
+                    (u.username && u.username.toLowerCase().includes(discoverSearchTerm));
             });
         } else if (discoverFilter === 'All Results') {
-            matches = Object.values(userCache).slice(0, 5); 
+            matches = Object.values(userCache).slice(0, 5);
         }
 
-        if(matches.length > 0) {
+        if (matches.length > 0) {
             container.innerHTML += `<div class="discover-section-header">Users</div>`;
-            matches.forEach(function(user) {
-                const uid = Object.keys(userCache).find(function(key) { return userCache[key] === user; });
-                if(!uid) return;
+            matches.forEach(function (user) {
+                const uid = Object.keys(userCache).find(function (key) { return userCache[key] === user; });
+                if (!uid) return;
                 const avatarHtml = renderAvatar({ ...user, uid }, { size: 40 });
 
                 container.innerHTML += `
@@ -4649,10 +4648,10 @@ window.renderDiscover = async function() {
         }
     };
 
-    const renderLiveSection = function() {
-        if(MOCK_LIVESTREAMS.length > 0) {
+    const renderLiveSection = function () {
+        if (MOCK_LIVESTREAMS.length > 0) {
             container.innerHTML += `<div class="discover-section-header">Livestreams</div>`;
-            MOCK_LIVESTREAMS.forEach(function(stream) {
+            MOCK_LIVESTREAMS.forEach(function (stream) {
                 container.innerHTML += `
                     <div class="social-card" style="padding:1rem; display:flex; gap:10px; border-left: 4px solid ${stream.color};">
                         <div style="width:80px; height:50px; background:${stream.color}; border-radius:6px; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
@@ -4664,34 +4663,34 @@ window.renderDiscover = async function() {
                             </div>
                             <div class="category-badge" style="margin-top:10px;">${stream.category}</div>
                         </div>
-                    </div>`; 
+                    </div>`;
             });
         }
     };
 
-    const renderPostsSection = function() {
+    const renderPostsSection = function () {
         let filteredPosts = allPosts;
-        filteredPosts = filteredPosts.filter(function(post) {
+        filteredPosts = filteredPosts.filter(function (post) {
             if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
             return true;
         });
-        if(discoverSearchTerm) {
-            filteredPosts = allPosts.filter(function(p) {
+        if (discoverSearchTerm) {
+            filteredPosts = allPosts.filter(function (p) {
                 const body = typeof p.content === 'string' ? p.content : (p.content?.text || '');
                 return (p.title || '').toLowerCase().includes(discoverSearchTerm) || body.toLowerCase().includes(discoverSearchTerm);
             });
         }
 
-        if(discoverPostsSort === 'popular') {
-            filteredPosts.sort(function(a,b) { return (b.likes || 0) - (a.likes || 0); });
+        if (discoverPostsSort === 'popular') {
+            filteredPosts.sort(function (a, b) { return (b.likes || 0) - (a.likes || 0); });
         } else {
-            filteredPosts.sort(function(a,b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
+            filteredPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
         }
 
-        if(filteredPosts.length > 0) {
+        if (filteredPosts.length > 0) {
             container.innerHTML += `<div class="discover-section-header">Posts</div>`;
-            filteredPosts.forEach(function(post) {
-                const author = userCache[post.userId] || {name: post.author};
+            filteredPosts.forEach(function (post) {
+                const author = userCache[post.userId] || { name: post.author };
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
                 const isLiked = post.likedBy && currentUser && post.likedBy.includes(currentUser.uid);
                 const isDisliked = post.dislikedBy && currentUser && post.dislikedBy.includes(currentUser.uid);
@@ -4725,22 +4724,22 @@ window.renderDiscover = async function() {
         }
     };
 
-    const renderCategoriesSection = function(onlyCategories = false) {
+    const renderCategoriesSection = function (onlyCategories = false) {
         let filteredCategories = categories.slice();
         if (discoverSearchTerm) {
             const term = discoverSearchTerm.toLowerCase();
-            filteredCategories = filteredCategories.filter(function(c) {
+            filteredCategories = filteredCategories.filter(function (c) {
                 return (c.name || '').toLowerCase().includes(term) || (c.slug || '').toLowerCase().includes(term) || (c.description || '').toLowerCase().includes(term);
             });
         }
 
         if (discoverCategoriesMode === 'verified_only') {
-            filteredCategories = filteredCategories.filter(function(c) { return !!c.verified; });
+            filteredCategories = filteredCategories.filter(function (c) { return !!c.verified; });
         } else if (discoverCategoriesMode === 'community_only') {
-            filteredCategories = filteredCategories.filter(function(c) { return (c.type || 'community') === 'community'; });
+            filteredCategories = filteredCategories.filter(function (c) { return (c.type || 'community') === 'community'; });
         }
 
-        const sorted = filteredCategories.slice().sort(function(a, b) {
+        const sorted = filteredCategories.slice().sort(function (a, b) {
             const memberDiff = (b.memberCount || 0) - (a.memberCount || 0);
             if (discoverCategoriesMode === 'verified_first') {
                 if (!!a.verified !== !!b.verified) return Number(b.verified) - Number(a.verified);
@@ -4758,7 +4757,7 @@ window.renderDiscover = async function() {
         const visible = onlyCategories ? sorted : sorted.slice(0, 6);
         if (visible.length > 0) {
             container.innerHTML += `<div class="discover-section-header discover-section-row"><span>Categories</span>${categoriesDropdown('section')}</div>`;
-            visible.forEach(function(cat) {
+            visible.forEach(function (cat) {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
                 const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
@@ -4794,7 +4793,7 @@ window.renderDiscover = async function() {
         renderPostsSection();
         renderCategoriesSection();
         await renderVideosSection();
-        if(container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
+        if (container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
     } else if (discoverFilter === 'Users') {
         renderUsers();
     } else if (discoverFilter === 'Livestreams') {
@@ -4811,16 +4810,16 @@ window.renderDiscover = async function() {
 }
 
 // --- Profile Rendering ---
-window.openUserProfile = async function(uid, event, pushToStack = true) {
-    if(event) event.stopPropagation();
+window.openUserProfile = async function (uid, event, pushToStack = true) {
+    if (event) event.stopPropagation();
     if (uid === currentUser.uid) {
         window.navigateTo('profile', pushToStack);
         return;
-    } 
+    }
 
-    viewingUserId = uid; 
+    viewingUserId = uid;
     currentProfileFilter = 'All Results';
-    window.navigateTo('public-profile', pushToStack); 
+    window.navigateTo('public-profile', pushToStack);
 
     let profile = userCache[uid];
     if (!profile) {
@@ -4834,9 +4833,9 @@ window.openUserProfile = async function(uid, event, pushToStack = true) {
     renderPublicProfile(uid, profile);
 }
 
-window.openUserProfileByHandle = async function(handle) {
+window.openUserProfileByHandle = async function (handle) {
     const normalized = (handle || '').replace(/^@/, '').toLowerCase();
-    const cachedEntry = Object.entries(userCache).find(function([_, data]) { return (data.username || '').toLowerCase() === normalized; });
+    const cachedEntry = Object.entries(userCache).find(function ([_, data]) { return (data.username || '').toLowerCase() === normalized; });
     if (cachedEntry) {
         openUserProfile(cachedEntry[0], null, true);
         return;
@@ -4853,7 +4852,7 @@ window.openUserProfileByHandle = async function(handle) {
 const PROFILE_FILTER_OPTIONS = ['All Results', 'Posts', 'Categories', 'Users', 'Videos', 'Livestreams'];
 
 function renderProfileFilterRow(uid, ariaLabel = 'Profile filters') {
-    const buttons = PROFILE_FILTER_OPTIONS.map(function(label) {
+    const buttons = PROFILE_FILTER_OPTIONS.map(function (label) {
         const active = currentProfileFilter === label;
         const safeLabel = label.replace(/'/g, "\\'");
         return `<button class="discover-pill ${active ? 'active' : ''}" role="tab" aria-selected="${active}" onclick="window.setProfileFilter('${safeLabel}', '${uid}')">${label}</button>`;
@@ -4866,16 +4865,16 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
     profileMediaPrefetching[uid] = 'loading';
     try {
         const tasks = [];
-        if (!videosCache.some(function(video) { return video.ownerId === uid; })) {
-            tasks.push(getDocs(query(collection(db, 'videos'), where('ownerId', '==', uid), orderBy('createdAt', 'desc'), limit(12))).then(function(snap) {
-                const newVideos = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+        if (!videosCache.some(function (video) { return video.ownerId === uid; })) {
+            tasks.push(getDocs(query(collection(db, 'videos'), where('ownerId', '==', uid), orderBy('createdAt', 'desc'), limit(12))).then(function (snap) {
+                const newVideos = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
                 videosCache = newVideos.concat(videosCache);
             }));
         }
-        if (!liveSessionsCache.some(function(session) { return (session.hostId || session.author) === uid; })) {
+        if (!liveSessionsCache.some(function (session) { return (session.hostId || session.author) === uid; })) {
             const liveQuery = query(collection(db, 'liveStreams'), where('hostId', '==', uid), limit(12));
-            tasks.push(getDocs(liveQuery).then(function(snap) {
-                const additions = snap.docs.map(function(d) {
+            tasks.push(getDocs(liveQuery).then(function (snap) {
+                const additions = snap.docs.map(function (d) {
                     const data = d.data();
                     const playbackUrl = data.playbackUrl || data.streamUrl || data.streamEmbedURL || '';
                     return ({
@@ -4885,9 +4884,9 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
                         streamEmbedURL: data.streamEmbedURL || playbackUrl,
                         tags: Array.isArray(data.tags) ? data.tags : [],
                     });
-                }).sort(function(a, b) { return (b.startedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0) - (a.startedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0); });
-                const existingIds = new Set(liveSessionsCache.map(function(s) { return s.id; }));
-                liveSessionsCache = liveSessionsCache.concat(additions.filter(function(s) { return !existingIds.has(s.id); }));
+                }).sort(function (a, b) { return (b.startedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0) - (a.startedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0); });
+                const existingIds = new Set(liveSessionsCache.map(function (s) { return s.id; }));
+                liveSessionsCache = liveSessionsCache.concat(additions.filter(function (s) { return !existingIds.has(s.id); }));
             }));
         }
         await Promise.all(tasks);
@@ -4901,16 +4900,16 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
 
 function getProfileContentSources(uid) {
     const posts = allPosts
-        .filter(function(p) { return p.userId === uid; })
-        .sort(function(a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
-    const videos = videosCache.filter(function(video) { return video.ownerId === uid; });
-    const liveSessions = liveSessionsCache.filter(function(session) { return (session.hostId || session.author) === uid; });
+        .filter(function (p) { return p.userId === uid; })
+        .sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
+    const videos = videosCache.filter(function (video) { return video.ownerId === uid; });
+    const liveSessions = liveSessionsCache.filter(function (session) { return (session.hostId || session.author) === uid; });
 
     const categoriesForProfile = [];
     const seenCategories = new Set();
 
     if (uid === currentUser?.uid) {
-        Object.keys(memberships || {}).forEach(function(catId) {
+        Object.keys(memberships || {}).forEach(function (catId) {
             const snapshot = getCategorySnapshot(catId);
             if (snapshot && !seenCategories.has(catId)) {
                 categoriesForProfile.push({
@@ -4924,7 +4923,7 @@ function getProfileContentSources(uid) {
     }
 
     if (!categoriesForProfile.length) {
-        posts.forEach(function(post) {
+        posts.forEach(function (post) {
             const cid = post.categoryId || post.category;
             const label = post.category || post.categoryName || cid;
             if (cid && label && !seenCategories.has(cid)) {
@@ -4999,7 +4998,7 @@ function renderProfileVideoCard(video) {
         </div>
         <div class="card-content" style="gap:6px;">
             <div style="font-weight:700;">${caption}</div>
-            <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(function(t){ return '#' + t; }).join(' ')}</div>
+            <div style="color:var(--text-muted); font-size:0.85rem;">${(video.hashtags || []).map(function (t) { return '#' + t; }).join(' ')}</div>
         </div>
     </div>`;
 }
@@ -5036,7 +5035,7 @@ function renderProfileCollageRow(label, items, renderer, seeAllAction) {
 function renderProfilePostsList(container, posts, context) {
     if (!container) return;
     if (!posts.length) { container.innerHTML = `<div class="empty-state"><p>No posts yet.</p></div>`; return; }
-    container.innerHTML = posts.map(function(post) {
+    container.innerHTML = posts.map(function (post) {
         return renderProfilePostCard(post, context, { compact: false, idPrefix: `${context}-post` });
     }).join('');
 }
@@ -5046,7 +5045,7 @@ function renderProfileAllResults(container, sources, uid, isSelfView) {
     const sections = [];
     const postContext = isSelfView ? 'profile' : 'public-profile';
     const postPrefix = isSelfView ? 'my-profile-collage' : 'profile-collage';
-    sections.push(renderProfileCollageRow('Posts', sources.posts.slice(0, 10), function(post) { return renderProfilePostCard(post, postContext, { compact: true, idPrefix: postPrefix }); }, `window.setProfileFilter('Posts', '${uid}')`));
+    sections.push(renderProfileCollageRow('Posts', sources.posts.slice(0, 10), function (post) { return renderProfilePostCard(post, postContext, { compact: true, idPrefix: postPrefix }); }, `window.setProfileFilter('Posts', '${uid}')`));
     sections.push(renderProfileCollageRow('Videos', sources.videos.slice(0, 10), renderProfileVideoCard, `window.setProfileFilter('Videos', '${uid}')`));
     sections.push(renderProfileCollageRow('Livestreams', sources.liveSessions.slice(0, 10), renderProfileLiveCard, `window.setProfileFilter('Livestreams', '${uid}')`));
     sections.push(renderProfileCollageRow('Categories', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
@@ -5089,7 +5088,7 @@ function renderProfileContent(uid, profile, isSelfView, containerId) {
 }
 
 function renderPublicProfile(uid, profileData = userCache[uid]) {
-    if(!profileData) return;
+    if (!profileData) return;
     if (!PROFILE_FILTER_OPTIONS.includes(currentProfileFilter)) currentProfileFilter = 'All Results';
     const normalizedProfile = normalizeUserProfileData(profileData, profileData.uid || profileData.id || currentUser?.uid || '');
     const container = document.getElementById('view-public-profile');
@@ -5100,14 +5099,14 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
     const userPosts = sources.posts;
-    const likesTotal = userPosts.reduce(function(acc, p) { return acc + (p.likes || 0); }, 0);
+    const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
 
     const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
 
     let linkHtml = '';
-    if(normalizedProfile.links) {
+    if (normalizedProfile.links) {
         let url = normalizedProfile.links;
-        if(!url.startsWith('http')) url = 'https://' + url;
+        if (!url.startsWith('http')) url = 'https://' + url;
         linkHtml = `<a href="${url}" target="_blank" style="color: var(--primary); font-size: 0.9rem; text-decoration: none; margin-top: 5px; display: inline-block;">🔗 ${escapeHtml(normalizedProfile.links)}</a>`;
     }
 
@@ -5150,16 +5149,16 @@ function renderProfile() {
     const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
 
     let linkHtml = '';
-    if(userProfile.links) {
+    if (userProfile.links) {
         let url = userProfile.links;
-        if(!url.startsWith('http')) url = 'https://' + url;
+        if (!url.startsWith('http')) url = 'https://' + url;
         linkHtml = `<a href="${url}" target="_blank" style="color: var(--primary); font-size: 0.9rem; text-decoration: none; margin-top: 5px; display: inline-flex; align-items:center; gap:5px;"> <i class="ph-bold ph-link"></i> ${escapeHtml(userProfile.links)}</a>`;
     }
 
     const followersCount = userProfile.followersCount || 0;
     const regionHtml = userProfile.region ? `<div class="real-name-subtext"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(userProfile.region)}</div>` : '';
     const realNameHtml = userProfile.realName ? `<div class="real-name-subtext">${escapeHtml(userProfile.realName)}</div>` : '';
-    const likesTotal = userPosts.reduce(function(acc, p) { return acc + (p.likes || 0); }, 0);
+    const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
 
     document.getElementById('view-profile').innerHTML = `
         <div class="profile-header">
@@ -5211,10 +5210,10 @@ function collectFollowedCategoryNames() {
 
 function computeTrendingCategories(limit = 8) {
     const counts = {};
-    allPosts.forEach(function(post) {
+    allPosts.forEach(function (post) {
         if (post.category) counts[post.category] = (counts[post.category] || 0) + 1;
     });
-    return Object.entries(counts).sort(function(a, b) { return b[1] - a[1]; }).slice(0, limit).map(function(entry) { return entry[0]; });
+    return Object.entries(counts).sort(function (a, b) { return b[1] - a[1]; }).slice(0, limit).map(function (entry) { return entry[0]; });
 }
 
 function renderCategoryPills() {
@@ -5223,9 +5222,9 @@ function renderCategoryPills() {
     header.innerHTML = '';
 
     const anchors = ['For You', 'Following'];
-    const seen = new Set(anchors.map(function(label) { return label.toLowerCase(); }));
+    const seen = new Set(anchors.map(function (label) { return label.toLowerCase(); }));
 
-    const addTopic = function(list, topicName, verifiedFlag) {
+    const addTopic = function (list, topicName, verifiedFlag) {
         const name = typeof topicName === 'string' ? topicName.trim() : '';
         const key = name.toLowerCase();
         if (!name || seen.has(key)) return;
@@ -5233,11 +5232,11 @@ function renderCategoryPills() {
         list.push({ name, verified: !!verifiedFlag });
     };
 
-    anchors.forEach(function(label) {
+    anchors.forEach(function (label) {
         const pill = document.createElement('div');
         pill.className = 'category-pill' + (currentCategory === label ? ' active' : '');
         pill.textContent = label;
-        pill.onclick = function() { window.setCategory(label); };
+        pill.onclick = function () { window.setCategory(label); };
         header.appendChild(pill);
     });
 
@@ -5246,15 +5245,15 @@ function renderCategoryPills() {
     header.appendChild(divider);
 
     const dynamicTopics = [];
-    const normalizedVerifiedSet = new Set(VERIFIED_TOPICS.map(function(t) { return (t || '').toLowerCase(); }));
+    const normalizedVerifiedSet = new Set(VERIFIED_TOPICS.map(function (t) { return (t || '').toLowerCase(); }));
 
-    VERIFIED_TOPICS.forEach(function(name) { addTopic(dynamicTopics, name, true); });
+    VERIFIED_TOPICS.forEach(function (name) { addTopic(dynamicTopics, name, true); });
 
     const followedNames = collectFollowedCategoryNames();
-    followedNames.forEach(function(name) { addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase())); });
+    followedNames.forEach(function (name) { addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase())); });
 
     if (!followedNames.length) {
-        computeTrendingCategories(20).forEach(function(name) {
+        computeTrendingCategories(20).forEach(function (name) {
             addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase()));
         });
     }
@@ -5262,11 +5261,11 @@ function renderCategoryPills() {
     const dynamicFull = dynamicTopics;
     const dynamic = dynamicFull.slice(0, categoryVisibleCount);
 
-    dynamic.forEach(function(topic) {
+    dynamic.forEach(function (topic) {
         const pill = document.createElement('div');
         pill.className = 'category-pill' + (currentCategory === topic.name ? ' active' : '') + (topic.verified ? ' verified-topic' : '');
         pill.innerHTML = `${escapeHtml(topic.name)}${topic.verified ? `<span class="topic-verified-icon">${getVerifiedIconSvg()}</span>` : ''}`;
-        pill.onclick = function() { window.setCategory(topic.name); };
+        pill.onclick = function () { window.setCategory(topic.name); };
         header.appendChild(pill);
     });
 
@@ -5274,54 +5273,54 @@ function renderCategoryPills() {
         const more = document.createElement('button');
         more.className = 'category-pill load-more';
         more.textContent = 'Load More';
-        more.onclick = function() { categoryVisibleCount += 10; renderCategoryPills(); };
+        more.onclick = function () { categoryVisibleCount += 10; renderCategoryPills(); };
         header.appendChild(more);
     }
 }
 
-window.setCategory = function(c) {
+window.setCategory = function (c) {
     currentCategory = c;
     renderCategoryPills();
     document.documentElement.style.setProperty('--primary', '#00f2ea');
     renderFeed();
 }
 
-window.renderLive = function() {
+window.renderLive = function () {
     const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
-    if(container) container.innerHTML = "";
+    if (container) container.innerHTML = "";
     renderLiveDirectoryFromCache();
 }
 
 // Helper Utils
 function getColorForUser(name) { return ['#FF6B6B', '#4ECDC4', '#45B7D1'][name.length % 3]; }
 function escapeHtml(text) {
-  if (text === null || text === undefined) return '';
+    if (text === null || text === undefined) return '';
 
-  // If you accidentally pass a structured payload (like post.content),
-  // prefer its `.text` field.
-  if (typeof text === 'object') {
-    if (typeof text.text === 'string') text = text.text;
-    else text = JSON.stringify(text);
-  } else if (typeof text !== 'string') {
-    text = String(text);
-  }
+    // If you accidentally pass a structured payload (like post.content),
+    // prefer its `.text` field.
+    if (typeof text === 'object') {
+        if (typeof text.text === 'string') text = text.text;
+        else text = JSON.stringify(text);
+    } else if (typeof text !== 'string') {
+        text = String(text);
+    }
 
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
-function cleanText(text) { if(typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
+function cleanText(text) { if (typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
 function renderSaved() { currentCategory = 'Saved'; renderFeed('saved-content'); }
 
 // Small Interaction Utils
-window.setDiscoverFilter = function(filter) {
+window.setDiscoverFilter = function (filter) {
     discoverFilter = filter;
-    document.querySelectorAll('.discover-pill').forEach(function(el) {
-        if(el.dataset.filter === filter) el.classList.add('active');
+    document.querySelectorAll('.discover-pill').forEach(function (el) {
+        if (el.dataset.filter === filter) el.classList.add('active');
         else el.classList.remove('active');
     });
     const postSort = document.getElementById('discover-post-sort');
@@ -5334,27 +5333,27 @@ window.setDiscoverFilter = function(filter) {
     if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
     renderDiscover();
 }
-window.handlePostsSortChange = function(e) { discoverPostsSort = e.target.value; renderDiscover(); }
-window.handleCategoriesModeChange = function(e) { discoverCategoriesMode = e.target.value; renderDiscover(); }
-window.handleSearchInput = function(e) { discoverSearchTerm = e.target.value.toLowerCase(); renderDiscover(); }
-window.setSavedFilter = function(filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function(el) { if(el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
-window.handleSavedSearch = function(e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
-window.openFullscreenMedia = function(url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if(!modal || !content) return; modal.style.display = 'flex'; if(type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
-window.closeFullscreenMedia = function() { const modal = document.getElementById('media-modal'); if(modal) modal.style.display = 'none'; const content = document.getElementById('media-modal-content'); if(content) content.innerHTML = ''; }
-window.addTagToSaved = async function(postId) { const tag = prompt("Enter a tag for this saved post (e.g. 'Science', 'Read Later'):"); if(!tag) return; userProfile.savedTags = userProfile.savedTags || {}; userProfile.savedTags[postId] = tag; await setDoc(doc(db, "users", currentUser.uid), { savedTags: userProfile.savedTags }, { merge: true }); renderSaved(); }
-window.setProfileFilter = function(category, uid) {
+window.handlePostsSortChange = function (e) { discoverPostsSort = e.target.value; renderDiscover(); }
+window.handleCategoriesModeChange = function (e) { discoverCategoriesMode = e.target.value; renderDiscover(); }
+window.handleSearchInput = function (e) { discoverSearchTerm = e.target.value.toLowerCase(); renderDiscover(); }
+window.setSavedFilter = function (filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function (el) { if (el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
+window.handleSavedSearch = function (e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
+window.openFullscreenMedia = function (url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if (!modal || !content) return; modal.style.display = 'flex'; if (type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
+window.closeFullscreenMedia = function () { const modal = document.getElementById('media-modal'); if (modal) modal.style.display = 'none'; const content = document.getElementById('media-modal-content'); if (content) content.innerHTML = ''; }
+window.addTagToSaved = async function (postId) { const tag = prompt("Enter a tag for this saved post (e.g. 'Science', 'Read Later'):"); if (!tag) return; userProfile.savedTags = userProfile.savedTags || {}; userProfile.savedTags[postId] = tag; await setDoc(doc(db, "users", currentUser.uid), { savedTags: userProfile.savedTags }, { merge: true }); renderSaved(); }
+window.setProfileFilter = function (category, uid) {
     const next = PROFILE_FILTER_OPTIONS.includes(category) ? category : 'All Results';
     currentProfileFilter = next;
     if (uid === 'me') renderProfile(); else renderPublicProfile(uid);
 }
-window.moveInputToComment = function(commentId, authorName) { activeReplyId = commentId; const slot = document.getElementById(`reply-slot-${commentId}`); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (slot && inputArea) { slot.appendChild(inputArea); input.placeholder = `Replying to ${authorName}...`; if(cancelBtn) cancelBtn.style.display = 'inline-block'; input.focus(); } }
-window.resetInputBox = function() { activeReplyId = null; const defaultSlot = document.getElementById('thread-input-default-slot'); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (defaultSlot && inputArea) { defaultSlot.appendChild(inputArea); input.placeholder = "Post your reply"; input.value = ""; if(cancelBtn) cancelBtn.style.display = 'none'; } }
-window.triggerFileSelect = function() { document.getElementById('thread-file').click(); }
-window.handleFileSelect = function(input) { const btn = document.getElementById('attach-btn-text'); if(input.files && input.files[0]) { btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "..."; btn.style.color = "var(--primary)"; } else { btn.innerHTML = `<i class="ph ph-paperclip"></i> Attach`; btn.style.color = "var(--text-muted)"; } }
-window.previewPostImage = function(input) { if(input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function(e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
-window.clearPostImage = function() { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
-window.togglePostOption = function(type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type); ['poll', 'gif', 'schedule', 'location'].forEach(function(t) { if(t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
-window.closeReview = function() { return document.getElementById('review-modal').style.display = 'none'; };
+window.moveInputToComment = function (commentId, authorName) { activeReplyId = commentId; const slot = document.getElementById(`reply-slot-${commentId}`); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (slot && inputArea) { slot.appendChild(inputArea); input.placeholder = `Replying to ${authorName}...`; if (cancelBtn) cancelBtn.style.display = 'inline-block'; input.focus(); } }
+window.resetInputBox = function () { activeReplyId = null; const defaultSlot = document.getElementById('thread-input-default-slot'); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (defaultSlot && inputArea) { defaultSlot.appendChild(inputArea); input.placeholder = "Post your reply"; input.value = ""; if (cancelBtn) cancelBtn.style.display = 'none'; } }
+window.triggerFileSelect = function () { document.getElementById('thread-file').click(); }
+window.handleFileSelect = function (input) { const btn = document.getElementById('attach-btn-text'); if (input.files && input.files[0]) { btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "..."; btn.style.color = "var(--primary)"; } else { btn.innerHTML = `<i class="ph ph-paperclip"></i> Attach`; btn.style.color = "var(--text-muted)"; } }
+window.previewPostImage = function (input) { if (input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function (e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
+window.clearPostImage = function () { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
+window.togglePostOption = function (type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type);['poll', 'gif', 'schedule', 'location'].forEach(function (t) { if (t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
+window.closeReview = function () { return document.getElementById('review-modal').style.display = 'none'; };
 function closePostOptionsDropdown() {
     const dropdown = document.getElementById('post-options-dropdown');
     if (dropdown) dropdown.style.display = 'none';
@@ -5373,18 +5372,18 @@ function handlePostOptionsEscape(event) {
     if (event.key === 'Escape') closePostOptionsDropdown();
 }
 
-window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
-    if(!requireAuth()) return;
+window.openPostOptions = function (event, postId, ownerId, context = 'feed') {
+    if (!requireAuth()) return;
     activeOptionsPost = { id: postId, ownerId, context };
     const dropdown = document.getElementById('post-options-dropdown');
     const deleteBtn = document.getElementById('dropdown-delete-btn');
     const editBtn = document.getElementById('dropdown-edit-btn');
     const shareBtn = document.getElementById('dropdown-share-btn');
     const messageBtn = document.getElementById('dropdown-message-btn');
-    if(deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
-    if(editBtn) editBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
-    if(shareBtn) shareBtn.style.display = 'flex';
-    if(messageBtn) messageBtn.style.display = currentUser && ownerId !== currentUser.uid ? 'flex' : 'none';
+    if (deleteBtn) deleteBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if (editBtn) editBtn.style.display = currentUser && ownerId === currentUser.uid ? 'flex' : 'none';
+    if (shareBtn) shareBtn.style.display = 'flex';
+    if (messageBtn) messageBtn.style.display = currentUser && ownerId !== currentUser.uid ? 'flex' : 'none';
     if (dropdown && event && event.currentTarget) {
         dropdown.style.display = 'block';
         const rect = event.currentTarget.getBoundingClientRect();
@@ -5396,23 +5395,23 @@ window.openPostOptions = function(event, postId, ownerId, context = 'feed') {
     document.addEventListener('keydown', handlePostOptionsEscape, true);
 };
 
-window.closePostOptions = function() { const modal = document.getElementById('post-options-modal'); if(modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
-window.handlePostOptionSelect = function(action) {
+window.closePostOptions = function () { const modal = document.getElementById('post-options-modal'); if (modal) modal.style.display = 'none'; closePostOptionsDropdown(); }
+window.handlePostOptionSelect = function (action) {
     closePostOptionsDropdown();
-    if(action === 'share' && activeOptionsPost?.id) return window.sharePost(activeOptionsPost.id);
-    if(action === 'message' && activeOptionsPost?.id) return window.messageAuthor(activeOptionsPost.id);
-    if(action === 'report') return window.openReportModal();
-    if(action === 'delete') return window.confirmDeletePost();
-    if(action === 'edit') return window.beginEditPost();
+    if (action === 'share' && activeOptionsPost?.id) return window.sharePost(activeOptionsPost.id);
+    if (action === 'message' && activeOptionsPost?.id) return window.messageAuthor(activeOptionsPost.id);
+    if (action === 'report') return window.openReportModal();
+    if (action === 'delete') return window.confirmDeletePost();
+    if (action === 'edit') return window.beginEditPost();
 }
-window.openReportModal = function() { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if(opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'flex'; }
-window.closeReportModal = function() { const modal = document.getElementById('report-modal'); if(modal) modal.style.display = 'none'; }
-window.submitReport = async function() { if(!requireAuth()) return; if(!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if(!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if(detailEl) detailEl.value = ''; if(categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch(e) { console.error(e); toast('Could not submit report.', 'error'); } }
-window.confirmDeletePost = async function() { if(!activeOptionsPost || !activeOptionsPost.id) return; if(!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if(!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function(p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if(currentViewId === 'profile') renderProfile(); if(currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if(activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if(threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch(e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
+window.openReportModal = function () { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if (opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if (modal) modal.style.display = 'flex'; }
+window.closeReportModal = function () { const modal = document.getElementById('report-modal'); if (modal) modal.style.display = 'none'; }
+window.submitReport = async function () { if (!requireAuth()) return; if (!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if (!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if (detailEl) detailEl.value = ''; if (categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch (e) { console.error(e); toast('Could not submit report.', 'error'); } }
+window.confirmDeletePost = async function () { if (!activeOptionsPost || !activeOptionsPost.id) return; if (!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if (!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function (p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if (currentViewId === 'profile') renderProfile(); if (currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if (activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if (threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch (e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
 
-window.beginEditPost = function() {
+window.beginEditPost = function () {
     if (!activeOptionsPost || !activeOptionsPost.id) return;
-    const post = allPosts.find(function(p) { return p.id === activeOptionsPost.id; });
+    const post = allPosts.find(function (p) { return p.id === activeOptionsPost.id; });
     if (!post || !currentUser || post.userId !== currentUser.uid) return toast('You can only edit your own post.', 'error');
     currentEditPost = post;
     const title = document.getElementById('postTitle');
@@ -5421,7 +5420,7 @@ window.beginEditPost = function() {
     if (content) content.value = typeof post.content === 'object' ? (post.content.text || '') : (post.content || '');
     composerTags = Array.isArray(post.tags) ? post.tags.map(normalizeTagValue).filter(Boolean) : [];
     composerMentions = normalizeMentionsField(post.mentions || []);
-    composerPoll = post.poll ? { title: post.poll.title || '', options: (post.poll.options || ['','']).slice(0,5) } : { title: '', options: ['', ''] };
+    composerPoll = post.poll ? { title: post.poll.title || '', options: (post.poll.options || ['', '']).slice(0, 5) } : { title: '', options: ['', ''] };
     composerScheduledFor = formatTimestampForInput(post.scheduledFor);
     composerLocation = post.location || '';
     selectedCategoryId = post.categoryId || selectedCategoryId;
@@ -6057,7 +6056,7 @@ function navigateConversationSearch(step = 0) {
     scrollToMessageById(targetId);
 }
 
-window.mobileMessagesBack = function() {
+window.mobileMessagesBack = function () {
     if (!isMobileViewport()) return;
     document.body.classList.remove('mobile-thread-open');
 };
@@ -6241,7 +6240,7 @@ function toggleReaction(conversationId, messageId, emoji, remove = false) {
 
 function closeMessageActionsMenu() {
     if (messageActionsMenuEl) {
-        try { messageActionsMenuEl.remove(); } catch (e) {}
+        try { messageActionsMenuEl.remove(); } catch (e) { }
         messageActionsMenuEl = null;
     }
 }
@@ -6572,7 +6571,7 @@ async function initConversations(autoOpen = true) {
         await refreshUserProfiles(Array.from(userIds), { force: true });
 
         await Promise.all(conversationMappings.map(function (mapping) {
-            return reconcileConversationMapping(mapping).catch(function () {});
+            return reconcileConversationMapping(mapping).catch(function () { });
         }));
 
         renderConversationList();
@@ -7661,7 +7660,7 @@ window.openMessagesPage = async function () {
     await initConversations();
 };
 
-window.sharePost = async function(postId, event) {
+window.sharePost = async function (postId, event) {
     if (event) event.stopPropagation();
     const base = window.location.href.split('#')[0];
     const url = `${base}#thread-${postId}`;
@@ -7696,21 +7695,21 @@ window.messageAuthor = async function (postId, event) {
     });
 };
 // --- Videos ---
-window.openVideoUploadModal = function() { return window.toggleVideoUploadModal(true); };
-window.toggleVideoUploadModal = function(show = true) {
+window.openVideoUploadModal = function () { return window.toggleVideoUploadModal(true); };
+window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
-    if(modal) modal.style.display = show ? 'flex' : 'none';
+    if (modal) modal.style.display = show ? 'flex' : 'none';
 };
 
 function ensureVideoObserver() {
-    if(videoObserver) return videoObserver;
-    videoObserver = new IntersectionObserver(function(entries) {
-        entries.forEach(function(entry) {
+    if (videoObserver) return videoObserver;
+    videoObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
             const vid = entry.target;
-            if(entry.isIntersecting) {
-                vid.play().catch(function() {});
+            if (entry.isIntersecting) {
+                vid.play().catch(function () { });
                 const vidId = vid.dataset.videoId;
-                if(vidId && !viewedVideos.has(vidId)) {
+                if (vidId && !viewedVideos.has(vidId)) {
                     viewedVideos.add(vidId);
                     incrementVideoViews(vidId);
                 }
@@ -7723,9 +7722,9 @@ function ensureVideoObserver() {
 }
 
 function pauseAllVideos() {
-    document.querySelectorAll('#video-feed video').forEach(function(v) {
+    document.querySelectorAll('#video-feed video').forEach(function (v) {
         v.pause();
-        if(videoObserver) videoObserver.unobserve(v);
+        if (videoObserver) videoObserver.unobserve(v);
     });
 }
 
@@ -7814,28 +7813,28 @@ function refreshVideoFeedWithFilters() {
 }
 
 function initVideoFeed() {
-    if(videosUnsubscribe) return; // already live
+    if (videosUnsubscribe) return; // already live
     renderVideosTopBar();
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function(snap) {
-        videosCache = snap.docs.map(function(d) { return ({ id: d.id, ...d.data() }); });
+    videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function (snap) {
+        videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
         refreshVideoFeedWithFilters();
     }));
 }
 
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
-    if(!feed) return;
+    if (!feed) return;
     pauseAllVideos();
     feed.innerHTML = '';
-    if(videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+    if (videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
 
     const observer = ensureVideoObserver();
 
-    videos.forEach(function(video) {
+    videos.forEach(function (video) {
         const card = document.createElement('div');
         card.className = 'video-card';
-        const tags = (video.hashtags || []).map(function(t) { return '#' + t; }).join(' ');
+        const tags = (video.hashtags || []).map(function (t) { return '#' + t; }).join(' ');
 
         const videoEl = document.createElement('video');
         videoEl.setAttribute('playsinline', '');
@@ -7871,12 +7870,12 @@ function renderVideoFeed(videos = []) {
         const likeBtn = document.createElement('button');
         likeBtn.className = 'icon-pill';
         likeBtn.innerHTML = `<i class="ph ph-heart"></i>${video.stats?.likes || 0}`;
-        likeBtn.onclick = function() { return window.likeVideo(video.id); };
+        likeBtn.onclick = function () { return window.likeVideo(video.id); };
 
         const saveBtn = document.createElement('button');
         saveBtn.className = 'icon-pill';
         saveBtn.innerHTML = '<i class="ph ph-bookmark"></i>';
-        saveBtn.onclick = function() { return window.saveVideo(video.id); };
+        saveBtn.onclick = function () { return window.saveVideo(video.id); };
 
         actions.appendChild(likeBtn);
         actions.appendChild(saveBtn);
@@ -7893,7 +7892,7 @@ function renderVideoFeed(videos = []) {
     });
 }
 
-window.uploadVideo = async function() {
+window.uploadVideo = async function () {
     if (!requireAuth()) return;
 
     const fileInput = document.getElementById('video-file');
@@ -7902,7 +7901,7 @@ window.uploadVideo = async function() {
     const caption = document.getElementById('video-caption').value || '';
     const hashtags = (document.getElementById('video-tags').value || '')
         .split(',')
-        .map(function(tag) { return tag.replace('#', '').trim(); })
+        .map(function (tag) { return tag.replace('#', '').trim(); })
         .filter(Boolean);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const file = fileInput.files[0];
@@ -7911,8 +7910,8 @@ window.uploadVideo = async function() {
 
     try {
         const uploadTask = uploadBytesResumable(storageRef, file);
-        await new Promise(function(resolve, reject) {
-            uploadTask.on('state_changed', function() {}, reject, resolve);
+        await new Promise(function (resolve, reject) {
+            uploadTask.on('state_changed', function () { }, reject, resolve);
         });
 
         const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
@@ -7943,15 +7942,15 @@ document.addEventListener('keydown', function (event) {
     }
 });
 
-window.likeVideo = async function(videoId) {
-    if(!requireAuth()) return;
+window.likeVideo = async function (videoId) {
+    if (!requireAuth()) return;
     const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
     await setDoc(likeRef, { createdAt: serverTimestamp() });
     await updateDoc(doc(db, 'videos', videoId), { 'stats.likes': increment(1) });
 };
 
-window.saveVideo = async function(videoId) {
-    if(!requireAuth()) return;
+window.saveVideo = async function (videoId) {
+    if (!requireAuth()) return;
     await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
     await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
 };
@@ -7959,13 +7958,13 @@ window.saveVideo = async function(videoId) {
 async function incrementVideoViews(videoId) {
     try {
         await updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) });
-    } catch(e) { console.warn('view inc', e.message); }
+    } catch (e) { console.warn('view inc', e.message); }
 }
 
 // --- Live Sessions ---
-window.toggleGoLiveModal = function(show = true) { const modal = document.getElementById('go-live-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
+window.toggleGoLiveModal = function (show = true) { const modal = document.getElementById('go-live-modal'); if (modal) modal.style.display = show ? 'flex' : 'none'; };
 
-window.openGoLiveSetupPage = function() {
+window.openGoLiveSetupPage = function () {
     window.location.hash = '#live-setup';
     window.navigateTo('live-setup');
 };
@@ -8855,16 +8854,16 @@ function renderLiveSetup() {
 }
 
 function renderLiveSessions() {
-    if(liveSessionsUnsubscribe) { renderLiveDirectoryFromCache(); return; }
+    if (liveSessionsUnsubscribe) { renderLiveDirectoryFromCache(); return; }
     const liveRef = query(
         collection(db, 'liveStreams'),
         where('isLive', '==', true),
         orderBy('startedAt', 'desc'),
         orderBy('createdAt', 'desc')
     );
-    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function(snap) {
+    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function (snap) {
         try {
-            liveSessionsCache = snap.docs.map(function(d) {
+            liveSessionsCache = snap.docs.map(function (d) {
                 const data = d.data();
                 const playbackUrl = data.playbackUrl || data.streamUrl || data.streamEmbedURL || '';
                 return ({
@@ -8881,17 +8880,17 @@ function renderLiveSessions() {
         } catch (e) {
             console.error('Live sessions snapshot failed', e);
         }
-    }, function(error) {
+    }, function (error) {
         console.error('Live sessions listener error', error);
         renderLiveDirectoryFromCache();
     }));
 }
 
-window.createLiveSession = async function() {
-    if(!requireAuth()) return;
+window.createLiveSession = async function () {
+    if (!requireAuth()) return;
     const title = document.getElementById('live-title').value;
     const category = document.getElementById('live-category').value;
-    const tags = (document.getElementById('live-tags').value || '').split(',').map(function(t) { return t.trim(); }).filter(Boolean);
+    const tags = (document.getElementById('live-tags').value || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
     const streamEmbedURL = document.getElementById('live-url').value;
     try {
         await addDoc(collection(db, 'liveStreams'), {
@@ -8910,14 +8909,14 @@ window.createLiveSession = async function() {
     }
 };
 
-window.openLiveSession = function(sessionId) {
+window.openLiveSession = function (sessionId) {
     if (activeLiveSessionId && activeLiveSessionId !== sessionId) {
         ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
     }
     activeLiveSessionId = sessionId;
     const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
-    if(!container) return;
-    const sessionData = liveSessionsCache.find(function(session) { return session.id === sessionId; });
+    if (!container) return;
+    const sessionData = liveSessionsCache.find(function (session) { return session.id === sessionId; });
     const streamUrl = sessionData?.streamEmbedURL || sessionData?.streamUrl || sessionData?.playbackUrl;
     const sessionCard = document.createElement('div');
     sessionCard.className = 'social-card';
@@ -8947,12 +8946,12 @@ window.openLiveSession = function(sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveStreams', sessionId, 'chat'), orderBy('createdAt'));
-    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function(snap) {
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function (snap) {
         try {
             const chatEl = document.getElementById('live-chat');
-            if(!chatEl) return;
+            if (!chatEl) return;
             chatEl.innerHTML = '';
-            snap.docs.forEach(function(docSnap) {
+            snap.docs.forEach(function (docSnap) {
                 const data = docSnap.data();
                 const row = document.createElement('div');
                 row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
@@ -8961,17 +8960,17 @@ function listenLiveChat(sessionId) {
         } catch (e) {
             console.error('Live chat snapshot failed', e);
         }
-    }, function(error) {
+    }, function (error) {
         console.error('Live chat listener error', error);
         const chatEl = document.getElementById('live-chat');
         if (chatEl) chatEl.innerHTML = '<div class="empty-state">Chat unavailable.</div>';
     }));
 }
 
-window.sendLiveChat = async function(sessionId) {
-    if(!requireAuth()) return;
+window.sendLiveChat = async function (sessionId) {
+    if (!requireAuth()) return;
     const input = document.getElementById('live-chat-input');
-    if(!input || !input.value.trim()) return;
+    if (!input || !input.value.trim()) return;
     try {
         await addDoc(collection(db, 'liveStreams', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
         input.value = '';
@@ -8985,52 +8984,52 @@ function renderStaffConsole() {
     const warning = document.getElementById('staff-access-warning');
     const panels = document.getElementById('staff-panels');
     const isStaff = hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient();
-    if(!isStaff) {
-        if(warning) warning.style.display = 'block';
-        if(panels) panels.style.display = 'none';
+    if (!isStaff) {
+        if (warning) warning.style.display = 'block';
+        if (panels) panels.style.display = 'none';
         return;
     }
-    if(warning) warning.style.display = 'none';
-    if(panels) panels.style.display = 'block';
+    if (warning) warning.style.display = 'none';
+    if (panels) panels.style.display = 'block';
     listenVerificationRequests();
     listenReports();
     listenAdminLogs();
 }
 
 function listenVerificationRequests() {
-    if(staffRequestsUnsub) return;
-    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function(snap) {
+    if (staffRequestsUnsub) return;
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function (snap) {
         const container = document.getElementById('verification-requests');
-        if(!container) return;
+        if (!container) return;
         container.innerHTML = '';
-        snap.docs.forEach(function(docSnap) {
+        snap.docs.forEach(function (docSnap) {
             const data = docSnap.data();
             const card = document.createElement('div');
             card.className = 'social-card';
-            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks||[]).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
+            card.innerHTML = `<div style="padding:1rem;"><div style="font-weight:800;">${data.category}</div><div style="font-size:0.9rem; color:var(--text-muted);">${(data.evidenceLinks || []).join('<br>')}</div><div style="margin-top:6px; display:flex; gap:8px;"><button class="icon-pill" onclick="window.approveVerification('${docSnap.id}', '${data.userId}')">Approve</button><button class="icon-pill" onclick="window.denyVerification('${docSnap.id}')">Deny</button></div></div>`;
             container.appendChild(card);
         });
     }));
 }
 
-window.approveVerification = async function(requestId, userId) {
+window.approveVerification = async function (requestId, userId) {
     await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'approved', reviewedAt: serverTimestamp() });
-    if(userId) await setDoc(doc(db, 'users', userId), { accountRoles: arrayUnion('verified'), verified: true, updatedAt: serverTimestamp() }, { merge: true });
+    if (userId) await setDoc(doc(db, 'users', userId), { accountRoles: arrayUnion('verified'), verified: true, updatedAt: serverTimestamp() }, { merge: true });
     await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'approveVerification', targetRef: requestId, createdAt: serverTimestamp() });
 };
 
-window.denyVerification = async function(requestId) {
+window.denyVerification = async function (requestId) {
     await updateDoc(doc(db, 'verificationRequests', requestId), { status: 'denied', reviewedAt: serverTimestamp() });
     await addDoc(collection(db, 'adminLogs'), { actorId: currentUser.uid, action: 'denyVerification', targetRef: requestId, createdAt: serverTimestamp() });
 };
 
 function listenReports() {
-    if(staffReportsUnsub) return;
-    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function(snap) {
+    if (staffReportsUnsub) return;
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function (snap) {
         const container = document.getElementById('reports-queue');
-        if(!container) return;
+        if (!container) return;
         container.innerHTML = '';
-        snap.docs.forEach(function(docSnap) {
+        snap.docs.forEach(function (docSnap) {
             const data = docSnap.data();
             const card = document.createElement('div');
             card.className = 'social-card';
@@ -9041,12 +9040,12 @@ function listenReports() {
 }
 
 function listenAdminLogs() {
-    if(staffLogsUnsub) return;
-    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function(snap) {
+    if (staffLogsUnsub) return;
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function (snap) {
         const container = document.getElementById('admin-logs');
-        if(!container) return;
+        if (!container) return;
         container.innerHTML = '';
-        snap.docs.forEach(function(docSnap) {
+        snap.docs.forEach(function (docSnap) {
             const data = docSnap.data();
             const row = document.createElement('div');
             row.textContent = `${data.actorId}: ${data.action}`;
@@ -9056,36 +9055,36 @@ function listenAdminLogs() {
 }
 
 // --- Verification Request ---
-window.openVerificationRequest = function() { toggleVerificationModal(true); };
-window.toggleVerificationModal = function(show = true) { const modal = document.getElementById('verification-modal'); if(modal) modal.style.display = show ? 'flex' : 'none'; };
-window.submitVerificationRequest = async function() {
-    if(!requireAuth()) return;
+window.openVerificationRequest = function () { toggleVerificationModal(true); };
+window.toggleVerificationModal = function (show = true) { const modal = document.getElementById('verification-modal'); if (modal) modal.style.display = show ? 'flex' : 'none'; };
+window.submitVerificationRequest = async function () {
+    if (!requireAuth()) return;
     const category = document.getElementById('verify-category').value;
-    const links = (document.getElementById('verify-links').value || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+    const links = (document.getElementById('verify-links').value || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
     const notes = document.getElementById('verify-notes').value;
     await addDoc(collection(db, 'verificationRequests'), { userId: currentUser.uid, category, evidenceLinks: links, notes, status: 'pending', createdAt: serverTimestamp() });
     toggleVerificationModal(false);
 };
 
 // --- Mobile shell helpers ---
-window.toggleDiscoverSearch = function() {
+window.toggleDiscoverSearch = function () {
     window.navigateTo('discover');
     const discoverInput = document.querySelector('#view-discover input[type="text"]');
     if (discoverInput) discoverInput.focus();
     window.closeMobileActionSheet();
 };
 
-window.openMobileActionSheet = function() {
+window.openMobileActionSheet = function () {
     const sheet = document.getElementById('mobile-action-sheet');
     if (sheet) sheet.classList.add('show');
 };
 
-window.closeMobileActionSheet = function() {
+window.closeMobileActionSheet = function () {
     const sheet = document.getElementById('mobile-action-sheet');
     if (sheet) sheet.classList.remove('show');
 };
 
-window.openMobileComposer = function() {
+window.openMobileComposer = function () {
     closeMobileActionSheet();
     const sheet = document.getElementById('mobile-composer-sheet');
     const input = document.getElementById('mobile-compose-input');
@@ -9096,19 +9095,19 @@ window.openMobileComposer = function() {
     if (input) input.focus();
 };
 
-window.closeMobileComposer = function() {
+window.closeMobileComposer = function () {
     const sheet = document.getElementById('mobile-composer-sheet');
     if (sheet) sheet.classList.remove('show');
 };
 
-window.syncMobileComposerState = function() {
+window.syncMobileComposerState = function () {
     const input = document.getElementById('mobile-compose-input');
     const submit = document.getElementById('mobile-compose-submit');
     const hasContent = input && input.value.trim().length > 0;
     if (submit) submit.disabled = !hasContent;
 };
 
-window.triggerComposerPost = function() {
+window.triggerComposerPost = function () {
     const input = document.getElementById('mobile-compose-input');
     const content = document.getElementById('postContent');
     if (!input || !content) return;
@@ -9122,7 +9121,7 @@ window.triggerComposerPost = function() {
 function bindMobileScrollHelper() {
     const btn = document.getElementById('mobile-scroll-top');
     if (!btn) return;
-    const handler = function() {
+    const handler = function () {
         const shouldShow = isMobileViewport() && window.scrollY > 200;
         btn.classList.toggle('show', shouldShow);
     };
@@ -9133,7 +9132,7 @@ function bindMobileScrollHelper() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
     syncMobileComposerState();
@@ -9147,7 +9146,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
 });
 
-window.addEventListener('hashchange', function() {
+window.addEventListener('hashchange', function () {
     const hash = (window.location.hash || '').replace('#', '');
     if (hash === 'live-setup') { window.navigateTo('live-setup', false); }
 });

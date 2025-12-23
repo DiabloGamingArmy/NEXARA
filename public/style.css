@@ -5474,13 +5474,13 @@ body.go-live-open {
 /* --- Messages Page Layout --- */
 .messages-layout {
     display: flex;
-    height: calc(100vh - 80px);
+    height: calc(100vh - 60px);
+    /* Adjusted for nav bar */
     background: var(--bg-body);
-    border: 1px solid var(--border);
-    border-radius: 12px;
+    /* border: 1px solid var(--border); */
+    /* border-radius: 12px; */
     overflow: hidden;
-    margin: 1rem;
-    /* Add margin to separate from edges */
+    /* margin: 1rem; */
 }
 
 .messages-sidebar {
