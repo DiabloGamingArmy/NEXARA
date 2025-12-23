@@ -187,8 +187,10 @@ body {
     min-height: 100vh;
     border-right: 1px solid var(--border);
     min-width: 0;
-    /* Subtle stream gradient */
+    /* Subtle stream gradient - fixed to prevent scroll changes */
     background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
+    background-attachment: fixed;
+    background-size: 100% 100vh;
 }
 
 @media(min-width: 1024px) {
@@ -198,6 +200,13 @@ body {
 
     body:not(.sidebar-home) .sidebar-right {
         display: none !important;
+    }
+
+    /* Constrain category header width to fit between sidebars */
+    body.sidebar-home .category-header {
+        width: calc(100vw - 570px);
+        /* Screen width - (left 250px + right 320px) */
+        max-width: calc(100vw - 570px);
     }
 }
 
