@@ -202,6 +202,12 @@ body {
         display: none !important;
     }
 
+    body.sidebar-home .main-feed {
+        flex: 0 0 calc(100vw - 570px);
+        width: calc(100vw - 570px);
+        max-width: calc(100vw - 570px);
+    }
+
     /* Constrain category header width to fit between sidebars */
     body.sidebar-home .category-header {
         width: calc(100vw - 570px);
