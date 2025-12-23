@@ -945,9 +945,8 @@ body {
 
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
+    position: fixed;
+    top: 1rem;
     z-index: 11;
     background: none;
     border: none;
@@ -959,7 +958,8 @@ body {
 }
 
 .category-scroll-left {
-    left: 0;
+    left: 250px;
+    /* After left sidebar */
     background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
     padding-right: 2rem;
 }
@@ -968,6 +968,12 @@ body {
     right: 0;
     background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
     padding-left: 2rem;
+}
+
+/* Adjust right arrow when sidebar is visible */
+body.sidebar-home .category-scroll-right {
+    right: 320px;
+    /* Before right sidebar */
 }
 
 .category-scroll-btn:hover {
