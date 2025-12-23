@@ -53,8 +53,8 @@ let videoMentions = [];
 let videoMentionSearchTimer = null;
 let messageTypingTimer = null;
 const USE_UPLOAD_SESSION = false;
-let uploadTasks = [];
-let activeUploadId = null;
+var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
+var activeUploadId = window.activeUploadId || null;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
@@ -8900,6 +8900,7 @@ window.uploadVideo = async function () {
 
     const storageRef = ref(storage, `${storagePath}/source.mp4`);
     activeUploadId = videoId;
+    window.activeUploadId = activeUploadId;
     const task = {
         id: videoId,
         title: title || 'Untitled video',
