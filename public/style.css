@@ -2902,27 +2902,205 @@ body.sidebar-home .category-scroll-right {
 }
 
 .video-feed {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    padding: 1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 22px;
+    padding: 1rem 1rem 2rem;
 }
 
 .video-card {
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    overflow: hidden;
-    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    cursor: pointer;
 }
 
-.video-card video {
+.video-thumb {
+    position: relative;
     width: 100%;
-    max-height: 70vh;
-    object-fit: cover;
+    aspect-ratio: 16 / 9;
+    border-radius: 16px;
+    background-size: cover;
+    background-position: center;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    box-shadow: 0 18px 36px -28px rgba(0, 242, 234, 0.4);
+}
+
+.video-duration {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
 }
 
 .video-meta {
-    padding: 1rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 12px;
+    align-items: start;
+}
+
+.video-avatar {
+    border-radius: 12px;
+}
+
+.video-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.video-title {
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+.video-channel {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.video-stats {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.video-modal {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 120;
+}
+
+.video-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(5, 10, 20, 0.7);
+    backdrop-filter: blur(6px);
+}
+
+.video-modal-dialog {
+    position: relative;
+    width: min(1200px, 92vw);
+    max-height: 90vh;
+    overflow: hidden;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+    z-index: 1;
+}
+
+.video-modal-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    border: none;
+    background: transparent;
+    color: var(--text-main);
+    font-size: 1.8rem;
+    cursor: pointer;
+    z-index: 2;
+}
+
+.video-modal-body {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+    gap: 20px;
+    padding: 20px;
+    overflow: auto;
+}
+
+.video-modal-player video {
+    width: 100%;
+    max-height: 70vh;
+    border-radius: 16px;
+    background: #000;
+}
+
+.video-modal-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.video-modal-title {
+    font-size: 1.4rem;
+    font-weight: 800;
+}
+
+.video-modal-channel {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.video-modal-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+}
+
+.video-modal-channel-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+
+.video-modal-channel-name {
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.video-modal-channel-handle {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.video-modal-stats {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.video-modal-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.video-modal-actions .icon-pill[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.video-modal-description {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    padding: 12px;
+    border-radius: 12px;
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+
+@media (max-width: 960px) {
+    .video-modal-body {
+        grid-template-columns: 1fr;
+    }
 }
 
 .staff-grid {
