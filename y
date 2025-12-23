@@ -197,8 +197,17 @@ service cloud.firestore {
     match /videos/{vid} {
       allow read: if true;
 
-      allow write: if isSignedIn()
+      allow create, delete: if isSignedIn()
         && request.auth.uid == request.resource.data.ownerId;
+
+      allow update: if isSignedIn()
+        && (
+          request.auth.uid == resource.data.ownerId
+          || (
+            request.resource.data.ownerId == resource.data.ownerId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stats'])
+          )
+        );
 
       match /likes/{uid} { allow read: if true; allow write: if isSignedIn() && request.auth.uid == uid; }
       match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
