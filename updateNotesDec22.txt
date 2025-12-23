@@ -204,3 +204,23 @@ Detailed changes:
    - Updated comments to refer to "Nexera".
 
 Net effect: Discussion view should now show only the discussion interface (no Live Editor), and the branding text should use the correct class name.
+
+Change Set 7 — Fix for Live Config UI Leak
+------------------------------------------
+Purpose: The user reported that the "Live Config" UI (Go Live setup) was visible on multiple pages (Live, Videos, Messages, etc.) underneath the proper content.
+This was caused by a massive block of excessive closing tags (</div> and </section>) at the end of the '#view-live-setup' container, which closed the main layout prematurely and left the subsequent content "orphaned" in the DOM structure (or broke the parent-child relationship).
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Fixed View Structure (Live Setup)**
+   - Removed ~20 lines of redundant/invalid closing tags (</div>, </section>) around lines 1218-1237.
+   - Replaced them with exactly 3 closing </div> tags to properly close:
+     1. .go-live-views
+     2. #go-live-root
+     3. #view-live-setup
+   - This prevents the Live Setup view from "leaking" its display state to the rest of the app and ensures it respects 'display: none'.
+
+Net effect: The "Live Config" UI should now be hidden by default and only appear when explicitly navigated to (e.g. via "Go Live" button). Other pages like Videos and Profile should no longer show this UI at the top or bottom.
