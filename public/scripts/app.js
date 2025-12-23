@@ -8087,6 +8087,9 @@ function initVideoFeed() {
     videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function (snap) {
         videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
         refreshVideoFeedWithFilters();
+        const modal = document.getElementById('video-detail-modal');
+        const activeVideoId = modal?.dataset?.videoId;
+        if (activeVideoId) updateVideoModalButtons(activeVideoId);
     }));
 }
 
@@ -8203,6 +8206,19 @@ function updateVideoModalButtons(videoId) {
         active: state.saved,
         activeColor: '#00f2ea'
     });
+}
+
+async function refreshVideoStatsFromServer(videoId) {
+    if (!videoId) return;
+    try {
+        const snap = await getDoc(doc(db, 'videos', videoId));
+        if (!snap.exists()) return;
+        const video = getVideoById(videoId);
+        if (!video) return;
+        video.stats = { ...(snap.data().stats || {}) };
+    } catch (err) {
+        console.warn('Unable to refresh video stats', err);
+    }
 }
 
 async function hydrateVideoEngagement(videoId) {
@@ -8428,6 +8444,7 @@ window.uploadVideo = async function () {
     const fileInput = document.getElementById('video-file');
     if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
 
+    const submitBtn = document.getElementById('video-upload-submit');
     const thumbInput = document.getElementById('video-thumbnail');
     const caption = document.getElementById('video-caption').value || '';
     const hashtags = (document.getElementById('video-tags').value || '')
@@ -8440,6 +8457,10 @@ window.uploadVideo = async function () {
     const storageRef = ref(storage, `videos/${currentUser.uid}/${videoId}/source.mp4`);
 
     try {
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<span class="button-spinner" aria-hidden="true"></span> Publishing...`;
+        }
         const uploadTask = uploadBytesResumable(storageRef, file);
         await new Promise(function (resolve, reject) {
             uploadTask.on('state_changed', function () { }, reject, resolve);
@@ -8481,6 +8502,11 @@ window.uploadVideo = async function () {
     } catch (err) {
         console.error('Video upload failed', err);
         toast('Video upload failed. Please try again.', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Publish';
+        }
     }
 };
 
@@ -8499,11 +8525,14 @@ window.likeVideo = async function (videoId) {
     const wasLiked = state.liked;
     const wasDisliked = state.disliked;
 
-    setVideoEngagementStatus(videoId, { liked: !wasLiked, disliked: wasLiked ? state.disliked : false });
-    updateVideoStats(videoId, {
-        likes: wasLiked ? -1 : 1,
-        dislikes: wasDisliked && !wasLiked ? -1 : 0
-    });
+    if (wasLiked) {
+        setVideoEngagementStatus(videoId, { liked: false });
+        updateVideoStats(videoId, { likes: -1 });
+    } else {
+        setVideoEngagementStatus(videoId, { liked: true, disliked: false });
+        updateVideoStats(videoId, { likes: 1 });
+        if (wasDisliked) updateVideoStats(videoId, { dislikes: -1 });
+    }
     updateVideoModalButtons(videoId);
 
     const videoRef = doc(db, 'videos', videoId);
@@ -8530,7 +8559,7 @@ window.likeVideo = async function (videoId) {
     } catch (err) {
         console.error('Video like failed', err);
         await hydrateVideoEngagement(videoId);
-        updateVideoStats(videoId, { likes: wasLiked ? 1 : -1, dislikes: wasDisliked && !wasLiked ? 1 : 0 });
+        await refreshVideoStatsFromServer(videoId);
         updateVideoModalButtons(videoId);
     }
 };
@@ -8544,11 +8573,14 @@ window.dislikeVideo = async function (videoId) {
     const wasDisliked = state.disliked;
     const wasLiked = state.liked;
 
-    setVideoEngagementStatus(videoId, { disliked: !wasDisliked, liked: wasDisliked ? state.liked : false });
-    updateVideoStats(videoId, {
-        dislikes: wasDisliked ? -1 : 1,
-        likes: wasLiked && !wasDisliked ? -1 : 0
-    });
+    if (wasDisliked) {
+        setVideoEngagementStatus(videoId, { disliked: false });
+        updateVideoStats(videoId, { dislikes: -1 });
+    } else {
+        setVideoEngagementStatus(videoId, { disliked: true, liked: false });
+        updateVideoStats(videoId, { dislikes: 1 });
+        if (wasLiked) updateVideoStats(videoId, { likes: -1 });
+    }
     updateVideoModalButtons(videoId);
 
     const videoRef = doc(db, 'videos', videoId);
@@ -8575,7 +8607,7 @@ window.dislikeVideo = async function (videoId) {
     } catch (err) {
         console.error('Video dislike failed', err);
         await hydrateVideoEngagement(videoId);
-        updateVideoStats(videoId, { dislikes: wasDisliked ? 1 : -1, likes: wasLiked && !wasDisliked ? 1 : 0 });
+        await refreshVideoStatsFromServer(videoId);
         updateVideoModalButtons(videoId);
     }
 };
