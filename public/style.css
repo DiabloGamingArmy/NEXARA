@@ -3722,11 +3722,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     margin: 0;
 }
 
-.video-upload-resume-hint {
-    margin-top: 6px;
-    text-align: right;
-}
-
 .video-upload-actions {
     display: flex;
     justify-content: flex-end;

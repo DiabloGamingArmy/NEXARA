@@ -23,6 +23,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
+const functions = getFunctions(app);
 
 // --- Global State & Cache ---
 let currentUser = null;
@@ -7906,38 +7907,37 @@ window.openVideoUploadModal = function () { return window.toggleVideoUploadModal
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (!show) {
+        const fileInput = document.getElementById('video-file');
+        const thumbInput = document.getElementById('video-thumbnail');
+        const title = document.getElementById('video-title');
+        const description = document.getElementById('video-description');
+        const visibility = document.getElementById('video-visibility');
+        const preview = document.getElementById('video-upload-preview');
+        const previewPlayer = document.getElementById('video-preview-player');
+        const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+        if (fileInput) fileInput.value = '';
+        if (thumbInput) thumbInput.value = '';
+        if (title) title.value = '';
+        if (description) description.value = '';
+        if (visibility) visibility.value = 'public';
+        if (preview) preview.classList.remove('active');
+        if (previewPlayer) previewPlayer.src = '';
+        if (thumbPreview) thumbPreview.src = '';
+
+        if (pendingVideoPreviewUrl) {
+            URL.revokeObjectURL(pendingVideoPreviewUrl);
+            pendingVideoPreviewUrl = null;
+        }
+        if (pendingVideoThumbnailUrl) {
+            URL.revokeObjectURL(pendingVideoThumbnailUrl);
+            pendingVideoThumbnailUrl = null;
+        }
+        pendingVideoThumbnailBlob = null;
+        resetVideoUploadMeta();
+    }
 };
-
-function resetVideoUploadForm() {
-    const fileInput = document.getElementById('video-file');
-    const thumbInput = document.getElementById('video-thumbnail');
-    const title = document.getElementById('video-title');
-    const description = document.getElementById('video-description');
-    const visibility = document.getElementById('video-visibility');
-    const preview = document.getElementById('video-upload-preview');
-    const previewPlayer = document.getElementById('video-preview-player');
-    const thumbPreview = document.getElementById('video-thumbnail-preview');
-
-    if (fileInput) fileInput.value = '';
-    if (thumbInput) thumbInput.value = '';
-    if (title) title.value = '';
-    if (description) description.value = '';
-    if (visibility) visibility.value = 'public';
-    if (preview) preview.classList.remove('active');
-    if (previewPlayer) previewPlayer.src = '';
-    if (thumbPreview) thumbPreview.src = '';
-
-    if (pendingVideoPreviewUrl) {
-        URL.revokeObjectURL(pendingVideoPreviewUrl);
-        pendingVideoPreviewUrl = null;
-    }
-    if (pendingVideoThumbnailUrl) {
-        URL.revokeObjectURL(pendingVideoThumbnailUrl);
-        pendingVideoThumbnailUrl = null;
-    }
-    pendingVideoThumbnailBlob = null;
-    resetVideoUploadMeta();
-}
 
 function pauseAllVideos() {
     document.querySelectorAll('#video-feed video').forEach(function (video) {
@@ -8805,43 +8805,8 @@ window.openVideoDetail = async function (videoId) {
 };
 
 document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') {
-        closeVideoDetailModalHandler();
-        closeVideoTaskViewer();
-    }
+    if (event.key === 'Escape') closeVideoDetailModalHandler();
 });
-
-async function createVideoUploadSession(file) {
-    if (!auth?.currentUser || !file) throw new Error('Missing upload file');
-    const idToken = await auth.currentUser.getIdToken();
-    const response = await fetch(UPLOAD_SESSION_ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-            fileName: file.name,
-            contentType: file.type || '',
-            size: file.size || 0
-        })
-    });
-
-    const raw = await response.text();
-    let json = null;
-    try {
-        json = raw ? JSON.parse(raw) : null;
-    } catch (_) {
-        json = null;
-    }
-
-    if (!response.ok) {
-        const messageCandidate = json?.error?.message || json?.error || json?.message || raw || `HTTP ${response.status}`;
-        const message = typeof messageCandidate === 'string' ? messageCandidate : JSON.stringify(messageCandidate);
-        throw new Error(message);
-    }
-    return json || {};
-}
 
 window.uploadVideo = async function () {
     if (!requireAuth()) return;
@@ -8857,70 +8822,48 @@ window.uploadVideo = async function () {
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const file = fileInput.files[0];
-    const pendingUpload = uploadManager ? uploadManager.findPendingUpload(currentUser.uid, file) : null;
-    let activeUploadId = pendingUpload?.uploadId || null;
+    let uploadSession = null;
+    let videoId = `${Date.now()}`;
+    let storagePath = `videos/${currentUser.uid}/${videoId}`;
+    try {
+        console.info('[VideoUpload] Requesting upload session');
+        const createSession = httpsCallable(functions, 'createUploadSession');
+        const result = await createSession({ size: file.size, type: file.type });
+        uploadSession = result?.data || null;
+        if (uploadSession?.uploadId) {
+            videoId = uploadSession.uploadId;
+            storagePath = uploadSession.storagePath || `videos/${currentUser.uid}/${videoId}`;
+        }
+        console.info('[VideoUpload] Upload session ready', uploadSession);
+    } catch (err) {
+        console.warn('[VideoUpload] Upload session failed, falling back to direct upload', err);
+    }
+
+    const storageRef = ref(storage, `${storagePath}/source.mp4`);
 
     try {
         if (submitBtn) {
             submitBtn.disabled = true;
             submitBtn.innerHTML = `<span class="button-spinner" aria-hidden="true"></span> Publishing...`;
         }
-        let uploadSession = null;
-        let uploadId = activeUploadId;
-
-        if (pendingUpload) {
-            console.info('[VideoUpload] Resuming upload', { uploadId, size: file.size, type: file.type });
-        } else {
-            console.info('[VideoUpload] Starting upload session', { size: file.size, type: file.type });
-            uploadSession = await createVideoUploadSession(file);
-            uploadId = uploadSession.uploadId;
-            activeUploadId = uploadId;
-        }
-
-        if (uploadId) {
-            try {
-                await updateDoc(doc(db, 'videoUploads', uploadId), {
-                    status: 'UPLOADING',
-                    updatedAt: serverTimestamp()
-                });
-            } catch (err) {
-                console.warn('[VideoUpload] Failed to update upload status', err);
-            }
-        }
-
-        const uploader = uploadManager || createUploadManager({ storage, onStateChange: setUploadTasks });
-        if (!uploadManager) {
-            uploadManager = uploader;
-            ensureVideoTaskViewerBindings();
-        }
-        const { snapshot, upload } = await uploader[pendingUpload ? 'resumeUpload' : 'startUpload']({
-            uid: currentUser.uid,
-            file,
-            session: uploadSession,
-            upload: pendingUpload,
-            onProgress: function (progress) {
-                console.info('[VideoUpload] Progress', { uploadId, progress });
-            },
-            onError: async function (error) {
+        console.info('[VideoUpload] Starting upload', { videoId, size: file.size, type: file.type });
+        const uploadTask = uploadBytesResumable(storageRef, file);
+        await new Promise(function (resolve, reject) {
+            uploadTask.on('state_changed', function (snapshot) {
+                const progress = snapshot.totalBytes ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100) : 0;
+                console.info('[VideoUpload] Progress', { videoId, progress });
+            }, function (error) {
                 console.error('[VideoUpload] Upload failed', error);
-                if (uploadId) {
-                    try {
-                        await updateDoc(doc(db, 'videoUploads', uploadId), {
-                            status: 'FAILED',
-                            error: error?.message || 'Upload failed',
-                            updatedAt: serverTimestamp()
-                        });
-                    } catch (err) {
-                        console.warn('[VideoUpload] Failed to update upload status', err);
-                    }
-                }
-                if (uploadId) uploader.markFailed(currentUser.uid, uploadId);
-            }
-        }) || {};
+                reject(error);
+            }, function () {
+                console.info('[VideoUpload] Upload complete', { videoId });
+                resolve();
+            });
+        });
 
-        if (!snapshot || !uploadId) throw new Error('Upload failed to start');
-        const videoURL = await getDownloadURL(snapshot.ref);
-        console.info('[VideoUpload] Video URL ready', { uploadId });
+        console.info('[VideoUpload] Fetching video URL', { videoId });
+        const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
+        console.info('[VideoUpload] Video URL ready', { videoId });
         let thumbURL = '';
         let thumbBlob = null;
 
@@ -8933,11 +8876,11 @@ window.uploadVideo = async function () {
         }
 
         if (thumbBlob) {
-            console.info('[VideoUpload] Uploading thumbnail', { uploadId });
-            const thumbRef = ref(storage, `videos/${currentUser.uid}/${uploadId}/thumb.jpg`);
+            console.info('[VideoUpload] Uploading thumbnail', { videoId });
+            const thumbRef = ref(storage, `${storagePath}/thumb.jpg`);
             await uploadBytes(thumbRef, thumbBlob);
             thumbURL = await getDownloadURL(thumbRef);
-            console.info('[VideoUpload] Thumbnail ready', { uploadId });
+            console.info('[VideoUpload] Thumbnail ready', { videoId });
         }
 
         const docData = {
@@ -8954,16 +8897,10 @@ window.uploadVideo = async function () {
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
 
-        console.info('[VideoUpload] Writing Firestore doc', { uploadId });
-        await setDoc(doc(db, 'videos', uploadId), docData);
-        await updateDoc(doc(db, 'videoUploads', uploadId), {
-            status: 'READY',
-            videoId: uploadId,
-            updatedAt: serverTimestamp()
-        });
-        uploader.markReady(currentUser.uid, uploadId);
-        console.info('[VideoUpload] Done', { uploadId });
-        videosCache = [{ id: uploadId, ...docData }, ...videosCache];
+        console.info('[VideoUpload] Writing Firestore doc', { videoId });
+        await setDoc(doc(db, 'videos', videoId), docData);
+        console.info('[VideoUpload] Done', { videoId });
+        videosCache = [{ id: videoId, ...docData }, ...videosCache];
         refreshVideoFeedWithFilters();
         resetVideoUploadForm();
         toggleVideoUploadModal(false);
