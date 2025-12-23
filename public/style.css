@@ -1048,6 +1048,14 @@ body.sidebar-home .category-scroll-right {
     box-shadow: 0 0 15px rgba(0, 242, 234, 0.3);
 }
 
+.category-pill.active .topic-verified-icon {
+    color: #000;
+}
+
+body.light-mode .category-pill.active .topic-verified-icon {
+    color: #fff;
+}
+
 .verified-topic {
     display: flex;
     align-items: center;
@@ -1065,6 +1073,26 @@ body.sidebar-home .category-scroll-right {
     width: 16px;
     height: 16px;
     display: block;
+}
+
+.category-pill.load-more {
+    border-radius: 5px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    box-shadow: none;
+}
+
+.category-pill.load-more::after {
+    display: none;
+}
+
+.category-pill.load-more:hover {
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-color: var(--primary);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transform: translateY(-1px);
 }
 
 .category-badge {

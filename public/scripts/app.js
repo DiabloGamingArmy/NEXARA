@@ -738,16 +738,6 @@ const THEMES = {
     'Gaming': '#7000ff', 'News': '#ff3d3d', 'Music': '#00bfff'
 };
 
-const VERIFIED_TOPICS = [
-    'STEM',
-    'Coding',
-    'Gaming',
-    'Music',
-    'Sports',
-    'News',
-    'History'
-];
-
 const DEFAULT_CATEGORY_RULES = [
     'Stay on-topic; explain context for beginners.',
     'No misinformation; if making factual claims, include a source link when possible.',
@@ -2456,7 +2446,7 @@ window.toggleFollow = async function (c, event) {
 
         const updatedList = wasFollowing
             ? followedCategoryList.filter(function (name) { return name !== topic; })
-            : [...followedCategoryList, topic];
+            : [topic, ...followedCategoryList];
 
         applyFollowedCategoryList(updatedList);
         if (currentCategory === 'Following') renderFeed();
@@ -5198,6 +5188,30 @@ function renderCategoryPills() {
     const anchors = ['For You', 'Following'];
     const seen = new Set(anchors.map(function (label) { return label.toLowerCase(); }));
 
+    const computeCategoryScore = function (cat) {
+        const memberScore = typeof cat.memberCount === 'number' ? cat.memberCount : 0;
+        const postScore = typeof cat.postCount === 'number' ? cat.postCount : 0;
+        const activityScore = typeof cat.activityScore === 'number' ? cat.activityScore : 0;
+        return memberScore + postScore + activityScore;
+    };
+
+    const categoryIndex = new Map();
+    (categories || []).forEach(function (cat) {
+        const label = typeof cat?.name === 'string' && cat.name.trim()
+            ? cat.name.trim()
+            : (typeof cat?.slug === 'string' && cat.slug.trim() ? cat.slug.trim() : (cat?.id || ''));
+        if (!label) return;
+        const key = label.toLowerCase();
+        if (!categoryIndex.has(key)) {
+            categoryIndex.set(key, {
+                name: label,
+                verified: !!cat.verified,
+                type: cat.type || 'community',
+                score: computeCategoryScore(cat)
+            });
+        }
+    });
+
     const addTopic = function (list, topicName, verifiedFlag) {
         const name = typeof topicName === 'string' ? topicName.trim() : '';
         const key = name.toLowerCase();
@@ -5219,18 +5233,34 @@ function renderCategoryPills() {
     header.appendChild(divider);
 
     const dynamicTopics = [];
-    const normalizedVerifiedSet = new Set(VERIFIED_TOPICS.map(function (t) { return (t || '').toLowerCase(); }));
+    const followedNames = collectFollowedCategoryNames().filter(function (name) {
+        return categoryIndex.has((name || '').toLowerCase());
+    });
 
-    VERIFIED_TOPICS.forEach(function (name) { addTopic(dynamicTopics, name, true); });
+    followedNames.forEach(function (name) {
+        const info = categoryIndex.get((name || '').toLowerCase());
+        addTopic(dynamicTopics, info?.name || name, info?.verified);
+    });
 
-    const followedNames = collectFollowedCategoryNames();
-    followedNames.forEach(function (name) { addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase())); });
+    const remainingCategories = Array.from(categoryIndex.values()).filter(function (cat) {
+        return !seen.has((cat.name || '').toLowerCase());
+    });
 
-    if (!followedNames.length) {
-        computeTrendingCategories(20).forEach(function (name) {
-            addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase()));
+    const verifiedCategories = remainingCategories.filter(function (cat) { return cat.verified; })
+        .sort(function (a, b) {
+            if (b.score !== a.score) return b.score - a.score;
+            return a.name.localeCompare(b.name);
         });
-    }
+
+    const communityCategories = remainingCategories.filter(function (cat) {
+        return !cat.verified && (cat.type || 'community') === 'community';
+    }).sort(function (a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.name.localeCompare(b.name);
+    });
+
+    verifiedCategories.forEach(function (cat) { addTopic(dynamicTopics, cat.name, cat.verified); });
+    communityCategories.forEach(function (cat) { addTopic(dynamicTopics, cat.name, cat.verified); });
 
     const dynamicFull = dynamicTopics;
     const dynamic = dynamicFull.slice(0, categoryVisibleCount);
