@@ -380,11 +380,30 @@
                     </div>
                 </div>
                 <div class="video-upload-panel">
-                    <label class="settings-label" for="video-caption">Caption</label>
-                    <textarea id="video-caption" class="form-input" rows="3"
-                        placeholder="What’s this video about?"></textarea>
-                    <label class="settings-label" for="video-tags">Hashtags (comma separated)</label>
-                    <input id="video-tags" class="form-input" placeholder="#nexera,#coding">
+                    <label class="settings-label" for="video-title">Title</label>
+                    <input id="video-title" class="form-input" placeholder="Give your video a title">
+                    <label class="settings-label" for="video-description">Description</label>
+                    <textarea id="video-description" class="form-input" rows="3"
+                        placeholder="Add a short description"></textarea>
+                    <div class="composer-meta-controls">
+                        <button type="button" class="icon-pill" onclick="window.toggleVideoTagInput()"><i
+                                class="ph ph-hash"></i> Tags</button>
+                        <button type="button" class="icon-pill" onclick="window.toggleVideoMentionInput()"><i
+                                class="ph ph-at"></i> Mentions</button>
+                    </div>
+                    <div id="video-tag-input-row" class="composer-inline" style="display:none;">
+                        <input type="text" id="video-tag-input" class="form-input" placeholder="Add a tag"
+                            onkeydown="window.handleVideoTagInputKey(event)"
+                            oninput="window.filterVideoTagSuggestions(this.value)">
+                        <div id="video-tag-suggestions" class="suggestion-row"></div>
+                    </div>
+                    <div id="video-tags-list" class="chip-row"></div>
+                    <div id="video-mention-input-row" class="composer-inline" style="display:none;">
+                        <input type="text" id="video-mention-input" class="form-input" placeholder="Search usernames"
+                            oninput="window.handleVideoMentionInput(event)">
+                        <div id="video-mention-suggestions" class="suggestion-row"></div>
+                    </div>
+                    <div id="video-mentions-list" class="mention-row"></div>
                     <label class="settings-label" for="video-visibility">Visibility</label>
                     <select id="video-visibility" class="form-input">
                         <option value="public">Public</option>

@@ -46,6 +46,9 @@ let videoSortMode = 'recent';
 let pendingVideoPreviewUrl = null;
 let pendingVideoThumbnailBlob = null;
 let pendingVideoThumbnailUrl = null;
+let videoTags = [];
+let videoMentions = [];
+let videoMentionSearchTimer = null;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
@@ -3211,6 +3214,24 @@ window.handlePollTitleChange = handlePollTitleChange;
 window.handleScheduleChange = handleScheduleChange;
 window.handleLocationInput = handleLocationInput;
 window.setComposerLocation = setComposerLocation;
+window.toggleVideoTagInput = toggleVideoTagInput;
+window.addVideoTag = addVideoTag;
+window.removeVideoTag = removeVideoTag;
+window.handleVideoTagInputKey = handleVideoTagInputKey;
+window.filterVideoTagSuggestions = filterVideoTagSuggestions;
+window.toggleVideoMentionInput = function (show) {
+    const row = document.getElementById('video-mention-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('video-mention-input');
+        if (input) input.focus();
+    }
+};
+window.addVideoMention = addVideoMention;
+window.removeVideoMention = removeVideoMention;
+window.handleVideoMentionInput = handleVideoMentionInput;
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
@@ -7871,8 +7892,8 @@ window.toggleVideoUploadModal = function (show = true) {
     if (!show) {
         const fileInput = document.getElementById('video-file');
         const thumbInput = document.getElementById('video-thumbnail');
-        const caption = document.getElementById('video-caption');
-        const tags = document.getElementById('video-tags');
+        const title = document.getElementById('video-title');
+        const description = document.getElementById('video-description');
         const visibility = document.getElementById('video-visibility');
         const preview = document.getElementById('video-upload-preview');
         const previewPlayer = document.getElementById('video-preview-player');
@@ -7880,8 +7901,8 @@ window.toggleVideoUploadModal = function (show = true) {
 
         if (fileInput) fileInput.value = '';
         if (thumbInput) thumbInput.value = '';
-        if (caption) caption.value = '';
-        if (tags) tags.value = '';
+        if (title) title.value = '';
+        if (description) description.value = '';
         if (visibility) visibility.value = 'public';
         if (preview) preview.classList.remove('active');
         if (previewPlayer) previewPlayer.src = '';
@@ -7896,6 +7917,7 @@ window.toggleVideoUploadModal = function (show = true) {
             pendingVideoThumbnailUrl = null;
         }
         pendingVideoThumbnailBlob = null;
+        resetVideoUploadMeta();
     }
 };
 
@@ -7905,6 +7927,173 @@ function pauseAllVideos() {
     });
     const modalPlayer = document.getElementById('video-modal-player');
     if (modalPlayer) modalPlayer.pause();
+}
+
+function resetVideoUploadMeta() {
+    videoTags = [];
+    videoMentions = [];
+    renderVideoTags();
+    renderVideoMentions();
+    const tagRow = document.getElementById('video-tag-input-row');
+    const mentionRow = document.getElementById('video-mention-input-row');
+    const tagSuggestions = document.getElementById('video-tag-suggestions');
+    const mentionSuggestions = document.getElementById('video-mention-suggestions');
+    if (tagRow) tagRow.style.display = 'none';
+    if (mentionRow) mentionRow.style.display = 'none';
+    if (tagSuggestions) tagSuggestions.style.display = 'none';
+    if (mentionSuggestions) mentionSuggestions.style.display = 'none';
+}
+
+function toggleVideoTagInput(show) {
+    const row = document.getElementById('video-tag-input-row');
+    if (!row) return;
+    const nextState = show !== undefined ? show : row.style.display !== 'flex';
+    row.style.display = nextState ? 'flex' : 'none';
+    if (nextState) {
+        const input = document.getElementById('video-tag-input');
+        if (input) {
+            input.focus();
+            filterVideoTagSuggestions(input.value);
+        }
+    }
+}
+
+function addVideoTag(raw = '') {
+    const normalized = normalizeTagValue(raw);
+    if (!normalized) return;
+    if (videoTags.includes(normalized)) return;
+    videoTags.push(normalized);
+    renderVideoTags();
+}
+
+function removeVideoTag(tag = '') {
+    videoTags = videoTags.filter(function (t) { return t !== tag; });
+    renderVideoTags();
+}
+
+function handleVideoTagInputKey(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        const input = event.target;
+        addVideoTag(input.value || '');
+        input.value = '';
+        filterVideoTagSuggestions('');
+    } else {
+        filterVideoTagSuggestions(event.target.value || '');
+    }
+}
+
+function filterVideoTagSuggestions(term = '') {
+    const container = document.getElementById('video-tag-suggestions');
+    if (!container) return;
+    const cleaned = normalizeTagValue(term);
+    const known = getKnownTags();
+    const matches = cleaned
+        ? known.filter(function (t) { return t.includes(cleaned) && !videoTags.includes(t); }).slice(0, 5)
+        : known.filter(function (t) { return !videoTags.includes(t); }).slice(0, 5);
+    if (!matches.length) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+    container.innerHTML = matches.map(function (tag) {
+        return `<button type="button" class="tag-suggestion" onclick="window.addVideoTag('${tag}')">#${escapeHtml(tag)}</button>`;
+    }).join('');
+}
+
+function renderVideoTags() {
+    const container = document.getElementById('video-tags-list');
+    if (!container) return;
+    if (!videoTags.length) {
+        container.innerHTML = '<div class="empty-chip">No tags added</div>';
+        return;
+    }
+    container.innerHTML = videoTags.map(function (tag) {
+        return `<span class="tag-chip">#${escapeHtml(tag)}<button type="button" class="chip-remove" onclick="window.removeVideoTag('${tag}')">&times;</button></span>`;
+    }).join('');
+}
+
+function addVideoMention(rawUser) {
+    const normalized = normalizeMentionEntry(rawUser);
+    if (!normalized.username) return;
+    if (videoMentions.some(function (m) { return m.username === normalized.username; })) return;
+    videoMentions.push(normalized);
+    renderVideoMentions();
+}
+
+function removeVideoMention(username) {
+    videoMentions = videoMentions.filter(function (m) { return m.username !== username; });
+    renderVideoMentions();
+}
+
+function renderVideoMentions() {
+    const container = document.getElementById('video-mentions-list');
+    if (!container) return;
+    if (!videoMentions.length) {
+        container.innerHTML = '<div class="empty-chip">No mentions added</div>';
+        return;
+    }
+    container.innerHTML = videoMentions.map(function (mention) {
+        const avatar = renderAvatar({ ...mention, name: mention.displayName || mention.username }, { size: 32, className: 'mention-avatar' });
+        const badge = renderVerifiedBadge(mention, 'with-gap');
+        return `<div class="mention-card">${avatar}<div class="mention-meta"><div class="mention-name">${escapeHtml(mention.displayName || mention.username)}${badge}</div><div class="mention-handle">@${escapeHtml(mention.username)}</div></div><button type="button" class="chip-remove" onclick="window.removeVideoMention('${mention.username}')">&times;</button></div>`;
+    }).join('');
+}
+
+async function searchVideoMentionSuggestions(term = '') {
+    const listEl = document.getElementById('video-mention-suggestions');
+    if (!listEl) return;
+    const cleaned = (term || '').trim().replace(/^@/, '').toLowerCase();
+    if (!cleaned) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    try {
+        const userQuery = query(
+            collection(db, 'users'),
+            orderBy('username'),
+            startAt(cleaned),
+            endAt(cleaned + '\uf8ff'),
+            limit(5)
+        );
+        const snap = await getDocs(userQuery);
+        const results = snap.docs.map(function (d) {
+            return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data(), d.id) };
+        });
+        if (!results.length) {
+            listEl.innerHTML = '';
+            listEl.style.display = 'none';
+            return;
+        }
+        listEl.style.display = 'block';
+        listEl.innerHTML = results.map(function (profile) {
+            const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
+            return `<button type="button" class="mention-suggestion" onclick='window.addVideoMention(${JSON.stringify({
+                uid: profile.id || profile.uid,
+                username: profile.username,
+                displayName: profile.name || profile.nickname || profile.displayName || '',
+                accountRoles: profile.accountRoles || []
+            }).replace(/'/g, "&apos;")})'>
+                ${avatar}
+                <div class="mention-suggestion-meta">
+                    <div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div>
+                    <div class="mention-handle">@${escapeHtml(profile.username || '')}</div>
+                </div>
+            </button>`;
+        }).join('');
+    } catch (err) {
+        console.warn('Video mention search failed', err);
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+    }
+}
+
+function handleVideoMentionInput(event) {
+    const value = event.target.value;
+    if (videoMentionSearchTimer) clearTimeout(videoMentionSearchTimer);
+    videoMentionSearchTimer = setTimeout(function () { searchVideoMentionSuggestions(value); }, 200);
 }
 
 async function generateThumbnailFromVideo(file) {
@@ -8251,7 +8440,7 @@ function buildVideoCard(video) {
     card.className = 'video-card';
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
-    card.setAttribute('aria-label', `Open video ${video.caption || 'details'}`);
+    card.setAttribute('aria-label', `Open video ${video.title || video.caption || 'details'}`);
 
     const thumb = document.createElement('div');
     thumb.className = 'video-thumb';
@@ -8274,7 +8463,7 @@ function buildVideoCard(video) {
 
     const title = document.createElement('div');
     title.className = 'video-title';
-    title.textContent = video.caption || 'Untitled video';
+    title.textContent = video.title || video.caption || 'Untitled video';
 
     const channel = document.createElement('div');
     channel.className = 'video-channel';
@@ -8384,9 +8573,25 @@ window.openVideoDetail = async function (videoId) {
     if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
     if (channelName) channelName.textContent = authorDisplay;
     if (channelHandle) channelHandle.textContent = authorHandle;
-    if (title) title.textContent = video.caption || 'Untitled video';
+    const videoTitle = video.title || video.caption || 'Untitled video';
+    const videoDescription = video.description || '';
+    const tagLine = Array.isArray(video.tags) && video.tags.length
+        ? video.tags.map(function (tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')
+        : '';
+    const mentionLine = Array.isArray(video.mentions) && video.mentions.length
+        ? video.mentions.map(function (m) {
+            const username = typeof m === 'string' ? m : (m.username || m.handle || '');
+            return username ? `<span class="tag-chip">@${escapeHtml(username)}</span>` : '';
+        }).join('')
+        : '';
+
+    if (title) title.textContent = videoTitle;
     if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
-    if (description) description.textContent = video.description || (video.hashtags || []).map(function (tag) { return `#${tag}`; }).join(' ') || 'No description yet.';
+    if (description) {
+        const descText = videoDescription ? escapeHtml(videoDescription) : 'No description yet.';
+        const metaLine = `${tagLine}${mentionLine ? ` ${mentionLine}` : ''}`;
+        description.innerHTML = `${descText}${metaLine ? `<div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">${metaLine}</div>` : ''}`;
+    }
 
     if (followBtn) {
         followBtn.onclick = function (event) {
@@ -8446,11 +8651,10 @@ window.uploadVideo = async function () {
 
     const submitBtn = document.getElementById('video-upload-submit');
     const thumbInput = document.getElementById('video-thumbnail');
-    const caption = document.getElementById('video-caption').value || '';
-    const hashtags = (document.getElementById('video-tags').value || '')
-        .split(',')
-        .map(function (tag) { return tag.replace('#', '').trim(); })
-        .filter(Boolean);
+    const title = document.getElementById('video-title')?.value || '';
+    const description = document.getElementById('video-description')?.value || '';
+    const tags = Array.from(new Set((videoTags || []).map(normalizeTagValue).filter(Boolean)));
+    const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const file = fileInput.files[0];
     const videoId = `${Date.now()}`;
@@ -8486,8 +8690,11 @@ window.uploadVideo = async function () {
 
         const docData = {
             ownerId: currentUser.uid,
-            caption,
-            hashtags,
+            title,
+            caption: title,
+            description,
+            tags,
+            mentions,
             createdAt: serverTimestamp(),
             videoURL,
             thumbURL,
