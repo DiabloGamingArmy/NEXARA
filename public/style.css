@@ -938,7 +938,7 @@ body {
 
 .category-divider {
     width: 3px;
-    background: linear-gradient(180deg, rgba(100, 120, 140, 0.6) 0%, rgba(0, 242, 234, 0.15) 100%);
+    background: white;
     margin: 0 6px;
     border-radius: 2px;
 }
