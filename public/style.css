@@ -936,11 +936,14 @@ body {
     z-index: -1;
 }
 
-.category-divider {
-    width: 3px;
-    background: white;
-    margin: 0 6px;
-    border-radius: 2px;
+.category-divider{
+  flex: 0 0 auto;          /* prevent flex shrink weirdness */
+  width: 3px;
+  height: 18px;            /* give it a visible height */
+  background-color: #fff;
+  margin: 0 6px;
+  border-radius: 2px;
+  opacity: 0.9;            /* optional, helps it feel “divider-y” */
 }
 
 /* Category scroll arrows - desktop only */
