@@ -5,7 +5,6 @@ import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, del
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
-import { initializeLiveDiscover } from "/scripts/LiveDiscover.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 
 // --- Firebase Configuration --- 
@@ -48,7 +47,6 @@ let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
-let liveDiscoverInitialized = false;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
@@ -588,8 +586,6 @@ let newChatSelections = [];
 let chatSearchResults = [];
 let videosUnsubscribe = null;
 let videosCache = [];
-let videoObserver = null;
-const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 
@@ -2143,11 +2139,6 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'messages') { releaseScrollLockIfSafe(); initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') {
-        ensureLiveDiscoverRoot();
-        if (!liveDiscoverInitialized) {
-            initializeLiveDiscover();
-            liveDiscoverInitialized = true;
-        }
         renderLiveSessions();
     }
     if (viewId === 'live-setup') { renderLiveSetup(); }
@@ -2165,23 +2156,6 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('go-live-open', goLiveLock);
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
 };
-
-function ensureLiveDiscoverRoot() {
-    let root = document.getElementById('live-discover-root');
-    if (!root) {
-        const liveView = document.getElementById('view-live');
-        root = document.createElement('div');
-        root.id = 'live-discover-root';
-        root.className = 'live-container';
-        if (liveView) {
-            liveView.prepend(root);
-        } else {
-            document.body.appendChild(root);
-        }
-    }
-    root.style.display = 'block';
-    return root;
-}
 
 function updateMobileNavState(viewId = 'feed') {
     const label = MOBILE_SECTION_LABELS[viewId] || 'Explore';
@@ -7740,33 +7714,6 @@ window.toggleVideoUploadModal = function (show = true) {
     if (modal) modal.style.display = show ? 'flex' : 'none';
 };
 
-function ensureVideoObserver() {
-    if (videoObserver) return videoObserver;
-    videoObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-            const vid = entry.target;
-            if (entry.isIntersecting) {
-                vid.play().catch(function () { });
-                const vidId = vid.dataset.videoId;
-                if (vidId && !viewedVideos.has(vidId)) {
-                    viewedVideos.add(vidId);
-                    incrementVideoViews(vidId);
-                }
-            } else {
-                vid.pause();
-            }
-        });
-    }, { threshold: 0.6 });
-    return videoObserver;
-}
-
-function pauseAllVideos() {
-    document.querySelectorAll('#video-feed video').forEach(function (v) {
-        v.pause();
-        if (videoObserver) videoObserver.unobserve(v);
-    });
-}
-
 function handleVideoSearchInput(event) {
     videoSearchTerm = (event.target.value || '').toLowerCase();
     renderVideosTopBar();
@@ -7861,75 +7808,216 @@ function initVideoFeed() {
     }));
 }
 
+function formatCompactNumber(value) {
+    const num = Number(value) || 0;
+    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(num >= 10_000_000 ? 0 : 1)}M`;
+    if (num >= 1_000) return `${(num / 1_000).toFixed(num >= 10_000 ? 0 : 1)}K`;
+    return `${num}`;
+}
+
+function formatVideoTimestamp(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return 'Just now';
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return '1 day ago';
+    if (days < 7) return `${days} days ago`;
+    if (days < 30) return `${Math.floor(days / 7)}w ago`;
+    if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+    return `${Math.floor(days / 365)}y ago`;
+}
+
+function resolveVideoThumbnail(video = {}) {
+    return video.thumbURL || video.thumbnail || video.previewImage || 'https://images.unsplash.com/photo-1516117172878-fd2c41f4a759?auto=format&fit=crop&w=1200&q=80';
+}
+
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
     if (!feed) return;
-    pauseAllVideos();
     feed.innerHTML = '';
     if (videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
 
-    const observer = ensureVideoObserver();
-
     videos.forEach(function (video) {
+        const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
         const card = document.createElement('div');
         card.className = 'video-card';
-        const tags = (video.hashtags || []).map(function (t) { return '#' + t; }).join(' ');
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', `Open video ${video.caption || 'details'}`);
 
-        const videoEl = document.createElement('video');
-        videoEl.setAttribute('playsinline', '');
-        videoEl.setAttribute('loop', '');
-        videoEl.setAttribute('muted', '');
-        videoEl.setAttribute('preload', 'metadata');
-        videoEl.dataset.videoId = video.id;
-        videoEl.src = video.videoURL || '';
+        const thumb = document.createElement('div');
+        thumb.className = 'video-thumb';
+        thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
+
+        const duration = document.createElement('div');
+        duration.className = 'video-duration';
+        duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
+        thumb.appendChild(duration);
 
         const meta = document.createElement('div');
         meta.className = 'video-meta';
 
-        const topRow = document.createElement('div');
-        topRow.style.display = 'flex';
-        topRow.style.justifyContent = 'space-between';
-        topRow.style.alignItems = 'center';
+        const avatar = document.createElement('div');
+        avatar.className = 'video-avatar';
+        applyAvatarToElement(avatar, author, { size: 42 });
 
-        const leftCol = document.createElement('div');
-        const captionEl = document.createElement('div');
-        captionEl.style.fontWeight = '800';
-        captionEl.textContent = escapeHtml(video.caption || '');
-        const tagsEl = document.createElement('div');
-        tagsEl.style.color = 'var(--text-muted)';
-        tagsEl.style.fontSize = '0.85rem';
-        tagsEl.textContent = tags;
-        leftCol.appendChild(captionEl);
-        leftCol.appendChild(tagsEl);
+        const info = document.createElement('div');
+        info.className = 'video-info';
 
-        const actions = document.createElement('div');
-        actions.style.display = 'flex';
-        actions.style.gap = '8px';
+        const title = document.createElement('div');
+        title.className = 'video-title';
+        title.textContent = video.caption || 'Untitled video';
 
-        const likeBtn = document.createElement('button');
-        likeBtn.className = 'icon-pill';
-        likeBtn.innerHTML = `<i class="ph ph-heart"></i>${video.stats?.likes || 0}`;
-        likeBtn.onclick = function () { return window.likeVideo(video.id); };
+        const channel = document.createElement('div');
+        channel.className = 'video-channel';
+        channel.textContent = author.displayName || author.name || author.username || 'Nexera Creator';
 
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'icon-pill';
-        saveBtn.innerHTML = '<i class="ph ph-bookmark"></i>';
-        saveBtn.onclick = function () { return window.saveVideo(video.id); };
+        const stats = document.createElement('div');
+        stats.className = 'video-stats';
+        stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
 
-        actions.appendChild(likeBtn);
-        actions.appendChild(saveBtn);
+        info.appendChild(title);
+        info.appendChild(channel);
+        info.appendChild(stats);
 
-        topRow.appendChild(leftCol);
-        topRow.appendChild(actions);
+        meta.appendChild(avatar);
+        meta.appendChild(info);
 
-        meta.appendChild(topRow);
-
-        card.appendChild(videoEl);
+        card.appendChild(thumb);
         card.appendChild(meta);
         feed.appendChild(card);
-        observer.observe(videoEl);
+        card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+        card.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                window.openVideoDetail(video.id);
+            }
+        });
+
+        if (video.ownerId) {
+            avatar.addEventListener('click', function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            });
+            channel.addEventListener('click', function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            });
+        }
+
+        if (video.ownerId && !getCachedUser(video.ownerId, { allowStale: false })) {
+            resolveUserProfile(video.ownerId).then(function (profile) {
+                if (!profile) return;
+                applyAvatarToElement(avatar, profile, { size: 42 });
+                channel.textContent = profile.displayName || profile.name || profile.username || 'Nexera Creator';
+            });
+        }
     });
 }
+
+function closeVideoDetailModal() {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const player = document.getElementById('video-modal-player');
+    if (player) {
+        player.pause();
+        player.src = '';
+    }
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+}
+
+window.closeVideoDetail = closeVideoDetailModal;
+
+window.openVideoDetail = async function (videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const video = videosCache.find(function (entry) { return entry.id === videoId; });
+    if (!video) return;
+
+    const player = document.getElementById('video-modal-player');
+    const title = document.getElementById('video-modal-title');
+    const stats = document.getElementById('video-modal-stats');
+    const description = document.getElementById('video-modal-description');
+    const avatar = document.getElementById('video-modal-avatar');
+    const channelName = document.getElementById('video-modal-channel-name');
+    const channelHandle = document.getElementById('video-modal-channel-handle');
+    const followBtn = document.getElementById('video-modal-follow');
+    const likeBtn = document.getElementById('video-modal-like');
+    const dislikeBtn = document.getElementById('video-modal-dislike');
+    const commentBtn = document.getElementById('video-modal-comment');
+    const saveBtn = document.getElementById('video-modal-save');
+
+    if (player) {
+        player.src = video.videoURL || '';
+        player.load();
+    }
+
+    const author = await resolveUserProfile(video.ownerId || '');
+    const authorDisplay = author?.displayName || author?.name || author?.username || 'Nexera Creator';
+    const authorHandle = author?.username ? `@${author.username}` : 'Nexera';
+
+    if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
+    if (channelName) channelName.textContent = authorDisplay;
+    if (channelHandle) channelHandle.textContent = authorHandle;
+    if (title) title.textContent = video.caption || 'Untitled video';
+    if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+    if (description) description.textContent = video.description || (video.hashtags || []).map(function (tag) { return `#${tag}`; }).join(' ') || 'No description yet.';
+
+    if (followBtn) {
+        followBtn.onclick = function (event) {
+            event.stopPropagation();
+            if (video.ownerId) window.toggleFollowUser(video.ownerId, event);
+        };
+        followBtn.textContent = (video.ownerId && followedUsers.has(video.ownerId)) ? 'Following' : 'Follow';
+    }
+
+    if (video.ownerId) {
+        if (avatar) {
+            avatar.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelName) {
+            channelName.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelHandle) {
+            channelHandle.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+    }
+
+    if (likeBtn) {
+        likeBtn.innerHTML = `<i class="ph ph-thumbs-up"></i> ${formatCompactNumber(video.stats?.likes || 0)}`;
+        likeBtn.onclick = function (event) { event.stopPropagation(); window.likeVideo(video.id); };
+    }
+    if (dislikeBtn) {
+        dislikeBtn.innerHTML = `<i class="ph ph-thumbs-down"></i> ${formatCompactNumber(video.stats?.dislikes || 0)}`;
+        dislikeBtn.onclick = function (event) { event.stopPropagation(); };
+    }
+    if (commentBtn) {
+        commentBtn.innerHTML = `<i class="ph ph-chat-circle"></i> ${formatCompactNumber(video.stats?.comments || 0)}`;
+    }
+    if (saveBtn) {
+        saveBtn.innerHTML = `<i class="ph ph-bookmark"></i> Save`;
+        saveBtn.onclick = function (event) { event.stopPropagation(); window.saveVideo(video.id); };
+    }
+
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+};
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeVideoDetailModal();
+});
 
 window.uploadVideo = async function () {
     if (!requireAuth()) return;
@@ -7993,12 +8081,6 @@ window.saveVideo = async function (videoId) {
     await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
     await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
 };
-
-async function incrementVideoViews(videoId) {
-    try {
-        await updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) });
-    } catch (e) { console.warn('view inc', e.message); }
-}
 
 // --- Live Sessions ---
 window.toggleGoLiveModal = function (show = true) { const modal = document.getElementById('go-live-modal'); if (modal) modal.style.display = show ? 'flex' : 'none'; };
