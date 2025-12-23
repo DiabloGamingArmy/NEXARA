@@ -1060,7 +1060,10 @@ function initApp(onReady) {
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 updateTimeCapsule();
-                window.navigateTo('feed', false);
+                const path = window.location.pathname || '/';
+                if (path === '/' || path === '/home') {
+                    window.navigateTo('feed', false);
+                }
                 renderProfile(); // Pre-render profile
                 if (!uploadManager) {
                     uploadManager = createUploadManager({ storage, onStateChange: setUploadTasks });
