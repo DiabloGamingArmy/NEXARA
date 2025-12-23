@@ -3379,6 +3379,133 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 8px;
 }
 
+.video-upload-modal {
+    max-width: 880px;
+}
+
+.video-upload-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.video-upload-header h3 {
+    margin: 0;
+    font-weight: 800;
+}
+
+.video-upload-header p {
+    margin: 6px 0 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.video-upload-shell {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px;
+}
+
+.video-upload-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--bg-hover);
+    border-radius: 16px;
+    padding: 16px;
+}
+
+.video-upload-drop {
+    border: 1px dashed var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: 0.2s ease;
+}
+
+.video-upload-drop:hover {
+    border-color: var(--primary);
+    box-shadow: 0 12px 24px rgba(0, 242, 234, 0.15);
+}
+
+.video-upload-input {
+    display: none;
+}
+
+.video-upload-icon {
+    font-size: 1.6rem;
+    color: var(--primary);
+}
+
+.video-upload-title {
+    font-weight: 700;
+}
+
+.video-upload-subtitle {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.video-upload-preview {
+    display: none;
+    gap: 12px;
+    flex-direction: column;
+}
+
+.video-upload-preview.active {
+    display: flex;
+}
+
+.video-upload-preview video {
+    width: 100%;
+    max-height: 220px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: #000;
+    object-fit: cover;
+}
+
+.video-upload-preview-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.video-upload-preview-meta img {
+    width: 88px;
+    height: 52px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    object-fit: cover;
+}
+
+.video-upload-thumb .form-input {
+    background: var(--bg-card);
+}
+
+.video-upload-hint {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+.video-upload-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 8px;
+}
+
 .destination-empty,
 .destination-error,
 .destination-loading {

@@ -43,6 +43,9 @@ const GO_LIVE_MODE_STORAGE_KEY = 'nexera-go-live-mode';
 let videoSearchTerm = '';
 let videoFilter = 'All';
 let videoSortMode = 'recent';
+let pendingVideoPreviewUrl = null;
+let pendingVideoThumbnailBlob = null;
+let pendingVideoThumbnailUrl = null;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
@@ -7865,6 +7868,35 @@ window.openVideoUploadModal = function () { return window.toggleVideoUploadModal
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (!show) {
+        const fileInput = document.getElementById('video-file');
+        const thumbInput = document.getElementById('video-thumbnail');
+        const caption = document.getElementById('video-caption');
+        const tags = document.getElementById('video-tags');
+        const visibility = document.getElementById('video-visibility');
+        const preview = document.getElementById('video-upload-preview');
+        const previewPlayer = document.getElementById('video-preview-player');
+        const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+        if (fileInput) fileInput.value = '';
+        if (thumbInput) thumbInput.value = '';
+        if (caption) caption.value = '';
+        if (tags) tags.value = '';
+        if (visibility) visibility.value = 'public';
+        if (preview) preview.classList.remove('active');
+        if (previewPlayer) previewPlayer.src = '';
+        if (thumbPreview) thumbPreview.src = '';
+
+        if (pendingVideoPreviewUrl) {
+            URL.revokeObjectURL(pendingVideoPreviewUrl);
+            pendingVideoPreviewUrl = null;
+        }
+        if (pendingVideoThumbnailUrl) {
+            URL.revokeObjectURL(pendingVideoThumbnailUrl);
+            pendingVideoThumbnailUrl = null;
+        }
+        pendingVideoThumbnailBlob = null;
+    }
 };
 
 function pauseAllVideos() {
@@ -7874,6 +7906,92 @@ function pauseAllVideos() {
     const modalPlayer = document.getElementById('video-modal-player');
     if (modalPlayer) modalPlayer.pause();
 }
+
+async function generateThumbnailFromVideo(file) {
+    if (!file) return null;
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    const url = URL.createObjectURL(file);
+
+    try {
+        return await new Promise(function (resolve) {
+            video.onloadedmetadata = function () {
+                const targetTime = Math.min(0.1, video.duration || 0);
+                video.currentTime = targetTime;
+            };
+            video.onseeked = function () {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 360;
+                const ctx = canvas.getContext('2d');
+                if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob(function (blob) {
+                    resolve(blob);
+                }, 'image/jpeg', 0.85);
+            };
+            video.onerror = function () { resolve(null); };
+            video.src = url;
+        });
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
+
+window.handleVideoFileChange = async function (event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    const preview = document.getElementById('video-upload-preview');
+    const previewPlayer = document.getElementById('video-preview-player');
+    const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+    if (pendingVideoPreviewUrl) {
+        URL.revokeObjectURL(pendingVideoPreviewUrl);
+        pendingVideoPreviewUrl = null;
+    }
+
+    if (!file) {
+        if (preview) preview.classList.remove('active');
+        if (previewPlayer) previewPlayer.src = '';
+        if (thumbPreview) thumbPreview.src = '';
+        return;
+    }
+
+    pendingVideoPreviewUrl = URL.createObjectURL(file);
+    if (previewPlayer) {
+        previewPlayer.src = pendingVideoPreviewUrl;
+        previewPlayer.load();
+    }
+    if (preview) preview.classList.add('active');
+
+    pendingVideoThumbnailBlob = await generateThumbnailFromVideo(file);
+    if (pendingVideoThumbnailUrl) {
+        URL.revokeObjectURL(pendingVideoThumbnailUrl);
+        pendingVideoThumbnailUrl = null;
+    }
+    if (pendingVideoThumbnailBlob && thumbPreview) {
+        pendingVideoThumbnailUrl = URL.createObjectURL(pendingVideoThumbnailBlob);
+        thumbPreview.src = pendingVideoThumbnailUrl;
+    }
+};
+
+window.handleThumbnailChange = function (event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+    pendingVideoThumbnailBlob = null;
+    if (pendingVideoThumbnailUrl) {
+        URL.revokeObjectURL(pendingVideoThumbnailUrl);
+        pendingVideoThumbnailUrl = null;
+    }
+
+    if (!file) return;
+
+    pendingVideoThumbnailUrl = URL.createObjectURL(file);
+    if (thumbPreview) thumbPreview.src = pendingVideoThumbnailUrl;
+};
 
 function handleVideoSearchInput(event) {
     videoSearchTerm = (event.target.value || '').toLowerCase();
@@ -8213,6 +8331,7 @@ function closeVideoDetailModalHandler() {
     document.body.classList.remove('modal-open');
 }
 
+const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = closeVideoDetailModalHandler;
 
 window.openVideoDetail = async function (videoId) {
@@ -8303,102 +8422,13 @@ document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') closeVideoDetailModalHandler();
 });
 
-window.closeVideoDetail = closeVideoDetailModal;
-
-window.openVideoDetail = async function (videoId) {
-    const modal = document.getElementById('video-detail-modal');
-    if (!modal) return;
-    const video = videosCache.find(function (entry) { return entry.id === videoId; });
-    if (!video) return;
-
-    const player = document.getElementById('video-modal-player');
-    const title = document.getElementById('video-modal-title');
-    const stats = document.getElementById('video-modal-stats');
-    const description = document.getElementById('video-modal-description');
-    const avatar = document.getElementById('video-modal-avatar');
-    const channelName = document.getElementById('video-modal-channel-name');
-    const channelHandle = document.getElementById('video-modal-channel-handle');
-    const followBtn = document.getElementById('video-modal-follow');
-    const likeBtn = document.getElementById('video-modal-like');
-    const dislikeBtn = document.getElementById('video-modal-dislike');
-    const commentBtn = document.getElementById('video-modal-comment');
-    const saveBtn = document.getElementById('video-modal-save');
-
-    if (player) {
-        player.src = video.videoURL || '';
-        player.load();
-    }
-
-    const author = await resolveUserProfile(video.ownerId || '');
-    const authorDisplay = author?.displayName || author?.name || author?.username || 'Nexera Creator';
-    const authorHandle = author?.username ? `@${author.username}` : 'Nexera';
-
-    if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
-    if (channelName) channelName.textContent = authorDisplay;
-    if (channelHandle) channelHandle.textContent = authorHandle;
-    if (title) title.textContent = video.caption || 'Untitled video';
-    if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
-    if (description) description.textContent = video.description || (video.hashtags || []).map(function (tag) { return `#${tag}`; }).join(' ') || 'No description yet.';
-
-    if (followBtn) {
-        followBtn.onclick = function (event) {
-            event.stopPropagation();
-            if (video.ownerId) window.toggleFollowUser(video.ownerId, event);
-        };
-        followBtn.textContent = (video.ownerId && followedUsers.has(video.ownerId)) ? 'Following' : 'Follow';
-    }
-
-    if (video.ownerId) {
-        if (avatar) {
-            avatar.onclick = function (event) {
-                event.stopPropagation();
-                window.openUserProfile(video.ownerId, event);
-            };
-        }
-        if (channelName) {
-            channelName.onclick = function (event) {
-                event.stopPropagation();
-                window.openUserProfile(video.ownerId, event);
-            };
-        }
-        if (channelHandle) {
-            channelHandle.onclick = function (event) {
-                event.stopPropagation();
-                window.openUserProfile(video.ownerId, event);
-            };
-        }
-    }
-
-    if (likeBtn) {
-        likeBtn.innerHTML = `<i class="ph ph-thumbs-up"></i> ${formatCompactNumber(video.stats?.likes || 0)}`;
-        likeBtn.onclick = function (event) { event.stopPropagation(); window.likeVideo(video.id); };
-    }
-    if (dislikeBtn) {
-        dislikeBtn.innerHTML = `<i class="ph ph-thumbs-down"></i> ${formatCompactNumber(video.stats?.dislikes || 0)}`;
-        dislikeBtn.onclick = function (event) { event.stopPropagation(); };
-    }
-    if (commentBtn) {
-        commentBtn.innerHTML = `<i class="ph ph-chat-circle"></i> ${formatCompactNumber(video.stats?.comments || 0)}`;
-    }
-    if (saveBtn) {
-        saveBtn.innerHTML = `<i class="ph ph-bookmark"></i> Save`;
-        saveBtn.onclick = function (event) { event.stopPropagation(); window.saveVideo(video.id); };
-    }
-
-    modal.style.display = 'flex';
-    document.body.classList.add('modal-open');
-};
-
-document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') closeVideoDetailModal();
-});
-
 window.uploadVideo = async function () {
     if (!requireAuth()) return;
 
     const fileInput = document.getElementById('video-file');
     if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
 
+    const thumbInput = document.getElementById('video-thumbnail');
     const caption = document.getElementById('video-caption').value || '';
     const hashtags = (document.getElementById('video-tags').value || '')
         .split(',')
@@ -8416,13 +8446,30 @@ window.uploadVideo = async function () {
         });
 
         const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
+        let thumbURL = '';
+        let thumbBlob = null;
+
+        if (thumbInput && thumbInput.files && thumbInput.files[0]) {
+            thumbBlob = thumbInput.files[0];
+        } else if (pendingVideoThumbnailBlob) {
+            thumbBlob = pendingVideoThumbnailBlob;
+        } else {
+            thumbBlob = await generateThumbnailFromVideo(file);
+        }
+
+        if (thumbBlob) {
+            const thumbRef = ref(storage, `videos/${currentUser.uid}/${videoId}/thumb.jpg`);
+            await uploadBytes(thumbRef, thumbBlob);
+            thumbURL = await getDownloadURL(thumbRef);
+        }
+
         const docData = {
             ownerId: currentUser.uid,
             caption,
             hashtags,
             createdAt: serverTimestamp(),
             videoURL,
-            thumbURL: '',
+            thumbURL,
             visibility,
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
