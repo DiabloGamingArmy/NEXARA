@@ -174,3 +174,33 @@ Detailed changes:
    - Removing the invalid duplicate nesting should restore the sidebar's visibility on the Home page and fix the Profile page content rendering "underneath".
 
 Net effect: Messages view should look correct (complex UI), Profile content should render in place, and Sidebars should behave as intended.
+
+Change Set 6 — Fix for Discussion View Nesting and Branding Rename
+------------------------------------------------------------------
+Purpose: The user reported that clicking a post (Discussion View) was displaying the "Live Editor" interface. This was caused by the 'view-thread' container missing a closing </div> tag, which caused subsequent views (including the Live Editor) to be nested inside it.
+Additionally, the project name "Nexara" was corrected to "Nexera" in CSS and HTML files.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Fixed View Nesting (Structural Integrity)**
+   - Added a missing </div> tag to close the '#view-thread' container (around line 645).
+   - This ensures that '#view-public-profile', '#view-discover', '#view-live', and '#view-live-setup' are no longer children of '#view-thread'.
+
+### Branding Rename
+Files:
+- public/style.css
+- public/pages/feed.html
+- public/pages/profile.html
+- public/pages/login.html
+- public/pages/admin.html
+
+Detailed changes:
+1) **Renamed CSS Class**
+   - Changed '.nexara-gradient-text' to '.nexera-gradient-text' in style.css.
+   - Updated all references to this class in the HTML files.
+   - Updated comments to refer to "Nexera".
+
+Net effect: Discussion view should now show only the discussion interface (no Live Editor), and the branding text should use the correct class name.
