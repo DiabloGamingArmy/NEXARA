@@ -21,6 +21,7 @@
   const state = {
     initialized: true,
     applying: false,
+    restoring: false,
     lastRouteKey: null
   };
 
@@ -46,6 +47,63 @@
     };
   }
 
+  function buildUrlForSection(view) {
+    const map = {
+      feed: '/home',
+      live: '/live',
+      videos: '/videos',
+      messages: '/messages',
+      discover: '/discover',
+      saved: '/saved',
+      profile: '/profile',
+      staff: '/staff'
+    };
+    return map[view] || null;
+  }
+
+  function buildUrlForVideo(videoId) {
+    return videoId ? `/video/${encodeURIComponent(videoId)}` : '/videos';
+  }
+
+  function buildUrlForPost(postId) {
+    return postId ? `/post/${encodeURIComponent(postId)}` : '/home';
+  }
+
+  function buildUrlForThread(threadId) {
+    return threadId ? `/view-thread/${encodeURIComponent(threadId)}` : '/home';
+  }
+
+  function buildUrlForProfile(uidOrHandle, params = {}) {
+    const search = new URLSearchParams(params);
+    const suffix = search.toString();
+    if (params.handle && !uidOrHandle) {
+      return `/profile${suffix ? `?${suffix}` : ''}`;
+    }
+    if (uidOrHandle) {
+      return `/profile/${encodeURIComponent(uidOrHandle)}${suffix ? `?${suffix}` : ''}`;
+    }
+    return `/profile${suffix ? `?${suffix}` : ''}`;
+  }
+
+  function buildUrlForMessages(conversationId, params = {}) {
+    const search = new URLSearchParams(params);
+    const suffix = search.toString();
+    if (conversationId) {
+      return `/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
+    }
+    return `/messages${suffix ? `?${suffix}` : ''}`;
+  }
+
+  function updateUrl(path, replace = false) {
+    if (state.restoring) return;
+    if (!path || window.location.pathname + window.location.search + window.location.hash === path) return;
+    if (replace) {
+      history.replaceState({}, '', path);
+    } else {
+      history.pushState({}, '', path);
+    }
+  }
+
   function parseRoute(url = snapshotUrl()) {
     const params = new URLSearchParams(url.search || '');
     const segments = (url.path || '/').split('/').filter(Boolean);
@@ -63,7 +121,14 @@
 
     const head = segments[0];
     if (SECTION_ROUTES[head]) {
+      if (head === 'messages' && segments[1]) {
+        return { type: 'messages', conversationId: segments[1], route };
+      }
       return { type: 'section', view: SECTION_ROUTES[head], route };
+    }
+
+    if (head === 'view-thread' && segments[1]) {
+      return { type: 'thread', threadId: segments[1], route };
     }
 
     if (ENTITY_ROUTES[head]) {
@@ -169,12 +234,37 @@
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: route.view });
       }
+      if (route.view === 'profile' && route.route?.params?.get('tab') && typeof window.setProfileFilter === 'function') {
+        const tab = route.route.params.get('tab');
+        setTimeout(() => window.setProfileFilter(tabFromParam(tab), 'me'), 0);
+      }
+      return;
+    }
+
+    if (route.type === 'messages') {
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'messages' });
+      }
+      if (route.conversationId && typeof window.openConversation === 'function') {
+        window.openConversation(route.conversationId);
+      }
+      return;
+    }
+
+    if (route.type === 'thread') {
+      if (route.threadId && typeof window.openThread === 'function') {
+        window.openThread(route.threadId);
+      }
       return;
     }
 
     if (route.type === 'entity') {
       if (route.entityType === 'profile' && route.handle && typeof window.openUserProfileByHandle === 'function') {
         window.openUserProfileByHandle(route.handle);
+        if (route.route?.params?.get('tab') && typeof window.setProfileFilter === 'function') {
+          const tab = route.route.params.get('tab');
+          setTimeout(() => window.setProfileFilter(tabFromParam(tab), route.handle), 0);
+        }
         return;
       }
 
@@ -196,6 +286,10 @@
       if (window.Nexera?.openEntity) {
         window.Nexera.openEntity(route.entityType, route.id, entity.data || null);
       }
+      if (route.entityType === 'profile' && route.route?.params?.get('tab') && typeof window.setProfileFilter === 'function') {
+        const tab = route.route.params.get('tab');
+        setTimeout(() => window.setProfileFilter(tabFromParam(tab), route.id), 0);
+      }
       return;
     }
   }
@@ -203,6 +297,7 @@
   async function applyCurrentRoute(source = 'load') {
     if (state.applying) return;
     state.applying = true;
+    state.restoring = true;
 
     const start = performance.now();
     const initialUrl = source === 'init' && window.__NEXERA_INITIAL_URL ? window.__NEXERA_INITIAL_URL : null;
@@ -222,6 +317,7 @@
 
     window.Nexera?.releaseSplash?.();
     state.applying = false;
+    state.restoring = false;
   }
 
   function isSameOrigin(href) {
@@ -258,19 +354,127 @@
     });
   }
 
+  function tabFromParam(tab) {
+    if (!tab) return 'All Results';
+    const normalized = tab.toLowerCase();
+    if (normalized === 'videos') return 'Videos';
+    if (normalized === 'posts') return 'Posts';
+    if (normalized === 'livestreams') return 'Livestreams';
+    if (normalized === 'categories') return 'Categories';
+    if (normalized === 'users') return 'Users';
+    return 'All Results';
+  }
+
+  function wrapNavigationFunctions() {
+    if (typeof window.navigateTo === 'function' && !window.navigateTo.__nexeraWrapped) {
+      const original = window.navigateTo;
+      window.navigateTo = function (viewId, pushToStack = true) {
+        const result = original.call(this, viewId, pushToStack);
+        const path = buildUrlForSection(viewId);
+        if (path) updateUrl(path);
+        return result;
+      };
+      window.navigateTo.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openVideoDetail === 'function' && !window.openVideoDetail.__nexeraWrapped) {
+      const original = window.openVideoDetail;
+      window.openVideoDetail = function (videoId) {
+        const result = original.call(this, videoId);
+        updateUrl(buildUrlForVideo(videoId));
+        return result;
+      };
+      window.openVideoDetail.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openThread === 'function' && !window.openThread.__nexeraWrapped) {
+      const original = window.openThread;
+      window.openThread = function (postId) {
+        const result = original.call(this, postId);
+        updateUrl(buildUrlForThread(postId));
+        return result;
+      };
+      window.openThread.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openUserProfile === 'function' && !window.openUserProfile.__nexeraWrapped) {
+      const original = window.openUserProfile;
+      window.openUserProfile = function (uid, event, pushToStack = true) {
+        const result = original.call(this, uid, event, pushToStack);
+        updateUrl(buildUrlForProfile(uid));
+        return result;
+      };
+      window.openUserProfile.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openUserProfileByHandle === 'function' && !window.openUserProfileByHandle.__nexeraWrapped) {
+      const original = window.openUserProfileByHandle;
+      window.openUserProfileByHandle = function (handle) {
+        const result = original.call(this, handle);
+        updateUrl(buildUrlForProfile(null, { handle }));
+        return result;
+      };
+      window.openUserProfileByHandle.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openMessagesPage === 'function' && !window.openMessagesPage.__nexeraWrapped) {
+      const original = window.openMessagesPage;
+      window.openMessagesPage = async function () {
+        const result = await original.call(this);
+        updateUrl(buildUrlForMessages());
+        return result;
+      };
+      window.openMessagesPage.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openConversation === 'function' && !window.openConversation.__nexeraWrapped) {
+      const original = window.openConversation;
+      window.openConversation = function (conversationId) {
+        const result = original.call(this, conversationId);
+        updateUrl(buildUrlForMessages(conversationId));
+        return result;
+      };
+      window.openConversation.__nexeraWrapped = true;
+    }
+
+    if (typeof window.setProfileFilter === 'function' && !window.setProfileFilter.__nexeraWrapped) {
+      const original = window.setProfileFilter;
+      window.setProfileFilter = function (category, uid) {
+        const result = original.call(this, category, uid);
+        const tab = (category || '').toLowerCase().replace(/\s+/g, '');
+        const tabParam = tab === 'allresults' ? null : tab;
+        const params = tabParam ? { tab: tabParam } : {};
+        if (uid && uid !== 'me') {
+          updateUrl(buildUrlForProfile(uid, params));
+        } else {
+          updateUrl(buildUrlForProfile(null, params));
+        }
+        return result;
+      };
+      window.setProfileFilter.__nexeraWrapped = true;
+    }
+  }
+
   function init() {
     patchHistory();
     document.addEventListener('click', interceptLinkClicks);
     window.addEventListener('popstate', () => applyCurrentRoute('popstate'));
     window.addEventListener('nexera:navigation', () => applyCurrentRoute('history'));
 
+    wrapNavigationFunctions();
     applyCurrentRoute('init');
   }
 
   window.NexeraRouter = {
     initialized: true,
     parseRoute,
-    applyCurrentRoute
+    applyCurrentRoute,
+    buildUrlForSection,
+    buildUrlForVideo,
+    buildUrlForPost,
+    buildUrlForProfile,
+    buildUrlForMessages,
+    buildUrlForThread
   };
 
   if (document.readyState === 'loading') {
