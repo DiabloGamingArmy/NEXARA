@@ -5,7 +5,6 @@ import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, del
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
-import { initializeLiveDiscover } from "/scripts/LiveDiscover.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 
 // --- Firebase Configuration --- 
@@ -48,7 +47,6 @@ let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
-let liveDiscoverInitialized = false;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
@@ -2143,11 +2141,6 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'messages') { releaseScrollLockIfSafe(); initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') {
-        ensureLiveDiscoverRoot();
-        if (!liveDiscoverInitialized) {
-            initializeLiveDiscover();
-            liveDiscoverInitialized = true;
-        }
         renderLiveSessions();
     }
     if (viewId === 'live-setup') { renderLiveSetup(); }
@@ -2165,23 +2158,6 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('go-live-open', goLiveLock);
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
 };
-
-function ensureLiveDiscoverRoot() {
-    let root = document.getElementById('live-discover-root');
-    if (!root) {
-        const liveView = document.getElementById('view-live');
-        root = document.createElement('div');
-        root.id = 'live-discover-root';
-        root.className = 'live-container';
-        if (liveView) {
-            liveView.prepend(root);
-        } else {
-            document.body.appendChild(root);
-        }
-    }
-    root.style.display = 'block';
-    return root;
-}
 
 function updateMobileNavState(viewId = 'feed') {
     const label = MOBILE_SECTION_LABELS[viewId] || 'Explore';
