@@ -680,6 +680,37 @@
             <div id="view-videos" class="view-section" style="display:none;">
                 <div id="videos-topbar"></div>
                 <div id="video-feed" class="video-feed"></div>
+                <div id="video-detail-modal" class="video-modal" style="display:none;">
+                    <div class="video-modal-backdrop" onclick="window.closeVideoDetail()"></div>
+                    <div class="video-modal-dialog">
+                        <button class="video-modal-close" type="button" onclick="window.closeVideoDetail()"
+                            aria-label="Close video details">&times;</button>
+                        <div class="video-modal-body">
+                            <div class="video-modal-player">
+                                <video id="video-modal-player" controls playsinline></video>
+                            </div>
+                            <div class="video-modal-meta">
+                                <div class="video-modal-title" id="video-modal-title"></div>
+                                <div class="video-modal-channel">
+                                    <div id="video-modal-avatar" class="video-modal-avatar"></div>
+                                    <div class="video-modal-channel-info">
+                                        <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
+                                        <div class="video-modal-channel-handle" id="video-modal-channel-handle"></div>
+                                    </div>
+                                    <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
+                                </div>
+                                <div class="video-modal-stats" id="video-modal-stats"></div>
+                                <div class="video-modal-actions">
+                                    <button id="video-modal-like" class="icon-pill"></button>
+                                    <button id="video-modal-dislike" class="icon-pill"></button>
+                                    <button id="video-modal-comment" class="icon-pill" disabled></button>
+                                    <button id="video-modal-save" class="icon-pill"></button>
+                                </div>
+                                <div class="video-modal-description" id="video-modal-description"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div id="view-messages" class="view-section" style="display:none;">
