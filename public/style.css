@@ -946,14 +946,14 @@ body {
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
     position: fixed;
-    /* top: 1rem; */
+    top: 1rem;
     z-index: 11;
     background: none;
     border: none;
     color: var(--text-main);
     font-size: 1.5rem;
     cursor: pointer;
-    padding: 1rem;
+    /* padding: 1rem; */
     transition: opacity 0.3s ease;
 }
 
