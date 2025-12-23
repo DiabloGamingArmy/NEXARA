@@ -181,6 +181,10 @@
     flex-shrink: 0;
 }
 
+.video-task-thumb[data-video-open] {
+    cursor: pointer;
+}
+
 .video-task-info {
     display: flex;
     flex-direction: column;
@@ -231,11 +235,21 @@
     border-radius: 8px;
     font-size: 0.85rem;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    min-height: 34px;
 }
 
 .video-task-action-btn.secondary {
     background: rgba(255, 255, 255, 0.1);
     color: var(--text-main);
+}
+
+.video-task-action-btn[disabled] {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 body.light-mode {
@@ -3776,6 +3790,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border: 1px solid var(--border);
     object-fit: cover;
     flex-shrink: 0;
+}
+
+.video-task-thumb[data-video-open] {
+    cursor: pointer;
 }
 
 .video-task-meta {

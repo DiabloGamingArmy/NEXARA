@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="grammarly-disable" content="true">
     <title>Nexera Feed</title>
     <!-- codex connection successful. -->
     <!-- Tailwind for utilities -->
@@ -25,7 +26,7 @@
         href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
 </head>
 
-<body>
+<body data-gramm="false">
 
     <!-- Loading -->
     <div id="loading-overlay"><img class="brand-logo brand-logo-splash" data-logo-variant="auto" alt="Nexera logo"
@@ -351,8 +352,8 @@
         <div class="modal-content video-upload-modal">
             <div class="video-upload-header">
                 <div>
-                    <h3>Create Video</h3>
-                    <p>Upload a clip, add details, and publish to your Nexera channel.</p>
+                    <h3 id="video-upload-modal-title">Create Video</h3>
+                    <p id="video-upload-modal-subtitle">Upload a clip, add details, and publish to your Nexera channel.</p>
                 </div>
                 <button class="x-close-btn" onclick="window.toggleVideoUploadModal(false)">&times;</button>
             </div>
@@ -411,7 +412,7 @@
                     </select>
                     <div class="video-upload-actions">
                         <button class="icon-pill" onclick="window.toggleVideoUploadModal(false)">Cancel</button>
-                        <button id="video-upload-submit" class="create-btn-sidebar" onclick="window.uploadVideo()">Publish</button>
+                        <button id="video-upload-submit" class="create-btn-sidebar" onclick="window.handleVideoSubmit()">Publish</button>
                     </div>
                 </div>
             </div>
@@ -422,8 +423,8 @@
         <div class="modal-content video-task-modal">
             <div class="video-task-header">
                 <div>
-                    <h3>Task Viewer</h3>
-                    <p>Track uploads while you keep browsing.</p>
+                    <h3>Video Manager</h3>
+                    <p>Manage uploads and update published video details.</p>
                 </div>
                 <button class="x-close-btn" onclick="window.toggleTaskViewer(false)">&times;</button>
             </div>
