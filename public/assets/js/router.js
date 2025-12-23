@@ -18,6 +18,7 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
     sectionRestoreObserver: null,
     sectionRestoreStart: null,
     videoExistenceCache: new Map(),
+    videoDocCache: new Map(),
     lastPath: null
   };
 
@@ -122,6 +123,12 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
     const searchParams = new URLSearchParams(window.location.search || '');
     const hashRoute = parseHashRoute();
     const rawPath = hashRoute || window.location.pathname || '/';
+    if (window.__NEXERA_BOOT_ROUTE && !hashRoute) {
+      const boot = window.__NEXERA_BOOT_ROUTE;
+      if (boot.viewType) {
+        return { ...boot, canonical: rawPath };
+      }
+    }
     const normalized = normalizePath(rawPath);
     const parts = normalized.split('/').filter(Boolean);
     const fromHash = Boolean(hashRoute);
@@ -187,6 +194,8 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
   }
 
   function getFirestoreInstance() {
+    const exposedDb = window.NexeraApp?.db;
+    if (exposedDb) return exposedDb;
     try {
       return getFirestore(getApp());
     } catch (error) {
@@ -195,22 +204,35 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
     }
   }
 
-  async function checkVideoExists(videoId) {
+  async function fetchVideoDoc(videoId) {
     if (!videoId) return null;
-    if (routerState.videoExistenceCache.has(videoId)) {
-      return routerState.videoExistenceCache.get(videoId);
+    if (routerState.videoDocCache.has(videoId)) {
+      return routerState.videoDocCache.get(videoId);
     }
     const db = getFirestoreInstance();
     if (!db) return null;
     try {
       const snap = await getDoc(doc(db, 'videos', videoId));
-      const exists = snap.exists();
-      routerState.videoExistenceCache.set(videoId, exists);
-      return exists;
+      const payload = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+      routerState.videoDocCache.set(videoId, payload);
+      routerState.videoExistenceCache.set(videoId, Boolean(payload));
+      return payload;
     } catch (error) {
       debugLog('Video existence check failed.', error);
       return null;
     }
+  }
+
+  async function checkVideoExists(videoId) {
+    if (routerState.videoExistenceCache.has(videoId)) {
+      return routerState.videoExistenceCache.get(videoId);
+    }
+    const docData = await fetchVideoDoc(videoId);
+    if (docData) return true;
+    if (routerState.videoExistenceCache.has(videoId)) {
+      return routerState.videoExistenceCache.get(videoId);
+    }
+    return null;
   }
 
   function isElementVisible(el) {
@@ -386,12 +408,22 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
         clearPendingRestore();
         return;
       }
+      if (!pending.directAttempted) {
+        pending.directAttempted = true;
+        const cachedDoc = routerState.videoDocCache.get(route.id) || null;
+        if (cachedDoc && typeof window.NexeraApp?.ensureVideoInCache === 'function') {
+          window.NexeraApp.ensureVideoInCache(cachedDoc);
+        }
+        if (typeof window.openVideoDetail === 'function') {
+          window.openVideoDetail(route.id);
+        }
+      }
       if (pending.exists === false) {
         clearPendingRestore();
         goNotFound();
         return;
       }
-      if (pending.exists === true && !pending.notified && Date.now() - startedAt > 8000) {
+      if (pending.exists === true && !pending.notified && Date.now() - startedAt > 2000) {
         if (typeof window.toast === 'function') {
           window.toast('Opening video…', 'info');
         }
@@ -434,7 +466,8 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
       timeoutMs: 10000,
       attempted: false,
       notified: false,
-      exists: null
+      exists: null,
+      directAttempted: false
     };
 
     attemptRestorePending();
@@ -443,11 +476,18 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
     routerState.pendingTimer = setInterval(() => attemptRestorePending(), 500);
 
     if (route.viewType === 'video') {
-      checkVideoExists(route.id).then((exists) => {
+      fetchVideoDoc(route.id).then((docData) => {
         if (!routerState.pendingRestore || routerState.pendingRestore.route !== route) return;
-        routerState.pendingRestore.exists = exists;
+        if (docData && typeof window.NexeraApp?.ensureVideoInCache === 'function') {
+          window.NexeraApp.ensureVideoInCache(docData);
+        }
+        const exists = docData ? true : routerState.videoExistenceCache.get(route.id);
+        routerState.pendingRestore.exists = exists ?? null;
         if (exists) {
           routerState.pendingRestore.timeoutMs = 25000;
+          if (typeof window.openVideoDetail === 'function') {
+            window.openVideoDetail(route.id);
+          }
         } else if (exists === false) {
           debugLog('Video does not exist, routing to not found.');
           clearPendingRestore();
@@ -697,6 +737,13 @@ import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11
     withReplayGuard(() => {
       applyRoute(route);
     });
+
+    if (window.NexeraApp?.onAuthReady) {
+      window.NexeraApp.onAuthReady(() => {
+        debugLog('Auth ready, reapplying route.');
+        withReplayGuard(() => applyRoute(parseRoute()));
+      });
+    }
 
     if (route?.canonical && (route.fromHash || route.canonical !== window.location.pathname)) {
       replaceUrl(route.canonical);

@@ -683,6 +683,17 @@ const ListenerRegistry = (function () {
 window.ListenerRegistry = ListenerRegistry;
 window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
 window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
+window.NexeraApp = window.NexeraApp || {};
+window.NexeraApp.auth = auth;
+window.NexeraApp.db = db;
+window.NexeraApp.onAuthReady = function (callback) {
+    return onAuthStateChanged(auth, callback);
+};
+window.NexeraApp.ensureVideoInCache = function (video) {
+    if (!video || !video.id) return;
+    if (videosCache.some(function (entry) { return entry.id === video.id; })) return;
+    videosCache = [video].concat(videosCache);
+};
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
