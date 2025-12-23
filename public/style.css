@@ -3351,6 +3351,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     align-items: center;
     justify-content: center;
     font-weight: 800;
+    flex-shrink: 0;
+    align-self: flex-start;
 }
 
 .destination-row-text {
