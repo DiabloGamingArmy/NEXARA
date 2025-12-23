@@ -8,7 +8,7 @@
  */
 
 const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
+const {onCall, onRequest} = require("firebase-functions/https");
 const logger = require("firebase-functions/logger");
 
 // For cost control, you can set the maximum number of containers that can be
@@ -37,3 +37,16 @@ exports.initializeUserChannel = ivs.initializeUserChannel;
 exports.createEphemeralChannel = ivs.createEphemeralChannel;
 exports.generatePlaybackToken = ivs.generatePlaybackToken;
 
+exports.createUploadSession = onCall((data, context) => {
+  if (!context.auth) {
+    throw new Error("Unauthorized");
+  }
+  const uploadId = `${Date.now()}`;
+  const storagePath = `videos/${context.auth.uid}/${uploadId}`;
+  return {
+    uploadId,
+    storagePath,
+    contentType: data?.type || null,
+    size: data?.size || null,
+  };
+});
