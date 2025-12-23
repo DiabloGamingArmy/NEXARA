@@ -1,3 +1,6 @@
+import { getApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
 (() => {
   if (window.NexeraRouter && window.NexeraRouter.initialized) return;
 
@@ -9,6 +12,12 @@
     pendingRestore: null,
     pendingTimer: null,
     pendingObserver: null,
+    desiredSection: null,
+    sectionRestoreActive: false,
+    sectionRestoreTimer: null,
+    sectionRestoreObserver: null,
+    sectionRestoreStart: null,
+    videoExistenceCache: new Map(),
     lastPath: null
   };
 
@@ -57,6 +66,20 @@
   };
 
   const NOT_FOUND_PATH = '/not-found.html';
+
+  const isDebugEnabled = () => {
+    try {
+      return window.localStorage?.getItem('NEXERA_DEBUG_ROUTER') === '1';
+    } catch {
+      return false;
+    }
+  };
+
+  const debugLog = (...args) => {
+    if (isDebugEnabled()) {
+      console.log('[NexeraRouter]', ...args);
+    }
+  };
 
   function getCurrentUrl() {
     return `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -163,6 +186,33 @@
     }
   }
 
+  function getFirestoreInstance() {
+    try {
+      return getFirestore(getApp());
+    } catch (error) {
+      debugLog('Firestore unavailable for router checks.', error);
+      return null;
+    }
+  }
+
+  async function checkVideoExists(videoId) {
+    if (!videoId) return null;
+    if (routerState.videoExistenceCache.has(videoId)) {
+      return routerState.videoExistenceCache.get(videoId);
+    }
+    const db = getFirestoreInstance();
+    if (!db) return null;
+    try {
+      const snap = await getDoc(doc(db, 'videos', videoId));
+      const exists = snap.exists();
+      routerState.videoExistenceCache.set(videoId, exists);
+      return exists;
+    } catch (error) {
+      debugLog('Video existence check failed.', error);
+      return null;
+    }
+  }
+
   function isElementVisible(el) {
     if (!el) return false;
     const style = window.getComputedStyle(el);
@@ -186,6 +236,7 @@
 
   function goNotFound() {
     if (window.location.pathname === NOT_FOUND_PATH) return;
+    debugLog('Routing to not found.');
     window.location.replace(NOT_FOUND_PATH);
   }
 
@@ -241,12 +292,62 @@
     }
   }
 
+  function clearSectionRestore() {
+    routerState.desiredSection = null;
+    routerState.sectionRestoreActive = false;
+    routerState.sectionRestoreStart = null;
+    if (routerState.sectionRestoreTimer) {
+      clearInterval(routerState.sectionRestoreTimer);
+      routerState.sectionRestoreTimer = null;
+    }
+    if (routerState.sectionRestoreObserver) {
+      routerState.sectionRestoreObserver.disconnect();
+      routerState.sectionRestoreObserver = null;
+    }
+  }
+
+  function attemptSectionRestore() {
+    if (!routerState.sectionRestoreActive || !routerState.desiredSection) return;
+    if (routerState.sectionRestoreStart && Date.now() - routerState.sectionRestoreStart > 15000) {
+      clearSectionRestore();
+      return;
+    }
+    if (!isAppReadyForNavigation()) return;
+    if (routerState.currentView === routerState.desiredSection) {
+      clearSectionRestore();
+      return;
+    }
+    if (typeof window.navigateTo === 'function') {
+      debugLog('Restoring section route:', routerState.desiredSection);
+      window.navigateTo(routerState.desiredSection, false);
+    }
+  }
+
+  function scheduleSectionRestore(view) {
+    // App boot may call navigateTo('feed') after auth; keep retrying until desired section is active.
+    clearSectionRestore();
+    routerState.desiredSection = view;
+    routerState.sectionRestoreActive = true;
+    routerState.sectionRestoreStart = Date.now();
+    attemptSectionRestore();
+    routerState.sectionRestoreObserver = new MutationObserver(() => attemptSectionRestore());
+    routerState.sectionRestoreObserver.observe(document.body, { childList: true, subtree: true });
+    routerState.sectionRestoreTimer = setInterval(() => attemptSectionRestore(), 500);
+  }
+
   function attemptRestorePending() {
     const pending = routerState.pendingRestore;
     if (!pending) return;
 
     const { route, startedAt, timeoutMs } = pending;
     if (Date.now() - startedAt > timeoutMs) {
+      if (route.viewType === 'video' && pending.exists !== false) {
+        if (pending.exists === true && typeof window.toast === 'function') {
+          window.toast('Still loading the video. Please try again in a moment.', 'info');
+        }
+        clearPendingRestore();
+        return;
+      }
       clearPendingRestore();
       goNotFound();
       return;
@@ -276,9 +377,25 @@
     }
 
     if (route.viewType === 'video') {
+      if (routerState.currentView !== 'videos' && isAppReadyForNavigation()) {
+        if (typeof window.navigateTo === 'function') {
+          window.navigateTo('videos', false);
+        }
+      }
       if (isVideoModalOpen(route.id)) {
         clearPendingRestore();
         return;
+      }
+      if (pending.exists === false) {
+        clearPendingRestore();
+        goNotFound();
+        return;
+      }
+      if (pending.exists === true && !pending.notified && Date.now() - startedAt > 8000) {
+        if (typeof window.toast === 'function') {
+          window.toast('Opening video…', 'info');
+        }
+        pending.notified = true;
       }
       const videoEl = document.querySelector(`[data-video-open="${route.id}"]`);
       if (videoEl) {
@@ -315,13 +432,29 @@
       route,
       startedAt: Date.now(),
       timeoutMs: 10000,
-      attempted: false
+      attempted: false,
+      notified: false,
+      exists: null
     };
 
     attemptRestorePending();
     routerState.pendingObserver = new MutationObserver(() => attemptRestorePending());
     routerState.pendingObserver.observe(document.body, { childList: true, subtree: true });
     routerState.pendingTimer = setInterval(() => attemptRestorePending(), 500);
+
+    if (route.viewType === 'video') {
+      checkVideoExists(route.id).then((exists) => {
+        if (!routerState.pendingRestore || routerState.pendingRestore.route !== route) return;
+        routerState.pendingRestore.exists = exists;
+        if (exists) {
+          routerState.pendingRestore.timeoutMs = 25000;
+        } else if (exists === false) {
+          debugLog('Video does not exist, routing to not found.');
+          clearPendingRestore();
+          goNotFound();
+        }
+      });
+    }
   }
 
   function applyRoute(route) {
@@ -332,6 +465,7 @@
     }
 
     if (route.viewType === 'unknown') {
+      debugLog('Unknown route, redirecting to not found:', route.path);
       goNotFound();
       return;
     }
@@ -339,7 +473,9 @@
     if (route.viewType === 'section') {
       clearPendingRestore();
       const view = route.view || 'feed';
-      if (typeof window.navigateTo === 'function') {
+      if (routerState.isReplaying) {
+        scheduleSectionRestore(view);
+      } else if (typeof window.navigateTo === 'function') {
         window.navigateTo(view, false);
       }
       return;
@@ -557,6 +693,7 @@
     wrapGoBack();
 
     const route = parseRoute();
+    debugLog('Parsed initial route:', route);
     withReplayGuard(() => {
       applyRoute(route);
     });

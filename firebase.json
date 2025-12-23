@@ -56,18 +56,18 @@
       }
     ],
     "rewrites": [
-      { "source": "/", "destination": "/pages/feed.html" },
-      { "source": "/home", "destination": "/pages/feed.html" },
-      { "source": "/live", "destination": "/pages/feed.html" },
-      { "source": "/videos", "destination": "/pages/feed.html" },
-      { "source": "/messages", "destination": "/pages/feed.html" },
-      { "source": "/discover", "destination": "/pages/feed.html" },
-      { "source": "/saved", "destination": "/pages/feed.html" },
-      { "source": "/profile", "destination": "/pages/feed.html" },
+      { "source": "/", "destination": "/pages/home.html" },
+      { "source": "/home", "destination": "/pages/home.html" },
+      { "source": "/live", "destination": "/pages/live.html" },
+      { "source": "/videos", "destination": "/pages/videos.html" },
+      { "source": "/messages", "destination": "/pages/messages.html" },
+      { "source": "/discover", "destination": "/pages/discover.html" },
+      { "source": "/saved", "destination": "/pages/saved.html" },
+      { "source": "/profile", "destination": "/pages/profile.html" },
+      { "source": "/staff", "destination": "/pages/staff.html" },
       { "source": "/profile/**", "destination": "/pages/feed.html" },
-      { "source": "/video/**", "destination": "/pages/feed.html" },
+      { "source": "/video/**", "destination": "/pages/videos.html" },
       { "source": "/post/**", "destination": "/pages/feed.html" },
-      { "source": "/staff", "destination": "/pages/feed.html" },
       { "source": "/not-found", "destination": "/not-found.html" },
       { "source": "**", "destination": "/not-found.html" }
     ]
