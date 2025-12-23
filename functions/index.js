@@ -32,8 +32,9 @@ setGlobalOptions({ maxInstances: 10 });
 // });
 
 const ivs = require("./ivs.js");
+const uploads = require("./uploads.js");
 
 exports.initializeUserChannel = ivs.initializeUserChannel;
 exports.createEphemeralChannel = ivs.createEphemeralChannel;
 exports.generatePlaybackToken = ivs.generatePlaybackToken;
-
+exports.createUploadSession = uploads.createUploadSession;
