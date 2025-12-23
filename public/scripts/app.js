@@ -8177,6 +8177,20 @@ window.handleVideoFileChange = async function (event) {
         const dataUrl = await blobToDataUrl(pendingVideoThumbnailBlob);
         thumbPreview.src = dataUrl;
     }
+
+    if (previewPlayer) {
+        previewPlayer.onerror = function () {
+            if (pendingVideoPreviewUrl) {
+                URL.revokeObjectURL(pendingVideoPreviewUrl);
+                pendingVideoPreviewUrl = null;
+            }
+            blobToDataUrl(file).then(function (dataUrl) {
+                if (!dataUrl) return;
+                previewPlayer.src = dataUrl;
+                previewPlayer.load();
+            });
+        };
+    }
 };
 
 window.handleThumbnailChange = function (event) {
@@ -8679,12 +8693,24 @@ window.uploadVideo = async function () {
             submitBtn.disabled = true;
             submitBtn.innerHTML = `<span class="button-spinner" aria-hidden="true"></span> Publishing...`;
         }
+        console.info('[VideoUpload] Starting upload', { videoId, size: file.size, type: file.type });
         const uploadTask = uploadBytesResumable(storageRef, file);
         await new Promise(function (resolve, reject) {
-            uploadTask.on('state_changed', function () { }, reject, resolve);
+            uploadTask.on('state_changed', function (snapshot) {
+                const progress = snapshot.totalBytes ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100) : 0;
+                console.info('[VideoUpload] Progress', { videoId, progress });
+            }, function (error) {
+                console.error('[VideoUpload] Upload failed', error);
+                reject(error);
+            }, function () {
+                console.info('[VideoUpload] Upload complete', { videoId });
+                resolve();
+            });
         });
 
+        console.info('[VideoUpload] Fetching video URL', { videoId });
         const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
+        console.info('[VideoUpload] Video URL ready', { videoId });
         let thumbURL = '';
         let thumbBlob = null;
 
@@ -8697,9 +8723,11 @@ window.uploadVideo = async function () {
         }
 
         if (thumbBlob) {
+            console.info('[VideoUpload] Uploading thumbnail', { videoId });
             const thumbRef = ref(storage, `videos/${currentUser.uid}/${videoId}/thumb.jpg`);
             await uploadBytes(thumbRef, thumbBlob);
             thumbURL = await getDownloadURL(thumbRef);
+            console.info('[VideoUpload] Thumbnail ready', { videoId });
         }
 
         const docData = {
@@ -8716,7 +8744,9 @@ window.uploadVideo = async function () {
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
 
+        console.info('[VideoUpload] Writing Firestore doc', { videoId });
         await setDoc(doc(db, 'videos', videoId), docData);
+        console.info('[VideoUpload] Done', { videoId });
         videosCache = [{ id: videoId, ...docData }, ...videosCache];
         refreshVideoFeedWithFilters();
         toggleVideoUploadModal(false);
