@@ -49,6 +49,7 @@ let pendingVideoThumbnailUrl = null;
 let videoTags = [];
 let videoMentions = [];
 let videoMentionSearchTimer = null;
+let messageTypingTimer = null;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
@@ -6533,7 +6534,10 @@ function attachMessageInputHandlers(conversationId) {
     if (!input) return;
     input.oninput = function () {
         const hasText = (input.value || '').trim().length > 0;
-        setTypingState(conversationId, hasText);
+        if (messageTypingTimer) clearTimeout(messageTypingTimer);
+        messageTypingTimer = setTimeout(function () {
+            setTypingState(conversationId, hasText);
+        }, 200);
     };
     input.onblur = function () { setTypingState(conversationId, false); };
 }
@@ -7929,6 +7933,16 @@ function pauseAllVideos() {
     if (modalPlayer) modalPlayer.pause();
 }
 
+function blobToDataUrl(blob) {
+    return new Promise(function (resolve) {
+        if (!blob) return resolve('');
+        const reader = new FileReader();
+        reader.onload = function () { resolve(reader.result || ''); };
+        reader.onerror = function () { resolve(''); };
+        reader.readAsDataURL(blob);
+    });
+}
+
 function resetVideoUploadMeta() {
     videoTags = [];
     videoMentions = [];
@@ -8160,8 +8174,8 @@ window.handleVideoFileChange = async function (event) {
         pendingVideoThumbnailUrl = null;
     }
     if (pendingVideoThumbnailBlob && thumbPreview) {
-        pendingVideoThumbnailUrl = URL.createObjectURL(pendingVideoThumbnailBlob);
-        thumbPreview.src = pendingVideoThumbnailUrl;
+        const dataUrl = await blobToDataUrl(pendingVideoThumbnailBlob);
+        thumbPreview.src = dataUrl;
     }
 };
 
