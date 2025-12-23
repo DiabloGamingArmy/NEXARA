@@ -1,9 +1,135 @@
-rules_version = '2';
+// --- NOTE: These rules are made for FIREBASE DATABASE, NOT FIREBASE STORAGE
 
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /{allPaths=**} {
-      // Allow everyone to see images
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------
+    // Auth helpers
+    // -------------------------
+    function isSignedIn() { return request.auth != null; }
+
+    function hasFounderClaim() {
+      return isSignedIn() && request.auth.token.founder == true;
+    }
+
+    // -------------------------
+    // User roles
+    // -------------------------
+    function getAccountRoles(uid) {
+      return (exists(/databases/$(database)/documents/users/$(uid)) &&
+              (get(/databases/$(database)/documents/users/$(uid)).data.accountRoles is list))
+        ? get(/databases/$(database)/documents/users/$(uid)).data.accountRoles
+        : [];
+    }
+
+    function hasAccountRole(role) {
+      return isSignedIn() && (role in getAccountRoles(request.auth.uid));
+    }
+
+    function accountRolesUnchanged(userId) {
+      return !('accountRoles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/users/$(userId)) &&
+            request.resource.data.accountRoles == [])
+        || (exists(/databases/$(database)/documents/users/$(userId)) &&
+            request.resource.data.accountRoles ==
+              get(/databases/$(database)/documents/users/$(userId)).data.accountRoles);
+    }
+
+    // -------------------------
+    // Category membership + moderation
+    // -------------------------
+    function isCategoryMember(categoryId) {
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.status == 'active'
+      );
+    }
+
+    function isCategoryMod(categoryId) {
+      let memberPath = /databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid);
+      let m = exists(memberPath) ? get(memberPath).data : null;
+
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(memberPath)
+        && (
+          ((m.roles is list) && (('owner' in m.roles) || ('mod' in m.roles)))
+          || (m.role in ['owner','mod'])
+        )
+      );
+    }
+
+    function memberRolesUnchanged(categoryId, uid) {
+      return !('roles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) &&
+            (request.resource.data.roles == ['member'] || request.resource.data.roles == ['owner']))
+        || (exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) &&
+            request.resource.data.roles ==
+              get(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)).data.roles);
+    }
+
+    function isStaffAccount() {
+      return hasFounderClaim() || hasAccountRole('staff') || hasAccountRole('admin');
+    }
+
+    // -------------------------
+    // Conversations
+    // -------------------------
+    function isConversationParticipant(conversationId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/conversations/$(conversationId))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+    }
+
+    // Allow a signed-in user to get a conversation doc even if it doesn't exist yet.
+    // This is needed so ensureConversation() can safely call getDoc() when creating a new convo.
+    function canReadConversation(conversationId) {
+      let path = /databases/$(database)/documents/conversations/$(conversationId);
+
+      return isSignedIn() && (
+        // If the doc does NOT exist, there's nothing to leak, so allow get().
+        !exists(path)
+        ||
+        // If it DOES exist, only allow if the user is a participant.
+        (exists(path) && request.auth.uid in get(path).data.participants)
+      );
+    }
+
+    // -------------------------
+    // Users
+    // -------------------------
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if (isSignedIn() && request.auth.uid == userId && accountRolesUnchanged(userId))
+                   || hasFounderClaim()
+                   || (isSignedIn()
+                       && exists(/databases/$(database)/documents/users/$(userId))
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount'])
+                       && (request.resource.data.followersCount is number)
+                       && request.resource.data.followersCount >= 0);
+    }
+
+    match /users/{userId}/followers/{followerId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && request.auth.uid == followerId;
+    }
+
+    match /users/{userId}/following/{targetId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update, delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/categoryMemberships/{categoryId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // -------------------------
+    // Categories
+    // -------------------------
+    match /categories/{categoryId} {
       allow read: if true;
 
       allow create: if isSignedIn()

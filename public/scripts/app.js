@@ -6,6 +6,7 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
+import { createUploadManager } from "/scripts/uploadManager.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -77,6 +78,8 @@ let mentionSearchTimer = null;
 let currentThreadComments = [];
 let liveSessionsCache = [];
 let profileMediaPrefetching = {};
+let uploadManager = null;
+let videoTaskViewerBound = false;
 
 // Optimistic UI Sets
 let followedCategories = new Set();
@@ -138,6 +141,8 @@ const BRAND_LOGO_VARIANTS = {
     dark: 'https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e',
     light: 'https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fblackicon.png?alt=media&token=52db20ec-c992-4487-9f1c-ee497514e26a'
 };
+
+const UPLOAD_SESSION_ENDPOINT = 'https://us-central1-spike-streaming-service.cloudfunctions.net/createUploadSession';
 
 function resolveBrandLogoVariant(el) {
     if (!el) return BRAND_LOGO_VARIANTS.icon;
@@ -999,6 +1004,11 @@ function initApp(onReady) {
                 updateTimeCapsule();
                 window.navigateTo('feed', false);
                 renderProfile(); // Pre-render profile
+                if (!uploadManager) {
+                    uploadManager = createUploadManager({ storage, onStateChange: setUploadTasks });
+                }
+                ensureVideoTaskViewerBindings();
+                uploadManager.restorePendingUploads(currentUser.uid);
             } else {
                 currentUser = null;
                 updateAuthClaims({});
@@ -1022,6 +1032,8 @@ function initApp(onReady) {
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
+                setUploadTasks([]);
+                closeVideoTaskViewer();
             }
         } catch (err) {
             console.error('Initialization error', err);
@@ -8339,6 +8351,120 @@ function setVideoFilter(filter) {
     refreshVideoFeedWithFilters();
 }
 
+function formatUploadFileSize(bytes) {
+    const value = Number(bytes) || 0;
+    if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+    return `${value} B`;
+}
+
+function getUploadTaskStatusLabel(upload = {}) {
+    const status = (upload.status || '').toUpperCase();
+    if (status === 'FAILED') return 'Failed';
+    if (status === 'PAUSED') return 'Paused';
+    if (status === 'UPLOADING') return 'Uploading';
+    if (status === 'READY' || status === 'UPLOADED') return 'Complete';
+    return 'Uploading';
+}
+
+function isUploadTaskComplete(upload = {}) {
+    const status = (upload.status || '').toUpperCase();
+    return status === 'READY' || status === 'UPLOADED';
+}
+
+function setUploadTasks(tasks) {
+    uploadTasks = Array.isArray(tasks) ? tasks : [];
+    renderUploadTasks();
+    renderVideosTopBar();
+}
+
+function renderUploadTasks() {
+    const list = document.getElementById('video-task-viewer-list');
+    if (!list) return;
+
+    if (!uploadTasks.length) {
+        list.innerHTML = '<div class="video-task-empty">No active uploads yet.</div>';
+        return;
+    }
+
+    list.innerHTML = uploadTasks.map(function (upload) {
+        const progress = Math.max(0, Math.min(100, Number(upload.lastProgress) || 0));
+        const statusLabel = getUploadTaskStatusLabel(upload);
+        const sizeLabel = formatUploadFileSize(upload.size);
+        const showResume = statusLabel === 'Paused';
+        const showRetry = statusLabel === 'Failed';
+        const actionLabel = showResume ? 'Resume' : showRetry ? 'Retry' : '';
+        const actionMarkup = actionLabel
+            ? `<button class="video-task-action-btn" data-upload-action="${showRetry ? 'retry' : 'resume'}" data-upload-id="${upload.uploadId}">${actionLabel}</button>`
+            : '';
+        return `
+            <div class="video-task-row" data-upload-id="${upload.uploadId}">
+                <div class="video-task-thumb"><i class="ph ph-video"></i></div>
+                <div class="video-task-info">
+                    <div class="video-task-title">${upload.fileName || upload.storagePath}</div>
+                    <div class="video-task-meta">
+                        <span>${statusLabel}</span>
+                        <span>${progress}%</span>
+                        <span>${sizeLabel}</span>
+                    </div>
+                    <div class="video-task-progress">
+                        <div class="video-task-progress-bar" style="width:${progress}%;"></div>
+                    </div>
+                    <div class="video-task-actions">
+                        ${actionMarkup}
+                        <button class="video-task-action-btn secondary" data-upload-action="dismiss" data-upload-id="${upload.uploadId}">Dismiss</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function ensureVideoTaskViewerBindings() {
+    const modal = document.getElementById('video-task-viewer');
+    if (!modal || videoTaskViewerBound) return;
+    videoTaskViewerBound = true;
+
+    modal.addEventListener('click', function (event) {
+        const closeBtn = event.target.closest('[data-task-viewer-close]');
+        if (closeBtn) {
+            closeVideoTaskViewer();
+            return;
+        }
+
+        const actionBtn = event.target.closest('[data-upload-action]');
+        if (!actionBtn) return;
+        const action = actionBtn.getAttribute('data-upload-action');
+        const uploadId = actionBtn.getAttribute('data-upload-id');
+        if (action === 'dismiss' && uploadManager && currentUser?.uid) {
+            uploadManager.clearUpload(currentUser.uid, uploadId);
+            return;
+        }
+        if ((action === 'resume' || action === 'retry') && uploadManager) {
+            uploadManager.prepareRetry(uploadId);
+            window.openVideoUploadModal();
+            const fileInput = document.getElementById('video-file');
+            if (fileInput) fileInput.focus();
+            toast('Select the original video file to resume the upload.', 'info');
+        }
+    });
+}
+
+function openVideoTaskViewer() {
+    const modal = document.getElementById('video-task-viewer');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+}
+
+function closeVideoTaskViewer() {
+    const modal = document.getElementById('video-task-viewer');
+    if (!modal) return;
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+}
+
 function renderVideosTopBar() {
     const container = document.getElementById('videos-topbar');
     if (!container) return;
@@ -8919,6 +9045,20 @@ window.uploadVideo = async function () {
         refreshVideoFeedWithFilters();
     } catch (err) {
         console.error('Video upload failed', err);
+        if (uploadManager && uploadManager.markFailed && currentUser?.uid && activeUploadId) {
+            uploadManager.markFailed(currentUser.uid, activeUploadId);
+        }
+        if (activeUploadId) {
+            try {
+                await updateDoc(doc(db, 'videoUploads', activeUploadId), {
+                    status: 'FAILED',
+                    error: err?.message || 'Upload failed',
+                    updatedAt: serverTimestamp()
+                });
+            } catch (error) {
+                console.warn('[VideoUpload] Failed to update upload status', error);
+            }
+        }
         toast('Video upload failed. Please try again.', 'error');
     } finally {
         if (submitBtn) {
