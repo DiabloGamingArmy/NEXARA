@@ -15,6 +15,229 @@
     --avatar-text-color: #0f172a;
 }
 
+.upload-task-viewer {
+    margin: 0 1rem 1.5rem 1rem;
+    padding: 1rem;
+    border-radius: 16px;
+    background: var(--bg-panel, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.upload-task-empty {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.upload-task-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0.75rem 0.85rem;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.upload-task-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.upload-task-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text-main);
+    word-break: break-all;
+}
+
+.upload-task-status {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.upload-task-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.upload-task-btn {
+    background: var(--primary);
+    border: none;
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.upload-task-btn.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
+}
+
+.upload-task-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.upload-task-progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #00f2ea, #4c8bff);
+    transition: width 0.2s ease;
+}
+
+.video-task-viewer-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.video-task-viewer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.video-task-viewer-dialog {
+    position: relative;
+    width: min(900px, 92vw);
+    max-height: 80vh;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    z-index: 1;
+    overflow: hidden;
+}
+
+.video-task-viewer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.video-task-viewer-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.video-task-viewer-close {
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    font-size: 1.8rem;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.video-task-viewer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.video-task-empty {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.video-task-row {
+    display: flex;
+    gap: 16px;
+    padding: 0.85rem;
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.video-task-thumb {
+    width: 120px;
+    height: 72px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.video-task-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.video-task-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    word-break: break-word;
+}
+
+.video-task-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.video-task-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.video-task-progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #00f2ea, #4c8bff);
+    transition: width 0.2s ease;
+}
+
+.video-task-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.video-task-action-btn {
+    border: none;
+    background: var(--primary);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.video-task-action-btn.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
+}
+
 body.light-mode {
     --bg-body: #f0f2f5;
     --bg-card: #ffffff;
@@ -3675,6 +3898,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 10px;
     flex-wrap: wrap;
     margin-bottom: 8px;
+    padding-top: 5px;
 }
 
 .composer-inline {
