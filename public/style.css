@@ -3589,6 +3589,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 10px;
     flex-wrap: wrap;
     margin-bottom: 8px;
+    padding-top: 5px;
 }
 
 .composer-inline {
