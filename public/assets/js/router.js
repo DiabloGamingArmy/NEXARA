@@ -22,7 +22,8 @@
     initialized: true,
     applying: false,
     restoring: false,
-    lastRouteKey: null
+    lastRouteKey: null,
+    suppressNextApply: false
   };
 
   const isDebugEnabled = () => {
@@ -120,10 +121,22 @@
     }
 
     const head = segments[0];
-    if (SECTION_ROUTES[head]) {
-      if (head === 'messages' && segments[1]) {
-        return { type: 'messages', conversationId: segments[1], route };
+    if (head === 'messages') {
+      return { type: 'messages', conversationId: segments[1] || null, route };
+    }
+
+    if (head === 'profile') {
+      if (segments[1]) {
+        return { type: 'entity', entityType: 'profile', id: segments[1], route };
       }
+      const handle = params.get('handle');
+      if (handle) {
+        return { type: 'entity', entityType: 'profile', id: null, handle, route };
+      }
+      return { type: 'section', view: SECTION_ROUTES.profile, route };
+    }
+
+    if (SECTION_ROUTES[head]) {
       return { type: 'section', view: SECTION_ROUTES[head], route };
     }
 
@@ -167,6 +180,34 @@
     return { exists: true, data: { id: snap.id, ...snap.data() } };
   }
 
+  function getCurrentUserId() {
+    if (typeof window.getCurrentUser === 'function') {
+      const user = window.getCurrentUser();
+      return user?.uid || null;
+    }
+    return window.Nexera?.auth?.currentUser?.uid || null;
+  }
+
+  async function resolveLatestConversationId() {
+    if (typeof window.Nexera?.getLatestConversationId === 'function') {
+      return window.Nexera.getLatestConversationId();
+    }
+    const userId = getCurrentUserId();
+    const db = window.Nexera?.db;
+    const store = window.Nexera?.firestore;
+    if (!userId || !db || !store?.collection || !store?.query || !store?.orderBy || !store?.limit || !store?.getDocs) {
+      return null;
+    }
+    const ref = store.query(
+      store.collection(db, `users/${userId}/conversations`),
+      store.orderBy('lastMessageAt', 'desc'),
+      store.limit(1)
+    );
+    const snap = await store.getDocs(ref);
+    if (snap.empty) return null;
+    return snap.docs[0]?.id || null;
+  }
+
   function ensureNotFoundShell() {
     let container = document.getElementById('nexera-not-found');
     if (container) return container;
@@ -190,7 +231,7 @@
     document.body.appendChild(container);
     const btn = container.querySelector('#not-found-home');
     if (btn) {
-      btn.addEventListener('click', () => navigateToPath('/home'));
+      btn.addEventListener('click', () => goHomeFromNotFound());
     }
     fetch('/assets/data/notFoundMessages.json', { cache: 'no-cache' })
       .then((response) => response.json())
@@ -214,11 +255,18 @@
   function hideNotFound() {
     const container = document.getElementById('nexera-not-found');
     if (container) container.remove();
+    const appLayout = document.getElementById('app-layout');
+    if (appLayout) appLayout.style.display = '';
   }
 
   function navigateToPath(path) {
     history.pushState({}, '', path);
     applyCurrentRoute('push');
+  }
+
+  function goHomeFromNotFound() {
+    history.pushState({}, '', '/home');
+    applyCurrentRoute('not-found');
   }
 
   async function applyRoute(route) {
@@ -247,11 +295,34 @@
       }
       if (route.conversationId && typeof window.openConversation === 'function') {
         window.openConversation(route.conversationId);
+        return;
+      }
+      if (!route.conversationId) {
+        const latestId = await resolveLatestConversationId();
+        if (latestId) {
+          const target = buildUrlForMessages(latestId);
+          if (target) {
+            history.replaceState({}, '', target);
+          }
+          if (typeof window.openConversation === 'function') {
+            window.openConversation(latestId);
+          }
+        }
       }
       return;
     }
 
     if (route.type === 'thread') {
+      if (route.threadId) {
+        const entity = await fetchEntity('post', route.threadId);
+        if (entity.exists === false) {
+          showNotFound();
+          return;
+        }
+        if (entity.data && typeof window.Nexera?.ensurePostInCache === 'function') {
+          window.Nexera.ensurePostInCache(entity.data);
+        }
+      }
       if (route.threadId && typeof window.openThread === 'function') {
         window.openThread(route.threadId);
       }
@@ -370,7 +441,9 @@
       const original = window.navigateTo;
       window.navigateTo = function (viewId, pushToStack = true) {
         const result = original.call(this, viewId, pushToStack);
-        const path = buildUrlForSection(viewId);
+        const path = viewId === 'profile'
+          ? buildUrlForProfile(getCurrentUserId())
+          : buildUrlForSection(viewId);
         if (path) updateUrl(path);
         return result;
       };
@@ -447,7 +520,7 @@
         if (uid && uid !== 'me') {
           updateUrl(buildUrlForProfile(uid, params));
         } else {
-          updateUrl(buildUrlForProfile(null, params));
+          updateUrl(buildUrlForProfile(getCurrentUserId(), params));
         }
         return result;
       };
@@ -459,7 +532,13 @@
     patchHistory();
     document.addEventListener('click', interceptLinkClicks);
     window.addEventListener('popstate', () => applyCurrentRoute('popstate'));
-    window.addEventListener('nexera:navigation', () => applyCurrentRoute('history'));
+    window.addEventListener('nexera:navigation', () => {
+      if (state.suppressNextApply) {
+        state.suppressNextApply = false;
+        return;
+      }
+      applyCurrentRoute('history');
+    });
 
     wrapNavigationFunctions();
     applyCurrentRoute('init');
@@ -474,7 +553,13 @@
     buildUrlForPost,
     buildUrlForProfile,
     buildUrlForMessages,
-    buildUrlForThread
+    buildUrlForThread,
+    shallowReplaceUrl(path) {
+      if (!path) return;
+      if (window.location.pathname + window.location.search + window.location.hash === path) return;
+      state.suppressNextApply = true;
+      history.replaceState({}, '', path);
+    }
   };
 
   if (document.readyState === 'loading') {
