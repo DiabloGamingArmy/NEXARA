@@ -186,6 +186,10 @@ function showSplash() {
 function hideSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
+    if (window.Nexera?.splashHold) {
+        window.Nexera.splashPending = true;
+        return;
+    }
     splash.classList.add('nexera-splash-hidden');
     splash.style.pointerEvents = 'none';
     const TRANSITION_BUFFER = 520;
@@ -683,6 +687,53 @@ const ListenerRegistry = (function () {
 window.ListenerRegistry = ListenerRegistry;
 window.debugActiveListeners = function () { return ListenerRegistry.debugPrint(); };
 window.addEventListener('beforeunload', function () { ListenerRegistry.clearAll(); });
+window.Nexera = window.Nexera || {};
+if (!window.Nexera.ready) {
+    let readyResolve;
+    window.Nexera.ready = new Promise(function (resolve) { readyResolve = resolve; });
+    window.Nexera.__resolveReady = readyResolve;
+}
+window.Nexera.auth = auth;
+window.Nexera.db = db;
+window.Nexera.storage = storage;
+window.Nexera.firestore = { doc, getDoc };
+window.Nexera.onAuthReady = function (callback) {
+    return onAuthStateChanged(auth, callback);
+};
+window.Nexera.ensureVideoInCache = function (video) {
+    if (!video || !video.id) return;
+    if (videosCache.some(function (entry) { return entry.id === video.id; })) return;
+    videosCache = [video].concat(videosCache);
+};
+window.Nexera.navigateTo = function (routeObj) {
+    if (!routeObj) return;
+    if (routeObj.view) {
+        window.navigateTo(routeObj.view, false);
+    }
+};
+window.Nexera.openEntity = function (type, id, payload) {
+    if (!type || !id) return;
+    if (type === 'video') {
+        if (payload) window.Nexera.ensureVideoInCache(payload);
+        if (typeof window.openVideoDetail === 'function') window.openVideoDetail(id);
+        return;
+    }
+    if (type === 'profile') {
+        if (typeof window.openUserProfile === 'function') window.openUserProfile(id, null, false);
+        return;
+    }
+    if (type === 'post') {
+        if (typeof window.openThread === 'function') window.openThread(id);
+    }
+};
+window.Nexera.splashHold = window.Nexera.splashHold !== false;
+window.Nexera.releaseSplash = function () {
+    window.Nexera.splashHold = false;
+    if (window.Nexera.splashPending) {
+        window.Nexera.splashPending = false;
+        hideSplash();
+    }
+};
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
@@ -939,6 +990,7 @@ function initApp(onReady) {
         if (markReady.done) return;
         markReady.done = true;
         if (typeof onReady === 'function') onReady();
+        if (window.Nexera?.__resolveReady) window.Nexera.__resolveReady();
         if (readyResolver) readyResolver();
     };
 
