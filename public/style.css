@@ -3915,7 +3915,7 @@ body.sidebar-home .category-scroll-right {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .topbar-actions {
@@ -3934,7 +3934,7 @@ body.sidebar-home .category-scroll-right {
 }
 
 .topbar-shell .discover-controls {
-    margin-bottom: 0.5rem;
+    margin-bottom: 1rem;
     width: 100%;
 }
 
@@ -4035,9 +4035,9 @@ body.sidebar-home .category-scroll-right {
 }
 
 .live-view-shell {
-    max-width: 1200px;
+    max-width: 100%;
     margin: 0 auto;
-    padding: 0 0 1.25rem;
+    padding: 0 1rem 1.25rem;
     width: 100%;
 }
 
