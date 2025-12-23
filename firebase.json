@@ -56,7 +56,20 @@
       }
     ],
     "rewrites": [
-      { "source": "**", "destination": "/index.html" }
+      { "source": "/", "destination": "/pages/feed.html" },
+      { "source": "/home", "destination": "/pages/feed.html" },
+      { "source": "/live", "destination": "/pages/feed.html" },
+      { "source": "/videos", "destination": "/pages/feed.html" },
+      { "source": "/messages", "destination": "/pages/feed.html" },
+      { "source": "/discover", "destination": "/pages/feed.html" },
+      { "source": "/saved", "destination": "/pages/feed.html" },
+      { "source": "/profile", "destination": "/pages/feed.html" },
+      { "source": "/profile/**", "destination": "/pages/feed.html" },
+      { "source": "/video/**", "destination": "/pages/feed.html" },
+      { "source": "/post/**", "destination": "/pages/feed.html" },
+      { "source": "/staff", "destination": "/pages/feed.html" },
+      { "source": "/not-found", "destination": "/not-found.html" },
+      { "source": "**", "destination": "/not-found.html" }
     ]
   },
   "storage": {
