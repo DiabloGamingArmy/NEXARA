@@ -5276,7 +5276,46 @@ function renderCategoryPills() {
         more.onclick = function () { categoryVisibleCount += 10; renderCategoryPills(); };
         header.appendChild(more);
     }
+
+    // Update scroll button visibility after rendering
+    window.updateCategoryScrollButtons();
 }
+
+// Category header scroll function
+window.scrollCategoryHeader = function (direction) {
+    const header = document.getElementById('category-header');
+    if (!header) return;
+
+    const scrollAmount = 200;
+    header.scrollBy({ left: direction * scrollAmount, behavior: 'smooth' });
+
+    // Update button visibility after scroll
+    setTimeout(function () { window.updateCategoryScrollButtons(); }, 300);
+};
+
+// Update scroll button visibility based on scroll position
+window.updateCategoryScrollButtons = function () {
+    const header = document.getElementById('category-header');
+    const leftBtn = document.getElementById('category-scroll-left');
+    const rightBtn = document.getElementById('category-scroll-right');
+
+    if (!header || !leftBtn || !rightBtn) return;
+
+    const canScrollLeft = header.scrollLeft > 0;
+    const canScrollRight = header.scrollLeft < (header.scrollWidth - header.clientWidth - 1);
+
+    leftBtn.style.display = canScrollLeft ? 'block' : 'none';
+    rightBtn.style.display = canScrollRight ? 'block' : 'none';
+};
+
+// Add scroll event listener to category header
+(function () {
+    const header = document.getElementById('category-header');
+    if (header) {
+        header.addEventListener('scroll', window.updateCategoryScrollButtons);
+    }
+})();
+
 
 window.setCategory = function (c) {
     currentCategory = c;

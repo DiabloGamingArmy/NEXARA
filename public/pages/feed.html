@@ -568,7 +568,17 @@
 
         <main class="main-feed">
             <div id="view-feed" class="view-section">
-                <div id="category-header" class="category-header"></div>
+                <div style="position: relative;">
+                    <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
+                        style="display: none;" onclick="window.scrollCategoryHeader(-1)">
+                        <i class="ph ph-caret-left"></i>
+                    </button>
+                    <div id="category-header" class="category-header"></div>
+                    <button id="category-scroll-right" class="category-scroll-btn category-scroll-right"
+                        style="display: none;" onclick="window.scrollCategoryHeader(1)">
+                        <i class="ph ph-caret-right"></i>
+                    </button>
+                </div>
                 <div id="feed-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
             </div>
 
@@ -609,7 +619,7 @@
                             style="width: 40px; height: 40px; border-radius: 12px; background: #333;"></div>
                         <div style="flex: 1;">
                             <textarea id="thread-input" class="form-input" placeholder="Post your reply" rows="2"
-                                style="margin-bottom: 5px; background: transparent; border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 0;"></textarea>
+                                style="margin-bottom: 5px; background: transparent; border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 10px 10px 10px 0;"></textarea>
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <div>
                                     <input type="file" id="thread-file" style="display: none;"
@@ -623,15 +633,15 @@
                                         style="background: transparent; color: var(--text-muted); border: none; margin-right: 10px; cursor: pointer; display: none;">Cancel</button>
                                     <button id="thread-send-btn" onclick="window.sendComment()"
                                         class="create-btn-sidebar"
-                                        style="width: auto; padding: 6px 15px; margin-top: 0; font-size: 0.9rem;">Reply</button>
+                                        style="width: auto; padding: 6px 15px; margin-top: 0; margin-right: 10px; font-size: 0.9rem;">Reply</button>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-                <div style="position: relative; max-width: 800px; margin: 0 auto;">
+                <div style="position: relative; max-width: 800px; margin: 0 auto; padding: 10px 10px 0 0;">
                     <div class="thread-filter-row"
-                        style="position: absolute; top: 0; right: 1rem; margin: 0; padding: 0.5rem 0; z-index: 15; display: flex; align-items: center; gap: 8px; background: var(--bg-body); border-radius: 8px; padding: 8px 12px;">
+                        style="position: absolute; top: 10px; right: 10px; margin: 0; z-index: 15; display: flex; align-items: center; gap: 8px; background: var(--bg-body); border-radius: 8px; padding: 8px 12px;">
                         <label for="comment-filter-mode" class="thread-filter-label">Filter</label>
                         <select id="comment-filter-mode" class="form-input" style="max-width:220px;"
                             onchange="window.updateCommentFilterMode(this.value)">
@@ -643,7 +653,7 @@
                         <input id="comment-filter-input" class="form-input" style="display:none; max-width:260px;"
                             placeholder="Type to filter..." oninput="window.updateCommentFilterQuery(this.value)">
                     </div>
-                    <div id="thread-stream" style="padding: 3rem 1rem 1rem 1rem; max-width: 800px;"></div>
+                    <div id="thread-stream" style="padding: 3rem 10px 1rem 1rem; max-width: 800px;"></div>
                 </div>
             </div>
 

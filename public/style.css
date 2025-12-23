@@ -822,6 +822,11 @@ body {
     box-shadow: 0 10px 22px rgba(0, 140, 180, 0.15);
 }
 
+/* Add right padding to options button in thread view */
+#view-thread .post-options-btn {
+    margin-right: 10px;
+}
+
 .post-options-dropdown {
     position: absolute;
     display: none;
@@ -932,9 +937,48 @@ body {
 }
 
 .category-divider {
-    width: 1px;
-    background: var(--border);
+    width: 3px;
+    background: linear-gradient(180deg, rgba(100, 120, 140, 0.6) 0%, rgba(0, 242, 234, 0.15) 100%);
     margin: 0 6px;
+    border-radius: 2px;
+}
+
+/* Category scroll arrows - desktop only */
+.category-scroll-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 11;
+    background: none;
+    border: none;
+    color: var(--text-main);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 1rem;
+    transition: opacity 0.3s ease;
+}
+
+.category-scroll-left {
+    left: 0;
+    background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
+    padding-right: 2rem;
+}
+
+.category-scroll-right {
+    right: 0;
+    background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
+    padding-left: 2rem;
+}
+
+.category-scroll-btn:hover {
+    color: var(--primary);
+}
+
+/* Hide scroll buttons on mobile */
+@media(max-width: 768px) {
+    .category-scroll-btn {
+        display: none !important;
+    }
 }
 
 .category-pill {
