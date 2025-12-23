@@ -7953,7 +7953,7 @@ function pauseAllVideos() {
     if (modalPlayer) modalPlayer.pause();
 }
 
-function renderUploadTasksLegacy() {
+function renderUploadTasksList() {
     const list = document.getElementById('video-task-list');
     if (!list) return;
     list.innerHTML = '';
@@ -8046,8 +8046,8 @@ function renderUploadTasksViewer() {
 }
 
 function renderUploadTasks() {
-    try { if (typeof renderUploadTasksViewer === 'function') renderUploadTasksViewer(); } catch (e) {}
-    try { if (typeof renderUploadTasksLegacy === 'function') renderUploadTasksLegacy(); } catch (e) {}
+    if (typeof renderUploadTasksList === 'function') renderUploadTasksList();
+    if (typeof renderUploadTasksViewer === 'function') renderUploadTasksViewer();
 }
 
 function toggleTaskViewer(show = true) {
@@ -8066,6 +8066,8 @@ function blobToDataUrl(blob) {
         reader.onerror = function () { resolve(''); };
         reader.readAsDataURL(blob);
     });
+    const modalPlayer = document.getElementById('video-modal-player');
+    if (modalPlayer) modalPlayer.pause();
 }
 
 function resetVideoUploadMeta() {
