@@ -82,6 +82,7 @@ export function buildTopBar({
     searchPlaceholder = '',
     searchValue = '',
     onSearch = null,
+    onSearchCommit = null,
     filters = [],
     dropdowns = [],
     actions = []
@@ -110,6 +111,14 @@ export function buildTopBar({
     searchInput.style.flex = '1';
     if (typeof onSearch === 'function') {
         searchInput.addEventListener('input', onSearch);
+    }
+    if (typeof onSearchCommit === 'function') {
+        searchInput.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                onSearchCommit(event);
+            }
+        });
+        searchInput.addEventListener('blur', onSearchCommit);
     }
     searchRow.appendChild(searchInput);
 
