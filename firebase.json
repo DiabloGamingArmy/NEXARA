@@ -67,7 +67,9 @@
       { "source": "/profile/**", "destination": "/pages/feed.html" },
       { "source": "/video/**", "destination": "/pages/feed.html" },
       { "source": "/post/**", "destination": "/pages/feed.html" },
-      { "source": "/staff", "destination": "/pages/feed.html" }
+      { "source": "/staff", "destination": "/pages/feed.html" },
+      { "source": "/not-found", "destination": "/not-found.html" },
+      { "source": "**", "destination": "/not-found.html" }
     ]
   },
   "storage": {

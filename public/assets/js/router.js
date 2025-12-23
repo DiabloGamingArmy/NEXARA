@@ -6,6 +6,9 @@
     currentView: null,
     isReplaying: false,
     pendingDetail: null,
+    pendingRestore: null,
+    pendingTimer: null,
+    pendingObserver: null,
     lastPath: null
   };
 
@@ -53,6 +56,8 @@
     post: (id) => (id ? `/post/${encodeURIComponent(id)}` : '/home')
   };
 
+  const NOT_FOUND_PATH = '/not-found.html';
+
   function getCurrentUrl() {
     return `${window.location.pathname}${window.location.search}${window.location.hash}`;
   }
@@ -90,22 +95,30 @@
     return null;
   }
 
-  function parseRouteFromPath(pathname, searchParams) {
-    const normalized = normalizePath(pathname);
+  function parseRoute() {
+    const searchParams = new URLSearchParams(window.location.search || '');
+    const hashRoute = parseHashRoute();
+    const rawPath = hashRoute || window.location.pathname || '/';
+    const normalized = normalizePath(rawPath);
     const parts = normalized.split('/').filter(Boolean);
+    const fromHash = Boolean(hashRoute);
+
+    if (normalized === NOT_FOUND_PATH || normalized === '/not-found') {
+      return { viewType: 'not-found', canonical: NOT_FOUND_PATH, fromHash };
+    }
 
     if (normalized.startsWith('/pages/')) {
       const pageName = normalized.split('/').pop();
       const defaultRoute = pageDefaults[pageName];
       const fallback = window.NEXERA_PAGE_ROUTE || window.NEXERA_DEFAULT_ROUTE || defaultRoute;
       if (fallback) {
-        return { type: 'section', view: pathToView[fallback.replace('/', '')] || 'feed', canonical: fallback };
+        return { viewType: 'section', view: pathToView[fallback.replace('/', '')] || 'feed', canonical: fallback, fromHash };
       }
     }
 
     if (normalized === '/' || normalized === '') {
       const fallbackRoute = window.NEXERA_PAGE_ROUTE || window.NEXERA_DEFAULT_ROUTE || '/home';
-      return { type: 'section', view: pathToView[fallbackRoute.replace('/', '')] || 'feed', canonical: fallbackRoute };
+      return { viewType: 'section', view: pathToView[fallbackRoute.replace('/', '')] || 'feed', canonical: fallbackRoute, fromHash };
     }
 
     const head = parts[0];
@@ -113,37 +126,32 @@
       const uid = parts[1] || searchParams.get('uid');
       const handle = searchParams.get('handle');
       if (uid || handle) {
-        return { type: 'profile', id: uid || null, handle: handle || null };
+        const canonical = uid ? `/profile/${encodeURIComponent(uid)}` : `/profile?handle=${encodeURIComponent(handle || '')}`;
+        return { viewType: 'profile', id: uid || null, handle: handle || null, canonical, fromHash };
       }
-      return { type: 'section', view: 'profile' };
+      return { viewType: 'section', view: 'profile', canonical: '/profile', fromHash };
     }
     if (head === 'video') {
       const id = parts[1] || searchParams.get('id');
-      if (id) return { type: 'video', id };
-      return { type: 'section', view: 'videos' };
+      if (id) {
+        return { viewType: 'video', id, canonical: `/video/${encodeURIComponent(id)}`, fromHash };
+      }
+      return { viewType: 'section', view: 'videos', canonical: '/videos', fromHash };
     }
     if (head === 'post') {
       const id = parts[1] || searchParams.get('id');
-      if (id) return { type: 'post', id };
-      return { type: 'section', view: 'feed' };
+      if (id) {
+        return { viewType: 'post', id, canonical: `/post/${encodeURIComponent(id)}`, fromHash };
+      }
+      return { viewType: 'section', view: 'feed', canonical: '/home', fromHash };
     }
 
     const view = pathToView[head];
-    if (view) return { type: 'section', view };
-
-    return { type: 'section', view: 'feed' };
-  }
-
-  function parseLocation() {
-    const hashRoute = parseHashRoute();
-    const searchParams = new URLSearchParams(window.location.search || '');
-    if (hashRoute) {
-      const parsed = parseRouteFromPath(hashRoute, searchParams);
-      parsed.canonical = hashRoute;
-      parsed.fromHash = true;
-      return parsed;
+    if (view) {
+      return { viewType: 'section', view, canonical: `/${head}`, fromHash };
     }
-    return parseRouteFromPath(window.location.pathname, searchParams);
+
+    return { viewType: 'unknown', path: normalized, fromHash };
   }
 
   function withReplayGuard(fn) {
@@ -155,30 +163,181 @@
     }
   }
 
-  function openVideoWithRetry(videoId, attempts = 8) {
-    if (!videoId || typeof window.openVideoDetail !== 'function') return;
-    const modal = document.getElementById('video-detail-modal');
-    const alreadyOpen = modal && modal.dataset.videoId === videoId;
-    if (alreadyOpen) return;
+  function isElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (!style) return false;
+    return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+  }
 
-    const attemptOpen = () => {
-      if (routerState.isReplaying) {
-        window.openVideoDetail(videoId);
-      } else {
-        window.openVideoDetail(videoId);
+  function isAuthScreenVisible() {
+    const auth = document.getElementById('auth-screen');
+    return isElementVisible(auth);
+  }
+
+  function isLoadingVisible() {
+    const loading = document.getElementById('loading-overlay');
+    return isElementVisible(loading);
+  }
+
+  function isAppReadyForNavigation() {
+    return !isLoadingVisible() && !isAuthScreenVisible();
+  }
+
+  function goNotFound() {
+    if (window.location.pathname === NOT_FOUND_PATH) return;
+    window.location.replace(NOT_FOUND_PATH);
+  }
+
+  function findElementByOnclickMatch(keyword, id) {
+    const candidates = document.querySelectorAll('[onclick]');
+    const patterns = [
+      `${keyword}('${id}')`,
+      `${keyword}(\"${id}\")`,
+      `${keyword}(&quot;${id}&quot;)`
+    ];
+    for (const el of candidates) {
+      const onclickValue = el.getAttribute('onclick') || '';
+      if (patterns.some((pattern) => onclickValue.includes(pattern))) return el;
+    }
+    return null;
+  }
+
+  function isProfileRendered(route) {
+    const container = document.getElementById('view-public-profile');
+    if (!container || !isElementVisible(container)) return false;
+    const header = container.querySelector('.profile-header');
+    if (!header) return false;
+    const text = header.textContent || '';
+    if (text.includes('Unknown User') || text.includes('@unknown')) return 'not-found';
+    if (route.handle) {
+      const normalized = route.handle.replace(/^@/, '').toLowerCase();
+      return text.toLowerCase().includes(`@${normalized}`);
+    }
+    return true;
+  }
+
+  function isThreadRendered(postId) {
+    const title = document.getElementById('thread-view-title');
+    if (!title || !isElementVisible(title)) return false;
+    return title.dataset.postId === postId;
+  }
+
+  function isVideoModalOpen(videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal || !isElementVisible(modal)) return false;
+    return modal.dataset.videoId === videoId;
+  }
+
+  function clearPendingRestore() {
+    routerState.pendingRestore = null;
+    if (routerState.pendingTimer) {
+      clearInterval(routerState.pendingTimer);
+      routerState.pendingTimer = null;
+    }
+    if (routerState.pendingObserver) {
+      routerState.pendingObserver.disconnect();
+      routerState.pendingObserver = null;
+    }
+  }
+
+  function attemptRestorePending() {
+    const pending = routerState.pendingRestore;
+    if (!pending) return;
+
+    const { route, startedAt, timeoutMs } = pending;
+    if (Date.now() - startedAt > timeoutMs) {
+      clearPendingRestore();
+      goNotFound();
+      return;
+    }
+
+    if (route.viewType === 'profile') {
+      const rendered = isProfileRendered(route);
+      if (rendered === true) {
+        clearPendingRestore();
+        return;
       }
-      const reopened = modal && modal.dataset.videoId === videoId;
-      if (!reopened && attempts > 0) {
-        setTimeout(() => openVideoWithRetry(videoId, attempts - 1), 450);
+      if (rendered === 'not-found') {
+        clearPendingRestore();
+        goNotFound();
+        return;
       }
+      if (!isAppReadyForNavigation()) return;
+      if (!pending.attempted) {
+        pending.attempted = true;
+        if (route.id && typeof window.openUserProfile === 'function') {
+          window.openUserProfile(route.id, null, false);
+        } else if (route.handle && typeof window.openUserProfileByHandle === 'function') {
+          window.openUserProfileByHandle(route.handle);
+        }
+      }
+      return;
+    }
+
+    if (route.viewType === 'video') {
+      if (isVideoModalOpen(route.id)) {
+        clearPendingRestore();
+        return;
+      }
+      const videoEl = document.querySelector(`[data-video-open="${route.id}"]`);
+      if (videoEl) {
+        videoEl.click();
+        return;
+      }
+      if (!pending.attempted && typeof window.openVideoDetail === 'function') {
+        pending.attempted = true;
+        window.openVideoDetail(route.id);
+      }
+      return;
+    }
+
+    if (route.viewType === 'post') {
+      if (isThreadRendered(route.id)) {
+        clearPendingRestore();
+        return;
+      }
+      const postEl = findElementByOnclickMatch('openThread', route.id);
+      if (postEl) {
+        postEl.click();
+        return;
+      }
+      if (!pending.attempted && typeof window.openThread === 'function' && isAppReadyForNavigation()) {
+        pending.attempted = true;
+        window.openThread(route.id);
+      }
+    }
+  }
+
+  function schedulePendingRestore(route) {
+    clearPendingRestore();
+    routerState.pendingRestore = {
+      route,
+      startedAt: Date.now(),
+      timeoutMs: 10000,
+      attempted: false
     };
 
-    attemptOpen();
+    attemptRestorePending();
+    routerState.pendingObserver = new MutationObserver(() => attemptRestorePending());
+    routerState.pendingObserver.observe(document.body, { childList: true, subtree: true });
+    routerState.pendingTimer = setInterval(() => attemptRestorePending(), 500);
   }
 
   function applyRoute(route) {
     if (!route) return;
-    if (route.type === 'section') {
+
+    if (route.viewType === 'not-found') {
+      return;
+    }
+
+    if (route.viewType === 'unknown') {
+      goNotFound();
+      return;
+    }
+
+    if (route.viewType === 'section') {
+      clearPendingRestore();
       const view = route.view || 'feed';
       if (typeof window.navigateTo === 'function') {
         window.navigateTo(view, false);
@@ -186,33 +345,27 @@
       return;
     }
 
-    if (route.type === 'profile') {
-      if (route.id && typeof window.openUserProfile === 'function') {
-        window.openUserProfile(route.id, null, false);
-        return;
-      }
-      if (route.handle && typeof window.openUserProfileByHandle === 'function') {
-        window.openUserProfileByHandle(route.handle);
-        return;
-      }
+    if (route.viewType === 'profile') {
+      schedulePendingRestore(route);
       if (typeof window.navigateTo === 'function') {
-        window.navigateTo('profile', false);
+        window.navigateTo('feed', false);
       }
       return;
     }
 
-    if (route.type === 'post') {
-      if (typeof window.openThread === 'function') {
-        window.openThread(route.id);
+    if (route.viewType === 'post') {
+      schedulePendingRestore(route);
+      if (typeof window.navigateTo === 'function') {
+        window.navigateTo('feed', false);
       }
       return;
     }
 
-    if (route.type === 'video') {
+    if (route.viewType === 'video') {
+      schedulePendingRestore(route);
       if (typeof window.navigateTo === 'function') {
         window.navigateTo('videos', false);
       }
-      openVideoWithRetry(route.id);
     }
   }
 
@@ -403,7 +556,7 @@
     wrapOpenMessagesPage();
     wrapGoBack();
 
-    const route = parseLocation();
+    const route = parseRoute();
     withReplayGuard(() => {
       applyRoute(route);
     });
@@ -414,7 +567,7 @@
 
     window.addEventListener('popstate', () => {
       withReplayGuard(() => {
-        const route = parseLocation();
+        const route = parseRoute();
         applyRoute(route);
       });
     });
@@ -423,7 +576,8 @@
   window.NexeraRouter = {
     initialized: true,
     buildLink,
-    parseLocation,
+    parseRoute,
+    restoreFromUrl: () => withReplayGuard(() => applyRoute(parseRoute())),
     applyRoute: (route) => withReplayGuard(() => applyRoute(route))
   };
 
