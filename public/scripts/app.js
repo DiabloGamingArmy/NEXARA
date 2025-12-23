@@ -53,6 +53,8 @@ let videoMentions = [];
 let videoMentionSearchTimer = null;
 let messageTypingTimer = null;
 const USE_UPLOAD_SESSION = false;
+let uploadTasks = [];
+let activeUploadId = null;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
@@ -7940,6 +7942,10 @@ window.toggleVideoUploadModal = function (show = true) {
     }
 };
 
+function resetVideoUploadForm() {
+    window.toggleVideoUploadModal(false);
+}
+
 function pauseAllVideos() {
     document.querySelectorAll('#video-feed video').forEach(function (video) {
         video.pause();
@@ -7947,6 +7953,60 @@ function pauseAllVideos() {
     const modalPlayer = document.getElementById('video-modal-player');
     if (modalPlayer) modalPlayer.pause();
 }
+
+function renderUploadTasks() {
+    const list = document.getElementById('video-task-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!uploadTasks.length) {
+        list.innerHTML = '<div class="video-task-empty">No active tasks.</div>';
+        return;
+    }
+
+    uploadTasks.forEach(function (task) {
+        const row = document.createElement('div');
+        row.className = 'video-task-row';
+
+        const thumb = document.createElement('img');
+        thumb.className = 'video-task-thumb';
+        thumb.src = task.thumbnail || '';
+        thumb.alt = 'Upload thumbnail';
+        row.appendChild(thumb);
+
+        const meta = document.createElement('div');
+        meta.className = 'video-task-meta';
+
+        const title = document.createElement('div');
+        title.className = 'video-task-title';
+        title.textContent = task.title || 'Untitled video';
+
+        const status = document.createElement('div');
+        status.className = 'video-task-status';
+        status.textContent = task.status || 'Uploading';
+
+        const progressWrap = document.createElement('div');
+        progressWrap.className = 'video-task-progress';
+        const progressBar = document.createElement('span');
+        progressBar.style.width = `${task.progress || 0}%`;
+        progressWrap.appendChild(progressBar);
+
+        meta.appendChild(title);
+        meta.appendChild(status);
+        meta.appendChild(progressWrap);
+        row.appendChild(meta);
+
+        list.appendChild(row);
+    });
+}
+
+function toggleTaskViewer(show = true) {
+    const modal = document.getElementById('video-task-viewer');
+    if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (show) renderUploadTasks();
+}
+
+window.toggleTaskViewer = toggleTaskViewer;
 
 function blobToDataUrl(blob) {
     return new Promise(function (resolve) {
@@ -8365,14 +8425,10 @@ function renderVideosTopBar() {
     uploadBtn.innerHTML = '<i class="ph ph-upload-simple"></i> Create Video';
     uploadBtn.onclick = function () { window.openVideoUploadModal(); };
 
-    const activeUploads = uploadTasks.filter(function (upload) {
-        return !isUploadTaskComplete(upload);
-    });
-    const taskViewerBtn = document.createElement('button');
-    taskViewerBtn.className = 'create-btn-sidebar';
-    taskViewerBtn.style.width = 'auto';
-    taskViewerBtn.innerHTML = activeUploads.length ? '<i class="ph ph-list"></i> Task Viewer' : '<i class="ph ph-list"></i> Task Viewer (No active tasks)';
-    taskViewerBtn.onclick = function () { openVideoTaskViewer(); };
+    const taskBtn = document.createElement('button');
+    taskBtn.className = 'icon-pill';
+    taskBtn.innerHTML = '<i class="ph ph-list"></i> Task Viewer';
+    taskBtn.onclick = function () { window.toggleTaskViewer(true); };
 
     const topBar = buildTopBar({
         title: 'Videos',
@@ -8400,7 +8456,7 @@ function renderVideosTopBar() {
                 show: true
             }
         ],
-        actions: [{ element: uploadBtn }, { element: taskViewerBtn }]
+        actions: [{ element: taskBtn }, { element: uploadBtn }]
     });
 
     container.innerHTML = '';
@@ -8843,23 +8899,52 @@ window.uploadVideo = async function () {
     }
 
     const storageRef = ref(storage, `${storagePath}/source.mp4`);
+    activeUploadId = videoId;
+    const task = {
+        id: videoId,
+        title: title || 'Untitled video',
+        status: 'Uploading',
+        progress: 0,
+        thumbnail: ''
+    };
+    uploadTasks = uploadTasks.filter(function (t) { return t.id !== videoId; }).concat(task);
+
+    let previewBlob = null;
+    if (thumbInput && thumbInput.files && thumbInput.files[0]) {
+        previewBlob = thumbInput.files[0];
+    } else if (pendingVideoThumbnailBlob) {
+        previewBlob = pendingVideoThumbnailBlob;
+    }
+    if (previewBlob) {
+        task.thumbnail = await blobToDataUrl(previewBlob);
+    }
+    renderUploadTasks();
 
     try {
         if (submitBtn) {
             submitBtn.disabled = true;
             submitBtn.innerHTML = `<span class="button-spinner" aria-hidden="true"></span> Publishing...`;
         }
+        resetVideoUploadForm();
+        toggleTaskViewer(true);
         console.info('[VideoUpload] Starting upload', { videoId, size: file.size, type: file.type });
         const uploadTask = uploadBytesResumable(storageRef, file);
         await new Promise(function (resolve, reject) {
             uploadTask.on('state_changed', function (snapshot) {
                 const progress = snapshot.totalBytes ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100) : 0;
                 console.info('[VideoUpload] Progress', { videoId, progress });
+                task.progress = progress;
+                renderUploadTasks();
             }, function (error) {
                 console.error('[VideoUpload] Upload failed', error);
+                task.status = 'Failed';
+                renderUploadTasks();
                 reject(error);
             }, function () {
                 console.info('[VideoUpload] Upload complete', { videoId });
+                task.progress = 100;
+                task.status = 'Processing';
+                renderUploadTasks();
                 resolve();
             });
         });
@@ -8903,10 +8988,10 @@ window.uploadVideo = async function () {
         console.info('[VideoUpload] Writing Firestore doc', { videoId });
         await setDoc(doc(db, 'videos', videoId), docData);
         console.info('[VideoUpload] Done', { videoId });
+        task.status = 'Ready';
+        renderUploadTasks();
         videosCache = [{ id: videoId, ...docData }, ...videosCache];
         refreshVideoFeedWithFilters();
-        resetVideoUploadForm();
-        toggleVideoUploadModal(false);
     } catch (err) {
         console.error('Video upload failed', err);
         if (uploadManager && uploadManager.markFailed && currentUser?.uid && activeUploadId) {
