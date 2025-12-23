@@ -15,6 +15,87 @@
     --avatar-text-color: #0f172a;
 }
 
+.upload-task-viewer {
+    margin: 0 1rem 1.5rem 1rem;
+    padding: 1rem;
+    border-radius: 16px;
+    background: var(--bg-panel, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.upload-task-empty {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.upload-task-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0.75rem 0.85rem;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.upload-task-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.upload-task-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text-main);
+    word-break: break-all;
+}
+
+.upload-task-status {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.upload-task-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.upload-task-btn {
+    background: var(--primary);
+    border: none;
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.upload-task-btn.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-main);
+}
+
+.upload-task-progress {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.upload-task-progress-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #00f2ea, #4c8bff);
+    transition: width 0.2s ease;
+}
+
 body.light-mode {
     --bg-body: #f0f2f5;
     --bg-card: #ffffff;
