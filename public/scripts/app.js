@@ -52,6 +52,7 @@ let videoTags = [];
 let videoMentions = [];
 let videoMentionSearchTimer = null;
 let messageTypingTimer = null;
+const USE_UPLOAD_SESSION = false;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
@@ -8825,18 +8826,20 @@ window.uploadVideo = async function () {
     let uploadSession = null;
     let videoId = `${Date.now()}`;
     let storagePath = `videos/${currentUser.uid}/${videoId}`;
-    try {
-        console.info('[VideoUpload] Requesting upload session');
-        const createSession = httpsCallable(functions, 'createUploadSession');
-        const result = await createSession({ size: file.size, type: file.type });
-        uploadSession = result?.data || null;
-        if (uploadSession?.uploadId) {
-            videoId = uploadSession.uploadId;
-            storagePath = uploadSession.storagePath || `videos/${currentUser.uid}/${videoId}`;
+    if (USE_UPLOAD_SESSION) {
+        try {
+            console.info('[VideoUpload] Requesting upload session');
+            const createSession = httpsCallable(functions, 'createUploadSession');
+            const result = await createSession({ size: file.size, type: file.type });
+            uploadSession = result?.data || null;
+            if (uploadSession?.uploadId) {
+                videoId = uploadSession.uploadId;
+                storagePath = uploadSession.storagePath || `videos/${currentUser.uid}/${videoId}`;
+            }
+            console.info('[VideoUpload] Upload session ready', uploadSession);
+        } catch (err) {
+            console.warn('[VideoUpload] Upload session failed, falling back to direct upload', err);
         }
-        console.info('[VideoUpload] Upload session ready', uploadSession);
-    } catch (err) {
-        console.warn('[VideoUpload] Upload session failed, falling back to direct upload', err);
     }
 
     const storageRef = ref(storage, `${storagePath}/source.mp4`);
