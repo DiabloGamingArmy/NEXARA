@@ -8002,47 +8002,42 @@ function renderUploadTasksList() {
 function renderUploadTasksViewer() {
     const list = document.getElementById('video-task-viewer-list');
     if (!list) return;
-    list.innerHTML = '';
-
     if (!uploadTasks.length) {
-        list.innerHTML = '<div class="video-task-empty">No active tasks.</div>';
+        list.innerHTML = '<div class="video-task-empty">No active uploads yet.</div>';
         return;
     }
 
-    uploadTasks.forEach(function (task) {
-        const row = document.createElement('div');
-        row.className = 'video-task-row';
-
-        const thumb = document.createElement('img');
-        thumb.className = 'video-task-thumb';
-        thumb.src = task.thumbnail || '';
-        thumb.alt = 'Upload thumbnail';
-        row.appendChild(thumb);
-
-        const meta = document.createElement('div');
-        meta.className = 'video-task-meta';
-
-        const title = document.createElement('div');
-        title.className = 'video-task-title';
-        title.textContent = task.title || 'Untitled video';
-
-        const status = document.createElement('div');
-        status.className = 'video-task-status';
-        status.textContent = task.status || 'Uploading';
-
-        const progressWrap = document.createElement('div');
-        progressWrap.className = 'video-task-progress';
-        const progressBar = document.createElement('span');
-        progressBar.style.width = `${task.progress || 0}%`;
-        progressWrap.appendChild(progressBar);
-
-        meta.appendChild(title);
-        meta.appendChild(status);
-        meta.appendChild(progressWrap);
-        row.appendChild(meta);
-
-        list.appendChild(row);
-    });
+    list.innerHTML = uploadTasks.map(function (upload) {
+        const progress = Math.max(0, Math.min(100, Number(upload.lastProgress) || 0));
+        const statusLabel = getUploadTaskStatusLabel(upload);
+        const sizeLabel = formatUploadFileSize(upload.size);
+        const showResume = statusLabel === 'Paused';
+        const showRetry = statusLabel === 'Failed';
+        const actionLabel = showResume ? 'Resume' : showRetry ? 'Retry' : '';
+        const actionMarkup = actionLabel
+            ? `<button class="video-task-action-btn" data-upload-action="${showRetry ? 'retry' : 'resume'}" data-upload-id="${upload.uploadId}">${actionLabel}</button>`
+            : '';
+        return `
+            <div class="video-task-row" data-upload-id="${upload.uploadId}">
+                <div class="video-task-thumb"><i class="ph ph-video"></i></div>
+                <div class="video-task-info">
+                    <div class="video-task-title">${upload.fileName || upload.storagePath}</div>
+                    <div class="video-task-meta">
+                        <span>${statusLabel}</span>
+                        <span>${progress}%</span>
+                        <span>${sizeLabel}</span>
+                    </div>
+                    <div class="video-task-progress">
+                        <div class="video-task-progress-bar" style="width:${progress}%;"></div>
+                    </div>
+                    <div class="video-task-actions">
+                        ${actionMarkup}
+                        <button class="video-task-action-btn secondary" data-upload-action="dismiss" data-upload-id="${upload.uploadId}">Dismiss</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
 function renderUploadTasks() {
@@ -8379,48 +8374,6 @@ function setUploadTasks(tasks) {
     uploadTasks = Array.isArray(tasks) ? tasks : [];
     renderUploadTasks();
     renderVideosTopBar();
-}
-
-function renderUploadTasks() {
-    const list = document.getElementById('video-task-viewer-list');
-    if (!list) return;
-
-    if (!uploadTasks.length) {
-        list.innerHTML = '<div class="video-task-empty">No active uploads yet.</div>';
-        return;
-    }
-
-    list.innerHTML = uploadTasks.map(function (upload) {
-        const progress = Math.max(0, Math.min(100, Number(upload.lastProgress) || 0));
-        const statusLabel = getUploadTaskStatusLabel(upload);
-        const sizeLabel = formatUploadFileSize(upload.size);
-        const showResume = statusLabel === 'Paused';
-        const showRetry = statusLabel === 'Failed';
-        const actionLabel = showResume ? 'Resume' : showRetry ? 'Retry' : '';
-        const actionMarkup = actionLabel
-            ? `<button class="video-task-action-btn" data-upload-action="${showRetry ? 'retry' : 'resume'}" data-upload-id="${upload.uploadId}">${actionLabel}</button>`
-            : '';
-        return `
-            <div class="video-task-row" data-upload-id="${upload.uploadId}">
-                <div class="video-task-thumb"><i class="ph ph-video"></i></div>
-                <div class="video-task-info">
-                    <div class="video-task-title">${upload.fileName || upload.storagePath}</div>
-                    <div class="video-task-meta">
-                        <span>${statusLabel}</span>
-                        <span>${progress}%</span>
-                        <span>${sizeLabel}</span>
-                    </div>
-                    <div class="video-task-progress">
-                        <div class="video-task-progress-bar" style="width:${progress}%;"></div>
-                    </div>
-                    <div class="video-task-actions">
-                        ${actionMarkup}
-                        <button class="video-task-action-btn secondary" data-upload-action="dismiss" data-upload-id="${upload.uploadId}">Dismiss</button>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
 }
 
 function ensureVideoTaskViewerBindings() {
