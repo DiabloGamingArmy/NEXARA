@@ -665,6 +665,161 @@
                 </div>
             </div>
 
+            <div id="view-videos" class="view-section" style="display:none;">
+                <div id="videos-topbar"></div>
+                <div id="video-feed" class="video-feed"></div>
+            </div>
+
+            <div id="view-messages" class="view-section" style="display:none;">
+                <div class="messages-layout">
+                    <div class="messages-sidebar">
+                        <div
+                            style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                            <h3 style="margin:0; font-weight:800;">Messages</h3>
+                            <button class="icon-pill" onclick="window.openNewChatModal()"><i class="ph ph-plus"></i>
+                                New</button>
+                        </div>
+                        <div id="conversation-list" class="conversation-list"></div>
+                    </div>
+                    <div class="messages-thread">
+                        <div class="message-thread-header-row">
+                            <button id="mobile-thread-back" class="mobile-thread-back" type="button"
+                                onclick="window.mobileMessagesBack()" aria-label="Back to conversations"
+                                style="display:none;">
+                                <i class="ph ph-arrow-left"></i> Back
+                            </button>
+                            <div id="message-header" class="message-thread-header">Select a conversation</div>
+                        </div>
+                        <div class="message-header-tools">
+                            <input id="conversation-search" class="form-input" placeholder="Search in conversation"
+                                oninput="window.handleConversationSearch(this.value)">
+                            <div class="search-nav">
+                                <button class="icon-pill" onclick="window.navigateConversationSearch(-1)"><i
+                                        class="ph ph-caret-up"></i></button>
+                                <button class="icon-pill" onclick="window.navigateConversationSearch(1)"><i
+                                        class="ph ph-caret-down"></i></button>
+                            </div>
+                        </div>
+                        <div class="messages-thread-inner">
+                            <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
+                            <div class="message-scroll-region">
+                                <div id="message-thread" class="message-thread-body"></div>
+                                <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
+                            </div>
+                        </div>
+                        <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
+                        <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
+                        </div>
+                        <div class="message-compose">
+                            <input type="file" id="message-media" accept="image/*,video/*" multiple
+                                style="display:none;" onchange="window.handleMessageFileChange(event)">
+                            <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i
+                                    class="ph ph-image"></i></button>
+                            <input id="message-input" class="form-input" placeholder="Message" />
+                            <button class="create-btn-sidebar" style="width:auto;"
+                                onclick="window.sendMessage()">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="view-conversation-settings" class="view-section" style="display:none;">
+                <div class="messages-settings-shell">
+                    <div class="messages-settings-header">
+                        <button class="icon-pill" onclick="window.backToConversationFromSettings()"><i
+                                class="ph ph-arrow-left"></i> Back</button>
+                        <div class="messages-settings-meta">
+                            <div id="conversation-settings-avatar"></div>
+                            <div>
+                                <div id="conversation-settings-title" style="font-weight:800;">Conversation Settings
+                                </div>
+                                <div id="conversation-settings-subtitle"
+                                    style="color:var(--text-muted); font-size:0.9rem;">Update participants, name, and
+                                    preferences</div>
+                            </div>
+                        </div>
+                        <button class="icon-pill" onclick="window.refreshConversationSettings()"><i
+                                class="ph ph-arrow-clockwise"></i></button>
+                    </div>
+                    <div class="messages-settings-grid">
+                        <div class="messages-settings-card">
+                            <div class="panel-title">Participants</div>
+                            <div id="conversation-participant-list"></div>
+                            <div class="input-group">
+                                <label class="settings-label" for="conversation-add-search">Add participants</label>
+                                <input id="conversation-add-search" class="form-input" placeholder="Search by username"
+                                    oninput="window.searchConversationParticipants(this.value)">
+                            </div>
+                            <div id="conversation-add-results" style="max-height:200px; overflow:auto;"></div>
+                        </div>
+                        <div class="messages-settings-card">
+                            <div class="panel-title">Conversation details</div>
+                            <div id="conversation-created-by" class="conversation-created-by"></div>
+                            <label class="settings-label" for="conversation-name-input">Name</label>
+                            <input id="conversation-name-input" class="form-input" placeholder="Conversation name">
+                            <div id="conversation-name-hint" class="settings-hint"></div>
+                            <button class="create-btn-sidebar" style="width:auto;"
+                                onclick="window.saveConversationName()">Save name</button>
+                            <div class="input-group" style="margin-top:10px;">
+                                <label class="settings-label" for="conversation-avatar-input">Conversation image</label>
+                                <input id="conversation-avatar-input" type="file" accept="image/*" class="form-input">
+                            </div>
+                            <div id="conversation-avatar-preview" class="conversation-avatar-preview"></div>
+                            <button class="icon-pill" onclick="window.uploadConversationAvatar()"><i
+                                    class="ph ph-upload"></i> Upload image</button>
+                            <div class="settings-chip-row" id="conversation-preferences-row">
+                                <button class="icon-pill" id="conversation-mute-btn"
+                                    onclick="window.toggleConversationMute()"><i class="ph ph-bell-slash"></i> Mute
+                                    chat</button>
+                                <button class="icon-pill" id="conversation-pin-btn"
+                                    onclick="window.toggleConversationPin()"><i class="ph ph-push-pin"></i> Pin</button>
+                                <button class="icon-pill" id="conversation-archive-btn"
+                                    onclick="window.toggleConversationArchive()"><i class="ph ph-archive"></i>
+                                    Archive</button>
+                            </div>
+                        </div>
+                        <div class="messages-settings-card">
+                            <div class="panel-title">Controls</div>
+                            <div style="display:flex; flex-direction:column; gap:8px;">
+                                <button class="icon-pill" onclick="window.blockConversationPartner()"><i
+                                        class="ph ph-user-x"></i> Block user</button>
+                                <button class="icon-pill" onclick="window.reportConversation()"><i
+                                        class="ph ph-flag"></i> Report conversation</button>
+                                <button class="icon-pill" onclick="window.leaveConversation()"><i
+                                        class="ph ph-door"></i> Leave chat</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="view-profile" class="view-section" style="display:none;"></div>
+
+            <div id="view-staff" class="view-section" style="display:none;">
+                <div style="padding:1rem;">
+                    <h2 style="font-weight:800; font-size:1.5rem; display:flex; align-items:center; gap:8px;">
+                        <i class="ph ph-shield-star"></i> Staff Console
+                    </h2>
+                    <div id="staff-access-warning" class="empty-state" style="display:none;">Access denied</div>
+                    <div id="staff-panels">
+                        <div class="staff-grid">
+                            <div class="glass-panel">
+                                <div class="panel-title">Verification Requests</div>
+                                <div id="verification-requests"></div>
+                            </div>
+                            <div class="glass-panel">
+                                <div class="panel-title">Reports Queue</div>
+                                <div id="reports-queue"></div>
+                            </div>
+                            <div class="glass-panel">
+                                <div class="panel-title">Admin Logs</div>
+                                <div id="admin-logs"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="view-live-setup" class="view-section" style="display:none;">
                 <div id="go-live-root" class="go-live-studio ui-basic is-active">
                     <div class="go-live-studio-topbar gl-panel">
@@ -1223,155 +1378,7 @@
     </div>
     </div>
 
-    <div id="view-videos" class="view-section" style="display:none;">
-        <div id="videos-topbar"></div>
-        <div id="video-feed" class="video-feed"></div>
-    </div>
 
-    <div id="view-messages" class="view-section" style="display:none;">
-        <div class="messages-layout">
-            <div class="messages-sidebar">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; font-weight:800;">Messages</h3>
-                    <button class="icon-pill" onclick="window.openNewChatModal()"><i class="ph ph-plus"></i>
-                        New</button>
-                </div>
-                <div id="conversation-list" class="conversation-list"></div>
-            </div>
-            <div class="messages-thread">
-                <div class="message-thread-header-row">
-                    <button id="mobile-thread-back" class="mobile-thread-back" type="button"
-                        onclick="window.mobileMessagesBack()" aria-label="Back to conversations" style="display:none;">
-                        <i class="ph ph-arrow-left"></i> Back
-                    </button>
-                    <div id="message-header" class="message-thread-header">Select a conversation</div>
-                </div>
-                <div class="message-header-tools">
-                    <input id="conversation-search" class="form-input" placeholder="Search in conversation"
-                        oninput="window.handleConversationSearch(this.value)">
-                    <div class="search-nav">
-                        <button class="icon-pill" onclick="window.navigateConversationSearch(-1)"><i
-                                class="ph ph-caret-up"></i></button>
-                        <button class="icon-pill" onclick="window.navigateConversationSearch(1)"><i
-                                class="ph ph-caret-down"></i></button>
-                    </div>
-                </div>
-                <div class="messages-thread-inner">
-                    <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
-                    <div class="message-scroll-region">
-                        <div id="message-thread" class="message-thread-body"></div>
-                        <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
-                    </div>
-                </div>
-                <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
-                <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;"></div>
-                <div class="message-compose">
-                    <input type="file" id="message-media" accept="image/*,video/*" multiple style="display:none;"
-                        onchange="window.handleMessageFileChange(event)">
-                    <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i
-                            class="ph ph-image"></i></button>
-                    <input id="message-input" class="form-input" placeholder="Message" />
-                    <button class="create-btn-sidebar" style="width:auto;" onclick="window.sendMessage()">Send</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="view-conversation-settings" class="view-section" style="display:none;">
-        <div class="messages-settings-shell">
-            <div class="messages-settings-header">
-                <button class="icon-pill" onclick="window.backToConversationFromSettings()"><i
-                        class="ph ph-arrow-left"></i> Back</button>
-                <div class="messages-settings-meta">
-                    <div id="conversation-settings-avatar"></div>
-                    <div>
-                        <div id="conversation-settings-title" style="font-weight:800;">Conversation Settings</div>
-                        <div id="conversation-settings-subtitle" style="color:var(--text-muted); font-size:0.9rem;">
-                            Update participants, name, and preferences</div>
-                    </div>
-                </div>
-                <button class="icon-pill" onclick="window.refreshConversationSettings()"><i
-                        class="ph ph-arrow-clockwise"></i></button>
-            </div>
-
-            <div class="messages-settings-grid">
-                <div class="messages-settings-card">
-                    <div class="panel-title">Participants</div>
-                    <div id="conversation-participant-list"></div>
-                    <div class="input-group">
-                        <label class="settings-label" for="conversation-add-search">Add participants</label>
-                        <input id="conversation-add-search" class="form-input" placeholder="Search by username"
-                            oninput="window.searchConversationParticipants(this.value)">
-                    </div>
-                    <div id="conversation-add-results" style="max-height:200px; overflow:auto;"></div>
-                </div>
-
-                <div class="messages-settings-card">
-                    <div class="panel-title">Conversation details</div>
-                    <div id="conversation-created-by" class="conversation-created-by"></div>
-                    <label class="settings-label" for="conversation-name-input">Name</label>
-                    <input id="conversation-name-input" class="form-input" placeholder="Conversation name">
-                    <div id="conversation-name-hint" class="settings-hint"></div>
-                    <button class="create-btn-sidebar" style="width:auto;" onclick="window.saveConversationName()">Save
-                        name</button>
-                    <div class="input-group" style="margin-top:10px;">
-                        <label class="settings-label" for="conversation-avatar-input">Conversation image</label>
-                        <input id="conversation-avatar-input" type="file" accept="image/*" class="form-input">
-                    </div>
-                    <div id="conversation-avatar-preview" class="conversation-avatar-preview"></div>
-                    <button class="icon-pill" onclick="window.uploadConversationAvatar()"><i class="ph ph-upload"></i>
-                        Upload image</button>
-                    <div class="settings-chip-row" id="conversation-preferences-row">
-                        <button class="icon-pill" id="conversation-mute-btn"
-                            onclick="window.toggleConversationMute()"><i class="ph ph-bell-slash"></i> Mute
-                            chat</button>
-                        <button class="icon-pill" id="conversation-pin-btn" onclick="window.toggleConversationPin()"><i
-                                class="ph ph-push-pin"></i> Pin</button>
-                        <button class="icon-pill" id="conversation-archive-btn"
-                            onclick="window.toggleConversationArchive()"><i class="ph ph-archive"></i> Archive</button>
-                    </div>
-                </div>
-
-                <div class="messages-settings-card">
-                    <div class="panel-title">Controls</div>
-                    <div style="display:flex; flex-direction:column; gap:8px;">
-                        <button class="icon-pill" onclick="window.blockConversationPartner()"><i
-                                class="ph ph-user-x"></i> Block user</button>
-                        <button class="icon-pill" onclick="window.reportConversation()"><i class="ph ph-flag"></i>
-                            Report conversation</button>
-                        <button class="icon-pill" onclick="window.leaveConversation()"><i class="ph ph-door"></i> Leave
-                            chat</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div id="view-staff" class="view-section" style="display:none;">
-        <div style="padding:1rem;">
-            <h2 style="font-weight:800; font-size:1.5rem; display:flex; align-items:center; gap:8px;">
-                <i class="ph ph-shield-star"></i> Staff Console
-            </h2>
-            <div id="staff-access-warning" class="empty-state" style="display:none;">Access denied</div>
-            <div id="staff-panels">
-                <div class="staff-grid">
-                    <div class="glass-panel">
-                        <div class="panel-title">Verification Requests</div>
-                        <div id="verification-requests"></div>
-                    </div>
-                    <div class="glass-panel">
-                        <div class="panel-title">Reports Queue</div>
-                        <div id="reports-queue"></div>
-                    </div>
-                    <div class="glass-panel">
-                        <div class="panel-title">Admin Logs</div>
-                        <div id="admin-logs"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div id="view-profile" class="view-section" style="display:none;"></div>
     </main>
 
     <aside class="sidebar-right glass-panel">

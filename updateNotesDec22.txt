@@ -224,3 +224,49 @@ Detailed changes:
    - This prevents the Live Setup view from "leaking" its display state to the rest of the app and ensures it respects 'display: none'.
 
 Net effect: The "Live Config" UI should now be hidden by default and only appear when explicitly navigated to (e.g. via "Go Live" button). Other pages like Videos and Profile should no longer show this UI at the top or bottom.
+
+Change Set 8 — Fix for Persistent Advanced View Leak
+----------------------------------------------------
+Purpose: User reported that the "Advanced Live View" was still visible everywhere.
+Cause: A rogue `</div>` tag at line 852 was closing the `.go-live-views` container prematurely. This caused the subsequent `basic-dock` and `#go-live-advanced-view` sections to be orphans outside of the main `go-live-root` and `view-live-setup` containers.
+Because they were outside the `go-live-root`, the CSS rules that normally hide them (e.g. valid nesting required) did not apply, and they rendered as default block elements at the bottom of the page (or wherever they fell).
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Removed Premature Closing Tag**
+   - Deleted the `</div>` at line 852.
+   - This restores the parent-child relationship: `go-live-views` now correctly wraps both `#go-live-basic-view` and `#go-live-advanced-view`.
+
+Net effect: The "Advanced Live View" is now properly nested and should respect the `display: none` rules controlled by the UI state, disappearing from other pages.
+
+Change Set 9 — Layout Correction & Messages Fix
+-----------------------------------------------
+Purpose: User reported that Videos, Profile, Staff, and Messages content was not appearing in the correct "section" (main feed area) or was missing/blank entirely (Messages).
+Cause:
+1. **Misplaced HTML**: The container divs for Videos, Messages, Staff, and Profile were located at the very bottom of `feed.html`, physically outside the main flow.
+2. **Missing CSS**: The `messages-layout` class and its children (sidebar, thread) had NO CSS defined in `style.css`.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1. **Relocated Views**:
+   - Moved `#view-videos`, `#view-messages`, `#view-conversation-settings`, `#view-staff`, and `#view-profile` from the bottom of the file (lines ~1226+) to the main content area (inside `.main-feed`, just before `#view-live-setup`).
+   - This ensures they share the correct flex/layout context of `.main-feed`.
+
+### CSS edits (public/style.css)
+File:
+- public/style.css
+
+Detailed changes:
+1. **Added Messages UI Styles**:
+   - Defined `.messages-layout`, `.messages-sidebar`, `.messages-thread`, `.conversation-list`, etc.
+   - Set fixed height logic (`calc(100vh - 80px)`) to ensure the chat window fits the screen and allows internal scrolling.
+
+Net effect:
+- Videos, Profile, and Staff views should now render correctly inside the main center column.
+- Messages page should now actually appear (not blank), have a proper sidebar/chat split, and scroll correctly.
