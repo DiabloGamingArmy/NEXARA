@@ -8303,6 +8303,96 @@ document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') closeVideoDetailModalHandler();
 });
 
+window.closeVideoDetail = closeVideoDetailModal;
+
+window.openVideoDetail = async function (videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const video = videosCache.find(function (entry) { return entry.id === videoId; });
+    if (!video) return;
+
+    const player = document.getElementById('video-modal-player');
+    const title = document.getElementById('video-modal-title');
+    const stats = document.getElementById('video-modal-stats');
+    const description = document.getElementById('video-modal-description');
+    const avatar = document.getElementById('video-modal-avatar');
+    const channelName = document.getElementById('video-modal-channel-name');
+    const channelHandle = document.getElementById('video-modal-channel-handle');
+    const followBtn = document.getElementById('video-modal-follow');
+    const likeBtn = document.getElementById('video-modal-like');
+    const dislikeBtn = document.getElementById('video-modal-dislike');
+    const commentBtn = document.getElementById('video-modal-comment');
+    const saveBtn = document.getElementById('video-modal-save');
+
+    if (player) {
+        player.src = video.videoURL || '';
+        player.load();
+    }
+
+    const author = await resolveUserProfile(video.ownerId || '');
+    const authorDisplay = author?.displayName || author?.name || author?.username || 'Nexera Creator';
+    const authorHandle = author?.username ? `@${author.username}` : 'Nexera';
+
+    if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
+    if (channelName) channelName.textContent = authorDisplay;
+    if (channelHandle) channelHandle.textContent = authorHandle;
+    if (title) title.textContent = video.caption || 'Untitled video';
+    if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+    if (description) description.textContent = video.description || (video.hashtags || []).map(function (tag) { return `#${tag}`; }).join(' ') || 'No description yet.';
+
+    if (followBtn) {
+        followBtn.onclick = function (event) {
+            event.stopPropagation();
+            if (video.ownerId) window.toggleFollowUser(video.ownerId, event);
+        };
+        followBtn.textContent = (video.ownerId && followedUsers.has(video.ownerId)) ? 'Following' : 'Follow';
+    }
+
+    if (video.ownerId) {
+        if (avatar) {
+            avatar.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelName) {
+            channelName.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelHandle) {
+            channelHandle.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+    }
+
+    if (likeBtn) {
+        likeBtn.innerHTML = `<i class="ph ph-thumbs-up"></i> ${formatCompactNumber(video.stats?.likes || 0)}`;
+        likeBtn.onclick = function (event) { event.stopPropagation(); window.likeVideo(video.id); };
+    }
+    if (dislikeBtn) {
+        dislikeBtn.innerHTML = `<i class="ph ph-thumbs-down"></i> ${formatCompactNumber(video.stats?.dislikes || 0)}`;
+        dislikeBtn.onclick = function (event) { event.stopPropagation(); };
+    }
+    if (commentBtn) {
+        commentBtn.innerHTML = `<i class="ph ph-chat-circle"></i> ${formatCompactNumber(video.stats?.comments || 0)}`;
+    }
+    if (saveBtn) {
+        saveBtn.innerHTML = `<i class="ph ph-bookmark"></i> Save`;
+        saveBtn.onclick = function (event) { event.stopPropagation(); window.saveVideo(video.id); };
+    }
+
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+};
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeVideoDetailModal();
+});
+
 window.uploadVideo = async function () {
     if (!requireAuth()) return;
 
