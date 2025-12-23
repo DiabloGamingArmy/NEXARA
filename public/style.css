@@ -937,14 +937,22 @@ body {
 }
 
 .category-divider{
-  flex: 0 0 auto;          /* prevent flex shrink weirdness */
-  width: 3px;
-  height: 18px;            /* give it a visible height */
-  background-color: #fff;
-  margin: 0 6px;
+  flex: 0 0 auto;                 /* don't shrink in flex rows */
+  width: 2px;                     /* thinner */
+  height: 36px;                   /* ~2x taller than 18px */
+  align-self: center;             /* vertically center in a flex row */
+  margin: 0 8px;                  /* a bit more breathing room */
   border-radius: 2px;
-  opacity: 0.9;            /* optional, helps it feel “divider-y” */
+
+  /* softer than pure white, still visible on dark cyan/blue */
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.00),
+    rgba(255,255,255,0.28),
+    rgba(255,255,255,0.00)
+  );
 }
+
 
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
