@@ -155,3 +155,22 @@ Detailed changes:
 
 Net effect: Navigation to Videos, Messages, and Staff sections should now display the UI skeletons instead of a blank page.
 
+
+Change Set 5 — Fix for Duplicate Views and Layout Breakage
+----------------------------------------------------------
+Purpose: Change Set 4 inadvertently introduced duplicate view containers at the top of feed.html, while the original (and more complete) containers still existed at the bottom. This caused layout nesting issues, rendered the correct views inaccessible, and likely broke the Right Sidebar display.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Removed Duplicate View Containers**
+   - Removed the duplicate blocks for '#view-videos', '#view-messages', and '#view-staff' that were added in Change Set 4.
+   - The application now correctly uses the original, fully-implemented view containers located at the bottom of the file (lines 1090+).
+
+2) **Verified Sidebar and Main Layout**
+   - Confirmed presence of '.sidebar-right' (Trending/Time Capsule) in the HTML.
+   - Removing the invalid duplicate nesting should restore the sidebar's visibility on the Home page and fix the Profile page content rendering "underneath".
+
+Net effect: Messages view should look correct (complex UI), Profile content should render in place, and Sidebars should behave as intended.
