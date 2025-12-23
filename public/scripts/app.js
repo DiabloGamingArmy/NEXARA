@@ -7714,6 +7714,14 @@ window.toggleVideoUploadModal = function (show = true) {
     if (modal) modal.style.display = show ? 'flex' : 'none';
 };
 
+function pauseAllVideos() {
+    document.querySelectorAll('#video-feed video').forEach(function (video) {
+        video.pause();
+    });
+    const modalPlayer = document.getElementById('video-modal-player');
+    if (modalPlayer) modalPlayer.pause();
+}
+
 function handleVideoSearchInput(event) {
     videoSearchTerm = (event.target.value || '').toLowerCase();
     renderVideosTopBar();
