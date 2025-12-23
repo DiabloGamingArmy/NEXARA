@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="grammarly-disable" content="true">
     <title>Nexera Feed</title>
     <!-- codex connection successful. -->
     <!-- Tailwind for utilities -->
@@ -25,7 +26,7 @@
         href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
 </head>
 
-<body>
+<body data-gramm="false">
 
     <!-- Loading -->
     <div id="loading-overlay"><img class="brand-logo brand-logo-splash" data-logo-variant="auto" alt="Nexera logo"
@@ -351,8 +352,8 @@
         <div class="modal-content video-upload-modal">
             <div class="video-upload-header">
                 <div>
-                    <h3>Create Video</h3>
-                    <p>Upload a clip, add details, and publish to your Nexera channel.</p>
+                    <h3 id="video-upload-modal-title">Create Video</h3>
+                    <p id="video-upload-modal-subtitle">Upload a clip, add details, and publish to your Nexera channel.</p>
                 </div>
                 <button class="x-close-btn" onclick="window.toggleVideoUploadModal(false)">&times;</button>
             </div>
@@ -411,7 +412,7 @@
                     </select>
                     <div class="video-upload-actions">
                         <button class="icon-pill" onclick="window.toggleVideoUploadModal(false)">Cancel</button>
-                        <button id="video-upload-submit" class="create-btn-sidebar" onclick="window.uploadVideo()">Publish</button>
+                        <button id="video-upload-submit" class="create-btn-sidebar" onclick="window.handleVideoSubmit()">Publish</button>
                     </div>
                 </div>
             </div>
@@ -422,8 +423,8 @@
         <div class="modal-content video-task-modal">
             <div class="video-task-header">
                 <div>
-                    <h3>Task Viewer</h3>
-                    <p>Track uploads while you keep browsing.</p>
+                    <h3>Video Manager</h3>
+                    <p>Manage uploads and update published video details.</p>
                 </div>
                 <button class="x-close-btn" onclick="window.toggleTaskViewer(false)">&times;</button>
             </div>
@@ -745,12 +746,8 @@
                         <button class="video-modal-close" type="button" onclick="window.closeVideoDetail()"
                             aria-label="Close video details">&times;</button>
                         <div class="video-modal-body">
-                            <div class="video-modal-player">
-                                <video id="video-modal-player" controls playsinline></video>
-                            </div>
-                            <div class="video-modal-meta">
-                                <div class="video-modal-title" id="video-modal-title"></div>
-                                <div class="video-modal-channel">
+                            <aside class="video-modal-side">
+                                <div class="video-modal-channel-card">
                                     <div id="video-modal-avatar" class="video-modal-avatar"></div>
                                     <div class="video-modal-channel-info">
                                         <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
@@ -758,15 +755,27 @@
                                     </div>
                                     <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
                                 </div>
-                                <div class="video-modal-stats" id="video-modal-stats"></div>
-                                <div class="video-modal-actions">
-                                    <button id="video-modal-like" class="icon-pill"></button>
-                                    <button id="video-modal-dislike" class="icon-pill"></button>
-                                    <button id="video-modal-comment" class="icon-pill" disabled></button>
-                                    <button id="video-modal-save" class="icon-pill"></button>
+                            </aside>
+                            <main class="video-modal-main">
+                                <div class="video-modal-player">
+                                    <video id="video-modal-player" controls playsinline></video>
                                 </div>
+                                <div class="video-modal-actions-bar">
+                                    <div class="video-modal-actions">
+                                        <button id="video-modal-like" class="icon-pill"></button>
+                                        <button id="video-modal-dislike" class="icon-pill"></button>
+                                        <button id="video-modal-save" class="icon-pill"></button>
+                                        <button id="video-modal-share" class="icon-pill"></button>
+                                    </div>
+                                    <div class="video-modal-views" id="video-modal-views"></div>
+                                </div>
+                                <div class="video-modal-title" id="video-modal-title"></div>
                                 <div class="video-modal-description" id="video-modal-description"></div>
-                            </div>
+                                <div class="video-modal-comments">
+                                    <div class="video-modal-comments-header">Comments</div>
+                                    <div class="video-modal-comments-empty">No Comments Yet</div>
+                                </div>
+                            </main>
                         </div>
                     </div>
                 </div>
@@ -1564,6 +1573,14 @@
                 alt="Nexera">
             <div class="splash-spinner" aria-hidden="true"></div>
         </div>
+    </div>
+
+    <div id="video-mini-player" class="video-mini-player" style="display:none;">
+        <div class="video-mini-player-header" data-mini-drag>
+            <span>Now Playing</span>
+            <button type="button" class="video-mini-player-close" onclick="window.closeMiniPlayer()">×</button>
+        </div>
+        <video id="video-mini-player-video" controls playsinline></video>
     </div>
 
     <!-- Main JS logic -->

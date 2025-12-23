@@ -51,6 +51,12 @@ let pendingVideoThumbnailUrl = null;
 let videoTags = [];
 let videoMentions = [];
 let videoMentionSearchTimer = null;
+let videoUploadMode = 'create';
+let editingVideoId = null;
+let editingVideoData = null;
+let miniPlayerState = null;
+let videoModalResumeTime = null;
+let profileReturnContext = null;
 let messageTypingTimer = null;
 const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
@@ -609,7 +615,7 @@ let messageActionsMenuEl = null;
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 let newChatSelections = [];
 let chatSearchResults = [];
-let videosUnsubscribe = null;
+let videosFeedLoaded = false;
 let videosCache = [];
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
@@ -2115,9 +2121,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     }
 
     if (viewId !== 'videos' && currentViewId === 'videos') {
+        transitionModalToMiniPlayer();
         pauseAllVideos();
         ListenerRegistry.unregister('videos:feed');
-        videosUnsubscribe = null;
+        videosFeedLoaded = false;
     }
 
     if (viewId !== 'live') {
@@ -2179,6 +2186,15 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'discover') { renderDiscover(); }
     if (viewId === 'messages') { releaseScrollLockIfSafe(); initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
+
+    if (viewId === 'videos' && miniPlayerState) {
+        restoreModalFromMiniPlayer();
+    }
+    if (shouldHideMiniPlayer(viewId)) {
+        hideMiniPlayer();
+    } else if (miniPlayerState) {
+        showMiniPlayer(miniPlayerState);
+    }
     if (viewId === 'live') {
         renderLiveSessions();
     }
@@ -2261,6 +2277,43 @@ function bindMobileNav() {
     if (fab) fab.onclick = function () { window.openMobileComposer(); };
 }
 
+function initMiniPlayerDrag() {
+    const container = document.getElementById('video-mini-player');
+    const handle = container?.querySelector('[data-mini-drag]');
+    if (!container || !handle) return;
+    let isDragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    const onPointerMove = function (event) {
+        if (!isDragging) return;
+        const x = event.clientX - offsetX;
+        const y = event.clientY - offsetY;
+        container.style.left = `${Math.max(8, Math.min(window.innerWidth - container.offsetWidth - 8, x))}px`;
+        container.style.top = `${Math.max(8, Math.min(window.innerHeight - container.offsetHeight - 8, y))}px`;
+        container.style.right = 'auto';
+        container.style.bottom = 'auto';
+    };
+
+    const stopDrag = function () {
+        if (!isDragging) return;
+        isDragging = false;
+        handle.style.cursor = 'grab';
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', stopDrag);
+    };
+
+    handle.addEventListener('pointerdown', function (event) {
+        isDragging = true;
+        handle.style.cursor = 'grabbing';
+        const rect = container.getBoundingClientRect();
+        offsetX = event.clientX - rect.left;
+        offsetY = event.clientY - rect.top;
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', stopDrag);
+    });
+}
+
 window.goBack = function () {
     if (navStack.length === 0) {
         window.navigateTo('feed', false);
@@ -2280,6 +2333,12 @@ window.goBack = function () {
     if (prevState.view === 'feed') renderFeed();
     if (prevState.view === 'public-profile' && viewingUserId) {
         window.openUserProfile(viewingUserId, null, false);
+    }
+    if (prevState.view === 'videos' && profileReturnContext?.videoId) {
+        videoModalResumeTime = profileReturnContext.currentTime || 0;
+        const videoId = profileReturnContext.videoId;
+        profileReturnContext = null;
+        window.openVideoDetail(videoId);
     }
 };
 
@@ -5185,6 +5244,7 @@ function renderProfile() {
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
     const verifiedBadge = renderVerifiedBadge(userProfile, 'with-gap');
     const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
+    const showReturnBar = !!profileReturnContext;
 
     let linkHtml = '';
     if (userProfile.links) {
@@ -5199,6 +5259,12 @@ function renderProfile() {
     const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
 
     document.getElementById('view-profile').innerHTML = `
+        ${showReturnBar ? `
+        <div class="glass-panel" style="position: sticky; top: 0; z-index: 20; padding: 1rem; display: flex; align-items: center; gap: 15px;">
+            <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;"><span>←</span> Back</button>
+            <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(userProfile.username || 'My Profile')}</h2>
+        </div>
+        ` : ''}
         <div class="profile-header">
             ${avatarHtml}
             <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
@@ -7905,10 +7971,55 @@ window.messageAuthor = async function (postId, event) {
     });
 };
 // --- Videos ---
-window.openVideoUploadModal = function () { return window.toggleVideoUploadModal(true); };
+function setVideoUploadModalMode(mode, video = null) {
+    videoUploadMode = mode === 'edit' ? 'edit' : 'create';
+    editingVideoId = videoUploadMode === 'edit' ? video?.id || null : null;
+    editingVideoData = videoUploadMode === 'edit' ? video : null;
+    const titleEl = document.getElementById('video-upload-modal-title');
+    const subtitleEl = document.getElementById('video-upload-modal-subtitle');
+    const submitBtn = document.getElementById('video-upload-submit');
+    if (titleEl) titleEl.textContent = videoUploadMode === 'edit' ? 'Edit Video' : 'Create Video';
+    if (subtitleEl) {
+        subtitleEl.textContent = videoUploadMode === 'edit'
+            ? 'Update your title, description, tags, or thumbnail.'
+            : 'Upload a clip, add details, and publish to your Nexera channel.';
+    }
+    if (submitBtn) submitBtn.textContent = videoUploadMode === 'edit' ? 'Save Changes' : 'Publish';
+}
+
+function populateVideoUploadForm(video = {}) {
+    const title = document.getElementById('video-title');
+    const description = document.getElementById('video-description');
+    const visibility = document.getElementById('video-visibility');
+    const preview = document.getElementById('video-upload-preview');
+    const previewPlayer = document.getElementById('video-preview-player');
+    const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+    if (title) title.value = video.title || video.caption || '';
+    if (description) description.value = video.description || '';
+    if (visibility) visibility.value = video.visibility || 'public';
+
+    videoTags = Array.isArray(video.tags) ? video.tags.slice() : [];
+    videoMentions = normalizeMentionsField(video.mentions || []);
+    renderVideoTags();
+    renderVideoMentions();
+
+    if (previewPlayer && video.videoURL) {
+        previewPlayer.src = video.videoURL;
+        previewPlayer.load();
+    }
+    if (preview) preview.classList.add('active');
+    if (thumbPreview) thumbPreview.src = resolveVideoThumbnail(video);
+}
+
+window.openVideoUploadModal = function () {
+    setVideoUploadModalMode('create');
+    return window.toggleVideoUploadModal(true);
+};
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) modal.style.display = show ? 'flex' : 'none';
+    document.body.classList.toggle('modal-open', show);
     if (!show) {
         const fileInput = document.getElementById('video-file');
         const thumbInput = document.getElementById('video-thumbnail');
@@ -7938,6 +8049,7 @@ window.toggleVideoUploadModal = function (show = true) {
         }
         pendingVideoThumbnailBlob = null;
         resetVideoUploadMeta();
+        setVideoUploadModalMode('create');
     }
 };
 
@@ -7953,96 +8065,96 @@ function pauseAllVideos() {
     if (modalPlayer) modalPlayer.pause();
 }
 
-function renderUploadTasksList() {
-    const list = document.getElementById('video-task-list');
-    if (!list) return;
-    list.innerHTML = '';
+const VIDEO_MANAGER_PLACEHOLDER_THUMB = 'data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"192\" height=\"112\" viewBox=\"0 0 192 112\"><rect width=\"192\" height=\"112\" rx=\"12\" fill=\"%2322222b\"/><path d=\"M79 35l42 21-42 21V35z\" fill=\"%23555\"/></svg>';
 
-    if (!uploadTasks.length) {
-        list.innerHTML = '<div class="video-task-empty">No active tasks.</div>';
-        return;
-    }
+function buildVideoManagerEntries() {
+    const uploads = Array.isArray(uploadTasks) ? uploadTasks : [];
+    const uploadEntries = uploads.map(function (upload) {
+        const uploadId = upload.uploadId || upload.id;
+        const cachedVideo = uploadId ? getVideoById(uploadId) : null;
+        const statusLabel = getUploadTaskStatusLabel({ status: upload.status || '' });
+        const progress = Math.max(0, Math.min(100, Number(upload.lastProgress ?? upload.progress ?? 0)));
+        const sizeLabel = upload.size ? formatUploadFileSize(upload.size) : '';
+        const thumbUrl = cachedVideo ? resolveVideoThumbnail(cachedVideo) : (upload.thumbnail || '');
+        const title = cachedVideo?.title || cachedVideo?.caption || upload.fileName || upload.title || upload.storagePath || 'Untitled video';
+        const sortAt = cachedVideo?.createdAt || upload.updatedAt || upload.startedAt || Date.now();
+        return {
+            id: uploadId,
+            title,
+            statusLabel,
+            progress,
+            sizeLabel,
+            thumbUrl,
+            canOpen: !!cachedVideo,
+            canEdit: !!cachedVideo,
+            sortAt,
+            videoId: cachedVideo?.id || null
+        };
+    });
 
-    uploadTasks.forEach(function (task) {
-        const row = document.createElement('div');
-        row.className = 'video-task-row';
+    const uploadIds = new Set(uploadEntries.map(function (entry) { return entry.id; }));
+    const uid = currentUser?.uid;
+    const videoEntries = (videosCache || []).filter(function (video) {
+        if (!uid) return false;
+        if (video.ownerId !== uid) return false;
+        return !uploadIds.has(video.id);
+    }).map(function (video) {
+        return {
+            id: video.id,
+            title: video.title || video.caption || 'Untitled video',
+            statusLabel: 'Done',
+            progress: 100,
+            sizeLabel: '',
+            thumbUrl: resolveVideoThumbnail(video),
+            canOpen: true,
+            canEdit: true,
+            sortAt: video.createdAt || Date.now(),
+            videoId: video.id
+        };
+    });
 
-        const thumb = document.createElement('img');
-        thumb.className = 'video-task-thumb';
-        thumb.src = task.thumbnail || '';
-        thumb.alt = 'Upload thumbnail';
-        row.appendChild(thumb);
-
-        const meta = document.createElement('div');
-        meta.className = 'video-task-meta';
-
-        const title = document.createElement('div');
-        title.className = 'video-task-title';
-        title.textContent = task.title || 'Untitled video';
-
-        const status = document.createElement('div');
-        status.className = 'video-task-status';
-        status.textContent = task.status || 'Uploading';
-
-        const progressWrap = document.createElement('div');
-        progressWrap.className = 'video-task-progress';
-        const progressBar = document.createElement('span');
-        progressBar.style.width = `${task.progress || 0}%`;
-        progressWrap.appendChild(progressBar);
-
-        meta.appendChild(title);
-        meta.appendChild(status);
-        meta.appendChild(progressWrap);
-        row.appendChild(meta);
-
-        list.appendChild(row);
+    return uploadEntries.concat(videoEntries).sort(function (a, b) {
+        const aTime = toDateSafe(a.sortAt)?.getTime?.() || Number(a.sortAt) || 0;
+        const bTime = toDateSafe(b.sortAt)?.getTime?.() || Number(b.sortAt) || 0;
+        return bTime - aTime;
     });
 }
 
-function renderUploadTasksViewer() {
-    const list = document.getElementById('video-task-viewer-list');
+function renderVideoManagerList() {
+    const list = document.getElementById('video-task-list');
     if (!list) return;
-    if (!uploadTasks.length) {
-        list.innerHTML = '<div class="video-task-empty">No active uploads yet.</div>';
+    const entries = buildVideoManagerEntries();
+    if (!entries.length) {
+        list.innerHTML = '<div class="video-task-empty">No videos yet.</div>';
         return;
     }
 
-    list.innerHTML = uploadTasks.map(function (upload) {
-        const progress = Math.max(0, Math.min(100, Number(upload.lastProgress) || 0));
-        const statusLabel = getUploadTaskStatusLabel(upload);
-        const sizeLabel = formatUploadFileSize(upload.size);
-        const showResume = statusLabel === 'Paused';
-        const showRetry = statusLabel === 'Failed';
-        const actionLabel = showResume ? 'Resume' : showRetry ? 'Retry' : '';
-        const actionMarkup = actionLabel
-            ? `<button class="video-task-action-btn" data-upload-action="${showRetry ? 'retry' : 'resume'}" data-upload-id="${upload.uploadId}">${actionLabel}</button>`
-            : '';
+    list.innerHTML = entries.map(function (entry) {
+        const thumbUrl = entry.thumbUrl || VIDEO_MANAGER_PLACEHOLDER_THUMB;
+        const safeTitle = escapeHtml(entry.title || 'Untitled video');
+        const openAttr = entry.canOpen && entry.videoId ? `data-video-open=\"${entry.videoId}\"` : '';
+        const editAttr = entry.canEdit && entry.videoId ? `data-video-edit=\"${entry.videoId}\"` : '';
+        const editDisabled = entry.canEdit ? '' : 'disabled';
         return `
-            <div class="video-task-row" data-upload-id="${upload.uploadId}">
-                <div class="video-task-thumb"><i class="ph ph-video"></i></div>
-                <div class="video-task-info">
-                    <div class="video-task-title">${upload.fileName || upload.storagePath}</div>
-                    <div class="video-task-meta">
-                        <span>${statusLabel}</span>
-                        <span>${progress}%</span>
-                        <span>${sizeLabel}</span>
-                    </div>
+            <div class="video-task-row">
+                <img class="video-task-thumb" src="${thumbUrl}" alt="Video thumbnail" ${openAttr} />
+                <div class="video-task-meta">
+                    <div class="video-task-title">${safeTitle}</div>
+                    <div class="video-task-status">${entry.statusLabel}${entry.sizeLabel ? ` • ${entry.sizeLabel}` : ''}</div>
                     <div class="video-task-progress">
-                        <div class="video-task-progress-bar" style="width:${progress}%;"></div>
-                    </div>
-                    <div class="video-task-actions">
-                        ${actionMarkup}
-                        <button class="video-task-action-btn secondary" data-upload-action="dismiss" data-upload-id="${upload.uploadId}">Dismiss</button>
+                        <span style="width:${entry.progress}%;"></span>
                     </div>
                 </div>
+                <button class="video-task-action-btn" type="button" ${editAttr} ${editDisabled} title="Edit video">
+                    <i class="ph ph-pencil-simple"></i>
+                </button>
             </div>
         `;
     }).join('');
 }
 
 function renderUploadTasks() {
-    if (typeof renderUploadTasksList === 'function') renderUploadTasksList();
-    if (typeof renderUploadTasksViewer === 'function') renderUploadTasksViewer();
+    renderVideoManagerList();
 }
 
 function toggleTaskViewer(show = true) {
@@ -8234,33 +8346,67 @@ function handleVideoMentionInput(event) {
 
 async function generateThumbnailFromVideo(file) {
     if (!file) return null;
+    const useDataUrl = typeof navigator !== 'undefined'
+        && /Safari/.test(navigator.userAgent || '')
+        && !/Chrome|Chromium|Edg/.test(navigator.userAgent || '');
     const video = document.createElement('video');
     video.preload = 'metadata';
     video.muted = true;
     video.playsInline = true;
-    const url = URL.createObjectURL(file);
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    const url = useDataUrl ? await blobToDataUrl(file) : URL.createObjectURL(file);
 
     try {
         return await new Promise(function (resolve) {
-            video.onloadedmetadata = function () {
-                const targetTime = Math.min(0.1, video.duration || 0);
-                video.currentTime = targetTime;
+            let settled = false;
+            const finalize = function (blob) {
+                if (settled) return;
+                settled = true;
+                resolve(blob);
             };
-            video.onseeked = function () {
+            const captureFrame = function () {
                 const canvas = document.createElement('canvas');
                 canvas.width = video.videoWidth || 640;
                 canvas.height = video.videoHeight || 360;
                 const ctx = canvas.getContext('2d');
                 if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                 canvas.toBlob(function (blob) {
-                    resolve(blob);
+                    finalize(blob);
                 }, 'image/jpeg', 0.85);
             };
-            video.onerror = function () { resolve(null); };
+            const requestFrame = function () {
+                if (typeof video.requestVideoFrameCallback === 'function') {
+                    video.requestVideoFrameCallback(function () { captureFrame(); });
+                } else {
+                    captureFrame();
+                }
+            };
+            const handleReady = function () {
+                if (settled) return;
+                const targetTime = Math.min(0.1, video.duration || 0);
+                if (Number.isFinite(targetTime) && targetTime > 0) {
+                    try {
+                        video.currentTime = targetTime;
+                        return;
+                    } catch (err) {
+                        console.warn('[VideoUpload] Unable to seek for thumbnail', err);
+                    }
+                }
+                requestFrame();
+            };
+            video.onloadedmetadata = handleReady;
+            video.onloadeddata = handleReady;
+            video.onseeked = function () {
+                if (settled) return;
+                captureFrame();
+            };
+            video.onerror = function () { finalize(null); };
             video.src = url;
+            video.load();
         });
     } finally {
-        URL.revokeObjectURL(url);
+        if (!useDataUrl) URL.revokeObjectURL(url);
     }
 }
 
@@ -8285,6 +8431,17 @@ window.handleVideoFileChange = async function (event) {
 
     pendingVideoPreviewUrl = URL.createObjectURL(file);
     if (previewPlayer) {
+        previewPlayer.onerror = function () {
+            if (pendingVideoPreviewUrl) {
+                URL.revokeObjectURL(pendingVideoPreviewUrl);
+                pendingVideoPreviewUrl = null;
+            }
+            blobToDataUrl(file).then(function (dataUrl) {
+                if (!dataUrl) return;
+                previewPlayer.src = dataUrl;
+                previewPlayer.load();
+            });
+        };
         previewPlayer.src = pendingVideoPreviewUrl;
         previewPlayer.load();
     }
@@ -8300,19 +8457,6 @@ window.handleVideoFileChange = async function (event) {
         thumbPreview.src = dataUrl;
     }
 
-    if (previewPlayer) {
-        previewPlayer.onerror = function () {
-            if (pendingVideoPreviewUrl) {
-                URL.revokeObjectURL(pendingVideoPreviewUrl);
-                pendingVideoPreviewUrl = null;
-            }
-            blobToDataUrl(file).then(function (dataUrl) {
-                if (!dataUrl) return;
-                previewPlayer.src = dataUrl;
-                previewPlayer.load();
-            });
-        };
-    }
 };
 
 window.handleThumbnailChange = function (event) {
@@ -8330,6 +8474,122 @@ window.handleThumbnailChange = function (event) {
 
     pendingVideoThumbnailUrl = URL.createObjectURL(file);
     if (thumbPreview) thumbPreview.src = pendingVideoThumbnailUrl;
+};
+
+window.handleVideoSubmit = function () {
+    if (videoUploadMode === 'edit') {
+        window.updateVideoDetails();
+        return;
+    }
+    window.uploadVideo();
+};
+
+window.openVideoEditModal = async function (videoId) {
+    if (!requireAuth() || !videoId) return;
+    let video = getVideoById(videoId);
+    if (!video) {
+        try {
+            const snap = await getDoc(doc(db, 'videos', videoId));
+            if (snap.exists()) video = { id: snap.id, ...snap.data() };
+        } catch (err) {
+            console.error('Unable to load video for edit', err);
+        }
+    }
+    if (!video) {
+        toast('Unable to load video details.', 'error');
+        return;
+    }
+
+    const fileInput = document.getElementById('video-file');
+    const thumbInput = document.getElementById('video-thumbnail');
+    if (fileInput) fileInput.value = '';
+    if (thumbInput) thumbInput.value = '';
+    if (pendingVideoPreviewUrl) {
+        URL.revokeObjectURL(pendingVideoPreviewUrl);
+        pendingVideoPreviewUrl = null;
+    }
+    if (pendingVideoThumbnailUrl) {
+        URL.revokeObjectURL(pendingVideoThumbnailUrl);
+        pendingVideoThumbnailUrl = null;
+    }
+    pendingVideoThumbnailBlob = null;
+
+    const videoData = {
+        ...video,
+        storagePath: video.storagePath || `videos/${currentUser.uid}/${video.id}`
+    };
+    setVideoUploadModalMode('edit', videoData);
+    window.toggleVideoUploadModal(true);
+    populateVideoUploadForm(videoData);
+};
+
+window.updateVideoDetails = async function () {
+    if (!requireAuth()) return;
+    if (!editingVideoId) return;
+    const submitBtn = document.getElementById('video-upload-submit');
+    const thumbInput = document.getElementById('video-thumbnail');
+    const title = document.getElementById('video-title')?.value || '';
+    const description = document.getElementById('video-description')?.value || '';
+    const tags = Array.from(new Set((videoTags || []).map(normalizeTagValue).filter(Boolean)));
+    const mentions = normalizeMentionsField(videoMentions || []);
+    const visibility = document.getElementById('video-visibility').value || 'public';
+    const videoId = editingVideoId;
+    let thumbURL = editingVideoData?.thumbURL || editingVideoData?.thumbnail || '';
+    const storagePath = editingVideoData?.storagePath || `videos/${currentUser.uid}/${videoId}`;
+
+    try {
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<span class="button-spinner" aria-hidden="true"></span> Saving...`;
+        }
+
+        let thumbBlob = null;
+        if (thumbInput && thumbInput.files && thumbInput.files[0]) {
+            thumbBlob = thumbInput.files[0];
+        } else if (pendingVideoThumbnailBlob) {
+            thumbBlob = pendingVideoThumbnailBlob;
+        }
+
+        if (thumbBlob) {
+            const thumbRef = ref(storage, `${storagePath}/thumb.jpg`);
+            await uploadBytes(thumbRef, thumbBlob);
+            thumbURL = await getDownloadURL(thumbRef);
+        }
+
+        await updateDoc(doc(db, 'videos', videoId), {
+            title,
+            caption: title,
+            description,
+            tags,
+            mentions,
+            visibility,
+            thumbURL,
+            updatedAt: serverTimestamp()
+        });
+
+        const cached = getVideoById(videoId);
+        if (cached) {
+            cached.title = title;
+            cached.caption = title;
+            cached.description = description;
+            cached.tags = tags;
+            cached.mentions = mentions;
+            cached.visibility = visibility;
+            if (thumbURL) cached.thumbURL = thumbURL;
+        }
+
+        toast('Video updated.', 'success');
+        resetVideoUploadForm();
+        renderUploadTasks();
+    } catch (err) {
+        console.error('Video update failed', err);
+        toast('Video update failed. Please try again.', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = videoUploadMode === 'edit' ? 'Save Changes' : 'Publish';
+        }
+    }
 };
 
 function handleVideoSearchInput(event) {
@@ -8361,7 +8621,8 @@ function getUploadTaskStatusLabel(upload = {}) {
     if (status === 'FAILED') return 'Failed';
     if (status === 'PAUSED') return 'Paused';
     if (status === 'UPLOADING') return 'Uploading';
-    if (status === 'READY' || status === 'UPLOADED') return 'Complete';
+    if (status === 'PROCESSING') return 'Processing';
+    if (status === 'READY' || status === 'UPLOADED') return 'Done';
     return 'Uploading';
 }
 
@@ -8382,26 +8643,17 @@ function ensureVideoTaskViewerBindings() {
     videoTaskViewerBound = true;
 
     modal.addEventListener('click', function (event) {
-        const closeBtn = event.target.closest('[data-task-viewer-close]');
-        if (closeBtn) {
-            closeVideoTaskViewer();
+        const openBtn = event.target.closest('[data-video-open]');
+        if (openBtn) {
+            const videoId = openBtn.getAttribute('data-video-open');
+            if (videoId) window.openVideoDetail(videoId);
             return;
         }
 
-        const actionBtn = event.target.closest('[data-upload-action]');
-        if (!actionBtn) return;
-        const action = actionBtn.getAttribute('data-upload-action');
-        const uploadId = actionBtn.getAttribute('data-upload-id');
-        if (action === 'dismiss' && uploadManager && currentUser?.uid) {
-            uploadManager.clearUpload(currentUser.uid, uploadId);
-            return;
-        }
-        if ((action === 'resume' || action === 'retry') && uploadManager) {
-            uploadManager.prepareRetry(uploadId);
-            window.openVideoUploadModal();
-            const fileInput = document.getElementById('video-file');
-            if (fileInput) fileInput.focus();
-            toast('Select the original video file to resume the upload.', 'info');
+        const editBtn = event.target.closest('[data-video-edit]');
+        if (editBtn) {
+            const videoId = editBtn.getAttribute('data-video-edit');
+            if (videoId) window.openVideoEditModal(videoId);
         }
     });
 }
@@ -8425,14 +8677,14 @@ function renderVideosTopBar() {
     if (!container) return;
 
     const uploadBtn = document.createElement('button');
-    uploadBtn.className = 'create-btn-sidebar';
+    uploadBtn.className = 'create-btn-sidebar topbar-action-btn';
     uploadBtn.style.width = 'auto';
     uploadBtn.innerHTML = '<i class="ph ph-upload-simple"></i> Create Video';
     uploadBtn.onclick = function () { window.openVideoUploadModal(); };
 
     const taskBtn = document.createElement('button');
-    taskBtn.className = 'icon-pill';
-    taskBtn.innerHTML = '<i class="ph ph-list"></i> Task Viewer';
+    taskBtn.className = 'icon-pill topbar-action-btn';
+    taskBtn.innerHTML = '<i class="ph ph-list"></i> Video Manager';
     taskBtn.onclick = function () { window.toggleTaskViewer(true); };
 
     const topBar = buildTopBar({
@@ -8497,16 +8749,20 @@ function refreshVideoFeedWithFilters() {
 }
 
 function initVideoFeed() {
-    if (videosUnsubscribe) return; // already live
+    if (videosFeedLoaded) return;
+    videosFeedLoaded = true;
     renderVideosTopBar();
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    videosUnsubscribe = ListenerRegistry.register('videos:feed', onSnapshot(refVideos, function (snap) {
+    getDocs(refVideos).then(function (snap) {
         videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
         refreshVideoFeedWithFilters();
         const modal = document.getElementById('video-detail-modal');
         const activeVideoId = modal?.dataset?.videoId;
         if (activeVideoId) updateVideoModalButtons(activeVideoId);
-    }));
+    }).catch(function (error) {
+        console.error('Unable to load videos', error);
+        videosFeedLoaded = false;
+    });
 }
 
 function formatCompactNumber(value) {
@@ -8608,13 +8864,6 @@ function updateVideoModalButtons(videoId) {
         active: state.disliked,
         activeColor: '#ff3d3d'
     });
-    renderVideoActionButton(document.getElementById('video-modal-comment'), {
-        icon: 'ph-chat-circle',
-        label: 'Comment',
-        count: video.stats.comments,
-        active: false,
-        activeColor: 'inherit'
-    });
     renderVideoActionButton(document.getElementById('video-modal-save'), {
         icon: 'ph-bookmark',
         label: state.saved ? 'Saved' : 'Save',
@@ -8622,6 +8871,15 @@ function updateVideoModalButtons(videoId) {
         active: state.saved,
         activeColor: '#00f2ea'
     });
+    renderVideoActionButton(document.getElementById('video-modal-share'), {
+        icon: 'ph-share-network',
+        label: 'Share',
+        count: null,
+        active: false,
+        activeColor: 'inherit'
+    });
+    const viewsEl = document.getElementById('video-modal-views');
+    if (viewsEl) viewsEl.textContent = `${formatCompactNumber(video.stats.views || 0)} views`;
 }
 
 async function refreshVideoStatsFromServer(videoId) {
@@ -8750,6 +9008,15 @@ function renderVideoFeed(videos = []) {
     });
 }
 
+function captureVideoProfileReturn(videoId) {
+    const player = document.getElementById('video-modal-player');
+    profileReturnContext = {
+        videoId,
+        currentTime: player?.currentTime || 0
+    };
+    closeVideoDetailModalHandler();
+}
+
 function closeVideoDetailModalHandler() {
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
@@ -8766,6 +9033,72 @@ function closeVideoDetailModalHandler() {
 const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = closeVideoDetailModalHandler;
 
+function getMiniPlayerElements() {
+    return {
+        container: document.getElementById('video-mini-player'),
+        player: document.getElementById('video-mini-player-video')
+    };
+}
+
+function shouldHideMiniPlayer(viewId) {
+    return viewId === 'live' || viewId === 'live-setup';
+}
+
+function showMiniPlayer({ videoId, src, currentTime = 0 } = {}) {
+    const { container, player } = getMiniPlayerElements();
+    if (!container || !player) return;
+    if (!videoId || !src) return;
+    if (shouldHideMiniPlayer(currentViewId)) return;
+    miniPlayerState = { videoId, src, currentTime };
+    player.src = src;
+    player.onloadedmetadata = function () {
+        try {
+            player.currentTime = currentTime || 0;
+        } catch (err) {
+            console.warn('Unable to resume mini player time', err);
+        }
+    };
+    player.ontimeupdate = function () {
+        if (miniPlayerState) miniPlayerState.currentTime = player.currentTime || 0;
+    };
+    player.play().catch(function () {});
+    container.style.display = 'flex';
+}
+
+function hideMiniPlayer() {
+    const { container, player } = getMiniPlayerElements();
+    if (!container || !player) return;
+    player.pause();
+    player.src = '';
+    container.style.display = 'none';
+}
+
+window.closeMiniPlayer = function () {
+    miniPlayerState = null;
+    hideMiniPlayer();
+};
+
+function transitionModalToMiniPlayer() {
+    const modal = document.getElementById('video-detail-modal');
+    const player = document.getElementById('video-modal-player');
+    if (!modal || !player) return;
+    const videoId = modal.dataset.videoId;
+    if (!videoId || player.paused || player.ended) return;
+    const src = player.currentSrc || player.src;
+    const currentTime = player.currentTime || 0;
+    closeVideoDetailModalHandler();
+    showMiniPlayer({ videoId, src, currentTime });
+}
+
+function restoreModalFromMiniPlayer() {
+    if (!miniPlayerState) return;
+    const { videoId, currentTime } = miniPlayerState;
+    videoModalResumeTime = currentTime;
+    hideMiniPlayer();
+    miniPlayerState = null;
+    window.openVideoDetail(videoId);
+}
+
 window.openVideoDetail = async function (videoId) {
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
@@ -8774,7 +9107,6 @@ window.openVideoDetail = async function (videoId) {
 
     const player = document.getElementById('video-modal-player');
     const title = document.getElementById('video-modal-title');
-    const stats = document.getElementById('video-modal-stats');
     const description = document.getElementById('video-modal-description');
     const avatar = document.getElementById('video-modal-avatar');
     const channelName = document.getElementById('video-modal-channel-name');
@@ -8782,14 +9114,30 @@ window.openVideoDetail = async function (videoId) {
     const followBtn = document.getElementById('video-modal-follow');
     const likeBtn = document.getElementById('video-modal-like');
     const dislikeBtn = document.getElementById('video-modal-dislike');
-    const commentBtn = document.getElementById('video-modal-comment');
     const saveBtn = document.getElementById('video-modal-save');
+    const shareBtn = document.getElementById('video-modal-share');
 
     modal.dataset.videoId = video.id;
     ensureVideoStats(video);
 
+    if (miniPlayerState) {
+        hideMiniPlayer();
+        miniPlayerState = null;
+    }
+
     if (player) {
         player.src = video.videoURL || '';
+        player.onloadedmetadata = function () {
+            if (typeof videoModalResumeTime === 'number') {
+                try {
+                    player.currentTime = videoModalResumeTime;
+                } catch (err) {
+                    console.warn('Unable to resume video time', err);
+                } finally {
+                    videoModalResumeTime = null;
+                }
+            }
+        };
         player.load();
     }
 
@@ -8813,7 +9161,6 @@ window.openVideoDetail = async function (videoId) {
         : '';
 
     if (title) title.textContent = videoTitle;
-    if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
     if (description) {
         const descText = videoDescription ? escapeHtml(videoDescription) : 'No description yet.';
         const metaLine = `${tagLine}${mentionLine ? ` ${mentionLine}` : ''}`;
@@ -8832,18 +9179,21 @@ window.openVideoDetail = async function (videoId) {
         if (avatar) {
             avatar.onclick = function (event) {
                 event.stopPropagation();
+                captureVideoProfileReturn(video.id);
                 window.openUserProfile(video.ownerId, event);
             };
         }
         if (channelName) {
             channelName.onclick = function (event) {
                 event.stopPropagation();
+                captureVideoProfileReturn(video.id);
                 window.openUserProfile(video.ownerId, event);
             };
         }
         if (channelHandle) {
             channelHandle.onclick = function (event) {
                 event.stopPropagation();
+                captureVideoProfileReturn(video.id);
                 window.openUserProfile(video.ownerId, event);
             };
         }
@@ -8857,6 +9207,21 @@ window.openVideoDetail = async function (videoId) {
     }
     if (saveBtn) {
         saveBtn.onclick = function (event) { event.stopPropagation(); window.saveVideo(video.id); };
+    }
+    if (shareBtn) {
+        shareBtn.onclick = function (event) {
+            event.stopPropagation();
+            const shareUrl = video.videoURL || window.location.href;
+            if (navigator.share) {
+                navigator.share({ title: videoTitle, url: shareUrl }).catch(function () {});
+                return;
+            }
+            navigator.clipboard?.writeText(shareUrl).then(function () {
+                toast('Video link copied.', 'info');
+            }).catch(function () {
+                toast('Unable to copy link.', 'error');
+            });
+        };
     }
 
     await hydrateVideoEngagement(video.id);
@@ -8985,6 +9350,7 @@ window.uploadVideo = async function () {
             tags,
             mentions,
             createdAt: serverTimestamp(),
+            storagePath,
             videoURL,
             thumbURL,
             visibility,
@@ -8997,7 +9363,6 @@ window.uploadVideo = async function () {
         task.status = 'Ready';
         renderUploadTasks();
         videosCache = [{ id: videoId, ...docData }, ...videosCache];
-        refreshVideoFeedWithFilters();
     } catch (err) {
         console.error('Video upload failed', err);
         if (uploadManager && uploadManager.markFailed && currentUser?.uid && activeUploadId) {
@@ -10341,6 +10706,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindMobileScrollHelper();
     syncMobileComposerState();
     bindAuthFormShortcuts();
+    initMiniPlayerDrag();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
