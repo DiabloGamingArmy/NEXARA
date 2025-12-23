@@ -192,20 +192,7 @@
     if (typeof window.Nexera?.getLatestConversationId === 'function') {
       return window.Nexera.getLatestConversationId();
     }
-    const userId = getCurrentUserId();
-    const db = window.Nexera?.db;
-    const store = window.Nexera?.firestore;
-    if (!userId || !db || !store?.collection || !store?.query || !store?.orderBy || !store?.limit || !store?.getDocs) {
-      return null;
-    }
-    const ref = store.query(
-      store.collection(db, `users/${userId}/conversations`),
-      store.orderBy('lastMessageAt', 'desc'),
-      store.limit(1)
-    );
-    const snap = await store.getDocs(ref);
-    if (snap.empty) return null;
-    return snap.docs[0]?.id || null;
+    return null;
   }
 
   function ensureNotFoundShell() {
@@ -300,10 +287,7 @@
       if (!route.conversationId) {
         const latestId = await resolveLatestConversationId();
         if (latestId) {
-          const target = buildUrlForMessages(latestId);
-          if (target) {
-            history.replaceState({}, '', target);
-          }
+          history.replaceState({}, '', buildUrlForMessages(latestId));
           if (typeof window.openConversation === 'function') {
             window.openConversation(latestId);
           }
@@ -441,8 +425,9 @@
       const original = window.navigateTo;
       window.navigateTo = function (viewId, pushToStack = true) {
         const result = original.call(this, viewId, pushToStack);
+        const profileId = viewId === 'profile' ? getCurrentUserId() : null;
         const path = viewId === 'profile'
-          ? buildUrlForProfile(getCurrentUserId())
+          ? (profileId ? buildUrlForProfile(profileId) : buildUrlForSection(viewId))
           : buildUrlForSection(viewId);
         if (path) updateUrl(path);
         return result;
@@ -494,7 +479,9 @@
       const original = window.openMessagesPage;
       window.openMessagesPage = async function () {
         const result = await original.call(this);
-        updateUrl(buildUrlForMessages());
+        const latestId = await resolveLatestConversationId();
+        const path = latestId ? buildUrlForMessages(latestId) : buildUrlForMessages();
+        updateUrl(path);
         return result;
       };
       window.openMessagesPage.__nexeraWrapped = true;
@@ -520,7 +507,8 @@
         if (uid && uid !== 'me') {
           updateUrl(buildUrlForProfile(uid, params));
         } else {
-          updateUrl(buildUrlForProfile(getCurrentUserId(), params));
+          const profileId = getCurrentUserId();
+          updateUrl(profileId ? buildUrlForProfile(profileId, params) : buildUrlForProfile(null, params));
         }
         return result;
       };
