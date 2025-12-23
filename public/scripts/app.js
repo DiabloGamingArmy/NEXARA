@@ -73,6 +73,12 @@ let followedCategoryList = [];
 let followedUsers = new Set();
 let followedTopicsUnsubscribe = null;
 let followingUnsubscribe = null;
+const videoEngagementState = {
+    liked: new Set(),
+    disliked: new Set(),
+    saved: new Set()
+};
+let videoEngagementHydrated = new Set();
 
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
@@ -361,6 +367,7 @@ let userProfile = {
     theme: "system",
     accountRoles: [],
     savedPosts: [],
+    savedVideos: [],
     following: [],
     followersCount: 0,
     followedCategories: []
@@ -462,7 +469,9 @@ function normalizeUserProfileData(data = {}, uid = '') {
         accountRoles,
         verified: isUserVerified({ ...data, accountRoles }),
         locationHistory,
-        photoPath: data.photoPath || ''
+        photoPath: data.photoPath || '',
+        savedPosts: Array.isArray(data.savedPosts) ? data.savedPosts : [],
+        savedVideos: Array.isArray(data.savedVideos) ? data.savedVideos : []
     };
     return profile;
 }
@@ -943,6 +952,7 @@ function initApp(onReady) {
                         userProfile.theme = savedTheme;
                         applyTheme(savedTheme);
 
+                        syncSavedVideosFromProfile(userProfile);
                         await hydrateFollowedCategories(user.uid, userProfile);
                         await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
@@ -957,6 +967,7 @@ function initApp(onReady) {
                         userProfile.locationHistory = [];
                         recentLocations = [];
                         applyTheme(storedTheme);
+                        syncSavedVideosFromProfile(userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = 'none';
                     }
@@ -993,6 +1004,10 @@ function initApp(onReady) {
                 userProfile.followedCategories = [];
                 followedUsers = new Set();
                 userProfile.following = [];
+                videoEngagementState.liked.clear();
+                videoEngagementState.disliked.clear();
+                videoEngagementState.saved.clear();
+                videoEngagementHydrated = new Set();
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
@@ -2363,6 +2378,11 @@ function applyFollowedCategoryList(list = []) {
     syncTopicFollowButtons();
     renderCategoryPills();
     if (currentCategory === 'Following') renderFeed();
+}
+
+function syncSavedVideosFromProfile(profile = userProfile) {
+    const list = Array.isArray(profile.savedVideos) ? profile.savedVideos : [];
+    videoEngagementState.saved = new Set(list);
 }
 
 function getTopicButtons(topic) {
@@ -5357,7 +5377,97 @@ function escapeHtml(text) {
 }
 
 function cleanText(text) { if (typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
-function renderSaved() { currentCategory = 'Saved'; renderFeed('saved-content'); }
+function renderSaved() {
+    currentCategory = 'Saved';
+    const container = document.getElementById('saved-content');
+    if (!container) return;
+
+    renderCategoryPills();
+    container.innerHTML = '';
+
+    const savedPostIds = Array.isArray(userProfile.savedPosts) ? userProfile.savedPosts : [];
+    let displayPosts = allPosts.filter(function (post) {
+        return savedPostIds.includes(post.id);
+    });
+
+    if (savedSearchTerm) {
+        displayPosts = displayPosts.filter(function (post) {
+            return (post.title || '').toLowerCase().includes(savedSearchTerm)
+                || (post.content?.text || post.content || '').toLowerCase().includes(savedSearchTerm);
+        });
+    }
+
+    if (savedFilter === 'Recent') {
+        displayPosts.sort(function (a, b) { return savedPostIds.indexOf(b.id) - savedPostIds.indexOf(a.id); });
+    } else if (savedFilter === 'Oldest') {
+        displayPosts.sort(function (a, b) { return savedPostIds.indexOf(a.id) - savedPostIds.indexOf(b.id); });
+    } else if (savedFilter === 'Videos') {
+        displayPosts = displayPosts.filter(function (p) { return p.type === 'video'; });
+    } else if (savedFilter === 'Images') {
+        displayPosts = displayPosts.filter(function (p) { return p.type === 'image'; });
+    }
+
+    const savedVideoIds = Array.isArray(userProfile.savedVideos) ? userProfile.savedVideos : [];
+    const savedVideoMap = new Map(videosCache.map(function (video) { return [video.id, video]; }));
+    let savedVideos = savedVideoIds.map(function (id) { return savedVideoMap.get(id); }).filter(Boolean);
+
+    if (savedSearchTerm) {
+        savedVideos = savedVideos.filter(function (video) {
+            const caption = (video.caption || '').toLowerCase();
+            const tags = (video.hashtags || []).map(function (t) { return `#${t}`.toLowerCase(); }).join(' ');
+            return caption.includes(savedSearchTerm) || tags.includes(savedSearchTerm);
+        });
+    }
+
+    if (savedFilter === 'Recent') {
+        savedVideos.sort(function (a, b) { return savedVideoIds.indexOf(b.id) - savedVideoIds.indexOf(a.id); });
+    } else if (savedFilter === 'Oldest') {
+        savedVideos.sort(function (a, b) { return savedVideoIds.indexOf(a.id) - savedVideoIds.indexOf(b.id); });
+    }
+
+    const showVideos = savedFilter !== 'Images';
+    const showPosts = true;
+    let hasRendered = false;
+    let wantsOnlyVideos = savedFilter === 'Videos';
+
+    if (showVideos) {
+        if (savedVideos.length) {
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Saved Videos';
+            const grid = document.createElement('div');
+            grid.className = 'video-feed';
+            savedVideos.forEach(function (video) {
+                grid.appendChild(buildVideoCard(video));
+            });
+            container.appendChild(header);
+            container.appendChild(grid);
+            hasRendered = true;
+        }
+    }
+
+    if (showPosts) {
+        if (displayPosts.length) {
+            displayPosts.forEach(function (post) {
+                container.innerHTML += getPostHTML(post);
+            });
+
+            displayPosts.forEach(function (post) {
+                const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+                const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
+                applyReviewButtonState(reviewBtn, reviewValue);
+            });
+
+            applyMyReviewStylesToDOM();
+            hasRendered = true;
+        }
+    }
+
+    if (!hasRendered) {
+        const message = wantsOnlyVideos ? 'No saved videos.' : 'No saved items yet.';
+        container.innerHTML = `<div class="empty-state"><p>${message}</p></div>`;
+    }
+}
 
 // Small Interaction Utils
 window.setDiscoverFilter = function (filter) {
@@ -7827,6 +7937,9 @@ function refreshVideoFeedWithFilters() {
         filtered = filtered.slice().sort(function (a, b) { return (b.stats?.views || 0) - (a.stats?.views || 0); });
     } else if (videoFilter === 'Shorts') {
         filtered = filtered.filter(function (video) { return (video.duration || 0) <= 120 || (video.lengthSeconds || 0) <= 120 || !(video.duration || video.lengthSeconds); });
+    } else if (videoFilter === 'Saved') {
+        const savedSet = videoEngagementState.saved.size ? videoEngagementState.saved : new Set(userProfile.savedVideos || []);
+        filtered = filtered.filter(function (video) { return savedSet.has(video.id); });
     }
 
     if (videoSortMode === 'popular') {
@@ -7871,6 +7984,198 @@ function resolveVideoThumbnail(video = {}) {
     return video.thumbURL || video.thumbnail || video.previewImage || 'https://images.unsplash.com/photo-1516117172878-fd2c41f4a759?auto=format&fit=crop&w=1200&q=80';
 }
 
+function ensureVideoStats(video = {}) {
+    if (!video.stats || typeof video.stats !== 'object') video.stats = {};
+    if (typeof video.stats.likes !== 'number') video.stats.likes = 0;
+    if (typeof video.stats.dislikes !== 'number') video.stats.dislikes = 0;
+    if (typeof video.stats.saves !== 'number') video.stats.saves = 0;
+    if (typeof video.stats.comments !== 'number') video.stats.comments = 0;
+    if (typeof video.stats.views !== 'number') video.stats.views = 0;
+    return video;
+}
+
+function getVideoById(videoId) {
+    return videosCache.find(function (entry) { return entry.id === videoId; }) || null;
+}
+
+function getVideoEngagementStatus(videoId) {
+    return {
+        liked: videoEngagementState.liked.has(videoId),
+        disliked: videoEngagementState.disliked.has(videoId),
+        saved: videoEngagementState.saved.has(videoId)
+    };
+}
+
+function setVideoEngagementStatus(videoId, { liked, disliked, saved }) {
+    if (liked === true) videoEngagementState.liked.add(videoId);
+    if (liked === false) videoEngagementState.liked.delete(videoId);
+    if (disliked === true) videoEngagementState.disliked.add(videoId);
+    if (disliked === false) videoEngagementState.disliked.delete(videoId);
+    if (saved === true) videoEngagementState.saved.add(videoId);
+    if (saved === false) videoEngagementState.saved.delete(videoId);
+}
+
+function updateVideoStats(videoId, deltas = {}) {
+    const video = getVideoById(videoId);
+    if (!video) return;
+    ensureVideoStats(video);
+    if (typeof deltas.likes === 'number') video.stats.likes = Math.max(0, video.stats.likes + deltas.likes);
+    if (typeof deltas.dislikes === 'number') video.stats.dislikes = Math.max(0, video.stats.dislikes + deltas.dislikes);
+    if (typeof deltas.saves === 'number') video.stats.saves = Math.max(0, video.stats.saves + deltas.saves);
+    if (typeof deltas.comments === 'number') video.stats.comments = Math.max(0, video.stats.comments + deltas.comments);
+    if (typeof deltas.views === 'number') video.stats.views = Math.max(0, video.stats.views + deltas.views);
+}
+
+function renderVideoActionButton(button, { icon, label, count, active, activeColor }) {
+    if (!button) return;
+    const finalIcon = `${active ? 'ph-fill' : 'ph'} ${icon}`;
+    const color = active ? activeColor : 'inherit';
+    const countLabel = typeof count === 'number' ? formatCompactNumber(count) : '';
+    const text = label ? ` ${label}` : '';
+    button.innerHTML = `<i class="${finalIcon}"></i>${countLabel ? ` ${countLabel}` : text}`;
+    button.style.color = color;
+}
+
+function updateVideoModalButtons(videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    if (modal.dataset.videoId && modal.dataset.videoId !== videoId) return;
+    const video = getVideoById(videoId);
+    if (!video) return;
+    ensureVideoStats(video);
+    const state = getVideoEngagementStatus(videoId);
+    renderVideoActionButton(document.getElementById('video-modal-like'), {
+        icon: 'ph-thumbs-up',
+        label: 'Like',
+        count: video.stats.likes,
+        active: state.liked,
+        activeColor: '#00f2ea'
+    });
+    renderVideoActionButton(document.getElementById('video-modal-dislike'), {
+        icon: 'ph-thumbs-down',
+        label: 'Dislike',
+        count: video.stats.dislikes,
+        active: state.disliked,
+        activeColor: '#ff3d3d'
+    });
+    renderVideoActionButton(document.getElementById('video-modal-comment'), {
+        icon: 'ph-chat-circle',
+        label: 'Comment',
+        count: video.stats.comments,
+        active: false,
+        activeColor: 'inherit'
+    });
+    renderVideoActionButton(document.getElementById('video-modal-save'), {
+        icon: 'ph-bookmark',
+        label: state.saved ? 'Saved' : 'Save',
+        count: null,
+        active: state.saved,
+        activeColor: '#00f2ea'
+    });
+}
+
+async function hydrateVideoEngagement(videoId) {
+    if (!currentUser || !videoId) return getVideoEngagementStatus(videoId);
+    if (videoEngagementHydrated.has(videoId)) return getVideoEngagementStatus(videoId);
+    try {
+        const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
+        const dislikeRef = doc(db, 'videos', videoId, 'dislikes', currentUser.uid);
+        const saveRef = doc(db, 'videos', videoId, 'saves', currentUser.uid);
+        const [likeSnap, dislikeSnap, saveSnap] = await Promise.all([
+            getDoc(likeRef),
+            getDoc(dislikeRef),
+            getDoc(saveRef)
+        ]);
+        setVideoEngagementStatus(videoId, {
+            liked: likeSnap.exists(),
+            disliked: dislikeSnap.exists(),
+            saved: saveSnap.exists() || videoEngagementState.saved.has(videoId)
+        });
+        videoEngagementHydrated.add(videoId);
+    } catch (err) {
+        console.warn('Unable to hydrate video engagement', err);
+    }
+    return getVideoEngagementStatus(videoId);
+}
+
+function buildVideoCard(video) {
+    const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
+    const card = document.createElement('div');
+    card.className = 'video-card';
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', `Open video ${video.caption || 'details'}`);
+
+    const thumb = document.createElement('div');
+    thumb.className = 'video-thumb';
+    thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
+
+    const duration = document.createElement('div');
+    duration.className = 'video-duration';
+    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
+    thumb.appendChild(duration);
+
+    const meta = document.createElement('div');
+    meta.className = 'video-meta';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'video-avatar';
+    applyAvatarToElement(avatar, author, { size: 42 });
+
+    const info = document.createElement('div');
+    info.className = 'video-info';
+
+    const title = document.createElement('div');
+    title.className = 'video-title';
+    title.textContent = video.caption || 'Untitled video';
+
+    const channel = document.createElement('div');
+    channel.className = 'video-channel';
+    channel.textContent = author.displayName || author.name || author.username || 'Nexera Creator';
+
+    const stats = document.createElement('div');
+    stats.className = 'video-stats';
+    stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+
+    info.appendChild(title);
+    info.appendChild(channel);
+    info.appendChild(stats);
+
+    meta.appendChild(avatar);
+    meta.appendChild(info);
+
+    card.appendChild(thumb);
+    card.appendChild(meta);
+    card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    card.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            window.openVideoDetail(video.id);
+        }
+    });
+
+    if (video.ownerId) {
+        avatar.addEventListener('click', function (event) {
+            event.stopPropagation();
+            window.openUserProfile(video.ownerId, event);
+        });
+        channel.addEventListener('click', function (event) {
+            event.stopPropagation();
+            window.openUserProfile(video.ownerId, event);
+        });
+    }
+
+    if (video.ownerId && !getCachedUser(video.ownerId, { allowStale: false })) {
+        resolveUserProfile(video.ownerId).then(function (profile) {
+            if (!profile) return;
+            applyAvatarToElement(avatar, profile, { size: 42 });
+            channel.textContent = profile.displayName || profile.name || profile.username || 'Nexera Creator';
+        });
+    }
+
+    return card;
+}
+
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
     if (!feed) return;
@@ -7878,82 +8183,112 @@ function renderVideoFeed(videos = []) {
     if (videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
 
     videos.forEach(function (video) {
-        const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
-        const card = document.createElement('div');
-        card.className = 'video-card';
-        card.tabIndex = 0;
-        card.setAttribute('role', 'button');
-        card.setAttribute('aria-label', `Open video ${video.caption || 'details'}`);
-
-        const thumb = document.createElement('div');
-        thumb.className = 'video-thumb';
-        thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
-
-        const duration = document.createElement('div');
-        duration.className = 'video-duration';
-        duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
-        thumb.appendChild(duration);
-
-        const meta = document.createElement('div');
-        meta.className = 'video-meta';
-
-        const avatar = document.createElement('div');
-        avatar.className = 'video-avatar';
-        applyAvatarToElement(avatar, author, { size: 42 });
-
-        const info = document.createElement('div');
-        info.className = 'video-info';
-
-        const title = document.createElement('div');
-        title.className = 'video-title';
-        title.textContent = video.caption || 'Untitled video';
-
-        const channel = document.createElement('div');
-        channel.className = 'video-channel';
-        channel.textContent = author.displayName || author.name || author.username || 'Nexera Creator';
-
-        const stats = document.createElement('div');
-        stats.className = 'video-stats';
-        stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
-
-        info.appendChild(title);
-        info.appendChild(channel);
-        info.appendChild(stats);
-
-        meta.appendChild(avatar);
-        meta.appendChild(info);
-
-        card.appendChild(thumb);
-        card.appendChild(meta);
-        feed.appendChild(card);
-        card.addEventListener('click', function () { window.openVideoDetail(video.id); });
-        card.addEventListener('keydown', function (event) {
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                window.openVideoDetail(video.id);
-            }
-        });
-
-        if (video.ownerId) {
-            avatar.addEventListener('click', function (event) {
-                event.stopPropagation();
-                window.openUserProfile(video.ownerId, event);
-            });
-            channel.addEventListener('click', function (event) {
-                event.stopPropagation();
-                window.openUserProfile(video.ownerId, event);
-            });
-        }
-
-        if (video.ownerId && !getCachedUser(video.ownerId, { allowStale: false })) {
-            resolveUserProfile(video.ownerId).then(function (profile) {
-                if (!profile) return;
-                applyAvatarToElement(avatar, profile, { size: 42 });
-                channel.textContent = profile.displayName || profile.name || profile.username || 'Nexera Creator';
-            });
-        }
+        feed.appendChild(buildVideoCard(video));
     });
 }
+
+function closeVideoDetailModal() {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const player = document.getElementById('video-modal-player');
+    if (player) {
+        player.pause();
+        player.src = '';
+    }
+    delete modal.dataset.videoId;
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+}
+
+window.closeVideoDetail = closeVideoDetailModal;
+
+window.openVideoDetail = async function (videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const video = videosCache.find(function (entry) { return entry.id === videoId; });
+    if (!video) return;
+
+    const player = document.getElementById('video-modal-player');
+    const title = document.getElementById('video-modal-title');
+    const stats = document.getElementById('video-modal-stats');
+    const description = document.getElementById('video-modal-description');
+    const avatar = document.getElementById('video-modal-avatar');
+    const channelName = document.getElementById('video-modal-channel-name');
+    const channelHandle = document.getElementById('video-modal-channel-handle');
+    const followBtn = document.getElementById('video-modal-follow');
+    const likeBtn = document.getElementById('video-modal-like');
+    const dislikeBtn = document.getElementById('video-modal-dislike');
+    const commentBtn = document.getElementById('video-modal-comment');
+    const saveBtn = document.getElementById('video-modal-save');
+
+    modal.dataset.videoId = video.id;
+    ensureVideoStats(video);
+
+    if (player) {
+        player.src = video.videoURL || '';
+        player.load();
+    }
+
+    const author = await resolveUserProfile(video.ownerId || '');
+    const authorDisplay = author?.displayName || author?.name || author?.username || 'Nexera Creator';
+    const authorHandle = author?.username ? `@${author.username}` : 'Nexera';
+
+    if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
+    if (channelName) channelName.textContent = authorDisplay;
+    if (channelHandle) channelHandle.textContent = authorHandle;
+    if (title) title.textContent = video.caption || 'Untitled video';
+    if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+    if (description) description.textContent = video.description || (video.hashtags || []).map(function (tag) { return `#${tag}`; }).join(' ') || 'No description yet.';
+
+    if (followBtn) {
+        followBtn.onclick = function (event) {
+            event.stopPropagation();
+            if (video.ownerId) window.toggleFollowUser(video.ownerId, event);
+        };
+        followBtn.textContent = (video.ownerId && followedUsers.has(video.ownerId)) ? 'Following' : 'Follow';
+    }
+
+    if (video.ownerId) {
+        if (avatar) {
+            avatar.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelName) {
+            channelName.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelHandle) {
+            channelHandle.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+    }
+
+    if (likeBtn) {
+        likeBtn.onclick = function (event) { event.stopPropagation(); window.likeVideo(video.id); };
+    }
+    if (dislikeBtn) {
+        dislikeBtn.onclick = function (event) { event.stopPropagation(); window.dislikeVideo(video.id); };
+    }
+    if (saveBtn) {
+        saveBtn.onclick = function (event) { event.stopPropagation(); window.saveVideo(video.id); };
+    }
+
+    await hydrateVideoEngagement(video.id);
+    updateVideoModalButtons(video.id);
+
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+};
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeVideoDetailModal();
+});
 
 function closeVideoDetailModal() {
     const modal = document.getElementById('video-detail-modal');
@@ -8109,15 +8444,132 @@ document.addEventListener('keydown', function (event) {
 
 window.likeVideo = async function (videoId) {
     if (!requireAuth()) return;
+    if (!videoId) return;
+    if (!videoEngagementHydrated.has(videoId)) await hydrateVideoEngagement(videoId);
+
+    const state = getVideoEngagementStatus(videoId);
+    const wasLiked = state.liked;
+    const wasDisliked = state.disliked;
+
+    setVideoEngagementStatus(videoId, { liked: !wasLiked, disliked: wasLiked ? state.disliked : false });
+    updateVideoStats(videoId, {
+        likes: wasLiked ? -1 : 1,
+        dislikes: wasDisliked && !wasLiked ? -1 : 0
+    });
+    updateVideoModalButtons(videoId);
+
+    const videoRef = doc(db, 'videos', videoId);
     const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
-    await setDoc(likeRef, { createdAt: serverTimestamp() });
-    await updateDoc(doc(db, 'videos', videoId), { 'stats.likes': increment(1) });
+    const dislikeRef = doc(db, 'videos', videoId, 'dislikes', currentUser.uid);
+
+    try {
+        if (wasLiked) {
+            await Promise.all([
+                deleteDoc(likeRef),
+                updateDoc(videoRef, { 'stats.likes': increment(-1) })
+            ]);
+        } else {
+            const writes = [
+                setDoc(likeRef, { createdAt: serverTimestamp() }),
+                updateDoc(videoRef, { 'stats.likes': increment(1) })
+            ];
+            if (wasDisliked) {
+                writes.push(deleteDoc(dislikeRef));
+                writes.push(updateDoc(videoRef, { 'stats.dislikes': increment(-1) }));
+            }
+            await Promise.all(writes);
+        }
+    } catch (err) {
+        console.error('Video like failed', err);
+        await hydrateVideoEngagement(videoId);
+        updateVideoStats(videoId, { likes: wasLiked ? 1 : -1, dislikes: wasDisliked && !wasLiked ? 1 : 0 });
+        updateVideoModalButtons(videoId);
+    }
+};
+
+window.dislikeVideo = async function (videoId) {
+    if (!requireAuth()) return;
+    if (!videoId) return;
+    if (!videoEngagementHydrated.has(videoId)) await hydrateVideoEngagement(videoId);
+
+    const state = getVideoEngagementStatus(videoId);
+    const wasDisliked = state.disliked;
+    const wasLiked = state.liked;
+
+    setVideoEngagementStatus(videoId, { disliked: !wasDisliked, liked: wasDisliked ? state.liked : false });
+    updateVideoStats(videoId, {
+        dislikes: wasDisliked ? -1 : 1,
+        likes: wasLiked && !wasDisliked ? -1 : 0
+    });
+    updateVideoModalButtons(videoId);
+
+    const videoRef = doc(db, 'videos', videoId);
+    const dislikeRef = doc(db, 'videos', videoId, 'dislikes', currentUser.uid);
+    const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
+
+    try {
+        if (wasDisliked) {
+            await Promise.all([
+                deleteDoc(dislikeRef),
+                updateDoc(videoRef, { 'stats.dislikes': increment(-1) })
+            ]);
+        } else {
+            const writes = [
+                setDoc(dislikeRef, { createdAt: serverTimestamp() }),
+                updateDoc(videoRef, { 'stats.dislikes': increment(1) })
+            ];
+            if (wasLiked) {
+                writes.push(deleteDoc(likeRef));
+                writes.push(updateDoc(videoRef, { 'stats.likes': increment(-1) }));
+            }
+            await Promise.all(writes);
+        }
+    } catch (err) {
+        console.error('Video dislike failed', err);
+        await hydrateVideoEngagement(videoId);
+        updateVideoStats(videoId, { dislikes: wasDisliked ? 1 : -1, likes: wasLiked && !wasDisliked ? 1 : 0 });
+        updateVideoModalButtons(videoId);
+    }
 };
 
 window.saveVideo = async function (videoId) {
     if (!requireAuth()) return;
-    await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
-    await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
+    if (!videoId) return;
+    if (!videoEngagementHydrated.has(videoId)) await hydrateVideoEngagement(videoId);
+
+    const wasSaved = videoEngagementState.saved.has(videoId);
+    const nextSaved = wasSaved
+        ? (userProfile.savedVideos || []).filter(function (id) { return id !== videoId; })
+        : [...(userProfile.savedVideos || []), videoId];
+
+    userProfile.savedVideos = nextSaved;
+    syncSavedVideosFromProfile(userProfile);
+    updateVideoStats(videoId, { saves: wasSaved ? -1 : 1 });
+    updateVideoModalButtons(videoId);
+    if (currentCategory === 'Saved') renderSaved();
+    if (currentViewId === 'videos' && videoFilter === 'Saved') refreshVideoFeedWithFilters();
+
+    const videoRef = doc(db, 'videos', videoId);
+    const saveRef = doc(db, 'videos', videoId, 'saves', currentUser.uid);
+    const userRef = doc(db, 'users', currentUser.uid);
+
+    try {
+        const writes = [
+            updateDoc(userRef, { savedVideos: wasSaved ? arrayRemove(videoId) : arrayUnion(videoId) }),
+            updateDoc(videoRef, { 'stats.saves': increment(wasSaved ? -1 : 1) })
+        ];
+        if (wasSaved) {
+            writes.push(deleteDoc(saveRef));
+        } else {
+            writes.push(setDoc(saveRef, { createdAt: serverTimestamp() }));
+        }
+        await Promise.all(writes);
+    } catch (err) {
+        console.error('Video save failed', err);
+        await hydrateVideoEngagement(videoId);
+        updateVideoStats(videoId, { saves: wasSaved ? 1 : -1 });
+        updateVideoModalButtons(videoId);
+    }
 };
 
 // --- Live Sessions ---

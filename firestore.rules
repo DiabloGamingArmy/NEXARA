@@ -275,6 +275,7 @@ service cloud.firestore {
         );
 
       match /likes/{uid} { allow read: if isSignedIn(); allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /dislikes/{uid} { allow read: if isSignedIn(); allow write: if isSignedIn() && request.auth.uid == uid; }
       match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
       match /comments/{cid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
     }
