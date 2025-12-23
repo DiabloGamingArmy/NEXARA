@@ -6,7 +6,7 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
-import { createUploadManager, renderUploadTaskViewer } from "/scripts/uploadManager.js";
+import { createUploadManager } from "/scripts/uploadManager.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -75,6 +75,8 @@ let currentThreadComments = [];
 let liveSessionsCache = [];
 let profileMediaPrefetching = {};
 let uploadManager = null;
+let uploadTasks = [];
+let videoTaskViewerBound = false;
 
 // Optimistic UI Sets
 let followedCategories = new Set();
@@ -1000,19 +1002,9 @@ function initApp(onReady) {
                 window.navigateTo('feed', false);
                 renderProfile(); // Pre-render profile
                 if (!uploadManager) {
-                    uploadManager = createUploadManager({ storage });
-                    uploadManager.initTaskViewer({
-                        onRetry: function () {
-                            window.openVideoUploadModal();
-                            const fileInput = document.getElementById('video-file');
-                            if (fileInput) fileInput.focus();
-                            toast('Select the original video file to resume the upload.', 'info');
-                        },
-                        onClear: function (uploadId) {
-                            if (uploadId) uploadManager.clearUpload(currentUser.uid, uploadId);
-                        }
-                    });
+                    uploadManager = createUploadManager({ storage, onStateChange: setUploadTasks });
                 }
+                ensureVideoTaskViewerBindings();
                 uploadManager.restorePendingUploads(currentUser.uid);
             } else {
                 currentUser = null;
@@ -1037,7 +1029,8 @@ function initApp(onReady) {
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
-                renderUploadTaskViewer([]);
+                setUploadTasks([]);
+                closeVideoTaskViewer();
             }
         } catch (err) {
             console.error('Initialization error', err);
@@ -8246,6 +8239,120 @@ function setVideoFilter(filter) {
     refreshVideoFeedWithFilters();
 }
 
+function formatUploadFileSize(bytes) {
+    const value = Number(bytes) || 0;
+    if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+    return `${value} B`;
+}
+
+function getUploadTaskStatusLabel(upload = {}) {
+    const status = (upload.status || '').toUpperCase();
+    if (status === 'FAILED') return 'Failed';
+    if (status === 'PAUSED') return 'Paused';
+    if (status === 'UPLOADING') return 'Uploading';
+    if (status === 'READY' || status === 'UPLOADED') return 'Complete';
+    return 'Uploading';
+}
+
+function isUploadTaskComplete(upload = {}) {
+    const status = (upload.status || '').toUpperCase();
+    return status === 'READY' || status === 'UPLOADED';
+}
+
+function setUploadTasks(tasks) {
+    uploadTasks = Array.isArray(tasks) ? tasks : [];
+    renderUploadTasks();
+    renderVideosTopBar();
+}
+
+function renderUploadTasks() {
+    const list = document.getElementById('video-task-viewer-list');
+    if (!list) return;
+
+    if (!uploadTasks.length) {
+        list.innerHTML = '<div class="video-task-empty">No active uploads yet.</div>';
+        return;
+    }
+
+    list.innerHTML = uploadTasks.map(function (upload) {
+        const progress = Math.max(0, Math.min(100, Number(upload.lastProgress) || 0));
+        const statusLabel = getUploadTaskStatusLabel(upload);
+        const sizeLabel = formatUploadFileSize(upload.size);
+        const showResume = statusLabel === 'Paused';
+        const showRetry = statusLabel === 'Failed';
+        const actionLabel = showResume ? 'Resume' : showRetry ? 'Retry' : '';
+        const actionMarkup = actionLabel
+            ? `<button class="video-task-action-btn" data-upload-action="${showRetry ? 'retry' : 'resume'}" data-upload-id="${upload.uploadId}">${actionLabel}</button>`
+            : '';
+        return `
+            <div class="video-task-row" data-upload-id="${upload.uploadId}">
+                <div class="video-task-thumb"><i class="ph ph-video"></i></div>
+                <div class="video-task-info">
+                    <div class="video-task-title">${upload.fileName || upload.storagePath}</div>
+                    <div class="video-task-meta">
+                        <span>${statusLabel}</span>
+                        <span>${progress}%</span>
+                        <span>${sizeLabel}</span>
+                    </div>
+                    <div class="video-task-progress">
+                        <div class="video-task-progress-bar" style="width:${progress}%;"></div>
+                    </div>
+                    <div class="video-task-actions">
+                        ${actionMarkup}
+                        <button class="video-task-action-btn secondary" data-upload-action="dismiss" data-upload-id="${upload.uploadId}">Dismiss</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function ensureVideoTaskViewerBindings() {
+    const modal = document.getElementById('video-task-viewer');
+    if (!modal || videoTaskViewerBound) return;
+    videoTaskViewerBound = true;
+
+    modal.addEventListener('click', function (event) {
+        const closeBtn = event.target.closest('[data-task-viewer-close]');
+        if (closeBtn) {
+            closeVideoTaskViewer();
+            return;
+        }
+
+        const actionBtn = event.target.closest('[data-upload-action]');
+        if (!actionBtn) return;
+        const action = actionBtn.getAttribute('data-upload-action');
+        const uploadId = actionBtn.getAttribute('data-upload-id');
+        if (action === 'dismiss' && uploadManager && currentUser?.uid) {
+            uploadManager.clearUpload(currentUser.uid, uploadId);
+            return;
+        }
+        if ((action === 'resume' || action === 'retry') && uploadManager) {
+            uploadManager.prepareRetry(uploadId);
+            window.openVideoUploadModal();
+            const fileInput = document.getElementById('video-file');
+            if (fileInput) fileInput.focus();
+            toast('Select the original video file to resume the upload.', 'info');
+        }
+    });
+}
+
+function openVideoTaskViewer() {
+    const modal = document.getElementById('video-task-viewer');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+}
+
+function closeVideoTaskViewer() {
+    const modal = document.getElementById('video-task-viewer');
+    if (!modal) return;
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+}
+
 function renderVideosTopBar() {
     const container = document.getElementById('videos-topbar');
     if (!container) return;
@@ -8255,6 +8362,15 @@ function renderVideosTopBar() {
     uploadBtn.style.width = 'auto';
     uploadBtn.innerHTML = '<i class="ph ph-upload-simple"></i> Create Video';
     uploadBtn.onclick = function () { window.openVideoUploadModal(); };
+
+    const activeUploads = uploadTasks.filter(function (upload) {
+        return !isUploadTaskComplete(upload);
+    });
+    const taskViewerBtn = document.createElement('button');
+    taskViewerBtn.className = 'create-btn-sidebar';
+    taskViewerBtn.style.width = 'auto';
+    taskViewerBtn.innerHTML = activeUploads.length ? '<i class="ph ph-list"></i> Task Viewer' : '<i class="ph ph-list"></i> Task Viewer (No active tasks)';
+    taskViewerBtn.onclick = function () { openVideoTaskViewer(); };
 
     const topBar = buildTopBar({
         title: 'Videos',
@@ -8282,7 +8398,7 @@ function renderVideosTopBar() {
                 show: true
             }
         ],
-        actions: [{ element: uploadBtn }]
+        actions: [{ element: uploadBtn }, { element: taskViewerBtn }]
     });
 
     container.innerHTML = '';
@@ -8688,7 +8804,10 @@ window.openVideoDetail = async function (videoId) {
 };
 
 document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') closeVideoDetailModalHandler();
+    if (event.key === 'Escape') {
+        closeVideoDetailModalHandler();
+        closeVideoTaskViewer();
+    }
 });
 
 async function createVideoUploadSession(file) {
@@ -8768,8 +8887,11 @@ window.uploadVideo = async function () {
             }
         }
 
-        const uploader = uploadManager || createUploadManager({ storage });
-        if (!uploadManager) uploadManager = uploader;
+        const uploader = uploadManager || createUploadManager({ storage, onStateChange: setUploadTasks });
+        if (!uploadManager) {
+            uploadManager = uploader;
+            ensureVideoTaskViewerBindings();
+        }
         const { snapshot, upload } = await uploader[pendingUpload ? 'resumeUpload' : 'startUpload']({
             uid: currentUser.uid,
             file,

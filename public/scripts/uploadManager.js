@@ -242,6 +242,9 @@ export function createUploadManager({ storage, onStateChange } = {}) {
             if (typeof onStateChange === 'function') onStateChange(getUploads(uid));
             return updated;
         },
+        prepareRetry: function (uploadId) {
+            if (uploadId) preferredRetryId = uploadId;
+        },
         clearUpload: function (uid, uploadId) {
             const remaining = removeUpload(uid, uploadId);
             renderTaskViewer(remaining);
