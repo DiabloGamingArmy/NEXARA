@@ -5,7 +5,6 @@ import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, del
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
-import { initializeLiveDiscover } from "/scripts/LiveDiscover.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 
 // --- Firebase Configuration --- 
@@ -44,11 +43,13 @@ const GO_LIVE_MODE_STORAGE_KEY = 'nexera-go-live-mode';
 let videoSearchTerm = '';
 let videoFilter = 'All';
 let videoSortMode = 'recent';
+let pendingVideoPreviewUrl = null;
+let pendingVideoThumbnailBlob = null;
+let pendingVideoThumbnailUrl = null;
 let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
-let liveDiscoverInitialized = false;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
@@ -75,6 +76,12 @@ let followedCategoryList = [];
 let followedUsers = new Set();
 let followedTopicsUnsubscribe = null;
 let followingUnsubscribe = null;
+const videoEngagementState = {
+    liked: new Set(),
+    disliked: new Set(),
+    saved: new Set()
+};
+let videoEngagementHydrated = new Set();
 
 // Snapshot cache to diff changes for thread rendering
 let postSnapshotCache = {};
@@ -363,6 +370,7 @@ let userProfile = {
     theme: "system",
     accountRoles: [],
     savedPosts: [],
+    savedVideos: [],
     following: [],
     followersCount: 0,
     followedCategories: []
@@ -464,7 +472,9 @@ function normalizeUserProfileData(data = {}, uid = '') {
         accountRoles,
         verified: isUserVerified({ ...data, accountRoles }),
         locationHistory,
-        photoPath: data.photoPath || ''
+        photoPath: data.photoPath || '',
+        savedPosts: Array.isArray(data.savedPosts) ? data.savedPosts : [],
+        savedVideos: Array.isArray(data.savedVideos) ? data.savedVideos : []
     };
     return profile;
 }
@@ -588,8 +598,6 @@ let newChatSelections = [];
 let chatSearchResults = [];
 let videosUnsubscribe = null;
 let videosCache = [];
-let videoObserver = null;
-const viewedVideos = new Set();
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 
@@ -741,16 +749,6 @@ const THEMES = {
     'Random': '#bd00ff', 'Brainrot': '#ff00ff', 'Sports': '#ff4500',
     'Gaming': '#7000ff', 'News': '#ff3d3d', 'Music': '#00bfff'
 };
-
-const VERIFIED_TOPICS = [
-    'STEM',
-    'Coding',
-    'Gaming',
-    'Music',
-    'Sports',
-    'News',
-    'History'
-];
 
 const DEFAULT_CATEGORY_RULES = [
     'Stay on-topic; explain context for beginners.',
@@ -957,6 +955,7 @@ function initApp(onReady) {
                         userProfile.theme = savedTheme;
                         applyTheme(savedTheme);
 
+                        syncSavedVideosFromProfile(userProfile);
                         await hydrateFollowedCategories(user.uid, userProfile);
                         await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
@@ -971,6 +970,7 @@ function initApp(onReady) {
                         userProfile.locationHistory = [];
                         recentLocations = [];
                         applyTheme(storedTheme);
+                        syncSavedVideosFromProfile(userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = 'none';
                     }
@@ -1007,6 +1007,10 @@ function initApp(onReady) {
                 userProfile.followedCategories = [];
                 followedUsers = new Set();
                 userProfile.following = [];
+                videoEngagementState.liked.clear();
+                videoEngagementState.disliked.clear();
+                videoEngagementState.saved.clear();
+                videoEngagementHydrated = new Set();
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'none';
                 if (authScreen) authScreen.style.display = 'flex';
@@ -1563,6 +1567,14 @@ function getDestinationFromCategory(cat) {
     };
 }
 
+function truncateDescription(text = '', wordLimit = 75) {
+    const normalized = typeof text === 'string' ? text.trim().replace(/\s+/g, ' ') : '';
+    if (!normalized) return '';
+    const words = normalized.split(' ');
+    if (words.length <= wordLimit) return normalized;
+    return `${words.slice(0, wordLimit).join(' ')}...`;
+}
+
 function ensureDefaultDestination() {
     if (!selectedCategoryId && categories.length) {
         const fallback = categories.find(function (c) { return c.type === 'community'; })
@@ -1580,7 +1592,11 @@ function renderDestinationField() {
 
     if (spinner) spinner.style.display = destinationPickerLoading ? 'block' : 'none';
     if (labelEl) labelEl.textContent = currentCategoryDoc ? currentCategoryDoc.name : 'Select...';
-    if (verifiedEl) verifiedEl.style.display = currentCategoryDoc && currentCategoryDoc.verified ? 'inline' : 'none';
+    if (verifiedEl) {
+        const isVerified = currentCategoryDoc && currentCategoryDoc.verified;
+        verifiedEl.style.display = isVerified ? 'inline-flex' : 'none';
+        verifiedEl.innerHTML = isVerified ? getVerifiedIconSvg() : '';
+    }
 }
 
 function setComposerError(message = '') {
@@ -1749,7 +1765,8 @@ function renderDestinationResults() {
         const desc = document.createElement('div');
         desc.className = 'destination-row-desc';
         const memberCount = destination.meta && destination.meta.memberCount ? `${destination.meta.memberCount} members` : '';
-        desc.textContent = destination.meta?.description || memberCount || '';
+        const description = destination.meta?.description || '';
+        desc.textContent = truncateDescription(description, 75) || memberCount || '';
 
         textWrap.appendChild(title);
         textWrap.appendChild(desc);
@@ -2143,11 +2160,6 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'messages') { releaseScrollLockIfSafe(); initConversations(); syncMobileMessagesShell(); } else { document.body.classList.remove('mobile-thread-open'); }
     if (viewId === 'videos') { initVideoFeed(); }
     if (viewId === 'live') {
-        ensureLiveDiscoverRoot();
-        if (!liveDiscoverInitialized) {
-            initializeLiveDiscover();
-            liveDiscoverInitialized = true;
-        }
         renderLiveSessions();
     }
     if (viewId === 'live-setup') { renderLiveSetup(); }
@@ -2165,23 +2177,6 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('go-live-open', goLiveLock);
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
 };
-
-function ensureLiveDiscoverRoot() {
-    let root = document.getElementById('live-discover-root');
-    if (!root) {
-        const liveView = document.getElementById('view-live');
-        root = document.createElement('div');
-        root.id = 'live-discover-root';
-        root.className = 'live-container';
-        if (liveView) {
-            liveView.prepend(root);
-        } else {
-            document.body.appendChild(root);
-        }
-    }
-    root.style.display = 'block';
-    return root;
-}
 
 function updateMobileNavState(viewId = 'feed') {
     const label = MOBILE_SECTION_LABELS[viewId] || 'Explore';
@@ -2401,6 +2396,11 @@ function applyFollowedCategoryList(list = []) {
     if (currentCategory === 'Following') renderFeed();
 }
 
+function syncSavedVideosFromProfile(profile = userProfile) {
+    const list = Array.isArray(profile.savedVideos) ? profile.savedVideos : [];
+    videoEngagementState.saved = new Set(list);
+}
+
 function getTopicButtons(topic) {
     const matches = [];
     const cleanTopic = topic.replace(/[^a-zA-Z0-9]/g, '');
@@ -2482,7 +2482,7 @@ window.toggleFollow = async function (c, event) {
 
         const updatedList = wasFollowing
             ? followedCategoryList.filter(function (name) { return name !== topic; })
-            : [...followedCategoryList, topic];
+            : [topic, ...followedCategoryList];
 
         applyFollowedCategoryList(updatedList);
         if (currentCategory === 'Following') renderFeed();
@@ -5224,6 +5224,30 @@ function renderCategoryPills() {
     const anchors = ['For You', 'Following'];
     const seen = new Set(anchors.map(function (label) { return label.toLowerCase(); }));
 
+    const computeCategoryScore = function (cat) {
+        const memberScore = typeof cat.memberCount === 'number' ? cat.memberCount : 0;
+        const postScore = typeof cat.postCount === 'number' ? cat.postCount : 0;
+        const activityScore = typeof cat.activityScore === 'number' ? cat.activityScore : 0;
+        return memberScore + postScore + activityScore;
+    };
+
+    const categoryIndex = new Map();
+    (categories || []).forEach(function (cat) {
+        const label = typeof cat?.name === 'string' && cat.name.trim()
+            ? cat.name.trim()
+            : (typeof cat?.slug === 'string' && cat.slug.trim() ? cat.slug.trim() : (cat?.id || ''));
+        if (!label) return;
+        const key = label.toLowerCase();
+        if (!categoryIndex.has(key)) {
+            categoryIndex.set(key, {
+                name: label,
+                verified: !!cat.verified,
+                type: cat.type || 'community',
+                score: computeCategoryScore(cat)
+            });
+        }
+    });
+
     const addTopic = function (list, topicName, verifiedFlag) {
         const name = typeof topicName === 'string' ? topicName.trim() : '';
         const key = name.toLowerCase();
@@ -5245,18 +5269,34 @@ function renderCategoryPills() {
     header.appendChild(divider);
 
     const dynamicTopics = [];
-    const normalizedVerifiedSet = new Set(VERIFIED_TOPICS.map(function (t) { return (t || '').toLowerCase(); }));
+    const followedNames = collectFollowedCategoryNames().filter(function (name) {
+        return categoryIndex.has((name || '').toLowerCase());
+    });
 
-    VERIFIED_TOPICS.forEach(function (name) { addTopic(dynamicTopics, name, true); });
+    followedNames.forEach(function (name) {
+        const info = categoryIndex.get((name || '').toLowerCase());
+        addTopic(dynamicTopics, info?.name || name, info?.verified);
+    });
 
-    const followedNames = collectFollowedCategoryNames();
-    followedNames.forEach(function (name) { addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase())); });
+    const remainingCategories = Array.from(categoryIndex.values()).filter(function (cat) {
+        return !seen.has((cat.name || '').toLowerCase());
+    });
 
-    if (!followedNames.length) {
-        computeTrendingCategories(20).forEach(function (name) {
-            addTopic(dynamicTopics, name, normalizedVerifiedSet.has((name || '').toLowerCase()));
+    const verifiedCategories = remainingCategories.filter(function (cat) { return cat.verified; })
+        .sort(function (a, b) {
+            if (b.score !== a.score) return b.score - a.score;
+            return a.name.localeCompare(b.name);
         });
-    }
+
+    const communityCategories = remainingCategories.filter(function (cat) {
+        return !cat.verified && (cat.type || 'community') === 'community';
+    }).sort(function (a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.name.localeCompare(b.name);
+    });
+
+    verifiedCategories.forEach(function (cat) { addTopic(dynamicTopics, cat.name, cat.verified); });
+    communityCategories.forEach(function (cat) { addTopic(dynamicTopics, cat.name, cat.verified); });
 
     const dynamicFull = dynamicTopics;
     const dynamic = dynamicFull.slice(0, categoryVisibleCount);
@@ -5353,7 +5393,97 @@ function escapeHtml(text) {
 }
 
 function cleanText(text) { if (typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
-function renderSaved() { currentCategory = 'Saved'; renderFeed('saved-content'); }
+function renderSaved() {
+    currentCategory = 'Saved';
+    const container = document.getElementById('saved-content');
+    if (!container) return;
+
+    renderCategoryPills();
+    container.innerHTML = '';
+
+    const savedPostIds = Array.isArray(userProfile.savedPosts) ? userProfile.savedPosts : [];
+    let displayPosts = allPosts.filter(function (post) {
+        return savedPostIds.includes(post.id);
+    });
+
+    if (savedSearchTerm) {
+        displayPosts = displayPosts.filter(function (post) {
+            return (post.title || '').toLowerCase().includes(savedSearchTerm)
+                || (post.content?.text || post.content || '').toLowerCase().includes(savedSearchTerm);
+        });
+    }
+
+    if (savedFilter === 'Recent') {
+        displayPosts.sort(function (a, b) { return savedPostIds.indexOf(b.id) - savedPostIds.indexOf(a.id); });
+    } else if (savedFilter === 'Oldest') {
+        displayPosts.sort(function (a, b) { return savedPostIds.indexOf(a.id) - savedPostIds.indexOf(b.id); });
+    } else if (savedFilter === 'Videos') {
+        displayPosts = displayPosts.filter(function (p) { return p.type === 'video'; });
+    } else if (savedFilter === 'Images') {
+        displayPosts = displayPosts.filter(function (p) { return p.type === 'image'; });
+    }
+
+    const savedVideoIds = Array.isArray(userProfile.savedVideos) ? userProfile.savedVideos : [];
+    const savedVideoMap = new Map(videosCache.map(function (video) { return [video.id, video]; }));
+    let savedVideos = savedVideoIds.map(function (id) { return savedVideoMap.get(id); }).filter(Boolean);
+
+    if (savedSearchTerm) {
+        savedVideos = savedVideos.filter(function (video) {
+            const caption = (video.caption || '').toLowerCase();
+            const tags = (video.hashtags || []).map(function (t) { return `#${t}`.toLowerCase(); }).join(' ');
+            return caption.includes(savedSearchTerm) || tags.includes(savedSearchTerm);
+        });
+    }
+
+    if (savedFilter === 'Recent') {
+        savedVideos.sort(function (a, b) { return savedVideoIds.indexOf(b.id) - savedVideoIds.indexOf(a.id); });
+    } else if (savedFilter === 'Oldest') {
+        savedVideos.sort(function (a, b) { return savedVideoIds.indexOf(a.id) - savedVideoIds.indexOf(b.id); });
+    }
+
+    const showVideos = savedFilter !== 'Images';
+    const showPosts = true;
+    let hasRendered = false;
+    let wantsOnlyVideos = savedFilter === 'Videos';
+
+    if (showVideos) {
+        if (savedVideos.length) {
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Saved Videos';
+            const grid = document.createElement('div');
+            grid.className = 'video-feed';
+            savedVideos.forEach(function (video) {
+                grid.appendChild(buildVideoCard(video));
+            });
+            container.appendChild(header);
+            container.appendChild(grid);
+            hasRendered = true;
+        }
+    }
+
+    if (showPosts) {
+        if (displayPosts.length) {
+            displayPosts.forEach(function (post) {
+                container.innerHTML += getPostHTML(post);
+            });
+
+            displayPosts.forEach(function (post) {
+                const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+                const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
+                applyReviewButtonState(reviewBtn, reviewValue);
+            });
+
+            applyMyReviewStylesToDOM();
+            hasRendered = true;
+        }
+    }
+
+    if (!hasRendered) {
+        const message = wantsOnlyVideos ? 'No saved videos.' : 'No saved items yet.';
+        container.innerHTML = `<div class="empty-state"><p>${message}</p></div>`;
+    }
+}
 
 // Small Interaction Utils
 window.setDiscoverFilter = function (filter) {
@@ -7738,34 +7868,130 @@ window.openVideoUploadModal = function () { return window.toggleVideoUploadModal
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (!show) {
+        const fileInput = document.getElementById('video-file');
+        const thumbInput = document.getElementById('video-thumbnail');
+        const caption = document.getElementById('video-caption');
+        const tags = document.getElementById('video-tags');
+        const visibility = document.getElementById('video-visibility');
+        const preview = document.getElementById('video-upload-preview');
+        const previewPlayer = document.getElementById('video-preview-player');
+        const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+        if (fileInput) fileInput.value = '';
+        if (thumbInput) thumbInput.value = '';
+        if (caption) caption.value = '';
+        if (tags) tags.value = '';
+        if (visibility) visibility.value = 'public';
+        if (preview) preview.classList.remove('active');
+        if (previewPlayer) previewPlayer.src = '';
+        if (thumbPreview) thumbPreview.src = '';
+
+        if (pendingVideoPreviewUrl) {
+            URL.revokeObjectURL(pendingVideoPreviewUrl);
+            pendingVideoPreviewUrl = null;
+        }
+        if (pendingVideoThumbnailUrl) {
+            URL.revokeObjectURL(pendingVideoThumbnailUrl);
+            pendingVideoThumbnailUrl = null;
+        }
+        pendingVideoThumbnailBlob = null;
+    }
 };
 
-function ensureVideoObserver() {
-    if (videoObserver) return videoObserver;
-    videoObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-            const vid = entry.target;
-            if (entry.isIntersecting) {
-                vid.play().catch(function () { });
-                const vidId = vid.dataset.videoId;
-                if (vidId && !viewedVideos.has(vidId)) {
-                    viewedVideos.add(vidId);
-                    incrementVideoViews(vidId);
-                }
-            } else {
-                vid.pause();
-            }
-        });
-    }, { threshold: 0.6 });
-    return videoObserver;
+function pauseAllVideos() {
+    document.querySelectorAll('#video-feed video').forEach(function (video) {
+        video.pause();
+    });
+    const modalPlayer = document.getElementById('video-modal-player');
+    if (modalPlayer) modalPlayer.pause();
 }
 
-function pauseAllVideos() {
-    document.querySelectorAll('#video-feed video').forEach(function (v) {
-        v.pause();
-        if (videoObserver) videoObserver.unobserve(v);
-    });
+async function generateThumbnailFromVideo(file) {
+    if (!file) return null;
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    const url = URL.createObjectURL(file);
+
+    try {
+        return await new Promise(function (resolve) {
+            video.onloadedmetadata = function () {
+                const targetTime = Math.min(0.1, video.duration || 0);
+                video.currentTime = targetTime;
+            };
+            video.onseeked = function () {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 360;
+                const ctx = canvas.getContext('2d');
+                if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob(function (blob) {
+                    resolve(blob);
+                }, 'image/jpeg', 0.85);
+            };
+            video.onerror = function () { resolve(null); };
+            video.src = url;
+        });
+    } finally {
+        URL.revokeObjectURL(url);
+    }
 }
+
+window.handleVideoFileChange = async function (event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    const preview = document.getElementById('video-upload-preview');
+    const previewPlayer = document.getElementById('video-preview-player');
+    const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+    if (pendingVideoPreviewUrl) {
+        URL.revokeObjectURL(pendingVideoPreviewUrl);
+        pendingVideoPreviewUrl = null;
+    }
+
+    if (!file) {
+        if (preview) preview.classList.remove('active');
+        if (previewPlayer) previewPlayer.src = '';
+        if (thumbPreview) thumbPreview.src = '';
+        return;
+    }
+
+    pendingVideoPreviewUrl = URL.createObjectURL(file);
+    if (previewPlayer) {
+        previewPlayer.src = pendingVideoPreviewUrl;
+        previewPlayer.load();
+    }
+    if (preview) preview.classList.add('active');
+
+    pendingVideoThumbnailBlob = await generateThumbnailFromVideo(file);
+    if (pendingVideoThumbnailUrl) {
+        URL.revokeObjectURL(pendingVideoThumbnailUrl);
+        pendingVideoThumbnailUrl = null;
+    }
+    if (pendingVideoThumbnailBlob && thumbPreview) {
+        pendingVideoThumbnailUrl = URL.createObjectURL(pendingVideoThumbnailBlob);
+        thumbPreview.src = pendingVideoThumbnailUrl;
+    }
+};
+
+window.handleThumbnailChange = function (event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    const thumbPreview = document.getElementById('video-thumbnail-preview');
+
+    pendingVideoThumbnailBlob = null;
+    if (pendingVideoThumbnailUrl) {
+        URL.revokeObjectURL(pendingVideoThumbnailUrl);
+        pendingVideoThumbnailUrl = null;
+    }
+
+    if (!file) return;
+
+    pendingVideoThumbnailUrl = URL.createObjectURL(file);
+    if (thumbPreview) thumbPreview.src = pendingVideoThumbnailUrl;
+};
 
 function handleVideoSearchInput(event) {
     videoSearchTerm = (event.target.value || '').toLowerCase();
@@ -7842,6 +8068,9 @@ function refreshVideoFeedWithFilters() {
         filtered = filtered.slice().sort(function (a, b) { return (b.stats?.views || 0) - (a.stats?.views || 0); });
     } else if (videoFilter === 'Shorts') {
         filtered = filtered.filter(function (video) { return (video.duration || 0) <= 120 || (video.lengthSeconds || 0) <= 120 || !(video.duration || video.lengthSeconds); });
+    } else if (videoFilter === 'Saved') {
+        const savedSet = videoEngagementState.saved.size ? videoEngagementState.saved : new Set(userProfile.savedVideos || []);
+        filtered = filtered.filter(function (video) { return savedSet.has(video.id); });
     }
 
     if (videoSortMode === 'popular') {
@@ -7861,75 +8090,337 @@ function initVideoFeed() {
     }));
 }
 
+function formatCompactNumber(value) {
+    const num = Number(value) || 0;
+    if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(num >= 10_000_000 ? 0 : 1)}M`;
+    if (num >= 1_000) return `${(num / 1_000).toFixed(num >= 10_000 ? 0 : 1)}K`;
+    return `${num}`;
+}
+
+function formatVideoTimestamp(ts) {
+    const date = toDateSafe(ts);
+    if (!date) return 'Just now';
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days <= 0) return 'Today';
+    if (days === 1) return '1 day ago';
+    if (days < 7) return `${days} days ago`;
+    if (days < 30) return `${Math.floor(days / 7)}w ago`;
+    if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+    return `${Math.floor(days / 365)}y ago`;
+}
+
+function resolveVideoThumbnail(video = {}) {
+    return video.thumbURL || video.thumbnail || video.previewImage || 'https://images.unsplash.com/photo-1516117172878-fd2c41f4a759?auto=format&fit=crop&w=1200&q=80';
+}
+
+function ensureVideoStats(video = {}) {
+    if (!video.stats || typeof video.stats !== 'object') video.stats = {};
+    if (typeof video.stats.likes !== 'number') video.stats.likes = 0;
+    if (typeof video.stats.dislikes !== 'number') video.stats.dislikes = 0;
+    if (typeof video.stats.saves !== 'number') video.stats.saves = 0;
+    if (typeof video.stats.comments !== 'number') video.stats.comments = 0;
+    if (typeof video.stats.views !== 'number') video.stats.views = 0;
+    return video;
+}
+
+function getVideoById(videoId) {
+    return videosCache.find(function (entry) { return entry.id === videoId; }) || null;
+}
+
+function getVideoEngagementStatus(videoId) {
+    return {
+        liked: videoEngagementState.liked.has(videoId),
+        disliked: videoEngagementState.disliked.has(videoId),
+        saved: videoEngagementState.saved.has(videoId)
+    };
+}
+
+function setVideoEngagementStatus(videoId, { liked, disliked, saved }) {
+    if (liked === true) videoEngagementState.liked.add(videoId);
+    if (liked === false) videoEngagementState.liked.delete(videoId);
+    if (disliked === true) videoEngagementState.disliked.add(videoId);
+    if (disliked === false) videoEngagementState.disliked.delete(videoId);
+    if (saved === true) videoEngagementState.saved.add(videoId);
+    if (saved === false) videoEngagementState.saved.delete(videoId);
+}
+
+function updateVideoStats(videoId, deltas = {}) {
+    const video = getVideoById(videoId);
+    if (!video) return;
+    ensureVideoStats(video);
+    if (typeof deltas.likes === 'number') video.stats.likes = Math.max(0, video.stats.likes + deltas.likes);
+    if (typeof deltas.dislikes === 'number') video.stats.dislikes = Math.max(0, video.stats.dislikes + deltas.dislikes);
+    if (typeof deltas.saves === 'number') video.stats.saves = Math.max(0, video.stats.saves + deltas.saves);
+    if (typeof deltas.comments === 'number') video.stats.comments = Math.max(0, video.stats.comments + deltas.comments);
+    if (typeof deltas.views === 'number') video.stats.views = Math.max(0, video.stats.views + deltas.views);
+}
+
+function renderVideoActionButton(button, { icon, label, count, active, activeColor }) {
+    if (!button) return;
+    const finalIcon = `${active ? 'ph-fill' : 'ph'} ${icon}`;
+    const color = active ? activeColor : 'inherit';
+    const countLabel = typeof count === 'number' ? formatCompactNumber(count) : '';
+    const text = label ? ` ${label}` : '';
+    button.innerHTML = `<i class="${finalIcon}"></i>${countLabel ? ` ${countLabel}` : text}`;
+    button.style.color = color;
+}
+
+function updateVideoModalButtons(videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    if (modal.dataset.videoId && modal.dataset.videoId !== videoId) return;
+    const video = getVideoById(videoId);
+    if (!video) return;
+    ensureVideoStats(video);
+    const state = getVideoEngagementStatus(videoId);
+    renderVideoActionButton(document.getElementById('video-modal-like'), {
+        icon: 'ph-thumbs-up',
+        label: 'Like',
+        count: video.stats.likes,
+        active: state.liked,
+        activeColor: '#00f2ea'
+    });
+    renderVideoActionButton(document.getElementById('video-modal-dislike'), {
+        icon: 'ph-thumbs-down',
+        label: 'Dislike',
+        count: video.stats.dislikes,
+        active: state.disliked,
+        activeColor: '#ff3d3d'
+    });
+    renderVideoActionButton(document.getElementById('video-modal-comment'), {
+        icon: 'ph-chat-circle',
+        label: 'Comment',
+        count: video.stats.comments,
+        active: false,
+        activeColor: 'inherit'
+    });
+    renderVideoActionButton(document.getElementById('video-modal-save'), {
+        icon: 'ph-bookmark',
+        label: state.saved ? 'Saved' : 'Save',
+        count: null,
+        active: state.saved,
+        activeColor: '#00f2ea'
+    });
+}
+
+async function hydrateVideoEngagement(videoId) {
+    if (!currentUser || !videoId) return getVideoEngagementStatus(videoId);
+    if (videoEngagementHydrated.has(videoId)) return getVideoEngagementStatus(videoId);
+    try {
+        const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
+        const dislikeRef = doc(db, 'videos', videoId, 'dislikes', currentUser.uid);
+        const saveRef = doc(db, 'videos', videoId, 'saves', currentUser.uid);
+        const [likeSnap, dislikeSnap, saveSnap] = await Promise.all([
+            getDoc(likeRef),
+            getDoc(dislikeRef),
+            getDoc(saveRef)
+        ]);
+        setVideoEngagementStatus(videoId, {
+            liked: likeSnap.exists(),
+            disliked: dislikeSnap.exists(),
+            saved: saveSnap.exists() || videoEngagementState.saved.has(videoId)
+        });
+        videoEngagementHydrated.add(videoId);
+    } catch (err) {
+        console.warn('Unable to hydrate video engagement', err);
+    }
+    return getVideoEngagementStatus(videoId);
+}
+
+function buildVideoCard(video) {
+    const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
+    const card = document.createElement('div');
+    card.className = 'video-card';
+    card.tabIndex = 0;
+    card.setAttribute('role', 'button');
+    card.setAttribute('aria-label', `Open video ${video.caption || 'details'}`);
+
+    const thumb = document.createElement('div');
+    thumb.className = 'video-thumb';
+    thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
+
+    const duration = document.createElement('div');
+    duration.className = 'video-duration';
+    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
+    thumb.appendChild(duration);
+
+    const meta = document.createElement('div');
+    meta.className = 'video-meta';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'video-avatar';
+    applyAvatarToElement(avatar, author, { size: 42 });
+
+    const info = document.createElement('div');
+    info.className = 'video-info';
+
+    const title = document.createElement('div');
+    title.className = 'video-title';
+    title.textContent = video.caption || 'Untitled video';
+
+    const channel = document.createElement('div');
+    channel.className = 'video-channel';
+    channel.textContent = author.displayName || author.name || author.username || 'Nexera Creator';
+
+    const stats = document.createElement('div');
+    stats.className = 'video-stats';
+    stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+
+    info.appendChild(title);
+    info.appendChild(channel);
+    info.appendChild(stats);
+
+    meta.appendChild(avatar);
+    meta.appendChild(info);
+
+    card.appendChild(thumb);
+    card.appendChild(meta);
+    card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    card.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            window.openVideoDetail(video.id);
+        }
+    });
+
+    if (video.ownerId) {
+        avatar.addEventListener('click', function (event) {
+            event.stopPropagation();
+            window.openUserProfile(video.ownerId, event);
+        });
+        channel.addEventListener('click', function (event) {
+            event.stopPropagation();
+            window.openUserProfile(video.ownerId, event);
+        });
+    }
+
+    if (video.ownerId && !getCachedUser(video.ownerId, { allowStale: false })) {
+        resolveUserProfile(video.ownerId).then(function (profile) {
+            if (!profile) return;
+            applyAvatarToElement(avatar, profile, { size: 42 });
+            channel.textContent = profile.displayName || profile.name || profile.username || 'Nexera Creator';
+        });
+    }
+
+    return card;
+}
+
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
     if (!feed) return;
-    pauseAllVideos();
     feed.innerHTML = '';
     if (videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
 
-    const observer = ensureVideoObserver();
-
     videos.forEach(function (video) {
-        const card = document.createElement('div');
-        card.className = 'video-card';
-        const tags = (video.hashtags || []).map(function (t) { return '#' + t; }).join(' ');
-
-        const videoEl = document.createElement('video');
-        videoEl.setAttribute('playsinline', '');
-        videoEl.setAttribute('loop', '');
-        videoEl.setAttribute('muted', '');
-        videoEl.setAttribute('preload', 'metadata');
-        videoEl.dataset.videoId = video.id;
-        videoEl.src = video.videoURL || '';
-
-        const meta = document.createElement('div');
-        meta.className = 'video-meta';
-
-        const topRow = document.createElement('div');
-        topRow.style.display = 'flex';
-        topRow.style.justifyContent = 'space-between';
-        topRow.style.alignItems = 'center';
-
-        const leftCol = document.createElement('div');
-        const captionEl = document.createElement('div');
-        captionEl.style.fontWeight = '800';
-        captionEl.textContent = escapeHtml(video.caption || '');
-        const tagsEl = document.createElement('div');
-        tagsEl.style.color = 'var(--text-muted)';
-        tagsEl.style.fontSize = '0.85rem';
-        tagsEl.textContent = tags;
-        leftCol.appendChild(captionEl);
-        leftCol.appendChild(tagsEl);
-
-        const actions = document.createElement('div');
-        actions.style.display = 'flex';
-        actions.style.gap = '8px';
-
-        const likeBtn = document.createElement('button');
-        likeBtn.className = 'icon-pill';
-        likeBtn.innerHTML = `<i class="ph ph-heart"></i>${video.stats?.likes || 0}`;
-        likeBtn.onclick = function () { return window.likeVideo(video.id); };
-
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'icon-pill';
-        saveBtn.innerHTML = '<i class="ph ph-bookmark"></i>';
-        saveBtn.onclick = function () { return window.saveVideo(video.id); };
-
-        actions.appendChild(likeBtn);
-        actions.appendChild(saveBtn);
-
-        topRow.appendChild(leftCol);
-        topRow.appendChild(actions);
-
-        meta.appendChild(topRow);
-
-        card.appendChild(videoEl);
-        card.appendChild(meta);
-        feed.appendChild(card);
-        observer.observe(videoEl);
+        feed.appendChild(buildVideoCard(video));
     });
 }
+
+function closeVideoDetailModalHandler() {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const player = document.getElementById('video-modal-player');
+    if (player) {
+        player.pause();
+        player.src = '';
+    }
+    delete modal.dataset.videoId;
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+}
+
+const closeVideoDetailModal = closeVideoDetailModalHandler;
+window.closeVideoDetail = closeVideoDetailModalHandler;
+
+window.openVideoDetail = async function (videoId) {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    const video = videosCache.find(function (entry) { return entry.id === videoId; });
+    if (!video) return;
+
+    const player = document.getElementById('video-modal-player');
+    const title = document.getElementById('video-modal-title');
+    const stats = document.getElementById('video-modal-stats');
+    const description = document.getElementById('video-modal-description');
+    const avatar = document.getElementById('video-modal-avatar');
+    const channelName = document.getElementById('video-modal-channel-name');
+    const channelHandle = document.getElementById('video-modal-channel-handle');
+    const followBtn = document.getElementById('video-modal-follow');
+    const likeBtn = document.getElementById('video-modal-like');
+    const dislikeBtn = document.getElementById('video-modal-dislike');
+    const commentBtn = document.getElementById('video-modal-comment');
+    const saveBtn = document.getElementById('video-modal-save');
+
+    modal.dataset.videoId = video.id;
+    ensureVideoStats(video);
+
+    if (player) {
+        player.src = video.videoURL || '';
+        player.load();
+    }
+
+    const author = await resolveUserProfile(video.ownerId || '');
+    const authorDisplay = author?.displayName || author?.name || author?.username || 'Nexera Creator';
+    const authorHandle = author?.username ? `@${author.username}` : 'Nexera';
+
+    if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
+    if (channelName) channelName.textContent = authorDisplay;
+    if (channelHandle) channelHandle.textContent = authorHandle;
+    if (title) title.textContent = video.caption || 'Untitled video';
+    if (stats) stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+    if (description) description.textContent = video.description || (video.hashtags || []).map(function (tag) { return `#${tag}`; }).join(' ') || 'No description yet.';
+
+    if (followBtn) {
+        followBtn.onclick = function (event) {
+            event.stopPropagation();
+            if (video.ownerId) window.toggleFollowUser(video.ownerId, event);
+        };
+        followBtn.textContent = (video.ownerId && followedUsers.has(video.ownerId)) ? 'Following' : 'Follow';
+    }
+
+    if (video.ownerId) {
+        if (avatar) {
+            avatar.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelName) {
+            channelName.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+        if (channelHandle) {
+            channelHandle.onclick = function (event) {
+                event.stopPropagation();
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
+    }
+
+    if (likeBtn) {
+        likeBtn.onclick = function (event) { event.stopPropagation(); window.likeVideo(video.id); };
+    }
+    if (dislikeBtn) {
+        dislikeBtn.onclick = function (event) { event.stopPropagation(); window.dislikeVideo(video.id); };
+    }
+    if (saveBtn) {
+        saveBtn.onclick = function (event) { event.stopPropagation(); window.saveVideo(video.id); };
+    }
+
+    await hydrateVideoEngagement(video.id);
+    updateVideoModalButtons(video.id);
+
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+};
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeVideoDetailModalHandler();
+});
 
 window.uploadVideo = async function () {
     if (!requireAuth()) return;
@@ -7937,6 +8428,7 @@ window.uploadVideo = async function () {
     const fileInput = document.getElementById('video-file');
     if (!fileInput || !fileInput.files || !fileInput.files[0]) return;
 
+    const thumbInput = document.getElementById('video-thumbnail');
     const caption = document.getElementById('video-caption').value || '';
     const hashtags = (document.getElementById('video-tags').value || '')
         .split(',')
@@ -7954,13 +8446,30 @@ window.uploadVideo = async function () {
         });
 
         const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
+        let thumbURL = '';
+        let thumbBlob = null;
+
+        if (thumbInput && thumbInput.files && thumbInput.files[0]) {
+            thumbBlob = thumbInput.files[0];
+        } else if (pendingVideoThumbnailBlob) {
+            thumbBlob = pendingVideoThumbnailBlob;
+        } else {
+            thumbBlob = await generateThumbnailFromVideo(file);
+        }
+
+        if (thumbBlob) {
+            const thumbRef = ref(storage, `videos/${currentUser.uid}/${videoId}/thumb.jpg`);
+            await uploadBytes(thumbRef, thumbBlob);
+            thumbURL = await getDownloadURL(thumbRef);
+        }
+
         const docData = {
             ownerId: currentUser.uid,
             caption,
             hashtags,
             createdAt: serverTimestamp(),
             videoURL,
-            thumbURL: '',
+            thumbURL,
             visibility,
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
@@ -7983,22 +8492,133 @@ document.addEventListener('keydown', function (event) {
 
 window.likeVideo = async function (videoId) {
     if (!requireAuth()) return;
+    if (!videoId) return;
+    if (!videoEngagementHydrated.has(videoId)) await hydrateVideoEngagement(videoId);
+
+    const state = getVideoEngagementStatus(videoId);
+    const wasLiked = state.liked;
+    const wasDisliked = state.disliked;
+
+    setVideoEngagementStatus(videoId, { liked: !wasLiked, disliked: wasLiked ? state.disliked : false });
+    updateVideoStats(videoId, {
+        likes: wasLiked ? -1 : 1,
+        dislikes: wasDisliked && !wasLiked ? -1 : 0
+    });
+    updateVideoModalButtons(videoId);
+
+    const videoRef = doc(db, 'videos', videoId);
     const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
-    await setDoc(likeRef, { createdAt: serverTimestamp() });
-    await updateDoc(doc(db, 'videos', videoId), { 'stats.likes': increment(1) });
+    const dislikeRef = doc(db, 'videos', videoId, 'dislikes', currentUser.uid);
+
+    try {
+        if (wasLiked) {
+            await Promise.all([
+                deleteDoc(likeRef),
+                updateDoc(videoRef, { 'stats.likes': increment(-1) })
+            ]);
+        } else {
+            const writes = [
+                setDoc(likeRef, { createdAt: serverTimestamp() }),
+                updateDoc(videoRef, { 'stats.likes': increment(1) })
+            ];
+            if (wasDisliked) {
+                writes.push(deleteDoc(dislikeRef));
+                writes.push(updateDoc(videoRef, { 'stats.dislikes': increment(-1) }));
+            }
+            await Promise.all(writes);
+        }
+    } catch (err) {
+        console.error('Video like failed', err);
+        await hydrateVideoEngagement(videoId);
+        updateVideoStats(videoId, { likes: wasLiked ? 1 : -1, dislikes: wasDisliked && !wasLiked ? 1 : 0 });
+        updateVideoModalButtons(videoId);
+    }
+};
+
+window.dislikeVideo = async function (videoId) {
+    if (!requireAuth()) return;
+    if (!videoId) return;
+    if (!videoEngagementHydrated.has(videoId)) await hydrateVideoEngagement(videoId);
+
+    const state = getVideoEngagementStatus(videoId);
+    const wasDisliked = state.disliked;
+    const wasLiked = state.liked;
+
+    setVideoEngagementStatus(videoId, { disliked: !wasDisliked, liked: wasDisliked ? state.liked : false });
+    updateVideoStats(videoId, {
+        dislikes: wasDisliked ? -1 : 1,
+        likes: wasLiked && !wasDisliked ? -1 : 0
+    });
+    updateVideoModalButtons(videoId);
+
+    const videoRef = doc(db, 'videos', videoId);
+    const dislikeRef = doc(db, 'videos', videoId, 'dislikes', currentUser.uid);
+    const likeRef = doc(db, 'videos', videoId, 'likes', currentUser.uid);
+
+    try {
+        if (wasDisliked) {
+            await Promise.all([
+                deleteDoc(dislikeRef),
+                updateDoc(videoRef, { 'stats.dislikes': increment(-1) })
+            ]);
+        } else {
+            const writes = [
+                setDoc(dislikeRef, { createdAt: serverTimestamp() }),
+                updateDoc(videoRef, { 'stats.dislikes': increment(1) })
+            ];
+            if (wasLiked) {
+                writes.push(deleteDoc(likeRef));
+                writes.push(updateDoc(videoRef, { 'stats.likes': increment(-1) }));
+            }
+            await Promise.all(writes);
+        }
+    } catch (err) {
+        console.error('Video dislike failed', err);
+        await hydrateVideoEngagement(videoId);
+        updateVideoStats(videoId, { dislikes: wasDisliked ? 1 : -1, likes: wasLiked && !wasDisliked ? 1 : 0 });
+        updateVideoModalButtons(videoId);
+    }
 };
 
 window.saveVideo = async function (videoId) {
     if (!requireAuth()) return;
-    await setDoc(doc(db, 'videos', videoId, 'saves', currentUser.uid), { createdAt: serverTimestamp() });
-    await updateDoc(doc(db, 'videos', videoId), { 'stats.saves': increment(1) });
-};
+    if (!videoId) return;
+    if (!videoEngagementHydrated.has(videoId)) await hydrateVideoEngagement(videoId);
 
-async function incrementVideoViews(videoId) {
+    const wasSaved = videoEngagementState.saved.has(videoId);
+    const nextSaved = wasSaved
+        ? (userProfile.savedVideos || []).filter(function (id) { return id !== videoId; })
+        : [...(userProfile.savedVideos || []), videoId];
+
+    userProfile.savedVideos = nextSaved;
+    syncSavedVideosFromProfile(userProfile);
+    updateVideoStats(videoId, { saves: wasSaved ? -1 : 1 });
+    updateVideoModalButtons(videoId);
+    if (currentCategory === 'Saved') renderSaved();
+    if (currentViewId === 'videos' && videoFilter === 'Saved') refreshVideoFeedWithFilters();
+
+    const videoRef = doc(db, 'videos', videoId);
+    const saveRef = doc(db, 'videos', videoId, 'saves', currentUser.uid);
+    const userRef = doc(db, 'users', currentUser.uid);
+
     try {
-        await updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) });
-    } catch (e) { console.warn('view inc', e.message); }
-}
+        const writes = [
+            updateDoc(userRef, { savedVideos: wasSaved ? arrayRemove(videoId) : arrayUnion(videoId) }),
+            updateDoc(videoRef, { 'stats.saves': increment(wasSaved ? -1 : 1) })
+        ];
+        if (wasSaved) {
+            writes.push(deleteDoc(saveRef));
+        } else {
+            writes.push(setDoc(saveRef, { createdAt: serverTimestamp() }));
+        }
+        await Promise.all(writes);
+    } catch (err) {
+        console.error('Video save failed', err);
+        await hydrateVideoEngagement(videoId);
+        updateVideoStats(videoId, { saves: wasSaved ? 1 : -1 });
+        updateVideoModalButtons(videoId);
+    }
+};
 
 // --- Live Sessions ---
 window.toggleGoLiveModal = function (show = true) { const modal = document.getElementById('go-live-modal'); if (modal) modal.style.display = show ? 'flex' : 'none'; };

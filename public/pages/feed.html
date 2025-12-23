@@ -79,12 +79,7 @@
                     <div class="destination-field-label">Posting to</div>
                     <div class="destination-field-value">
                         <span id="destination-current-label">Select...</span>
-                        <span id="destination-current-verified" class="verified-badge" style="display:none;"> <svg
-                                viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <path
-                                    d="M12 2.75a1 1 0 0 1 .8.4l1.86 2.52 3.02-.08a1 1 0 0 1 .84.46l1.64 2.56a1 1 0 0 1-.06 1.14l-1.83 2.43.73 2.95a1 1 0 0 1-.39 1.05l-2.5 1.78a1 1 0 0 1-1.12.02L12 17.85l-3.09 1.18a1 1 0 0 1-1.12-.02l-2.5-1.78a1 1 0 0 1-.39-1.05l.73-2.95-1.83-2.43a1 1 0 0 1-.06-1.14l1.64-2.56a1 1 0 0 1 .84-.46l3.02.08L11.2 3.15a1 1 0 0 1 .8-.4Zm-1.2 11 4.7-4.7-1.4-1.4-3.3 3.3-1.6-1.6-1.4 1.42 3 3Z">
-                                </path>
-                            </svg> </span>
+                        <span id="destination-current-verified" class="verified-badge" style="display:none;"></span>
                     </div>
                     <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
                     <div id="destination-loading-spinner" class="inline-spinner" aria-hidden="true"></div>
@@ -353,22 +348,54 @@
     </div>
 
     <div id="video-upload-modal" class="modal-overlay">
-        <div class="modal-content">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h3 style="margin:0; font-weight:800;">Create Video</h3>
+        <div class="modal-content video-upload-modal">
+            <div class="video-upload-header">
+                <div>
+                    <h3>Create Video</h3>
+                    <p>Upload a clip, add details, and publish to your Nexera channel.</p>
+                </div>
                 <button class="x-close-btn" onclick="window.toggleVideoUploadModal(false)">&times;</button>
             </div>
-            <input type="file" id="video-file" accept="video/mp4" class="form-input">
-            <label class="settings-label">Caption</label>
-            <textarea id="video-caption" class="form-input" rows="2"></textarea>
-            <label class="settings-label">Hashtags (comma separated)</label>
-            <input id="video-tags" class="form-input" placeholder="#nexera,#coding">
-            <label class="settings-label">Visibility</label>
-            <select id="video-visibility" class="form-input">
-                <option value="public">Public</option>
-                <option value="private">Private</option>
-            </select>
-            <button class="create-btn-sidebar" onclick="window.uploadVideo()">Publish</button>
+            <div class="video-upload-shell">
+                <div class="video-upload-panel">
+                    <label class="video-upload-drop" for="video-file">
+                        <input type="file" id="video-file" accept="video/mp4,video/*" class="video-upload-input"
+                            onchange="window.handleVideoFileChange(event)">
+                        <div class="video-upload-icon"><i class="ph ph-video-camera"></i></div>
+                        <div class="video-upload-title">Drop a video or click to browse</div>
+                        <div class="video-upload-subtitle">MP4 recommended • up to 2 minutes for Shorts</div>
+                    </label>
+                    <div class="video-upload-preview" id="video-upload-preview" aria-hidden="true">
+                        <video id="video-preview-player" muted playsinline></video>
+                        <div class="video-upload-preview-meta">
+                            <div>Auto thumbnail</div>
+                            <img id="video-thumbnail-preview" alt="Video thumbnail preview" />
+                        </div>
+                    </div>
+                    <div class="video-upload-thumb">
+                        <label class="settings-label">Custom thumbnail (optional)</label>
+                        <input type="file" id="video-thumbnail" accept="image/*" class="form-input"
+                            onchange="window.handleThumbnailChange(event)">
+                        <p class="video-upload-hint">We’ll grab the first frame if you skip this step.</p>
+                    </div>
+                </div>
+                <div class="video-upload-panel">
+                    <label class="settings-label" for="video-caption">Caption</label>
+                    <textarea id="video-caption" class="form-input" rows="3"
+                        placeholder="What’s this video about?"></textarea>
+                    <label class="settings-label" for="video-tags">Hashtags (comma separated)</label>
+                    <input id="video-tags" class="form-input" placeholder="#nexera,#coding">
+                    <label class="settings-label" for="video-visibility">Visibility</label>
+                    <select id="video-visibility" class="form-input">
+                        <option value="public">Public</option>
+                        <option value="private">Private</option>
+                    </select>
+                    <div class="video-upload-actions">
+                        <button class="icon-pill" onclick="window.toggleVideoUploadModal(false)">Cancel</button>
+                        <button class="create-btn-sidebar" onclick="window.uploadVideo()">Publish</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -680,6 +707,37 @@
             <div id="view-videos" class="view-section" style="display:none;">
                 <div id="videos-topbar"></div>
                 <div id="video-feed" class="video-feed"></div>
+                <div id="video-detail-modal" class="video-modal" style="display:none;">
+                    <div class="video-modal-backdrop" onclick="window.closeVideoDetail()"></div>
+                    <div class="video-modal-dialog">
+                        <button class="video-modal-close" type="button" onclick="window.closeVideoDetail()"
+                            aria-label="Close video details">&times;</button>
+                        <div class="video-modal-body">
+                            <div class="video-modal-player">
+                                <video id="video-modal-player" controls playsinline></video>
+                            </div>
+                            <div class="video-modal-meta">
+                                <div class="video-modal-title" id="video-modal-title"></div>
+                                <div class="video-modal-channel">
+                                    <div id="video-modal-avatar" class="video-modal-avatar"></div>
+                                    <div class="video-modal-channel-info">
+                                        <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
+                                        <div class="video-modal-channel-handle" id="video-modal-channel-handle"></div>
+                                    </div>
+                                    <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
+                                </div>
+                                <div class="video-modal-stats" id="video-modal-stats"></div>
+                                <div class="video-modal-actions">
+                                    <button id="video-modal-like" class="icon-pill"></button>
+                                    <button id="video-modal-dislike" class="icon-pill"></button>
+                                    <button id="video-modal-comment" class="icon-pill" disabled></button>
+                                    <button id="video-modal-save" class="icon-pill"></button>
+                                </div>
+                                <div class="video-modal-description" id="video-modal-description"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div id="view-messages" class="view-section" style="display:none;">
