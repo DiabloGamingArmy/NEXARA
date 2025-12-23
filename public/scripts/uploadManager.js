@@ -1,6 +1,7 @@
 import { ref, uploadBytesResumable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
 const UPLOAD_STORAGE_PREFIX = 'nexera-video-uploads';
+const PROGRESS_THROTTLE_MS = 400;
 let taskViewerBound = false;
 let preferredRetryId = null;
 
@@ -46,7 +47,8 @@ function updateUpload(uid, uploadId, patch) {
     const uploads = getUploads(uid);
     const idx = uploads.findIndex(function (entry) { return entry.uploadId === uploadId; });
     if (idx === -1) return null;
-    uploads[idx] = { ...uploads[idx], ...patch };
+    const updatedAt = patch?.updatedAt || Date.now();
+    uploads[idx] = { ...uploads[idx], ...patch, updatedAt };
     persistUploads(uid, uploads);
     return uploads[idx];
 }
@@ -130,7 +132,7 @@ function ensureTaskViewerListener({ onRetry, onClear }) {
 function normalizeResumableUploads(uploads) {
     return uploads.map(function (upload) {
         if (upload.status === 'UPLOADING') {
-            return { ...upload, status: 'PAUSED' };
+            return { ...upload, status: 'PAUSED', updatedAt: Date.now() };
         }
         return upload;
     });
@@ -156,10 +158,20 @@ function runUploadTask({ uid, storage, file, upload, onProgress, onComplete, onE
         const task = uploadBytesResumable(storageRef, file, {
             contentType: file.type || upload.contentType || undefined
         });
+        let lastProgressUpdate = 0;
+        let lastProgressValue = -1;
 
         task.on('state_changed', function (snapshot) {
             const progress = snapshot.totalBytes ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100) : 0;
-            updateUpload(uid, upload.uploadId, { lastProgress: progress, status: 'UPLOADING' });
+            const now = Date.now();
+            const shouldUpdate = progress === 0
+                || progress === 100
+                || progress !== lastProgressValue
+                && now - lastProgressUpdate >= PROGRESS_THROTTLE_MS;
+            if (!shouldUpdate) return;
+            lastProgressUpdate = now;
+            lastProgressValue = progress;
+            updateUpload(uid, upload.uploadId, { lastProgress: progress, status: 'UPLOADING', updatedAt: now });
             renderTaskViewer(getUploads(uid));
             if (typeof onStateChange === 'function') onStateChange(getUploads(uid));
             if (typeof onProgress === 'function') onProgress(progress, snapshot);
@@ -209,6 +221,7 @@ export function createUploadManager({ storage, onStateChange } = {}) {
                 contentType: file.type || session.contentType || '',
                 lastProgress: 0,
                 startedAt: Date.now(),
+                updatedAt: Date.now(),
                 status: 'UPLOADING'
             };
             upsertUpload(uid, upload);
@@ -218,7 +231,7 @@ export function createUploadManager({ storage, onStateChange } = {}) {
         },
         resumeUpload: async function ({ uid, file, upload, onProgress, onComplete, onError } = {}) {
             if (!uid || !file || !upload) return null;
-            updateUpload(uid, upload.uploadId, { status: 'UPLOADING' });
+            updateUpload(uid, upload.uploadId, { status: 'UPLOADING', updatedAt: Date.now() });
             renderTaskViewer(getUploads(uid));
             if (typeof onStateChange === 'function') onStateChange(getUploads(uid));
             return runUploadTask({ uid, storage, file, upload, onProgress, onComplete, onError, onStateChange });
