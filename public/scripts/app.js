@@ -79,7 +79,6 @@ let currentThreadComments = [];
 let liveSessionsCache = [];
 let profileMediaPrefetching = {};
 let uploadManager = null;
-let uploadTasks = [];
 let videoTaskViewerBound = false;
 
 // Optimistic UI Sets
