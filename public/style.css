@@ -197,6 +197,12 @@ body {
     body:not(.sidebar-home) .sidebar-right {
         display: none !important;
     }
+
+    /* Adjust category header to not overlap with right sidebar */
+    body.sidebar-home .category-header {
+        margin-right: 320px;
+        /* Match sidebar width */
+    }
 }
 
 /* Components */
@@ -5493,8 +5499,8 @@ body.go-live-open {
     display: flex;
     flex-direction: column;
     padding: 16px;
-    background: rgba(0, 242, 234, 0.03);
-    /* Subtle cyan tint to match theme */
+    background: rgba(255, 255, 255, 0.02);
+    /* Match sidebar-left subtle bg */
 }
 
 .messages-thread {

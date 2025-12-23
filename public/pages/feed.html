@@ -628,7 +628,10 @@
                             </div>
                         </div>
                     </div>
-                    <div class="thread-filter-row">
+                </div>
+                <div id="thread-stream" style="padding: 1rem; max-width: 800px; margin: 0 auto; position: relative;">
+                    <div class="thread-filter-row"
+                        style="position: absolute; top: 1rem; right: 1rem; margin: 0; padding: 0;">
                         <label for="comment-filter-mode" class="thread-filter-label">Filter</label>
                         <select id="comment-filter-mode" class="form-input" style="max-width:220px;"
                             onchange="window.updateCommentFilterMode(this.value)">
@@ -641,7 +644,6 @@
                             placeholder="Type to filter..." oninput="window.updateCommentFilterQuery(this.value)">
                     </div>
                 </div>
-                <div id="thread-stream" style="padding: 1rem; max-width: 800px; margin: 0 auto;"></div>
             </div>
 
             <div id="view-public-profile" class="view-section" style="display:none;"></div>
