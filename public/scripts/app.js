@@ -7953,7 +7953,7 @@ function pauseAllVideos() {
     if (modalPlayer) modalPlayer.pause();
 }
 
-function renderUploadTasks() {
+function renderUploadTasksLegacy() {
     const list = document.getElementById('video-task-list');
     if (!list) return;
     list.innerHTML = '';
@@ -7997,6 +7997,57 @@ function renderUploadTasks() {
 
         list.appendChild(row);
     });
+}
+
+function renderUploadTasksViewer() {
+    const list = document.getElementById('video-task-viewer-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!uploadTasks.length) {
+        list.innerHTML = '<div class="video-task-empty">No active tasks.</div>';
+        return;
+    }
+
+    uploadTasks.forEach(function (task) {
+        const row = document.createElement('div');
+        row.className = 'video-task-row';
+
+        const thumb = document.createElement('img');
+        thumb.className = 'video-task-thumb';
+        thumb.src = task.thumbnail || '';
+        thumb.alt = 'Upload thumbnail';
+        row.appendChild(thumb);
+
+        const meta = document.createElement('div');
+        meta.className = 'video-task-meta';
+
+        const title = document.createElement('div');
+        title.className = 'video-task-title';
+        title.textContent = task.title || 'Untitled video';
+
+        const status = document.createElement('div');
+        status.className = 'video-task-status';
+        status.textContent = task.status || 'Uploading';
+
+        const progressWrap = document.createElement('div');
+        progressWrap.className = 'video-task-progress';
+        const progressBar = document.createElement('span');
+        progressBar.style.width = `${task.progress || 0}%`;
+        progressWrap.appendChild(progressBar);
+
+        meta.appendChild(title);
+        meta.appendChild(status);
+        meta.appendChild(progressWrap);
+        row.appendChild(meta);
+
+        list.appendChild(row);
+    });
+}
+
+function renderUploadTasks() {
+    try { if (typeof renderUploadTasksViewer === 'function') renderUploadTasksViewer(); } catch (e) {}
+    try { if (typeof renderUploadTasksLegacy === 'function') renderUploadTasksLegacy(); } catch (e) {}
 }
 
 function toggleTaskViewer(show = true) {
