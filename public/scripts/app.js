@@ -6596,11 +6596,14 @@ function renderConversationList() {
         const unreadLabel = unread >= 10 ? '10+' : `${unread}`;
         const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
         const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
+        const tsSource = mapping.lastMessageAt || mapping.createdAt;
+        const tsLabel = tsSource ? formatMessageHoverTimestamp(tsSource) : '';
         const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
         item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
             <div class="conversation-body">
                 <div class="conversation-title-row">
                     <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                    <div class="conversation-time">${escapeHtml(tsLabel)}</div>
                     ${flagHtml}
                 </div>
                 <div class="conversation-preview">${previewText}</div>
