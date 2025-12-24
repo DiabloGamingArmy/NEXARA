@@ -89,6 +89,7 @@ let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
 let composerTags = [];
+let composerCreatedTags = new Set();
 let composerMentions = [];
 let composerPoll = { title: '', options: ['', ''] };
 let composerScheduledFor = '';
@@ -100,6 +101,7 @@ let replyExpansionState = {};
 let currentEditPost = null;
 let goLiveController = null;
 let tagSuggestionPool = [];
+let tagSuggestionState = { query: '', loading: false, token: 0 };
 let composerNewTagNotice = '';
 let videoNewTagNotice = '';
 let mentionSearchTimer = null;
@@ -3154,6 +3156,10 @@ function normalizeTagValue(tag = '') {
     return tag.trim().replace(/^#/, '').toLowerCase().replace(/[^\w]/g, '');
 }
 
+function buildTagDisplayName(normalized = '') {
+    return normalized ? `#${normalized}` : '';
+}
+
 function getHashtagQuery(inputValue = '') {
     const trimmed = (inputValue || '').trim();
     if (!trimmed.startsWith('#')) return '';
@@ -3256,6 +3262,7 @@ function renderLocationSuggestions(queryText = '') {
 
 function resetComposerState() {
     composerTags = [];
+    composerCreatedTags = new Set();
     composerMentions = [];
     composerPoll = { title: '', options: ['', ''] };
     composerScheduledFor = '';
@@ -3266,7 +3273,7 @@ function resetComposerState() {
     renderPollOptions();
     updateComposerTagLimit(false);
     composerNewTagNotice = '';
-    updateComposerTagHelper('', '', getKnownTags());
+    updateComposerTagHelper('');
     const scheduleInput = document.getElementById('schedule-input');
     if (scheduleInput) scheduleInput.value = '';
     setComposerLocation('');
@@ -3291,6 +3298,65 @@ function getKnownTags() {
         (post.tags || []).forEach(function (tag) { collected.add(normalizeTagValue(tag)); });
     });
     return Array.from(collected).filter(Boolean);
+}
+
+async function fetchTagSuggestions(prefix = '') {
+    const cleaned = normalizeTagValue(prefix);
+    if (!cleaned) return [];
+    const prefixLower = buildTagDisplayName(cleaned).toLowerCase();
+    const tagQuery = query(
+        collection(db, 'tags'),
+        orderBy('nameLower'),
+        startAt(prefixLower),
+        endAt(prefixLower + '\uf8ff'),
+        limit(5)
+    );
+    const snap = await getDocs(tagQuery);
+    return snap.docs.map(function (docSnap) {
+        const data = docSnap.data() || {};
+        const rawName = data.name || docSnap.id || '';
+        return normalizeTagValue(rawName);
+    }).filter(Boolean);
+}
+
+async function ensureTagDocument(normalizedTag = '') {
+    const tagId = normalizeTagValue(normalizedTag);
+    if (!tagId) return { created: false };
+    const tagRef = doc(db, 'tags', tagId);
+    const snap = await getDoc(tagRef);
+    if (snap.exists()) {
+        return { created: false };
+    }
+    const name = buildTagDisplayName(tagId);
+    await setDoc(tagRef, {
+        name,
+        nameLower: name.toLowerCase(),
+        uses: 1,
+        createdAt: serverTimestamp()
+    }, { merge: false });
+    composerCreatedTags.add(tagId);
+    return { created: true };
+}
+
+async function incrementTagUses(tags = []) {
+    const updates = (tags || [])
+        .map(function (tag) { return normalizeTagValue(tag); })
+        .filter(Boolean)
+        .filter(function (tag) { return !composerCreatedTags.has(tag); })
+        .map(function (tag) {
+            const name = buildTagDisplayName(tag);
+            return setDoc(doc(db, 'tags', tag), {
+                name,
+                nameLower: name.toLowerCase(),
+                uses: increment(1)
+            }, { merge: true });
+        });
+    if (!updates.length) return;
+    try {
+        await Promise.all(updates);
+    } catch (err) {
+        console.warn('Tag use increment failed', err);
+    }
 }
 
 function addComposerTag(tag = '') {
@@ -3330,36 +3396,49 @@ function renderComposerTags() {
     }).join('');
 }
 
-function filterTagSuggestions(queryText = '') {
+async function filterTagSuggestions(queryText = '') {
     const listEl = document.getElementById('tag-suggestions');
     if (!listEl) return;
     // Only show suggestions after a valid hashtag prefix (# + 1 char).
     const cleaned = getHashtagQuery(queryText);
-    const known = getKnownTags();
-    const matches = cleaned ? rankTagSuggestions(known, cleaned, composerTags) : [];
-    if (!matches.length) {
+    if (!cleaned) {
         listEl.innerHTML = '';
         listEl.style.display = 'none';
-    } else {
-        listEl.style.display = 'block';
-        listEl.innerHTML = matches.map(function (tag) {
-            return `<button type="button" class="suggestion-chip" onmousedown="event.preventDefault()" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
-        }).join('');
-    }
-    updateComposerTagHelper(queryText, cleaned, known);
-}
-
-function updateComposerTagHelper(rawValue = '', cleaned = '', known = []) {
-    const helper = document.getElementById('tag-helper-text');
-    if (!helper) return;
-    const normalized = cleaned || getHashtagQuery(rawValue);
-    if (composerNewTagNotice) {
-        helper.textContent = composerNewTagNotice;
-        helper.style.display = 'block';
+        updateComposerTagHelper(queryText, cleaned);
         return;
     }
-    if (normalized && !known.includes(normalized)) {
-        helper.textContent = `Creating new tag #${normalized}`;
+    const token = ++tagSuggestionState.token;
+    tagSuggestionState.query = cleaned;
+    tagSuggestionState.loading = true;
+    try {
+        const matches = await fetchTagSuggestions(cleaned);
+        if (token !== tagSuggestionState.token) return;
+        if (!matches.length) {
+            listEl.innerHTML = '';
+            listEl.style.display = 'none';
+        } else {
+            listEl.style.display = 'block';
+            listEl.innerHTML = matches.map(function (tag) {
+                return `<button type="button" class="suggestion-chip" onmousedown="event.preventDefault()" onclick="window.selectTagSuggestion('${tag}')">#${escapeHtml(tag)}</button>`;
+            }).join('');
+        }
+    } catch (err) {
+        console.warn('Tag suggestion lookup failed', err);
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+    } finally {
+        if (token === tagSuggestionState.token) {
+            tagSuggestionState.loading = false;
+        }
+    }
+    updateComposerTagHelper(queryText, cleaned);
+}
+
+function updateComposerTagHelper(rawValue = '', cleaned = '') {
+    const helper = document.getElementById('tag-helper-text');
+    if (!helper) return;
+    if (composerNewTagNotice) {
+        helper.textContent = composerNewTagNotice;
         helper.style.display = 'block';
         return;
     }
@@ -3389,7 +3468,17 @@ function toggleTagInput(show) {
     }
 }
 
-function handleTagInputKey(event) {
+window.selectTagSuggestion = function (tag = '') {
+    const input = document.getElementById('tag-input');
+    if (!input) return;
+    const normalized = normalizeTagValue(tag);
+    if (!normalized) return;
+    input.value = buildTagDisplayName(normalized);
+    input.focus();
+    filterTagSuggestions(input.value);
+};
+
+async function handleTagInputKey(event) {
     if (event.key === 'Enter') {
         event.preventDefault();
         const input = event.target;
@@ -3399,16 +3488,32 @@ function handleTagInputKey(event) {
             filterTagSuggestions(raw);
             return;
         }
-        // Enter adds the normalized tag and shows "creating new tag" when unknown.
-        const knownTags = getKnownTags();
-        addComposerTag(raw);
-        if (query && !knownTags.includes(query)) {
-            composerNewTagNotice = `Creating new tag #${query}`;
-        } else {
-            composerNewTagNotice = '';
+        if (composerTags.length >= 10) {
+            updateComposerTagLimit(true);
+            return;
         }
+        if (composerTags.includes(query)) {
+            input.value = '';
+            updateComposerTagLimit(false);
+            filterTagSuggestions('');
+            return;
+        }
+        composerNewTagNotice = '';
+        try {
+            const tagRef = doc(db, 'tags', query);
+            const snap = await getDoc(tagRef);
+            if (!snap.exists()) {
+                composerNewTagNotice = 'Creating new tag...';
+                updateComposerTagHelper(raw, query);
+                await ensureTagDocument(query);
+            }
+        } catch (err) {
+            console.warn('Tag creation failed', err);
+        }
+        addComposerTag(query);
+        composerNewTagNotice = '';
         input.value = '';
-        updateComposerTagHelper(raw, query, knownTags);
+        updateComposerTagHelper(raw, query);
         filterTagSuggestions('');
     } else {
         composerNewTagNotice = '';
@@ -3605,7 +3710,10 @@ function escapeRegex(str = '') {
 
 function renderTagList(tags = []) {
     if (!tags.length) return '';
-    return `<div style="margin-top:8px;">${tags.map(function (tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
+    return `<div style="margin-top:8px;">${tags.map(function (tag) {
+        const normalized = normalizeTagValue(tag);
+        return normalized ? `<span class="tag-chip">#${escapeHtml(normalized)}</span>` : '';
+    }).filter(Boolean).join('')}</div>`;
 }
 
 function renderPollBlock(post) {
@@ -3639,8 +3747,10 @@ function formatContent(text = '', tags = [], mentions = []) {
         safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
     });
     (tags || []).forEach(function (tag) {
-        const regex = new RegExp('#' + escapeRegex(tag), 'gi');
-        safe = safe.replace(regex, `<span class="tag-chip">#${escapeHtml(tag)}</span>`);
+        const normalized = normalizeTagValue(tag);
+        if (!normalized) return;
+        const regex = new RegExp('#' + escapeRegex(normalized), 'gi');
+        safe = safe.replace(regex, `<span class="tag-chip">#${escapeHtml(normalized)}</span>`);
     });
     return safe;
 }
@@ -3769,7 +3879,8 @@ window.createPost = async function () {
     const content = document.getElementById('postContent').value;
     const tagInput = document.getElementById('tag-input');
     const mentionInput = document.getElementById('mention-input');
-    const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+    const normalizedTags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+    const tags = normalizedTags.map(function (tag) { return buildTagDisplayName(tag); });
     const mentions = normalizeMentionsField(composerMentions || []);
     const fileInput = document.getElementById('postFile');
     const btn = document.getElementById('publishBtn');
@@ -3865,6 +3976,7 @@ window.createPost = async function () {
         } else {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+            await incrementTagUses(normalizedTags);
         }
 
         if (locationValue) {

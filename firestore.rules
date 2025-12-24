@@ -163,6 +163,15 @@ service firebase.storage {
     }
 
     // -------------------------
+    // Tags
+    // -------------------------
+    match /tags/{tagId} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if false;
+    }
+
+    // -------------------------
     // Live sessions
     // -------------------------
     match /liveSessions/{sid} {
