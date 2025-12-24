@@ -1,0 +1,66 @@
+// Firebase Storage Rules (NOT Firestore rules)
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // -------------------------
+    // Helpers
+    // -------------------------
+    function isSignedIn() { return request.auth != null; }
+
+    // -------------------------
+    // Public images (optional)
+    // Put public images here if you truly want them world-readable:
+    // e.g. /public_images/..., /avatars/..., /thumbnails/...
+    // -------------------------
+    match /public_images/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /avatars/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /thumbnails/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // -------------------------
+    // Videos (OPERATIONAL RULE)
+    // Path: /videos/{uid}/{videoId}/{fileName}
+    // -------------------------
+    match /videos/{uid}/{videoId}/{fileName} {
+      allow read: if true;
+
+      // Keeps your current behavior: owner-only upload/write, huge max size.
+      // If you want to restrict MIME types later, add: request.resource.contentType.matches('video/.*')
+      allow write: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.size < 100 * 1024 * 1024 * 1024;
+    }
+
+    // -------------------------
+    // Conversation avatars (participant-only write)
+    // Path: /conversation_avatars/{cid}/{fileName}
+    // Uses Firestore lookup to validate membership.
+    // -------------------------
+    match /conversation_avatars/{cid}/{fileName} {
+      allow read: if true;
+
+      allow write: if isSignedIn()
+        && exists(/databases/{database}/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/{database}/documents/conversations/$(cid)).data.participants;
+    }
+
+    // -------------------------
+    // Default: deny everything else
+    // -------------------------
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
