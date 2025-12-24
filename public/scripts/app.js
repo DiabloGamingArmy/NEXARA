@@ -43,6 +43,10 @@ let savedSearchTerm = '';
 let savedFilter = 'All Saved';
 const SEARCH_QUERY_KEY = 'q';
 const SEARCH_DEBOUNCE_MS = 300;
+let preserveFeedState = false;
+let pendingFeedScrollRestore = null;
+let feedScrollRestoreToken = 0;
+let forceConversationScroll = false;
 
 const GO_LIVE_MODE_STORAGE_KEY = 'nexera-go-live-mode';
 let videoSearchTerm = '';
@@ -723,6 +727,24 @@ window.Nexera.ensurePostInCache = function (post) {
     if (post.userId && !userCache[post.userId]) {
         fetchMissingProfiles([{ userId: post.userId }]);
     }
+};
+window.Nexera.restoreFeedScroll = function (scrollY) {
+    if (typeof scrollY !== 'number') return;
+    pendingFeedScrollRestore = scrollY;
+    const token = ++feedScrollRestoreToken;
+    const started = performance.now();
+    const attempt = function () {
+        if (token !== feedScrollRestoreToken) return;
+        const container = document.getElementById('feed-content');
+        const ready = container && (container.children.length > 0 || !feedLoading);
+        if (ready || performance.now() - started > 1500) {
+            window.scrollTo(0, pendingFeedScrollRestore || 0);
+            pendingFeedScrollRestore = null;
+            return;
+        }
+        requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(attempt);
 };
 window.Nexera.navigateTo = function (routeObj) {
     if (!routeObj) return;
@@ -2245,7 +2267,8 @@ window.navigateTo = function (viewId, pushToStack = true) {
             category: currentCategory,
             profileFilter: currentProfileFilter,
             viewingUser: viewingUserId,
-            activePost: activePostId
+            activePost: activePostId,
+            scrollY: window.scrollY || 0
         });
     }
 
@@ -2267,7 +2290,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     // View Specific Logic
     syncSearchStateFromUrl(viewId);
     if (viewId === 'feed') {
-        currentCategory = 'For You';
+        if (!preserveFeedState) {
+            currentCategory = 'For You';
+        }
+        preserveFeedState = false;
         renderFeed();
         loadFeedData();
     }
@@ -2417,10 +2443,16 @@ window.goBack = function () {
     if (prevState.view === 'public-profile') viewingUserId = prevState.viewingUser;
     if (prevState.view === 'thread') activePostId = prevState.activePost;
 
+    if (prevState.view === 'feed') {
+        preserveFeedState = true;
+        if (typeof prevState.scrollY === 'number' && window.Nexera?.restoreFeedScroll) {
+            window.Nexera.restoreFeedScroll(prevState.scrollY);
+        }
+    }
+
     window.navigateTo(prevState.view, false);
 
     // Re-render Views based on restored context
-    if (prevState.view === 'feed') renderFeed();
     if (prevState.view === 'public-profile' && viewingUserId) {
         window.openUserProfile(viewingUserId, null, false);
     }
@@ -2892,8 +2924,6 @@ function renderFeed(targetId = 'feed-content') {
 
     if (currentCategory === 'For You') {
         displayPosts = displayPosts.slice().sort(function (a, b) {
-            const scoreDiff = getPostAffinityScore(b) - getPostAffinityScore(a);
-            if (scoreDiff !== 0) return scoreDiff;
             return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
         });
     }
@@ -6034,6 +6064,18 @@ function isNearBottom(el, threshold = 80) {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
 }
 
+function getMessageScrollContainer() {
+    const body = document.getElementById('message-thread');
+    if (!body) return null;
+    return body.closest('.message-scroll-region') || body;
+}
+
+function scrollMessagesToBottom() {
+    const scrollRegion = getMessageScrollContainer();
+    if (!scrollRegion) return;
+    scrollRegion.scrollTop = scrollRegion.scrollHeight;
+}
+
 function computeConversationTitle(convo = {}, viewerId = currentUser?.uid) {
     const stored = (convo.title || '').trim();
     if (stored) return stored;
@@ -6242,9 +6284,10 @@ function renderMessageHeader(convo = {}) {
 
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
-    if (!body) return;
-    const shouldStickToBottom = isNearBottom(body);
-    const previousOffset = body.scrollHeight - body.scrollTop;
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion) return;
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
     body.innerHTML = '';
 
     let lastTimestamp = null;
@@ -6434,9 +6477,12 @@ function renderMessages(msgs = [], convo = {}) {
 
     body.appendChild(fragment);
     if (shouldStickToBottom) {
-        body.scrollTop = body.scrollHeight;
+        scrollRegion.scrollTop = scrollRegion.scrollHeight;
     } else {
-        body.scrollTop = Math.max(0, body.scrollHeight - previousOffset);
+        scrollRegion.scrollTop = Math.max(0, scrollRegion.scrollHeight - previousOffset);
+    }
+    if (forceConversationScroll) {
+        forceConversationScroll = false;
     }
 }
 
@@ -6960,6 +7006,7 @@ async function openConversation(conversationId) {
     if (body) body.innerHTML = '';
     const header = document.getElementById('message-header');
     if (header) header.textContent = 'Loading conversation...';
+    forceConversationScroll = true;
 
     let convo = null;
     try {
