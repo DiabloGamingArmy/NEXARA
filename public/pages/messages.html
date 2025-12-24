@@ -410,6 +410,121 @@
                         <option value="public">Public</option>
                         <option value="private">Private</option>
                     </select>
+                    <div class="video-upload-grid">
+                        <div class="video-upload-field">
+                            <label class="settings-label" for="video-category">Category</label>
+                            <select id="video-category" class="form-input">
+                                <option value="General">General</option>
+                                <option value="Education">Education</option>
+                                <option value="Entertainment">Entertainment</option>
+                                <option value="Gaming">Gaming</option>
+                                <option value="News">News</option>
+                                <option value="Tech">Tech</option>
+                                <option value="Lifestyle">Lifestyle</option>
+                            </select>
+                        </div>
+                        <div class="video-upload-field">
+                            <label class="settings-label" for="video-language">Language</label>
+                            <select id="video-language" class="form-input">
+                                <option value="en">English</option>
+                                <option value="es">Spanish</option>
+                                <option value="fr">French</option>
+                                <option value="de">German</option>
+                                <option value="pt">Portuguese</option>
+                                <option value="ja">Japanese</option>
+                            </select>
+                        </div>
+                        <div class="video-upload-field">
+                            <label class="settings-label" for="video-license">License</label>
+                            <select id="video-license" class="form-input">
+                                <option value="Standard">Standard</option>
+                                <option value="Creative Commons">Creative Commons</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="video-upload-field">
+                        <label class="settings-label" for="video-scheduled-at">Scheduled publish time (optional)</label>
+                        <input id="video-scheduled-at" class="form-input" type="datetime-local">
+                        <p class="video-upload-hint">Leave blank to publish immediately.</p>
+                    </div>
+                    <div class="video-advanced-options">
+                        <div class="video-advanced-header">
+                            <div>
+                                <div class="video-advanced-title">Advanced options</div>
+                                <div class="video-advanced-subtitle">Tune engagement and sharing settings.</div>
+                            </div>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Monetizable</div>
+                                <div class="video-toggle-helper">Coming soon.</div>
+                            </div>
+                            <label class="switch is-disabled" aria-label="Monetizable">
+                                <input type="checkbox" id="video-monetizable" disabled>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Downloadable</div>
+                                <div class="video-toggle-helper">Allow viewers to download this video.</div>
+                            </div>
+                            <label class="switch" aria-label="Downloadable">
+                                <input type="checkbox" id="video-allow-download">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Embeddable</div>
+                                <div class="video-toggle-helper">Allow sharing this video as an embed.</div>
+                            </div>
+                            <label class="switch" aria-label="Embeddable">
+                                <input type="checkbox" id="video-allow-embed">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Allow comments</div>
+                                <div class="video-toggle-helper">Let people reply and start discussions.</div>
+                            </div>
+                            <label class="switch" aria-label="Allow comments">
+                                <input type="checkbox" id="video-allow-comments" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Notify followers</div>
+                                <div class="video-toggle-helper">Send a push when this video goes live.</div>
+                            </div>
+                            <label class="switch" aria-label="Notify followers">
+                                <input type="checkbox" id="video-notify-followers" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Age restricted</div>
+                                <div class="video-toggle-helper">Limit viewing to adults only.</div>
+                            </div>
+                            <label class="switch" aria-label="Age restricted">
+                                <input type="checkbox" id="video-age-restricted">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-toggle-row">
+                            <div class="video-toggle-text">
+                                <div class="video-toggle-label">Sensitive content</div>
+                                <div class="video-toggle-helper">Flag this video as sensitive.</div>
+                            </div>
+                            <label class="switch" aria-label="Sensitive content">
+                                <input type="checkbox" id="video-sensitive-content">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
                     <div class="video-upload-actions">
                         <button class="icon-pill" onclick="window.toggleVideoUploadModal(false)">Cancel</button>
                         <button id="video-upload-submit" class="create-btn-sidebar" onclick="window.handleVideoSubmit()">Publish</button>
@@ -747,16 +862,6 @@
                         <button class="video-modal-close" type="button" onclick="window.closeVideoDetail()"
                             aria-label="Close video details">&times;</button>
                         <div class="video-modal-body">
-                            <aside class="video-modal-side">
-                                <div class="video-modal-channel-card">
-                                    <div id="video-modal-avatar" class="video-modal-avatar"></div>
-                                    <div class="video-modal-channel-info">
-                                        <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
-                                        <div class="video-modal-channel-handle" id="video-modal-channel-handle"></div>
-                                    </div>
-                                    <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
-                                </div>
-                            </aside>
                             <main class="video-modal-main">
                                 <div class="video-modal-player">
                                     <video id="video-modal-player" controls playsinline></video>
@@ -769,6 +874,18 @@
                                         <button id="video-modal-share" class="icon-pill"></button>
                                     </div>
                                     <div class="video-modal-views" id="video-modal-views"></div>
+                                </div>
+                                <div class="video-modal-channel-card" id="video-modal-channel-card">
+                                    <div class="video-modal-channel-header">
+                                        <div id="video-modal-avatar" class="video-modal-avatar"></div>
+                                        <div class="video-modal-channel-info">
+                                            <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
+                                            <div class="video-modal-channel-handle" id="video-modal-channel-handle"></div>
+                                        </div>
+                                        <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
+                                    </div>
+                                    <div id="video-modal-channel-bio" class="video-modal-channel-bio"></div>
+                                    <div id="video-modal-channel-links" class="video-modal-channel-links"></div>
                                 </div>
                                 <div class="video-modal-title" id="video-modal-title"></div>
                                 <div class="video-modal-description" id="video-modal-description"></div>
@@ -1620,10 +1737,18 @@
 
     <div id="video-mini-player" class="video-mini-player" style="display:none;">
         <div class="video-mini-player-header" data-mini-drag>
-            <span>Now Playing</span>
-            <button type="button" class="video-mini-player-close" onclick="window.closeMiniPlayer()">×</button>
+            <div class="video-mini-player-status">
+                <span id="video-mini-player-indicator" class="video-mini-player-indicator"></span>
+                <span id="video-mini-player-status">Playing</span>
+            </div>
+            <div class="video-mini-player-actions">
+                <button type="button" class="video-mini-player-expand" onclick="window.expandMiniPlayer()" aria-label="Expand video">
+                    <i class="ph ph-arrows-out"></i>
+                </button>
+                <button type="button" class="video-mini-player-close" onclick="window.closeMiniPlayer()" aria-label="Close mini player">×</button>
+            </div>
         </div>
-        <video id="video-mini-player-video" controls playsinline></video>
+        <div id="video-mini-player-slot" class="video-mini-player-slot"></div>
     </div>
 
     <!-- Main JS logic -->

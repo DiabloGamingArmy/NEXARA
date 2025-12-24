@@ -60,6 +60,9 @@
       { "source": "/home", "destination": "/pages/home.html" },
       { "source": "/live", "destination": "/pages/live.html" },
       { "source": "/videos", "destination": "/pages/videos.html" },
+      { "source": "/videos/**", "destination": "/pages/videos.html" },
+      { "source": "/create-video", "destination": "/pages/videos.html" },
+      { "source": "/video/video-manager", "destination": "/pages/videos.html" },
       { "source": "/messages", "destination": "/pages/messages.html" },
       { "source": "/inbox", "destination": "/index.html" },
       { "source": "/discover", "destination": "/pages/discover.html" },
@@ -70,7 +73,7 @@
       { "source": "/messages/**", "destination": "/index.html" },
       { "source": "/inbox/**", "destination": "/index.html" },
       { "source": "/view-thread/**", "destination": "/index.html" },
-      { "source": "/video/**", "destination": "/index.html" },
+      { "source": "/video/**", "destination": "/pages/videos.html" },
       { "source": "/post/**", "destination": "/index.html" },
       { "source": "/not-found", "destination": "/index.html" },
       { "source": "**", "destination": "/index.html" }
