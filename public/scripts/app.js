@@ -64,6 +64,8 @@ let videoUploadMode = 'create';
 let editingVideoId = null;
 let editingVideoData = null;
 let miniPlayerState = null;
+let miniPlayerMode = null;
+let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
@@ -87,6 +89,7 @@ let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
 let composerTags = [];
+let composerCreatedTags = new Set();
 let composerMentions = [];
 let composerPoll = { title: '', options: ['', ''] };
 let composerScheduledFor = '';
@@ -98,6 +101,7 @@ let replyExpansionState = {};
 let currentEditPost = null;
 let goLiveController = null;
 let tagSuggestionPool = [];
+let tagSuggestionState = { query: '', loading: false, token: 0 };
 let composerNewTagNotice = '';
 let videoNewTagNotice = '';
 let mentionSearchTimer = null;
@@ -114,6 +118,7 @@ let liveSessionsCache = [];
 let profileMediaPrefetching = {};
 let uploadManager = null;
 let videoTaskViewerBound = false;
+let videoManagerMenuState = { videoId: null };
 
 // Optimistic UI Sets
 let followedCategories = new Set();
@@ -2333,10 +2338,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'videos' && miniPlayerState) {
         restoreModalFromMiniPlayer();
     }
-    if (shouldHideMiniPlayer(viewId)) {
+    if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
     } else if (miniPlayerState) {
-        showMiniPlayer(miniPlayerState);
+        showMiniPlayer();
     }
     if (viewId === 'live') {
         renderLiveSessions();
@@ -3151,6 +3156,10 @@ function normalizeTagValue(tag = '') {
     return tag.trim().replace(/^#/, '').toLowerCase().replace(/[^\w]/g, '');
 }
 
+function buildTagDisplayName(normalized = '') {
+    return normalized ? `#${normalized}` : '';
+}
+
 function getHashtagQuery(inputValue = '') {
     const trimmed = (inputValue || '').trim();
     if (!trimmed.startsWith('#')) return '';
@@ -3253,6 +3262,7 @@ function renderLocationSuggestions(queryText = '') {
 
 function resetComposerState() {
     composerTags = [];
+    composerCreatedTags = new Set();
     composerMentions = [];
     composerPoll = { title: '', options: ['', ''] };
     composerScheduledFor = '';
@@ -3263,7 +3273,7 @@ function resetComposerState() {
     renderPollOptions();
     updateComposerTagLimit(false);
     composerNewTagNotice = '';
-    updateComposerTagHelper('', '', getKnownTags());
+    updateComposerTagHelper('');
     const scheduleInput = document.getElementById('schedule-input');
     if (scheduleInput) scheduleInput.value = '';
     setComposerLocation('');
@@ -3288,6 +3298,65 @@ function getKnownTags() {
         (post.tags || []).forEach(function (tag) { collected.add(normalizeTagValue(tag)); });
     });
     return Array.from(collected).filter(Boolean);
+}
+
+async function fetchTagSuggestions(prefix = '') {
+    const cleaned = normalizeTagValue(prefix);
+    if (!cleaned) return [];
+    const prefixLower = buildTagDisplayName(cleaned).toLowerCase();
+    const tagQuery = query(
+        collection(db, 'tags'),
+        orderBy('nameLower'),
+        startAt(prefixLower),
+        endAt(prefixLower + '\uf8ff'),
+        limit(5)
+    );
+    const snap = await getDocs(tagQuery);
+    return snap.docs.map(function (docSnap) {
+        const data = docSnap.data() || {};
+        const rawName = data.name || docSnap.id || '';
+        return normalizeTagValue(rawName);
+    }).filter(Boolean);
+}
+
+async function ensureTagDocument(normalizedTag = '') {
+    const tagId = normalizeTagValue(normalizedTag);
+    if (!tagId) return { created: false };
+    const tagRef = doc(db, 'tags', tagId);
+    const snap = await getDoc(tagRef);
+    if (snap.exists()) {
+        return { created: false };
+    }
+    const name = buildTagDisplayName(tagId);
+    await setDoc(tagRef, {
+        name,
+        nameLower: name.toLowerCase(),
+        uses: 1,
+        createdAt: serverTimestamp()
+    }, { merge: false });
+    composerCreatedTags.add(tagId);
+    return { created: true };
+}
+
+async function incrementTagUses(tags = []) {
+    const updates = (tags || [])
+        .map(function (tag) { return normalizeTagValue(tag); })
+        .filter(Boolean)
+        .filter(function (tag) { return !composerCreatedTags.has(tag); })
+        .map(function (tag) {
+            const name = buildTagDisplayName(tag);
+            return setDoc(doc(db, 'tags', tag), {
+                name,
+                nameLower: name.toLowerCase(),
+                uses: increment(1)
+            }, { merge: true });
+        });
+    if (!updates.length) return;
+    try {
+        await Promise.all(updates);
+    } catch (err) {
+        console.warn('Tag use increment failed', err);
+    }
 }
 
 function addComposerTag(tag = '') {
@@ -3327,36 +3396,49 @@ function renderComposerTags() {
     }).join('');
 }
 
-function filterTagSuggestions(queryText = '') {
+async function filterTagSuggestions(queryText = '') {
     const listEl = document.getElementById('tag-suggestions');
     if (!listEl) return;
     // Only show suggestions after a valid hashtag prefix (# + 1 char).
     const cleaned = getHashtagQuery(queryText);
-    const known = getKnownTags();
-    const matches = cleaned ? rankTagSuggestions(known, cleaned, composerTags) : [];
-    if (!matches.length) {
+    if (!cleaned) {
         listEl.innerHTML = '';
         listEl.style.display = 'none';
-    } else {
-        listEl.style.display = 'block';
-        listEl.innerHTML = matches.map(function (tag) {
-            return `<button type="button" class="suggestion-chip" onmousedown="event.preventDefault()" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
-        }).join('');
-    }
-    updateComposerTagHelper(queryText, cleaned, known);
-}
-
-function updateComposerTagHelper(rawValue = '', cleaned = '', known = []) {
-    const helper = document.getElementById('tag-helper-text');
-    if (!helper) return;
-    const normalized = cleaned || getHashtagQuery(rawValue);
-    if (composerNewTagNotice) {
-        helper.textContent = composerNewTagNotice;
-        helper.style.display = 'block';
+        updateComposerTagHelper(queryText, cleaned);
         return;
     }
-    if (normalized && !known.includes(normalized)) {
-        helper.textContent = `Creating new tag #${normalized}`;
+    const token = ++tagSuggestionState.token;
+    tagSuggestionState.query = cleaned;
+    tagSuggestionState.loading = true;
+    try {
+        const matches = await fetchTagSuggestions(cleaned);
+        if (token !== tagSuggestionState.token) return;
+        if (!matches.length) {
+            listEl.innerHTML = '';
+            listEl.style.display = 'none';
+        } else {
+            listEl.style.display = 'block';
+            listEl.innerHTML = matches.map(function (tag) {
+                return `<button type="button" class="suggestion-chip" onmousedown="event.preventDefault()" onclick="window.selectTagSuggestion('${tag}')">#${escapeHtml(tag)}</button>`;
+            }).join('');
+        }
+    } catch (err) {
+        console.warn('Tag suggestion lookup failed', err);
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+    } finally {
+        if (token === tagSuggestionState.token) {
+            tagSuggestionState.loading = false;
+        }
+    }
+    updateComposerTagHelper(queryText, cleaned);
+}
+
+function updateComposerTagHelper(rawValue = '', cleaned = '') {
+    const helper = document.getElementById('tag-helper-text');
+    if (!helper) return;
+    if (composerNewTagNotice) {
+        helper.textContent = composerNewTagNotice;
         helper.style.display = 'block';
         return;
     }
@@ -3386,7 +3468,17 @@ function toggleTagInput(show) {
     }
 }
 
-function handleTagInputKey(event) {
+window.selectTagSuggestion = function (tag = '') {
+    const input = document.getElementById('tag-input');
+    if (!input) return;
+    const normalized = normalizeTagValue(tag);
+    if (!normalized) return;
+    input.value = buildTagDisplayName(normalized);
+    input.focus();
+    filterTagSuggestions(input.value);
+};
+
+async function handleTagInputKey(event) {
     if (event.key === 'Enter') {
         event.preventDefault();
         const input = event.target;
@@ -3396,16 +3488,32 @@ function handleTagInputKey(event) {
             filterTagSuggestions(raw);
             return;
         }
-        // Enter adds the normalized tag and shows "creating new tag" when unknown.
-        const knownTags = getKnownTags();
-        addComposerTag(raw);
-        if (query && !knownTags.includes(query)) {
-            composerNewTagNotice = `Creating new tag #${query}`;
-        } else {
-            composerNewTagNotice = '';
+        if (composerTags.length >= 10) {
+            updateComposerTagLimit(true);
+            return;
         }
+        if (composerTags.includes(query)) {
+            input.value = '';
+            updateComposerTagLimit(false);
+            filterTagSuggestions('');
+            return;
+        }
+        composerNewTagNotice = '';
+        try {
+            const tagRef = doc(db, 'tags', query);
+            const snap = await getDoc(tagRef);
+            if (!snap.exists()) {
+                composerNewTagNotice = 'Creating new tag...';
+                updateComposerTagHelper(raw, query);
+                await ensureTagDocument(query);
+            }
+        } catch (err) {
+            console.warn('Tag creation failed', err);
+        }
+        addComposerTag(query);
+        composerNewTagNotice = '';
         input.value = '';
-        updateComposerTagHelper(raw, query, knownTags);
+        updateComposerTagHelper(raw, query);
         filterTagSuggestions('');
     } else {
         composerNewTagNotice = '';
@@ -3415,14 +3523,21 @@ function handleTagInputKey(event) {
 
 function normalizeMentionEntry(raw = {}) {
     if (typeof raw === 'string') {
-        return { username: raw.replace(/^@/, '').toLowerCase(), uid: raw.uid || null };
+        const username = raw.replace(/^@/, '').toLowerCase();
+        return {
+            username,
+            uid: raw.uid || null,
+            photoURL: raw.photoURL || '',
+            avatarColor: raw.avatarColor || raw.profileColor || raw.color || computeAvatarColor(raw.uid || username || 'user')
+        };
     }
     const username = (raw.username || raw.handle || '').replace(/^@/, '').toLowerCase();
     const displayName = raw.displayName || raw.nickname || raw.name || '';
     const uid = raw.uid || raw.userId || null;
     const accountRoles = Array.isArray(raw.accountRoles) ? raw.accountRoles : (raw.role ? [raw.role] : []);
     const verified = accountRoles.includes('verified');
-    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor: raw.avatarColor || '', accountRoles, verified };
+    const avatarColor = raw.avatarColor || raw.profileColor || raw.color || computeAvatarColor(uid || username || 'user');
+    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor, accountRoles, verified };
 }
 
 function addComposerMention(rawUser) {
@@ -3595,7 +3710,10 @@ function escapeRegex(str = '') {
 
 function renderTagList(tags = []) {
     if (!tags.length) return '';
-    return `<div style="margin-top:8px;">${tags.map(function (tag) { return `<span class="tag-chip">#${escapeHtml(tag)}</span>`; }).join('')}</div>`;
+    return `<div style="margin-top:8px;">${tags.map(function (tag) {
+        const normalized = normalizeTagValue(tag);
+        return normalized ? `<span class="tag-chip">#${escapeHtml(normalized)}</span>` : '';
+    }).filter(Boolean).join('')}</div>`;
 }
 
 function renderPollBlock(post) {
@@ -3629,8 +3747,10 @@ function formatContent(text = '', tags = [], mentions = []) {
         safe = safe.replace(regex, `<a class="mention-link" onclick=\"window.openUserProfileByHandle('${handle}')\">@${escapeHtml(handle)}</a>`);
     });
     (tags || []).forEach(function (tag) {
-        const regex = new RegExp('#' + escapeRegex(tag), 'gi');
-        safe = safe.replace(regex, `<span class="tag-chip">#${escapeHtml(tag)}</span>`);
+        const normalized = normalizeTagValue(tag);
+        if (!normalized) return;
+        const regex = new RegExp('#' + escapeRegex(normalized), 'gi');
+        safe = safe.replace(regex, `<span class="tag-chip">#${escapeHtml(normalized)}</span>`);
     });
     return safe;
 }
@@ -3759,7 +3879,8 @@ window.createPost = async function () {
     const content = document.getElementById('postContent').value;
     const tagInput = document.getElementById('tag-input');
     const mentionInput = document.getElementById('mention-input');
-    const tags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+    const normalizedTags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
+    const tags = normalizedTags.map(function (tag) { return buildTagDisplayName(tag); });
     const mentions = normalizeMentionsField(composerMentions || []);
     const fileInput = document.getElementById('postFile');
     const btn = document.getElementById('publishBtn');
@@ -3855,6 +3976,7 @@ window.createPost = async function () {
         } else {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+            await incrementTagUses(normalizedTags);
         }
 
         if (locationValue) {
@@ -6302,13 +6424,14 @@ function normalizeNotificationKeyPart(value = '') {
     return String(value || '').replace(/[\\/]/g, '_').trim();
 }
 
-function buildNotificationDocId({ targetUid = '', actorUid = '', entityType = '', entityId = '', actionType = '' }) {
+function buildNotificationDocId({ targetUid = '', actorUid = '', entityType = '', entityId = '', actionType = '', type = '' }) {
+    const action = actionType || type || '';
     return [
-        normalizeNotificationKeyPart(targetUid),
+        normalizeNotificationKeyPart(action),
         normalizeNotificationKeyPart(actorUid),
+        normalizeNotificationKeyPart(targetUid),
         normalizeNotificationKeyPart(entityType),
-        normalizeNotificationKeyPart(entityId),
-        normalizeNotificationKeyPart(actionType)
+        normalizeNotificationKeyPart(entityId)
     ].filter(Boolean).join('_');
 }
 
@@ -6318,24 +6441,22 @@ async function createNotificationOnce(payload = {}) {
     if (!targetUid || !actorUid || targetUid === actorUid) return;
     const docId = buildNotificationDocId(payload);
     if (!docId) return;
-    const notifRef = doc(db, 'users', targetUid, 'notifications', docId);
-    await runTransaction(db, async function (tx) {
-        const snap = await tx.get(notifRef);
-        if (snap.exists()) return;
-        const body = {
-            createdAt: serverTimestamp(),
-            read: false,
-            actorUid,
-            targetUid,
-            entityType: payload.entityType || null,
-            entityId: payload.entityId || null,
-            actionType: payload.actionType || payload.type || null,
-            type: payload.type || payload.actionType || 'activity',
-            previewText: payload.previewText || '',
-            extra: payload.extra || null
-        };
-        tx.set(notifRef, body, { merge: false });
-    });
+    const notifRef = doc(db, 'notifications', targetUid, 'items', docId);
+    const snap = await getDoc(notifRef);
+    if (snap.exists()) return;
+    const body = {
+        createdAt: serverTimestamp(),
+        read: false,
+        actorUid,
+        targetUid,
+        entityType: payload.entityType || null,
+        entityId: payload.entityId || null,
+        actionType: payload.actionType || payload.type || null,
+        type: payload.type || payload.actionType || 'activity',
+        previewText: payload.previewText || '',
+        extra: payload.extra || null
+    };
+    await setDoc(notifRef, body, { merge: false });
 }
 
 function getNotificationBucket(notification = {}) {
@@ -6463,14 +6584,11 @@ function renderInboxNotifications(mode = 'posts') {
 
 async function markInboxNotificationsRead(mode = '') {
     if (!currentUser || !mode) return;
-    const toMark = inboxNotifications.filter(function (notif) {
-        return !notif.read && getNotificationBucket(notif) === mode;
+    inboxNotifications.forEach(function (notif) {
+        if (getNotificationBucket(notif) === mode) {
+            notif.read = true;
+        }
     });
-    if (!toMark.length) return;
-    await Promise.all(toMark.map(function (notif) {
-        const ref = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
-        return updateDoc(ref, { read: true });
-    }));
 }
 
 function setInboxMode(mode = 'messages') {
@@ -7023,7 +7141,7 @@ function initInboxNotifications(userId) {
         inboxNotificationsUnsubscribe = null;
     }
     if (!userId) return;
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(50));
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
@@ -8717,6 +8835,60 @@ function setVideoUploadModalMode(mode, video = null) {
     if (submitBtn) submitBtn.textContent = videoUploadMode === 'edit' ? 'Save Changes' : 'Publish';
 }
 
+const VIDEO_UPLOAD_DEFAULTS = {
+    monetizable: false,
+    allowDownload: false,
+    allowEmbed: false,
+    allowComments: true,
+    notifyFollowers: true,
+    ageRestricted: false,
+    containsSensitiveContent: false,
+    category: 'General',
+    language: 'en',
+    license: 'Standard'
+};
+
+function setVideoToggleValue(id, value) {
+    const input = document.getElementById(id);
+    if (input) input.checked = !!value;
+}
+
+function getVideoToggleValue(id, fallback = false) {
+    const input = document.getElementById(id);
+    return input ? !!input.checked : fallback;
+}
+
+function setVideoSelectValue(id, value, fallback = '') {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const finalValue = value || fallback;
+    if (finalValue) input.value = finalValue;
+}
+
+function applyVideoUploadDefaults() {
+    setVideoToggleValue('video-monetizable', VIDEO_UPLOAD_DEFAULTS.monetizable);
+    setVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    setVideoToggleValue('video-allow-embed', VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    setVideoToggleValue('video-allow-comments', VIDEO_UPLOAD_DEFAULTS.allowComments);
+    setVideoToggleValue('video-notify-followers', VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    setVideoToggleValue('video-age-restricted', VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    setVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
+    setVideoSelectValue('video-category', VIDEO_UPLOAD_DEFAULTS.category);
+    setVideoSelectValue('video-language', VIDEO_UPLOAD_DEFAULTS.language);
+    setVideoSelectValue('video-license', VIDEO_UPLOAD_DEFAULTS.license);
+    const scheduledInput = document.getElementById('video-scheduled-at');
+    if (scheduledInput) scheduledInput.value = '';
+}
+
+function parseVideoScheduleTimestamp() {
+    const scheduledInput = document.getElementById('video-scheduled-at');
+    const rawValue = scheduledInput?.value || '';
+    if (!rawValue) return null;
+    const date = new Date(rawValue);
+    if (Number.isNaN(date.getTime())) return null;
+    return Timestamp.fromDate(date);
+}
+
 function populateVideoUploadForm(video = {}) {
     const title = document.getElementById('video-title');
     const description = document.getElementById('video-description');
@@ -8741,16 +8913,41 @@ function populateVideoUploadForm(video = {}) {
     if (preview) preview.classList.add('active');
     if (thumbPreview) thumbPreview.src = resolveVideoThumbnail(video);
     pendingVideoHasCustomThumbnail = !!(video?.hasCustomThumbnail || video?.thumbURL || video?.thumbnail);
+
+    setVideoSelectValue('video-category', video.category, VIDEO_UPLOAD_DEFAULTS.category);
+    setVideoSelectValue('video-language', video.language, VIDEO_UPLOAD_DEFAULTS.language);
+    setVideoSelectValue('video-license', video.license, VIDEO_UPLOAD_DEFAULTS.license);
+    const scheduledInput = document.getElementById('video-scheduled-at');
+    if (scheduledInput) {
+        if (video.scheduledAt && typeof video.scheduledAt.toDate === 'function') {
+            const scheduledDate = video.scheduledAt.toDate();
+            scheduledInput.value = scheduledDate.toISOString().slice(0, 16);
+        } else {
+            scheduledInput.value = '';
+        }
+    }
+
+    setVideoToggleValue('video-monetizable', video.monetizable ?? VIDEO_UPLOAD_DEFAULTS.monetizable);
+    setVideoToggleValue('video-allow-download', video.allowDownload ?? VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    setVideoToggleValue('video-allow-embed', video.allowEmbed ?? VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    setVideoToggleValue('video-allow-comments', video.allowComments ?? VIDEO_UPLOAD_DEFAULTS.allowComments);
+    setVideoToggleValue('video-notify-followers', video.notifyFollowers ?? VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    setVideoToggleValue('video-age-restricted', video.ageRestricted ?? VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    setVideoToggleValue('video-sensitive-content', video.containsSensitiveContent ?? VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
 }
 
 window.openVideoUploadModal = function () {
     setVideoUploadModalMode('create');
+    applyVideoUploadDefaults();
     return window.toggleVideoUploadModal(true);
 };
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) modal.style.display = show ? 'flex' : 'none';
     document.body.classList.toggle('modal-open', show);
+    if (show && videoUploadMode === 'create') {
+        applyVideoUploadDefaults();
+    }
     if (!show) {
         const fileInput = document.getElementById('video-file');
         const thumbInput = document.getElementById('video-thumbnail');
@@ -8782,6 +8979,10 @@ window.toggleVideoUploadModal = function (show = true) {
         pendingVideoHasCustomThumbnail = false;
         resetVideoUploadMeta();
         setVideoUploadModalMode('create');
+        applyVideoUploadDefaults();
+        if (window.location.pathname === '/videos/create-video' || window.location.pathname === '/create-video') {
+            window.NexeraRouter?.replaceStateSilently?.('/videos');
+        }
     }
 };
 
@@ -8794,7 +8995,9 @@ function pauseAllVideos() {
         video.pause();
     });
     const modalPlayer = document.getElementById('video-modal-player');
-    if (modalPlayer) modalPlayer.pause();
+    if (modalPlayer && (!miniPlayerState || !modalPlayer.closest('#video-mini-player'))) {
+        modalPlayer.pause();
+    }
 }
 
 const VIDEO_MANAGER_PLACEHOLDER_THUMB = 'data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"192\" height=\"112\" viewBox=\"0 0 192 112\"><rect width=\"192\" height=\"112\" rx=\"12\" fill=\"%2322222b\"/><path d=\"M79 35l42 21-42 21V35z\" fill=\"%23555\"/></svg>';
@@ -8805,6 +9008,7 @@ function buildVideoManagerEntries() {
         const uploadId = upload.uploadId || upload.id;
         const cachedVideo = uploadId ? getVideoById(uploadId) : null;
         const statusLabel = getUploadTaskStatusLabel({ status: upload.status || '' });
+        const isComplete = isUploadTaskComplete(upload);
         const progress = Math.max(0, Math.min(100, Number(upload.lastProgress ?? upload.progress ?? 0)));
         const sizeLabel = upload.size ? formatUploadFileSize(upload.size) : '';
         const thumbUrl = cachedVideo ? resolveVideoThumbnail(cachedVideo) : (upload.thumbnail || '');
@@ -8814,6 +9018,7 @@ function buildVideoManagerEntries() {
             id: uploadId,
             title,
             statusLabel,
+            isComplete,
             progress,
             sizeLabel,
             thumbUrl,
@@ -8835,6 +9040,7 @@ function buildVideoManagerEntries() {
             id: video.id,
             title: video.title || video.caption || 'Untitled video',
             statusLabel: 'Done',
+            isComplete: true,
             progress: 100,
             sizeLabel: '',
             thumbUrl: resolveVideoThumbnail(video),
@@ -8867,6 +9073,9 @@ function renderVideoManagerList() {
         const openAttr = entry.canOpen && entry.videoId ? `data-video-open=\"${entry.videoId}\"` : '';
         const editAttr = entry.canEdit && entry.videoId ? `data-video-edit=\"${entry.videoId}\"` : '';
         const editDisabled = entry.canEdit ? '' : 'disabled';
+        const menuAttr = entry.videoId ? `data-video-menu=\"${entry.videoId}\"` : '';
+        const menuDisabled = entry.videoId ? '' : 'disabled';
+        const progressClass = entry.isComplete ? 'is-complete' : '';
         return `
             <div class="video-task-row">
                 <img class="video-task-thumb" src="${thumbUrl}" alt="Video thumbnail" ${openAttr} />
@@ -8874,12 +9083,17 @@ function renderVideoManagerList() {
                     <div class="video-task-title">${safeTitle}</div>
                     <div class="video-task-status">${entry.statusLabel}${entry.sizeLabel ? ` • ${entry.sizeLabel}` : ''}</div>
                     <div class="video-task-progress">
-                        <span style="width:${entry.progress}%;"></span>
+                        <span class="${progressClass}" style="width:${entry.progress}%;"></span>
                     </div>
                 </div>
-                <button class="video-task-action-btn" type="button" ${editAttr} ${editDisabled} title="Edit video">
-                    <i class="ph ph-pencil-simple"></i>
-                </button>
+                <div class="video-task-actions">
+                    <button class="video-task-action-btn" type="button" ${editAttr} ${editDisabled} title="Edit video">
+                        <i class="ph ph-pencil-simple"></i>
+                    </button>
+                    <button class="video-task-action-btn" type="button" ${menuAttr} ${menuDisabled} title="More options">
+                        <i class="ph ph-dots-three"></i>
+                    </button>
+                </div>
             </div>
         `;
     }).join('');
@@ -8890,8 +9104,15 @@ function renderUploadTasks() {
 }
 
 function toggleTaskViewer(show = true) {
-    const modal = document.getElementById('video-task-viewer');
-    if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (show) {
+        if (typeof window.openVideoTaskViewer === 'function') {
+            window.openVideoTaskViewer();
+        } else {
+            openVideoTaskViewer();
+        }
+    } else {
+        closeVideoTaskViewer();
+    }
     if (show) renderUploadTasks();
 }
 
@@ -9329,6 +9550,16 @@ window.updateVideoDetails = async function () {
     const tags = Array.from(new Set((videoTags || []).map(normalizeTagValue).filter(Boolean)));
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
+    const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
+    const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
+    const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
+    const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    const allowEmbed = getVideoToggleValue('video-allow-embed', VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    const allowComments = getVideoToggleValue('video-allow-comments', VIDEO_UPLOAD_DEFAULTS.allowComments);
+    const notifyFollowers = getVideoToggleValue('video-notify-followers', VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    const ageRestricted = getVideoToggleValue('video-age-restricted', VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    const containsSensitiveContent = getVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
+    const scheduledAt = parseVideoScheduleTimestamp();
     const videoId = editingVideoId;
     let thumbURL = editingVideoData?.thumbURL || editingVideoData?.thumbnail || '';
     let hasCustomThumbnail = !!(editingVideoData?.hasCustomThumbnail || thumbURL);
@@ -9354,13 +9585,29 @@ window.updateVideoDetails = async function () {
             hasCustomThumbnail = true;
         }
 
+        const monetizable = editingVideoData?.monetizable ?? VIDEO_UPLOAD_DEFAULTS.monetizable;
+        const scheduledVisibility = scheduledAt ? visibility : null;
+        const effectiveVisibility = scheduledAt ? 'private' : visibility;
+
         await updateDoc(doc(db, 'videos', videoId), {
             title,
             caption: title,
             description,
             tags,
             mentions,
-            visibility,
+            visibility: effectiveVisibility,
+            scheduledVisibility,
+            scheduledAt,
+            category,
+            language,
+            license,
+            monetizable,
+            allowDownload,
+            allowEmbed,
+            allowComments,
+            notifyFollowers,
+            ageRestricted,
+            containsSensitiveContent,
             thumbURL,
             hasCustomThumbnail,
             updatedAt: serverTimestamp()
@@ -9373,7 +9620,19 @@ window.updateVideoDetails = async function () {
             cached.description = description;
             cached.tags = tags;
             cached.mentions = mentions;
-            cached.visibility = visibility;
+            cached.visibility = effectiveVisibility;
+            cached.scheduledVisibility = scheduledVisibility;
+            cached.scheduledAt = scheduledAt;
+            cached.category = category;
+            cached.language = language;
+            cached.license = license;
+            cached.monetizable = monetizable;
+            cached.allowDownload = allowDownload;
+            cached.allowEmbed = allowEmbed;
+            cached.allowComments = allowComments;
+            cached.notifyFollowers = notifyFollowers;
+            cached.ageRestricted = ageRestricted;
+            cached.containsSensitiveContent = containsSensitiveContent;
             if (thumbURL) cached.thumbURL = thumbURL;
             cached.hasCustomThumbnail = hasCustomThumbnail;
         }
@@ -9453,7 +9712,10 @@ function ensureVideoTaskViewerBindings() {
         const openBtn = event.target.closest('[data-video-open]');
         if (openBtn) {
             const videoId = openBtn.getAttribute('data-video-open');
-            if (videoId) window.openVideoDetail(videoId);
+            if (videoId) {
+                closeVideoTaskViewer();
+                window.openVideoDetail(videoId);
+            }
             return;
         }
 
@@ -9464,6 +9726,108 @@ function ensureVideoTaskViewerBindings() {
                 closeVideoTaskViewer();
                 window.openVideoEditModal(videoId);
             }
+            return;
+        }
+
+        const menuBtn = event.target.closest('[data-video-menu]');
+        if (menuBtn) {
+            const videoId = menuBtn.getAttribute('data-video-menu');
+            if (videoId) {
+                openVideoManagerMenu(event, videoId);
+            }
+        }
+    });
+}
+
+function ensureVideoManagerMenu() {
+    let dropdown = document.getElementById('video-manager-options-dropdown');
+    if (dropdown) return dropdown;
+    dropdown = document.createElement('div');
+    dropdown.id = 'video-manager-options-dropdown';
+    dropdown.className = 'post-options-dropdown menu-surface';
+    dropdown.style.display = 'none';
+    dropdown.innerHTML = `
+        <button type="button" id="video-manager-delete-btn">
+            <i class="ph ph-trash"></i> Delete
+        </button>
+    `;
+    document.body.appendChild(dropdown);
+    const deleteBtn = dropdown.querySelector('#video-manager-delete-btn');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            const targetId = videoManagerMenuState.videoId;
+            closeVideoManagerMenu();
+            if (targetId) confirmDeleteVideo(targetId);
+        });
+    }
+    return dropdown;
+}
+
+function openVideoManagerMenu(event, videoId) {
+    if (!videoId) return;
+    const dropdown = ensureVideoManagerMenu();
+    const trigger = event?.target?.closest('[data-video-menu]');
+    if (!dropdown || !trigger) return;
+    videoManagerMenuState.videoId = videoId;
+    dropdown.style.display = 'block';
+    const rect = trigger.getBoundingClientRect();
+    const dropdownRect = dropdown.getBoundingClientRect();
+    dropdown.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    dropdown.style.left = `${Math.max(10, rect.right + window.scrollX - dropdownRect.width)}px`;
+    setTimeout(function () {
+        document.addEventListener('click', closeVideoManagerMenu, { once: true });
+    }, 0);
+}
+
+function closeVideoManagerMenu() {
+    const dropdown = document.getElementById('video-manager-options-dropdown');
+    if (dropdown) dropdown.style.display = 'none';
+    videoManagerMenuState.videoId = null;
+}
+
+async function confirmDeleteVideo(videoId) {
+    if (!requireAuth() || !videoId) return;
+    await openConfirmModal({
+        title: 'Delete video?',
+        message: 'Are you sure? This video will be removed permanently.',
+        confirmText: 'Delete',
+        onConfirm: async function () {
+            const video = getVideoById(videoId);
+            const storagePath = video?.storagePath || '';
+            try {
+                if (storagePath) {
+                    await deleteObject(ref(storage, `${storagePath}/source.mp4`)).catch(function (err) {
+                        console.warn('Video delete warning (source)', err);
+                    });
+                    await deleteObject(ref(storage, `${storagePath}/thumb.jpg`)).catch(function (err) {
+                        console.warn('Video delete warning (thumb)', err);
+                    });
+                } else if (video?.videoURL) {
+                    await deleteObject(ref(storage, video.videoURL)).catch(function (err) {
+                        console.warn('Video delete warning (source url)', err);
+                    });
+                }
+                if (video?.thumbURL || video?.thumbnail) {
+                    const thumbRef = video.thumbURL || video.thumbnail;
+                    await deleteObject(ref(storage, thumbRef)).catch(function (err) {
+                        console.warn('Video delete warning (thumb url)', err);
+                    });
+                }
+            } catch (err) {
+                console.warn('Video delete storage warning', err);
+            }
+            try {
+                await deleteDoc(doc(db, 'videos', videoId));
+                videosCache = videosCache.filter(function (entry) { return entry.id !== videoId; });
+                uploadTasks = uploadTasks.filter(function (task) { return task.id !== videoId; });
+                renderUploadTasks();
+                if (currentViewId === 'videos') refreshVideoFeedWithFilters();
+                toast('Video deleted.', 'info');
+            } catch (err) {
+                console.error('Video delete failed', err);
+                toast('Failed to delete video.', 'error');
+            }
         }
     });
 }
@@ -9473,13 +9837,20 @@ function openVideoTaskViewer() {
     if (!modal) return;
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
+    renderUploadTasks();
 }
+
+window.openVideoTaskViewer = openVideoTaskViewer;
 
 function closeVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
     modal.style.display = 'none';
     document.body.classList.remove('modal-open');
+    closeVideoManagerMenu();
+    if (window.location.pathname === '/videos/video-manager') {
+        window.NexeraRouter?.replaceStateSilently?.('/videos');
+    }
 }
 
 function renderVideosTopBar() {
@@ -9826,16 +10197,39 @@ function captureVideoProfileReturn(videoId) {
         videoId,
         currentTime: player?.currentTime || 0
     };
-    closeVideoDetailModalHandler();
+    minimizeVideoDetail({ updateRoute: false });
 }
 
-function closeVideoDetailModalHandler() {
+function getVideoModalPlayer() {
+    return document.getElementById('video-modal-player');
+}
+
+function getVideoModalPlayerContainer() {
+    return document.querySelector('.video-modal-player');
+}
+
+function captureVideoDetailReturnPath() {
+    const path = window.location.pathname || '';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    if (path.startsWith('/video/')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = '/videos';
+}
+
+function closeVideoDetailModalHandler(options = {}) {
+    const { keepPlayback = false } = options;
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
-    const player = document.getElementById('video-modal-player');
-    if (player) {
+    const player = getVideoModalPlayer();
+    if (player && !keepPlayback) {
         player.pause();
-        player.src = '';
+        player.removeAttribute('src');
+        player.load();
     }
     delete modal.dataset.videoId;
     modal.style.display = 'none';
@@ -9843,12 +10237,16 @@ function closeVideoDetailModalHandler() {
 }
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
-window.closeVideoDetail = closeVideoDetailModalHandler;
+window.closeVideoDetail = function () {
+    minimizeVideoDetail({ updateRoute: true, preferPiP: true });
+};
 
 function getMiniPlayerElements() {
     return {
         container: document.getElementById('video-mini-player'),
-        player: document.getElementById('video-mini-player-video')
+        slot: document.getElementById('video-mini-player-slot'),
+        status: document.getElementById('video-mini-player-status'),
+        indicator: document.getElementById('video-mini-player-indicator')
     };
 }
 
@@ -9856,59 +10254,179 @@ function shouldHideMiniPlayer(viewId) {
     return viewId === 'live' || viewId === 'live-setup';
 }
 
-function showMiniPlayer({ videoId, src, currentTime = 0 } = {}) {
-    const { container, player } = getMiniPlayerElements();
-    if (!container || !player) return;
-    if (!videoId || !src) return;
-    if (shouldHideMiniPlayer(currentViewId)) return;
-    miniPlayerState = { videoId, src, currentTime };
-    player.src = src;
-    player.onloadedmetadata = function () {
-        try {
-            player.currentTime = currentTime || 0;
-        } catch (err) {
-            console.warn('Unable to resume mini player time', err);
-        }
-    };
-    player.ontimeupdate = function () {
+function updateMiniPlayerIndicator(player) {
+    const { status, indicator } = getMiniPlayerElements();
+    if (!status || !indicator || !player) return;
+    const playing = !player.paused && !player.ended;
+    status.textContent = playing ? 'Playing' : 'Paused';
+    indicator.classList.toggle('is-playing', playing);
+    indicator.classList.toggle('is-paused', !playing);
+}
+
+function bindMiniPlayerEvents(player) {
+    if (!player || player.dataset.miniPlayerBound) return;
+    player.dataset.miniPlayerBound = 'true';
+    player.addEventListener('timeupdate', function () {
         if (miniPlayerState) miniPlayerState.currentTime = player.currentTime || 0;
-    };
-    player.play().catch(function () {});
+    });
+    player.addEventListener('play', function () { updateMiniPlayerIndicator(player); });
+    player.addEventListener('pause', function () { updateMiniPlayerIndicator(player); });
+    player.addEventListener('ended', function () { updateMiniPlayerIndicator(player); });
+}
+
+function moveVideoPlayerTo(container) {
+    const player = getVideoModalPlayer();
+    if (!player || !container) return;
+    if (player.parentElement !== container) {
+        container.appendChild(player);
+    }
+}
+
+function showMiniPlayer() {
+    const { container, slot } = getMiniPlayerElements();
+    if (!container || !slot) return;
+    if (!miniPlayerState?.videoId) return;
+    if (miniPlayerMode !== 'dock') return;
+    if (shouldHideMiniPlayer(currentViewId)) return;
+    moveVideoPlayerTo(slot);
+    const player = getVideoModalPlayer();
+    bindMiniPlayerEvents(player);
+    updateMiniPlayerIndicator(player);
     container.style.display = 'flex';
 }
 
-function hideMiniPlayer() {
-    const { container, player } = getMiniPlayerElements();
-    if (!container || !player) return;
-    player.pause();
-    player.src = '';
-    container.style.display = 'none';
+function hideMiniPlayer({ stopPlayback = true } = {}) {
+    const { container } = getMiniPlayerElements();
+    const player = getVideoModalPlayer();
+    if (container) container.style.display = 'none';
+    if (!player) return;
+    if (stopPlayback) {
+        player.pause();
+        player.removeAttribute('src');
+        player.load();
+    }
+    if (stopPlayback || player.closest('#video-mini-player')) {
+        moveVideoPlayerTo(getVideoModalPlayerContainer());
+    }
 }
 
 window.closeMiniPlayer = function () {
+    const player = getVideoModalPlayer();
+    if (document.pictureInPictureElement === player) {
+        document.exitPictureInPicture?.().catch(function () {});
+    }
+    miniPlayerMode = null;
     miniPlayerState = null;
-    hideMiniPlayer();
+    hideMiniPlayer({ stopPlayback: true });
 };
 
-function transitionModalToMiniPlayer() {
+window.expandMiniPlayer = function () {
+    restoreModalFromMiniPlayer();
+};
+
+async function maybeEnterPictureInPicture(player) {
+    if (!player) return false;
+    if (!document.pictureInPictureEnabled || player.disablePictureInPicture) return false;
+    try {
+        await player.requestPictureInPicture();
+        return true;
+    } catch (err) {
+        console.warn('Picture-in-Picture failed', err);
+        return false;
+    }
+}
+
+async function minimizeVideoDetail({ updateRoute = true, preferPiP = true } = {}) {
     const modal = document.getElementById('video-detail-modal');
-    const player = document.getElementById('video-modal-player');
+    const player = getVideoModalPlayer();
     if (!modal || !player) return;
     const videoId = modal.dataset.videoId;
-    if (!videoId || player.paused || player.ended) return;
-    const src = player.currentSrc || player.src;
-    const currentTime = player.currentTime || 0;
-    closeVideoDetailModalHandler();
-    showMiniPlayer({ videoId, src, currentTime });
+    if (!videoId) {
+        closeVideoDetailModalHandler();
+        return;
+    }
+    miniPlayerState = { videoId, currentTime: player.currentTime || 0 };
+    closeVideoDetailModalHandler({ keepPlayback: true });
+
+    if (updateRoute) {
+        const nextPath = videoDetailReturnPath || '/videos';
+        if (window.location.pathname !== nextPath) {
+            window.NexeraRouter?.replaceStateSilently?.(nextPath);
+        }
+    }
+
+    if (preferPiP) {
+        const pipActive = await maybeEnterPictureInPicture(player);
+        if (pipActive) {
+            miniPlayerMode = 'pip';
+            return;
+        }
+    }
+    miniPlayerMode = 'dock';
+    showMiniPlayer();
+}
+
+function transitionModalToMiniPlayer() {
+    minimizeVideoDetail({ updateRoute: false });
 }
 
 function restoreModalFromMiniPlayer() {
     if (!miniPlayerState) return;
-    const { videoId, currentTime } = miniPlayerState;
-    videoModalResumeTime = currentTime;
-    hideMiniPlayer();
+    const { videoId } = miniPlayerState;
+    const player = getVideoModalPlayer();
+    if (miniPlayerMode === 'pip' && document.pictureInPictureElement === player) {
+        document.exitPictureInPicture?.().catch(function () {});
+    }
+    miniPlayerMode = null;
+    hideMiniPlayer({ stopPlayback: false });
     miniPlayerState = null;
     window.openVideoDetail(videoId);
+}
+
+document.addEventListener('leavepictureinpicture', function () {
+    if (miniPlayerMode === 'pip' && miniPlayerState && !document.pictureInPictureElement) {
+        miniPlayerMode = 'dock';
+        showMiniPlayer();
+    }
+});
+
+function normalizeProfileLinks(rawLinks) {
+    if (!Array.isArray(rawLinks)) return [];
+    return rawLinks.map(function (link) {
+        if (!link) return null;
+        if (typeof link === 'string') {
+            return { label: link, url: link };
+        }
+        if (typeof link === 'object') {
+            return { label: link.label || link.url || '', url: link.url || '' };
+        }
+        return null;
+    }).filter(Boolean).map(function (link) {
+        let url = (link.url || '').trim();
+        if (!url) return null;
+        if (!/^https?:\/\//i.test(url)) {
+            url = `https://${url}`;
+        }
+        if (!/^https?:\/\//i.test(url)) return null;
+        let label = (link.label || '').trim();
+        if (!label) {
+            try {
+                label = new URL(url).hostname.replace(/^www\./, '');
+            } catch (err) {
+                label = url;
+            }
+        }
+        return { label, url };
+    }).filter(Boolean);
+}
+
+function renderProfileLinks(links = []) {
+    if (!links.length) return '';
+    return links.map(function (link) {
+        const safeLabel = escapeHtml(link.label || link.url || '');
+        const safeUrl = escapeHtml(link.url || '');
+        return `<a class="video-modal-link-chip" href="${safeUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${safeLabel}</a>`;
+    }).join('');
 }
 
 window.openVideoDetail = async function (videoId) {
@@ -9917,12 +10435,17 @@ window.openVideoDetail = async function (videoId) {
     const video = videosCache.find(function (entry) { return entry.id === videoId; });
     if (!video) return;
 
-    const player = document.getElementById('video-modal-player');
+    captureVideoDetailReturnPath();
+
+    const player = getVideoModalPlayer();
     const title = document.getElementById('video-modal-title');
     const description = document.getElementById('video-modal-description');
     const avatar = document.getElementById('video-modal-avatar');
     const channelName = document.getElementById('video-modal-channel-name');
     const channelHandle = document.getElementById('video-modal-channel-handle');
+    const channelCard = document.getElementById('video-modal-channel-card');
+    const channelBio = document.getElementById('video-modal-channel-bio');
+    const channelLinks = document.getElementById('video-modal-channel-links');
     const followBtn = document.getElementById('video-modal-follow');
     const likeBtn = document.getElementById('video-modal-like');
     const dislikeBtn = document.getElementById('video-modal-dislike');
@@ -9932,25 +10455,46 @@ window.openVideoDetail = async function (videoId) {
     modal.dataset.videoId = video.id;
     ensureVideoStats(video);
 
-    if (miniPlayerState) {
-        hideMiniPlayer();
+    if (miniPlayerState && miniPlayerState.videoId !== video.id) {
+        window.closeMiniPlayer();
+    }
+    if (miniPlayerState && miniPlayerState.videoId === video.id) {
+        if (miniPlayerMode === 'pip' && document.pictureInPictureElement === player) {
+            await document.exitPictureInPicture?.().catch(function () {});
+        }
+        miniPlayerMode = null;
+        hideMiniPlayer({ stopPlayback: false });
         miniPlayerState = null;
+        moveVideoPlayerTo(getVideoModalPlayerContainer());
     }
 
     if (player) {
-        player.src = video.videoURL || '';
-        player.onloadedmetadata = function () {
-            if (typeof videoModalResumeTime === 'number') {
-                try {
-                    player.currentTime = videoModalResumeTime;
-                } catch (err) {
-                    console.warn('Unable to resume video time', err);
-                } finally {
-                    videoModalResumeTime = null;
+        const videoSrc = video.videoURL || '';
+        const currentSrc = player.currentSrc || player.src || '';
+        const shouldReset = videoSrc && currentSrc !== videoSrc;
+        if (shouldReset) {
+            player.src = videoSrc;
+            player.onloadedmetadata = function () {
+                if (typeof videoModalResumeTime === 'number') {
+                    try {
+                        player.currentTime = videoModalResumeTime;
+                    } catch (err) {
+                        console.warn('Unable to resume video time', err);
+                    } finally {
+                        videoModalResumeTime = null;
+                    }
                 }
+            };
+            player.load();
+        } else if (typeof videoModalResumeTime === 'number') {
+            try {
+                player.currentTime = videoModalResumeTime;
+            } catch (err) {
+                console.warn('Unable to resume video time', err);
+            } finally {
+                videoModalResumeTime = null;
             }
-        };
-        player.load();
+        }
     }
 
     const author = await resolveUserProfile(video.ownerId || '');
@@ -9960,6 +10504,16 @@ window.openVideoDetail = async function (videoId) {
     if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
     if (channelName) channelName.textContent = authorDisplay;
     if (channelHandle) channelHandle.textContent = authorHandle;
+    if (channelBio) {
+        const bioText = (author?.bio || '').trim();
+        channelBio.textContent = bioText;
+        channelBio.style.display = bioText ? 'block' : 'none';
+    }
+    if (channelLinks) {
+        const links = normalizeProfileLinks(author?.links || []);
+        channelLinks.innerHTML = renderProfileLinks(links);
+        channelLinks.style.display = links.length ? 'flex' : 'none';
+    }
     const videoTitle = video.title || video.caption || 'Untitled video';
     const videoDescription = video.description || '';
     const tagLine = Array.isArray(video.tags) && video.tags.length
@@ -10009,6 +10563,13 @@ window.openVideoDetail = async function (videoId) {
                 window.openUserProfile(video.ownerId, event);
             };
         }
+        if (channelCard) {
+            channelCard.onclick = function (event) {
+                if (event.target.closest('button') || event.target.closest('a')) return;
+                captureVideoProfileReturn(video.id);
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
     }
 
     if (likeBtn) {
@@ -10044,7 +10605,7 @@ window.openVideoDetail = async function (videoId) {
 };
 
 document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') closeVideoDetailModalHandler();
+    if (event.key === 'Escape') window.closeVideoDetail();
 });
 
 window.uploadVideo = async function () {
@@ -10060,6 +10621,16 @@ window.uploadVideo = async function () {
     const tags = Array.from(new Set((videoTags || []).map(normalizeTagValue).filter(Boolean)));
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
+    const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
+    const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
+    const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
+    const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    const allowEmbed = getVideoToggleValue('video-allow-embed', VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    const allowComments = getVideoToggleValue('video-allow-comments', VIDEO_UPLOAD_DEFAULTS.allowComments);
+    const notifyFollowers = getVideoToggleValue('video-notify-followers', VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    const ageRestricted = getVideoToggleValue('video-age-restricted', VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    const containsSensitiveContent = getVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
+    const scheduledAt = parseVideoScheduleTimestamp();
     const file = fileInput.files[0];
     let uploadSession = null;
     let videoId = `${Date.now()}`;
@@ -10158,6 +10729,8 @@ window.uploadVideo = async function () {
             console.info('[VideoUpload] Thumbnail ready', { videoId });
         }
 
+        const scheduledVisibility = scheduledAt ? visibility : null;
+        const effectiveVisibility = scheduledAt ? 'private' : visibility;
         const docData = {
             ownerId: currentUser.uid,
             title,
@@ -10169,8 +10742,20 @@ window.uploadVideo = async function () {
             storagePath,
             videoURL,
             thumbURL,
-            visibility,
+            visibility: effectiveVisibility,
+            scheduledVisibility,
+            scheduledAt,
             hasCustomThumbnail,
+            monetizable: false,
+            allowDownload,
+            allowEmbed,
+            allowComments,
+            notifyFollowers,
+            ageRestricted,
+            containsSensitiveContent,
+            category,
+            language,
+            license,
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
 

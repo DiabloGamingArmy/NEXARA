@@ -73,6 +73,14 @@
     return videoId ? `/video/${encodeURIComponent(videoId)}` : '/videos';
   }
 
+  function buildUrlForVideoManager() {
+    return '/videos/video-manager';
+  }
+
+  function buildUrlForCreateVideo() {
+    return '/videos/create-video';
+  }
+
   function buildUrlForPost(postId) {
     return postId ? `/post/${encodeURIComponent(postId)}` : '/home';
   }
@@ -143,6 +151,34 @@
     }
 
     const head = segments[0];
+    if (head === 'videos' && segments[1] === 'video-manager') {
+      return {
+        type: 'video-manager',
+        canonicalPath: '/videos/video-manager',
+        route
+      };
+    }
+    if (head === 'videos' && segments[1] === 'create-video') {
+      return {
+        type: 'video-create',
+        canonicalPath: '/videos/create-video',
+        route
+      };
+    }
+    if (head === 'video' && segments[1] === 'video-manager') {
+      return {
+        type: 'video-manager',
+        canonicalPath: '/videos/video-manager',
+        route
+      };
+    }
+    if (head === 'create-video') {
+      return {
+        type: 'video-create',
+        canonicalPath: '/videos/create-video',
+        route
+      };
+    }
     if (head === 'profile' && (segments[1] || params.get('handle'))) {
       return {
         type: 'entity',
@@ -316,6 +352,32 @@
       }
       if (route.conversationId && typeof window.openConversation === 'function') {
         window.openConversation(route.conversationId);
+      }
+      return;
+    }
+
+    if (route.type === 'video-manager') {
+      if (route.canonicalPath && route.route?.path !== route.canonicalPath) {
+        replaceStateSilently(route.canonicalPath);
+      }
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'videos' });
+      }
+      if (typeof window.openVideoTaskViewer === 'function') {
+        window.openVideoTaskViewer();
+      }
+      return;
+    }
+
+    if (route.type === 'video-create') {
+      if (route.canonicalPath && route.route?.path !== route.canonicalPath) {
+        replaceStateSilently(route.canonicalPath);
+      }
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'videos' });
+      }
+      if (typeof window.openVideoUploadModal === 'function') {
+        window.openVideoUploadModal();
       }
       return;
     }
@@ -494,6 +556,26 @@
       window.openVideoDetail.__nexeraWrapped = true;
     }
 
+    if (typeof window.openVideoTaskViewer === 'function' && !window.openVideoTaskViewer.__nexeraWrapped) {
+      const original = window.openVideoTaskViewer;
+      window.openVideoTaskViewer = function () {
+        const result = original.call(this);
+        updateUrl(buildUrlForVideoManager());
+        return result;
+      };
+      window.openVideoTaskViewer.__nexeraWrapped = true;
+    }
+
+    if (typeof window.openVideoUploadModal === 'function' && !window.openVideoUploadModal.__nexeraWrapped) {
+      const original = window.openVideoUploadModal;
+      window.openVideoUploadModal = function () {
+        const result = original.call(this);
+        updateUrl(buildUrlForCreateVideo());
+        return result;
+      };
+      window.openVideoUploadModal.__nexeraWrapped = true;
+    }
+
     if (typeof window.openThread === 'function' && !window.openThread.__nexeraWrapped) {
       const original = window.openThread;
       window.openThread = function (postId) {
@@ -582,6 +664,8 @@
     applyCurrentRoute,
     buildUrlForSection,
     buildUrlForVideo,
+    buildUrlForVideoManager,
+    buildUrlForCreateVideo,
     buildUrlForPost,
     buildUrlForProfile,
     buildUrlForMessages,
