@@ -2697,11 +2697,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     line-height: 1.2;
 }
 
-.conversation-time {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    margin-left: auto;
-}
 
 .message-thread-header-row .mobile-thread-back {
     display: none;

@@ -6529,13 +6529,15 @@ function computeUnreadMessageTotal() {
     }, 0);
 }
 
+function computeUnreadNotificationTotal() {
+    return inboxNotifications.reduce(function (sum, notif) {
+        return sum + (!notif.read ? 1 : 0);
+    }, 0);
+}
+
 function updateInboxNavBadge() {
-    const total = computeUnreadMessageTotal()
-        + (inboxNotificationCounts.posts || 0)
-        + (inboxNotificationCounts.videos || 0)
-        + (inboxNotificationCounts.livestreams || 0)
-        + (inboxNotificationCounts.account || 0);
-    const label = total >= 99 ? '99+' : String(total);
+    const total = computeUnreadMessageTotal() + computeUnreadNotificationTotal();
+    const label = total > 99 ? '99+' : String(total);
     document.querySelectorAll('#nav-inbox-badge').forEach(function (badge) {
         if (!badge) return;
         if (total <= 0) {
@@ -6738,17 +6740,15 @@ function renderConversationList() {
         const muteState = resolveMuteState(mapping.id, mapping);
         const isMuted = muteState.active || (details.mutedBy || []).includes(currentUser.uid);
         updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
-        const unreadLabel = unread >= 10 ? '10+' : `${unread}`;
+        const unreadLabel = unread > 10 ? '10+' : `${unread}`;
         const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
         const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
         const tsSource = mapping.lastMessageAt || mapping.createdAt;
-        const tsLabel = tsSource ? formatMessageHoverTimestamp(tsSource) : '';
         const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
         item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
             <div class="conversation-body">
                 <div class="conversation-title-row">
                     <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
-                    <div class="conversation-time">${escapeHtml(tsLabel)}</div>
                     ${flagHtml}
                 </div>
                 <div class="conversation-preview">${previewText}</div>
