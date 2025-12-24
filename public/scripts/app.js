@@ -3418,14 +3418,21 @@ function handleTagInputKey(event) {
 
 function normalizeMentionEntry(raw = {}) {
     if (typeof raw === 'string') {
-        return { username: raw.replace(/^@/, '').toLowerCase(), uid: raw.uid || null };
+        const username = raw.replace(/^@/, '').toLowerCase();
+        return {
+            username,
+            uid: raw.uid || null,
+            photoURL: raw.photoURL || '',
+            avatarColor: raw.avatarColor || raw.profileColor || raw.color || computeAvatarColor(raw.uid || username || 'user')
+        };
     }
     const username = (raw.username || raw.handle || '').replace(/^@/, '').toLowerCase();
     const displayName = raw.displayName || raw.nickname || raw.name || '';
     const uid = raw.uid || raw.userId || null;
     const accountRoles = Array.isArray(raw.accountRoles) ? raw.accountRoles : (raw.role ? [raw.role] : []);
     const verified = accountRoles.includes('verified');
-    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor: raw.avatarColor || '', accountRoles, verified };
+    const avatarColor = raw.avatarColor || raw.profileColor || raw.color || computeAvatarColor(uid || username || 'user');
+    return { username, uid, displayName, photoURL: raw.photoURL || '', avatarColor, accountRoles, verified };
 }
 
 function addComposerMention(rawUser) {
@@ -6305,13 +6312,14 @@ function normalizeNotificationKeyPart(value = '') {
     return String(value || '').replace(/[\\/]/g, '_').trim();
 }
 
-function buildNotificationDocId({ targetUid = '', actorUid = '', entityType = '', entityId = '', actionType = '' }) {
+function buildNotificationDocId({ targetUid = '', actorUid = '', entityType = '', entityId = '', actionType = '', type = '' }) {
+    const action = actionType || type || '';
     return [
-        normalizeNotificationKeyPart(targetUid),
+        normalizeNotificationKeyPart(action),
         normalizeNotificationKeyPart(actorUid),
+        normalizeNotificationKeyPart(targetUid),
         normalizeNotificationKeyPart(entityType),
-        normalizeNotificationKeyPart(entityId),
-        normalizeNotificationKeyPart(actionType)
+        normalizeNotificationKeyPart(entityId)
     ].filter(Boolean).join('_');
 }
 
@@ -6321,24 +6329,22 @@ async function createNotificationOnce(payload = {}) {
     if (!targetUid || !actorUid || targetUid === actorUid) return;
     const docId = buildNotificationDocId(payload);
     if (!docId) return;
-    const notifRef = doc(db, 'users', targetUid, 'notifications', docId);
-    await runTransaction(db, async function (tx) {
-        const snap = await tx.get(notifRef);
-        if (snap.exists()) return;
-        const body = {
-            createdAt: serverTimestamp(),
-            read: false,
-            actorUid,
-            targetUid,
-            entityType: payload.entityType || null,
-            entityId: payload.entityId || null,
-            actionType: payload.actionType || payload.type || null,
-            type: payload.type || payload.actionType || 'activity',
-            previewText: payload.previewText || '',
-            extra: payload.extra || null
-        };
-        tx.set(notifRef, body, { merge: false });
-    });
+    const notifRef = doc(db, 'notifications', targetUid, 'items', docId);
+    const snap = await getDoc(notifRef);
+    if (snap.exists()) return;
+    const body = {
+        createdAt: serverTimestamp(),
+        read: false,
+        actorUid,
+        targetUid,
+        entityType: payload.entityType || null,
+        entityId: payload.entityId || null,
+        actionType: payload.actionType || payload.type || null,
+        type: payload.type || payload.actionType || 'activity',
+        previewText: payload.previewText || '',
+        extra: payload.extra || null
+    };
+    await setDoc(notifRef, body, { merge: false });
 }
 
 function getNotificationBucket(notification = {}) {
@@ -6466,14 +6472,11 @@ function renderInboxNotifications(mode = 'posts') {
 
 async function markInboxNotificationsRead(mode = '') {
     if (!currentUser || !mode) return;
-    const toMark = inboxNotifications.filter(function (notif) {
-        return !notif.read && getNotificationBucket(notif) === mode;
+    inboxNotifications.forEach(function (notif) {
+        if (getNotificationBucket(notif) === mode) {
+            notif.read = true;
+        }
     });
-    if (!toMark.length) return;
-    await Promise.all(toMark.map(function (notif) {
-        const ref = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
-        return updateDoc(ref, { read: true });
-    }));
 }
 
 function setInboxMode(mode = 'messages') {
@@ -7026,7 +7029,7 @@ function initInboxNotifications(userId) {
         inboxNotificationsUnsubscribe = null;
     }
     if (!userId) return;
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(50));
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
