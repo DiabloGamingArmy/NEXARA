@@ -123,7 +123,7 @@
       scrollY: window.scrollY || 0,
       path: window.location.pathname + window.location.search
     };
-    history.replaceState({ ...current, nexeraFeedScroll: scrollState }, '', scrollState.path + window.location.hash);
+    replaceStateSilently(scrollState.path + window.location.hash, { ...current, nexeraFeedScroll: scrollState });
   }
 
   function parseRoute(url = snapshotUrl()) {
@@ -385,7 +385,15 @@
     const start = performance.now();
     const initialUrl = source === 'init' && window.__NEXERA_INITIAL_URL ? window.__NEXERA_INITIAL_URL : null;
     const parsed = parseRoute(initialUrl || undefined);
+    const routeKey = `${parsed.route?.path || ''}${parsed.route?.search || ''}${parsed.route?.hash || ''}`;
     debugLog('route parsed', parsed, source);
+    if (state.lastRouteKey === routeKey && source !== 'popstate') {
+      debugLog('route skipped (same)', routeKey);
+      state.applying = false;
+      state.restoring = false;
+      return;
+    }
+    state.lastRouteKey = routeKey;
 
     if (window.Nexera?.ready) {
       const readyStart = performance.now();
@@ -438,6 +446,9 @@
       const original = history[method];
       history[method] = function (...args) {
         const result = original.apply(this, args);
+        if (isDebugEnabled()) {
+          debugLog('history', method, args?.[2] || window.location.pathname + window.location.search);
+        }
         if (!state.suppressEvents) {
           window.dispatchEvent(new Event('nexera:navigation'));
         }
@@ -483,6 +494,7 @@
       const original = window.openThread;
       window.openThread = function (postId) {
         recordFeedScrollState();
+        debugLog('openThread', postId);
         const result = original.call(this, postId);
         updateUrl(buildUrlForThread(postId));
         return result;
@@ -494,6 +506,7 @@
       const original = window.openUserProfile;
       window.openUserProfile = function (uid, event, pushToStack = true) {
         recordFeedScrollState();
+        debugLog('openUserProfile', uid);
         const result = original.call(this, uid, event, pushToStack);
         updateUrl(buildUrlForProfile(uid));
         return result;
@@ -569,15 +582,15 @@
     buildUrlForProfile,
     buildUrlForMessages,
     buildUrlForThread,
-    replaceStateSilently(path) {
-      replaceStateSilently(path);
+    replaceStateSilently(path, nextState = {}) {
+      replaceStateSilently(path, nextState);
     }
   };
 
-  function replaceStateSilently(path) {
+  function replaceStateSilently(path, nextState = {}) {
     if (!path) return;
     state.suppressEvents = true;
-    history.replaceState({}, '', path);
+    history.replaceState(nextState, '', path);
     state.suppressEvents = false;
   }
 

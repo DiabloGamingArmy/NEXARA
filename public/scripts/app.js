@@ -2889,6 +2889,10 @@ function getPostHTML(post) {
 }
 
 function renderFeed(targetId = 'feed-content') {
+    if (window.localStorage?.getItem('NEXERA_DEBUG_ROUTER') === '1') {
+        window.__nexeraFeedRenderCount = (window.__nexeraFeedRenderCount || 0) + 1;
+        console.log('[NexeraRouter] renderFeed', window.__nexeraFeedRenderCount);
+    }
     const container = document.getElementById(targetId);
     if (!container) return;
 
