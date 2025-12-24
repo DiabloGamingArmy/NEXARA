@@ -36,13 +36,21 @@ let currentCategory = 'For You';
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
+let discoverSearchDebounce = null;
 let discoverPostsSort = 'recent';
 let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
+const SEARCH_QUERY_KEY = 'q';
+const SEARCH_DEBOUNCE_MS = 300;
+let preserveFeedState = false;
+let pendingFeedScrollRestore = null;
+let feedScrollRestoreToken = 0;
+let forceConversationScroll = false;
 
 const GO_LIVE_MODE_STORAGE_KEY = 'nexera-go-live-mode';
 let videoSearchTerm = '';
+let videoSearchDebounce = null;
 let videoFilter = 'All';
 let videoSortMode = 'recent';
 let pendingVideoPreviewUrl = null;
@@ -62,9 +70,11 @@ const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
 var activeUploadId = window.activeUploadId || null;
 let liveSearchTerm = '';
+let liveSearchDebounce = null;
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
+let liveTagSearchDebounce = null;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
@@ -704,6 +714,37 @@ window.Nexera.ensureVideoInCache = function (video) {
     if (!video || !video.id) return;
     if (videosCache.some(function (entry) { return entry.id === video.id; })) return;
     videosCache = [video].concat(videosCache);
+};
+window.Nexera.ensurePostInCache = function (post) {
+    if (!post || !post.id) return;
+    const normalized = normalizePostData(post.id, post);
+    const existingIndex = allPosts.findIndex(function (entry) { return entry.id === post.id; });
+    if (existingIndex >= 0) {
+        allPosts[existingIndex] = { ...allPosts[existingIndex], ...normalized };
+    } else {
+        allPosts = [normalized].concat(allPosts);
+    }
+    if (post.userId && !userCache[post.userId]) {
+        fetchMissingProfiles([{ userId: post.userId }]);
+    }
+};
+window.Nexera.restoreFeedScroll = function (scrollY) {
+    if (typeof scrollY !== 'number') return;
+    pendingFeedScrollRestore = scrollY;
+    const token = ++feedScrollRestoreToken;
+    const started = performance.now();
+    const attempt = function () {
+        if (token !== feedScrollRestoreToken) return;
+        const container = document.getElementById('feed-content');
+        const ready = container && (container.children.length > 0 || !feedLoading);
+        if (ready || performance.now() - started > 1500) {
+            window.scrollTo(0, pendingFeedScrollRestore || 0);
+            pendingFeedScrollRestore = null;
+            return;
+        }
+        requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(attempt);
 };
 window.Nexera.navigateTo = function (routeObj) {
     if (!routeObj) return;
@@ -2159,6 +2200,21 @@ async function startUserReviewListener(uid) {
 }
 
 // --- Navigation Logic ---
+function syncSearchStateFromUrl(viewId) {
+    const params = new URLSearchParams(window.location.search || '');
+    const rawValue = (params.get(SEARCH_QUERY_KEY) || '').trim();
+    const normalized = rawValue.toLowerCase();
+    if (viewId === 'discover') {
+        discoverSearchTerm = normalized;
+    }
+    if (viewId === 'videos') {
+        videoSearchTerm = normalized;
+    }
+    if (viewId === 'live') {
+        liveSearchTerm = normalized;
+    }
+}
+
 window.navigateTo = function (viewId, pushToStack = true) {
     // Cleanup previous listeners if leaving specific views
     if (viewId !== 'thread') {
@@ -2211,7 +2267,8 @@ window.navigateTo = function (viewId, pushToStack = true) {
             category: currentCategory,
             profileFilter: currentProfileFilter,
             viewingUser: viewingUserId,
-            activePost: activePostId
+            activePost: activePostId,
+            scrollY: window.scrollY || 0
         });
     }
 
@@ -2231,8 +2288,12 @@ window.navigateTo = function (viewId, pushToStack = true) {
     }
 
     // View Specific Logic
+    syncSearchStateFromUrl(viewId);
     if (viewId === 'feed') {
-        currentCategory = 'For You';
+        if (!preserveFeedState) {
+            currentCategory = 'For You';
+        }
+        preserveFeedState = false;
         renderFeed();
         loadFeedData();
     }
@@ -2382,10 +2443,16 @@ window.goBack = function () {
     if (prevState.view === 'public-profile') viewingUserId = prevState.viewingUser;
     if (prevState.view === 'thread') activePostId = prevState.activePost;
 
+    if (prevState.view === 'feed') {
+        preserveFeedState = true;
+        if (typeof prevState.scrollY === 'number' && window.Nexera?.restoreFeedScroll) {
+            window.Nexera.restoreFeedScroll(prevState.scrollY);
+        }
+    }
+
     window.navigateTo(prevState.view, false);
 
     // Re-render Views based on restored context
-    if (prevState.view === 'feed') renderFeed();
     if (prevState.view === 'public-profile' && viewingUserId) {
         window.openUserProfile(viewingUserId, null, false);
     }
@@ -2857,8 +2924,6 @@ function renderFeed(targetId = 'feed-content') {
 
     if (currentCategory === 'For You') {
         displayPosts = displayPosts.slice().sort(function (a, b) {
-            const scoreDiff = getPostAffinityScore(b) - getPostAffinityScore(a);
-            if (scoreDiff !== 0) return scoreDiff;
             return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
         });
     }
@@ -4020,7 +4085,20 @@ window.removeReview = async function () {
 }
 
 // --- Thread & Comments ---
-window.openThread = function (postId) {
+window.showThreadLoadError = function (message = 'Unable to load this thread right now.') {
+    activePostId = null;
+    window.navigateTo('thread', false);
+    const main = document.getElementById('thread-main-post');
+    const stream = document.getElementById('thread-stream');
+    if (main) {
+        main.innerHTML = `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
+    }
+    if (stream) {
+        stream.innerHTML = '';
+    }
+};
+
+window.openThread = async function (postId) {
     activePostId = postId;
     activeReplyId = null;
     commentRootDisplayCount[postId] = 20;
@@ -4033,6 +4111,22 @@ window.openThread = function (postId) {
     if (filterInput) { filterInput.value = ''; filterInput.style.display = 'none'; }
     window.resetInputBox();
     window.navigateTo('thread');
+
+    if (!allPosts.find(function (p) { return p.id === postId; })) {
+        try {
+            const snap = await getDoc(doc(db, 'posts', postId));
+            if (!snap.exists()) {
+                window.showThreadLoadError('Thread not found.');
+                return;
+            }
+            window.Nexera?.ensurePostInCache?.({ id: snap.id, ...snap.data() });
+        } catch (error) {
+            console.error('Thread load failed', error);
+            window.showThreadLoadError('Unable to load this thread right now.');
+            return;
+        }
+    }
+
     renderThreadMainPost(postId);
     attachThreadComments(postId);
 }
@@ -4663,6 +4757,39 @@ window.toggleCommentDislike = async function (commentId, event) {
 
 
 // --- Discovery & Search ---
+function updateSearchQueryParam(value) {
+    const url = new URL(window.location.href);
+    const normalized = (value || '').trim();
+    if (normalized) {
+        url.searchParams.set(SEARCH_QUERY_KEY, normalized);
+    } else {
+        url.searchParams.delete(SEARCH_QUERY_KEY);
+    }
+    const next = `${url.pathname}${url.searchParams.toString() ? `?${url.searchParams.toString()}` : ''}${url.hash}`;
+    if (window.NexeraRouter?.replaceStateSilently) {
+        window.NexeraRouter.replaceStateSilently(next);
+    } else {
+        history.replaceState({}, '', next);
+    }
+}
+
+function captureInputSelection(input) {
+    if (!input) return null;
+    return {
+        start: input.selectionStart ?? null,
+        end: input.selectionEnd ?? null
+    };
+}
+
+function restoreInputSelection(input, selection) {
+    if (!input || !selection || selection.start === null || selection.end === null) return;
+    try {
+        input.setSelectionRange(selection.start, selection.end);
+    } catch (e) {
+        // Ignore restore errors for unsupported inputs.
+    }
+}
+
 function renderDiscoverTopBar() {
     const container = document.getElementById('discover-topbar');
     if (!container) return;
@@ -4714,8 +4841,7 @@ function renderDiscoverTopBar() {
     container.appendChild(topBar);
 }
 
-window.renderDiscover = async function () {
-    renderDiscoverTopBar();
+async function renderDiscoverResults() {
     const container = document.getElementById('discover-results');
     container.innerHTML = "";
 
@@ -4959,6 +5085,11 @@ window.renderDiscover = async function () {
     }
 
     applyMyReviewStylesToDOM();
+}
+
+window.renderDiscover = async function () {
+    renderDiscoverTopBar();
+    await renderDiscoverResults();
 }
 
 // --- Profile Rendering ---
@@ -5663,7 +5794,19 @@ window.setDiscoverFilter = function (filter) {
 }
 window.handlePostsSortChange = function (e) { discoverPostsSort = e.target.value; renderDiscover(); }
 window.handleCategoriesModeChange = function (e) { discoverCategoriesMode = e.target.value; renderDiscover(); }
-window.handleSearchInput = function (e) { discoverSearchTerm = e.target.value.toLowerCase(); renderDiscover(); }
+window.handleSearchInput = function (e) {
+    const input = e.target;
+    const rawValue = input?.value || '';
+    const selection = captureInputSelection(input);
+    discoverSearchTerm = rawValue.toLowerCase();
+    clearTimeout(discoverSearchDebounce);
+    discoverSearchDebounce = setTimeout(function () {
+        updateSearchQueryParam(rawValue);
+        renderDiscoverResults().then(function () {
+            restoreInputSelection(input, selection);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+}
 window.setSavedFilter = function (filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function (el) { if (el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
 window.handleSavedSearch = function (e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
 window.openFullscreenMedia = function (url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if (!modal || !content) return; modal.style.display = 'flex'; if (type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
@@ -5921,6 +6064,18 @@ function isNearBottom(el, threshold = 80) {
     return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
 }
 
+function getMessageScrollContainer() {
+    const body = document.getElementById('message-thread');
+    if (!body) return null;
+    return body.closest('.message-scroll-region') || body;
+}
+
+function scrollMessagesToBottom() {
+    const scrollRegion = getMessageScrollContainer();
+    if (!scrollRegion) return;
+    scrollRegion.scrollTop = scrollRegion.scrollHeight;
+}
+
 function computeConversationTitle(convo = {}, viewerId = currentUser?.uid) {
     const stored = (convo.title || '').trim();
     if (stored) return stored;
@@ -6129,9 +6284,10 @@ function renderMessageHeader(convo = {}) {
 
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
-    if (!body) return;
-    const shouldStickToBottom = isNearBottom(body);
-    const previousOffset = body.scrollHeight - body.scrollTop;
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion) return;
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
     body.innerHTML = '';
 
     let lastTimestamp = null;
@@ -6321,9 +6477,12 @@ function renderMessages(msgs = [], convo = {}) {
 
     body.appendChild(fragment);
     if (shouldStickToBottom) {
-        body.scrollTop = body.scrollHeight;
+        scrollRegion.scrollTop = scrollRegion.scrollHeight;
     } else {
-        body.scrollTop = Math.max(0, body.scrollHeight - previousOffset);
+        scrollRegion.scrollTop = Math.max(0, scrollRegion.scrollHeight - previousOffset);
+    }
+    if (forceConversationScroll) {
+        forceConversationScroll = false;
     }
 }
 
@@ -6847,6 +7006,7 @@ async function openConversation(conversationId) {
     if (body) body.innerHTML = '';
     const header = document.getElementById('message-header');
     if (header) header.textContent = 'Loading conversation...';
+    forceConversationScroll = true;
 
     let convo = null;
     try {
@@ -7993,8 +8153,12 @@ window.openMessagesPage = async function () {
 
 window.sharePost = async function (postId, event) {
     if (event) event.stopPropagation();
-    const base = window.location.href.split('#')[0];
-    const url = `${base}#thread-${postId}`;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    const threadId = post?.threadId || postId;
+    const threadPath = window.NexeraRouter?.buildUrlForThread
+        ? window.NexeraRouter.buildUrlForThread(threadId)
+        : `/view-thread/${encodeURIComponent(threadId)}`;
+    const url = `${window.location.origin}${threadPath}`;
 
     try {
         if (navigator.share) {
@@ -8648,9 +8812,16 @@ window.updateVideoDetails = async function () {
 };
 
 function handleVideoSearchInput(event) {
-    videoSearchTerm = (event.target.value || '').toLowerCase();
-    renderVideosTopBar();
-    refreshVideoFeedWithFilters();
+    const input = event.target;
+    const rawValue = input?.value || '';
+    const selection = captureInputSelection(input);
+    videoSearchTerm = rawValue.toLowerCase();
+    clearTimeout(videoSearchDebounce);
+    videoSearchDebounce = setTimeout(function () {
+        updateSearchQueryParam(rawValue);
+        refreshVideoFeedWithFilters({ skipTopBar: true });
+        restoreInputSelection(input, selection);
+    }, SEARCH_DEBOUNCE_MS);
 }
 
 function handleVideoSortChange(event) {
@@ -8775,8 +8946,10 @@ function renderVideosTopBar() {
     container.appendChild(topBar);
 }
 
-function refreshVideoFeedWithFilters() {
-    renderVideosTopBar();
+function refreshVideoFeedWithFilters(options = {}) {
+    if (!options.skipTopBar) {
+        renderVideosTopBar();
+    }
     let filtered = videosCache.slice();
 
     if (videoSearchTerm) {
@@ -9612,13 +9785,28 @@ function resolveLiveThumbnail(session = {}) {
 }
 
 function handleLiveSearchInput(event) {
-    liveSearchTerm = (event.target.value || '').toLowerCase();
-    renderLiveDirectoryFromCache();
+    const input = event.target;
+    const rawValue = input?.value || '';
+    const selection = captureInputSelection(input);
+    liveSearchTerm = rawValue.toLowerCase();
+    clearTimeout(liveSearchDebounce);
+    liveSearchDebounce = setTimeout(function () {
+        updateSearchQueryParam(rawValue);
+        renderLiveDirectoryFromCache({ skipTopBar: true, skipFilterRow: true });
+        restoreInputSelection(input, selection);
+    }, SEARCH_DEBOUNCE_MS);
 }
 
 function handleLiveTagFilterInput(event) {
-    liveTagFilter = (event.target.value || '').toLowerCase();
-    renderLiveDirectoryFromCache();
+    const input = event.target;
+    const rawValue = input?.value || '';
+    const selection = captureInputSelection(input);
+    liveTagFilter = rawValue.toLowerCase();
+    clearTimeout(liveTagSearchDebounce);
+    liveTagSearchDebounce = setTimeout(function () {
+        renderLiveDirectoryFromCache({ skipTopBar: true, skipFilterRow: true });
+        restoreInputSelection(input, selection);
+    }, SEARCH_DEBOUNCE_MS);
 }
 
 function setLiveSortMode(mode) {
@@ -9826,9 +10014,13 @@ function renderLiveGrid(sessions = []) {
     });
 }
 
-function renderLiveDirectoryFromCache() {
-    renderLiveTopBar();
-    renderLiveFilterRow();
+function renderLiveDirectoryFromCache(options = {}) {
+    if (!options.skipTopBar) {
+        renderLiveTopBar();
+    }
+    if (!options.skipFilterRow) {
+        renderLiveFilterRow();
+    }
     const divider = document.getElementById('live-divider');
     const sessions = liveSessionsCache.slice();
 

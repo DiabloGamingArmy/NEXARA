@@ -22,7 +22,8 @@
     initialized: true,
     applying: false,
     restoring: false,
-    lastRouteKey: null
+    lastRouteKey: null,
+    suppressEvents: false
   };
 
   const isDebugEnabled = () => {
@@ -58,6 +59,12 @@
       profile: '/profile',
       staff: '/staff'
     };
+    if (view === 'profile') {
+      const user = typeof window.getCurrentUser === 'function' ? window.getCurrentUser() : null;
+      if (user?.uid) {
+        return buildUrlForProfile(user.uid);
+      }
+    }
     return map[view] || null;
   }
 
@@ -104,6 +111,21 @@
     }
   }
 
+  function isFeedRoute(url = snapshotUrl()) {
+    const parsed = parseRoute(url);
+    return parsed.type === 'section' && parsed.view === 'feed';
+  }
+
+  function recordFeedScrollState() {
+    if (!isFeedRoute()) return;
+    const current = history.state || {};
+    const scrollState = {
+      scrollY: window.scrollY || 0,
+      path: window.location.pathname + window.location.search
+    };
+    history.replaceState({ ...current, nexeraFeedScroll: scrollState }, '', scrollState.path + window.location.hash);
+  }
+
   function parseRoute(url = snapshotUrl()) {
     const params = new URLSearchParams(url.search || '');
     const segments = (url.path || '/').split('/').filter(Boolean);
@@ -120,6 +142,15 @@
     }
 
     const head = segments[0];
+    if (head === 'profile' && (segments[1] || params.get('handle'))) {
+      return {
+        type: 'entity',
+        entityType: 'profile',
+        id: segments[1] || null,
+        handle: params.get('handle'),
+        route
+      };
+    }
     if (SECTION_ROUTES[head]) {
       if (head === 'messages' && segments[1]) {
         return { type: 'messages', conversationId: segments[1], route };
@@ -167,11 +198,37 @@
     return { exists: true, data: { id: snap.id, ...snap.data() } };
   }
 
+  async function fetchThread(threadId) {
+    if (!threadId) return { exists: false, data: null };
+    const db = window.Nexera?.db;
+    const docFn = window.Nexera?.firestore?.doc;
+    const getDocFn = window.Nexera?.firestore?.getDoc;
+    if (!db || !docFn || !getDocFn) return { exists: null, data: null };
+
+    try {
+      const start = performance.now();
+      const snap = await getDocFn(docFn(db, 'posts', threadId));
+      debugLog('getDoc', 'thread', threadId, `${Math.round(performance.now() - start)}ms`);
+      if (!snap.exists()) return { exists: false, data: null };
+      return { exists: true, data: { id: snap.id, ...snap.data() } };
+    } catch (error) {
+      debugLog('getDoc failed', 'thread', threadId, error);
+      return { exists: null, data: null, error };
+    }
+  }
+
   function ensureNotFoundShell() {
     let container = document.getElementById('nexera-not-found');
     if (container) return container;
     container = document.createElement('div');
     container.id = 'nexera-not-found';
+    container.style.position = 'fixed';
+    container.style.inset = '0';
+    container.style.zIndex = '9999';
+    container.style.background = 'var(--bg-main, #0b0b0b)';
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.style.justifyContent = 'center';
     container.innerHTML = `
       <div id="auth-screen" style="display:flex;">
         <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo"
@@ -206,8 +263,6 @@
   }
 
   function showNotFound() {
-    const appLayout = document.getElementById('app-layout');
-    if (appLayout) appLayout.style.display = 'none';
     ensureNotFoundShell();
   }
 
@@ -231,6 +286,16 @@
     }
 
     if (route.type === 'section') {
+      if (route.view === 'profile') {
+        const currentUser = typeof window.getCurrentUser === 'function' ? window.getCurrentUser() : null;
+        if (currentUser?.uid && route.route?.segments?.length === 1) {
+          replaceStateSilently(buildUrlForProfile(currentUser.uid));
+          if (typeof window.openUserProfile === 'function') {
+            window.openUserProfile(currentUser.uid, null, false);
+          }
+          return;
+        }
+      }
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: route.view });
       }
@@ -252,7 +317,25 @@
     }
 
     if (route.type === 'thread') {
-      if (route.threadId && typeof window.openThread === 'function') {
+      if (!route.threadId) {
+        showNotFound();
+        return;
+      }
+      const thread = await fetchThread(route.threadId);
+      if (thread.exists === false) {
+        showNotFound();
+        return;
+      }
+      if (thread.exists === null) {
+        if (typeof window.showThreadLoadError === 'function') {
+          window.showThreadLoadError('Unable to load this thread right now.');
+        }
+        return;
+      }
+      if (thread.data && typeof window.Nexera?.ensurePostInCache === 'function') {
+        window.Nexera.ensurePostInCache(thread.data);
+      }
+      if (typeof window.openThread === 'function') {
         window.openThread(route.threadId);
       }
       return;
@@ -315,6 +398,13 @@
     const done = Math.round(performance.now() - start);
     debugLog('route applied', parsed.type, `${done}ms`);
 
+    if (source === 'popstate' && parsed.type === 'section' && parsed.view === 'feed') {
+      const scrollState = history.state?.nexeraFeedScroll;
+      if (scrollState?.scrollY !== undefined && typeof window.Nexera?.restoreFeedScroll === 'function') {
+        window.Nexera.restoreFeedScroll(scrollState.scrollY);
+      }
+    }
+
     window.Nexera?.releaseSplash?.();
     state.applying = false;
     state.restoring = false;
@@ -348,7 +438,9 @@
       const original = history[method];
       history[method] = function (...args) {
         const result = original.apply(this, args);
-        window.dispatchEvent(new Event('nexera:navigation'));
+        if (!state.suppressEvents) {
+          window.dispatchEvent(new Event('nexera:navigation'));
+        }
         return result;
       };
     });
@@ -390,6 +482,7 @@
     if (typeof window.openThread === 'function' && !window.openThread.__nexeraWrapped) {
       const original = window.openThread;
       window.openThread = function (postId) {
+        recordFeedScrollState();
         const result = original.call(this, postId);
         updateUrl(buildUrlForThread(postId));
         return result;
@@ -400,6 +493,7 @@
     if (typeof window.openUserProfile === 'function' && !window.openUserProfile.__nexeraWrapped) {
       const original = window.openUserProfile;
       window.openUserProfile = function (uid, event, pushToStack = true) {
+        recordFeedScrollState();
         const result = original.call(this, uid, event, pushToStack);
         updateUrl(buildUrlForProfile(uid));
         return result;
@@ -474,8 +568,18 @@
     buildUrlForPost,
     buildUrlForProfile,
     buildUrlForMessages,
-    buildUrlForThread
+    buildUrlForThread,
+    replaceStateSilently(path) {
+      replaceStateSilently(path);
+    }
   };
+
+  function replaceStateSilently(path) {
+    if (!path) return;
+    state.suppressEvents = true;
+    history.replaceState({}, '', path);
+    state.suppressEvents = false;
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });
