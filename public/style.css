@@ -424,10 +424,18 @@ body {
     min-height: 100vh;
     border-right: 1px solid var(--border);
     min-width: 0;
-    /* Subtle stream gradient - fixed to prevent scroll changes */
+    position: relative;
+    z-index: 0;
+}
+
+.main-feed::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
     background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
-    background-attachment: fixed;
-    background-size: 100% 100vh;
+    transform: translateZ(0);
 }
 
 @media(min-width: 1024px) {
