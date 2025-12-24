@@ -698,7 +698,7 @@ if (!window.Nexera.ready) {
 window.Nexera.auth = auth;
 window.Nexera.db = db;
 window.Nexera.storage = storage;
-window.Nexera.firestore = { doc, getDoc };
+window.Nexera.firestore = { doc, getDoc, collection, query, orderBy, limit, getDocs };
 window.Nexera.onAuthReady = function (callback) {
     return onAuthStateChanged(auth, callback);
 };
@@ -738,6 +738,7 @@ window.Nexera.openEntity = function (type, id, payload) {
         return;
     }
     if (type === 'post') {
+        if (payload && typeof window.Nexera.ensurePostInCache === 'function') window.Nexera.ensurePostInCache(payload);
         if (typeof window.openThread === 'function') window.openThread(id);
     }
 };

@@ -200,6 +200,13 @@
     if (container) return container;
     container = document.createElement('div');
     container.id = 'nexera-not-found';
+    container.style.position = 'fixed';
+    container.style.inset = '0';
+    container.style.zIndex = '9999';
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.style.justifyContent = 'center';
+    container.style.background = 'rgba(0, 0, 0, 0.65)';
     container.innerHTML = `
       <div id="auth-screen" style="display:flex;">
         <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo"
@@ -234,8 +241,6 @@
   }
 
   function showNotFound() {
-    const appLayout = document.getElementById('app-layout');
-    if (appLayout) appLayout.style.display = 'none';
     ensureNotFoundShell();
   }
 
@@ -371,6 +376,7 @@
     debugLog('route applied', parsed.type, `${done}ms`);
 
     window.Nexera?.releaseSplash?.();
+    setTimeout(ensureMainViewVisible, 0);
     state.applying = false;
     state.restoring = false;
   }
