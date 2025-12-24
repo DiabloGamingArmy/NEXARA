@@ -114,11 +114,13 @@
                             oninput="window.filterTagSuggestions(this.value)">
                         <div id="tag-suggestions" class="suggestion-row"></div>
                     </div>
+                    <div id="tag-helper-text" class="tag-helper-text" style="display:none;"></div>
+                    <div id="tag-limit-note" class="tag-helper-text" style="display:none;">You can add up to 10 tags.</div>
                     <div id="composer-tags-list" class="chip-row"></div>
                     <div id="mention-input-row" class="composer-inline" style="display:none;">
                         <input type="text" id="mention-input" class="form-input" placeholder="Search usernames"
                             oninput="window.handleMentionInput(event)">
-                        <div id="mention-suggestions" class="suggestion-row"></div>
+                        <div id="mention-suggestions" class="mention-suggestions-list"></div>
                     </div>
                     <div id="composer-mentions-list" class="mention-row"></div>
 
@@ -398,6 +400,8 @@
                             oninput="window.filterVideoTagSuggestions(this.value)">
                         <div id="video-tag-suggestions" class="suggestion-row"></div>
                     </div>
+                    <div id="video-tag-helper-text" class="tag-helper-text" style="display:none;"></div>
+                    <div id="video-tag-limit-note" class="tag-helper-text" style="display:none;">You can add up to 10 tags.</div>
                     <div id="video-tags-list" class="chip-row"></div>
                     <div id="video-mention-input-row" class="composer-inline" style="display:none;">
                         <input type="text" id="video-mention-input" class="form-input" placeholder="Search usernames"
@@ -613,7 +617,8 @@
             <a onclick="window.navigateTo('videos')" id="nav-videos" class="nav-item"><i
                     class="ph-bold ph-film-strip"></i> Videos</a>
             <a onclick="window.openMessagesPage()" id="nav-messages" class="nav-item"><i class="ph-bold ph-chats"></i>
-                Messages</a>
+                <span class="nav-label">Inbox</span>
+                <span id="nav-inbox-badge" class="nav-badge" style="display:none;"></span></a>
             <a onclick="window.navigateTo('discover')" id="nav-discover" class="nav-item"><i
                     class="ph-bold ph-compass"></i> Discover</a>
             <a onclick="window.navigateTo('saved')" id="nav-saved" class="nav-item"><i class="ph-bold ph-bookmark"></i>
@@ -782,17 +787,42 @@
             </div>
 
             <div id="view-messages" class="view-section" style="display:none;">
-                <div class="messages-layout">
-                    <div class="messages-sidebar">
-                        <div
-                            style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                            <h3 style="margin:0; font-weight:800;">Messages</h3>
+                <div class="inbox-tabs">
+                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">Posts</button>
+                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">Videos</button>
+                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">Livestreams</button>
+                    <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">Messages</button>
+                    <button class="inbox-tab" data-mode="account" onclick="window.setInboxMode('account')">Account Notifications</button>
+                </div>
+                <div id="inbox-panel-messages" class="inbox-panel active">
+                    <div class="inbox-layout">
+                        <div class="inbox-sidebar">
+                        <div class="inbox-header">
+                            <div class="inbox-title">Inbox</div>
                             <button class="icon-pill" onclick="window.openNewChatModal()"><i class="ph ph-plus"></i>
                                 New</button>
                         </div>
-                        <div id="conversation-list" class="conversation-list"></div>
+                        <input id="conversation-list-search" class="form-input inbox-search-input"
+                            placeholder="Search conversations" oninput="window.handleConversationListSearch(event)">
+                        <div class="inbox-filters">
+                            <button class="inbox-filter active" data-filter="all"
+                                onclick="window.setConversationFilter('all')">All</button>
+                            <button class="inbox-filter" data-filter="unread"
+                                onclick="window.setConversationFilter('unread')">Unread</button>
+                            <button class="inbox-filter" data-filter="pinned"
+                                onclick="window.setConversationFilter('pinned')">Pinned</button>
+                            <button class="inbox-filter" data-filter="archived"
+                                onclick="window.setConversationFilter('archived')">Archived</button>
+                        </div>
+                        <div class="inbox-requests">
+                            <button class="inbox-requests-toggle" type="button">Message requests</button>
+                            <div class="inbox-requests-empty">No requests yet.</div>
+                        </div>
+                        <div id="pinned-conversations" class="inbox-pinned" style="display:none;"></div>
+                        <div id="conversation-list" class="conversation-list inbox-list"></div>
+                        <div id="conversation-list-empty" class="empty-state" style="display:none;"></div>
                     </div>
-                    <div class="messages-thread">
+                        <div class="inbox-thread">
                         <div class="message-thread-header-row">
                             <button id="mobile-thread-back" class="mobile-thread-back" type="button"
                                 onclick="window.mobileMessagesBack()" aria-label="Back to conversations"
@@ -831,6 +861,23 @@
                                 onclick="window.sendMessage()">Send</button>
                         </div>
                     </div>
+                    </div>
+                </div>
+                <div id="inbox-panel-posts" class="inbox-panel">
+                    <div id="inbox-list-posts" class="inbox-notification-list"></div>
+                    <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
+                </div>
+                <div id="inbox-panel-videos" class="inbox-panel">
+                    <div id="inbox-list-videos" class="inbox-notification-list"></div>
+                    <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
+                </div>
+                <div id="inbox-panel-livestreams" class="inbox-panel">
+                    <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
+                    <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
+                </div>
+                <div id="inbox-panel-account" class="inbox-panel">
+                    <div id="inbox-list-account" class="inbox-notification-list"></div>
+                    <div id="inbox-empty-account" class="empty-state">No account notifications yet.</div>
                 </div>
             </div>
 
