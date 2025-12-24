@@ -64,6 +64,8 @@ let videoUploadMode = 'create';
 let editingVideoId = null;
 let editingVideoData = null;
 let miniPlayerState = null;
+let miniPlayerMode = null;
+let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
@@ -114,6 +116,7 @@ let liveSessionsCache = [];
 let profileMediaPrefetching = {};
 let uploadManager = null;
 let videoTaskViewerBound = false;
+let videoManagerMenuState = { videoId: null };
 
 // Optimistic UI Sets
 let followedCategories = new Set();
@@ -2333,10 +2336,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (viewId === 'videos' && miniPlayerState) {
         restoreModalFromMiniPlayer();
     }
-    if (shouldHideMiniPlayer(viewId)) {
+    if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
     } else if (miniPlayerState) {
-        showMiniPlayer(miniPlayerState);
+        showMiniPlayer();
     }
     if (viewId === 'live') {
         renderLiveSessions();
@@ -8782,6 +8785,9 @@ window.toggleVideoUploadModal = function (show = true) {
         pendingVideoHasCustomThumbnail = false;
         resetVideoUploadMeta();
         setVideoUploadModalMode('create');
+        if (window.location.pathname === '/videos/create-video' || window.location.pathname === '/create-video') {
+            window.NexeraRouter?.replaceStateSilently?.('/videos');
+        }
     }
 };
 
@@ -8794,7 +8800,9 @@ function pauseAllVideos() {
         video.pause();
     });
     const modalPlayer = document.getElementById('video-modal-player');
-    if (modalPlayer) modalPlayer.pause();
+    if (modalPlayer && (!miniPlayerState || !modalPlayer.closest('#video-mini-player'))) {
+        modalPlayer.pause();
+    }
 }
 
 const VIDEO_MANAGER_PLACEHOLDER_THUMB = 'data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"192\" height=\"112\" viewBox=\"0 0 192 112\"><rect width=\"192\" height=\"112\" rx=\"12\" fill=\"%2322222b\"/><path d=\"M79 35l42 21-42 21V35z\" fill=\"%23555\"/></svg>';
@@ -8805,6 +8813,7 @@ function buildVideoManagerEntries() {
         const uploadId = upload.uploadId || upload.id;
         const cachedVideo = uploadId ? getVideoById(uploadId) : null;
         const statusLabel = getUploadTaskStatusLabel({ status: upload.status || '' });
+        const isComplete = isUploadTaskComplete(upload);
         const progress = Math.max(0, Math.min(100, Number(upload.lastProgress ?? upload.progress ?? 0)));
         const sizeLabel = upload.size ? formatUploadFileSize(upload.size) : '';
         const thumbUrl = cachedVideo ? resolveVideoThumbnail(cachedVideo) : (upload.thumbnail || '');
@@ -8814,6 +8823,7 @@ function buildVideoManagerEntries() {
             id: uploadId,
             title,
             statusLabel,
+            isComplete,
             progress,
             sizeLabel,
             thumbUrl,
@@ -8835,6 +8845,7 @@ function buildVideoManagerEntries() {
             id: video.id,
             title: video.title || video.caption || 'Untitled video',
             statusLabel: 'Done',
+            isComplete: true,
             progress: 100,
             sizeLabel: '',
             thumbUrl: resolveVideoThumbnail(video),
@@ -8867,6 +8878,9 @@ function renderVideoManagerList() {
         const openAttr = entry.canOpen && entry.videoId ? `data-video-open=\"${entry.videoId}\"` : '';
         const editAttr = entry.canEdit && entry.videoId ? `data-video-edit=\"${entry.videoId}\"` : '';
         const editDisabled = entry.canEdit ? '' : 'disabled';
+        const menuAttr = entry.videoId ? `data-video-menu=\"${entry.videoId}\"` : '';
+        const menuDisabled = entry.videoId ? '' : 'disabled';
+        const progressClass = entry.isComplete ? 'is-complete' : '';
         return `
             <div class="video-task-row">
                 <img class="video-task-thumb" src="${thumbUrl}" alt="Video thumbnail" ${openAttr} />
@@ -8874,12 +8888,17 @@ function renderVideoManagerList() {
                     <div class="video-task-title">${safeTitle}</div>
                     <div class="video-task-status">${entry.statusLabel}${entry.sizeLabel ? ` • ${entry.sizeLabel}` : ''}</div>
                     <div class="video-task-progress">
-                        <span style="width:${entry.progress}%;"></span>
+                        <span class="${progressClass}" style="width:${entry.progress}%;"></span>
                     </div>
                 </div>
-                <button class="video-task-action-btn" type="button" ${editAttr} ${editDisabled} title="Edit video">
-                    <i class="ph ph-pencil-simple"></i>
-                </button>
+                <div class="video-task-actions">
+                    <button class="video-task-action-btn" type="button" ${editAttr} ${editDisabled} title="Edit video">
+                        <i class="ph ph-pencil-simple"></i>
+                    </button>
+                    <button class="video-task-action-btn" type="button" ${menuAttr} ${menuDisabled} title="More options">
+                        <i class="ph ph-dots-three"></i>
+                    </button>
+                </div>
             </div>
         `;
     }).join('');
@@ -8890,8 +8909,15 @@ function renderUploadTasks() {
 }
 
 function toggleTaskViewer(show = true) {
-    const modal = document.getElementById('video-task-viewer');
-    if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (show) {
+        if (typeof window.openVideoTaskViewer === 'function') {
+            window.openVideoTaskViewer();
+        } else {
+            openVideoTaskViewer();
+        }
+    } else {
+        closeVideoTaskViewer();
+    }
     if (show) renderUploadTasks();
 }
 
@@ -9453,7 +9479,10 @@ function ensureVideoTaskViewerBindings() {
         const openBtn = event.target.closest('[data-video-open]');
         if (openBtn) {
             const videoId = openBtn.getAttribute('data-video-open');
-            if (videoId) window.openVideoDetail(videoId);
+            if (videoId) {
+                closeVideoTaskViewer();
+                window.openVideoDetail(videoId);
+            }
             return;
         }
 
@@ -9464,6 +9493,108 @@ function ensureVideoTaskViewerBindings() {
                 closeVideoTaskViewer();
                 window.openVideoEditModal(videoId);
             }
+            return;
+        }
+
+        const menuBtn = event.target.closest('[data-video-menu]');
+        if (menuBtn) {
+            const videoId = menuBtn.getAttribute('data-video-menu');
+            if (videoId) {
+                openVideoManagerMenu(event, videoId);
+            }
+        }
+    });
+}
+
+function ensureVideoManagerMenu() {
+    let dropdown = document.getElementById('video-manager-options-dropdown');
+    if (dropdown) return dropdown;
+    dropdown = document.createElement('div');
+    dropdown.id = 'video-manager-options-dropdown';
+    dropdown.className = 'post-options-dropdown menu-surface';
+    dropdown.style.display = 'none';
+    dropdown.innerHTML = `
+        <button type="button" id="video-manager-delete-btn">
+            <i class="ph ph-trash"></i> Delete
+        </button>
+    `;
+    document.body.appendChild(dropdown);
+    const deleteBtn = dropdown.querySelector('#video-manager-delete-btn');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            const targetId = videoManagerMenuState.videoId;
+            closeVideoManagerMenu();
+            if (targetId) confirmDeleteVideo(targetId);
+        });
+    }
+    return dropdown;
+}
+
+function openVideoManagerMenu(event, videoId) {
+    if (!videoId) return;
+    const dropdown = ensureVideoManagerMenu();
+    const trigger = event?.target?.closest('[data-video-menu]');
+    if (!dropdown || !trigger) return;
+    videoManagerMenuState.videoId = videoId;
+    dropdown.style.display = 'block';
+    const rect = trigger.getBoundingClientRect();
+    const dropdownRect = dropdown.getBoundingClientRect();
+    dropdown.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    dropdown.style.left = `${Math.max(10, rect.right + window.scrollX - dropdownRect.width)}px`;
+    setTimeout(function () {
+        document.addEventListener('click', closeVideoManagerMenu, { once: true });
+    }, 0);
+}
+
+function closeVideoManagerMenu() {
+    const dropdown = document.getElementById('video-manager-options-dropdown');
+    if (dropdown) dropdown.style.display = 'none';
+    videoManagerMenuState.videoId = null;
+}
+
+async function confirmDeleteVideo(videoId) {
+    if (!requireAuth() || !videoId) return;
+    await openConfirmModal({
+        title: 'Delete video?',
+        message: 'Are you sure? This video will be removed permanently.',
+        confirmText: 'Delete',
+        onConfirm: async function () {
+            const video = getVideoById(videoId);
+            const storagePath = video?.storagePath || '';
+            try {
+                if (storagePath) {
+                    await deleteObject(ref(storage, `${storagePath}/source.mp4`)).catch(function (err) {
+                        console.warn('Video delete warning (source)', err);
+                    });
+                    await deleteObject(ref(storage, `${storagePath}/thumb.jpg`)).catch(function (err) {
+                        console.warn('Video delete warning (thumb)', err);
+                    });
+                } else if (video?.videoURL) {
+                    await deleteObject(ref(storage, video.videoURL)).catch(function (err) {
+                        console.warn('Video delete warning (source url)', err);
+                    });
+                }
+                if (video?.thumbURL || video?.thumbnail) {
+                    const thumbRef = video.thumbURL || video.thumbnail;
+                    await deleteObject(ref(storage, thumbRef)).catch(function (err) {
+                        console.warn('Video delete warning (thumb url)', err);
+                    });
+                }
+            } catch (err) {
+                console.warn('Video delete storage warning', err);
+            }
+            try {
+                await deleteDoc(doc(db, 'videos', videoId));
+                videosCache = videosCache.filter(function (entry) { return entry.id !== videoId; });
+                uploadTasks = uploadTasks.filter(function (task) { return task.id !== videoId; });
+                renderUploadTasks();
+                if (currentViewId === 'videos') refreshVideoFeedWithFilters();
+                toast('Video deleted.', 'info');
+            } catch (err) {
+                console.error('Video delete failed', err);
+                toast('Failed to delete video.', 'error');
+            }
         }
     });
 }
@@ -9473,13 +9604,20 @@ function openVideoTaskViewer() {
     if (!modal) return;
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
+    renderUploadTasks();
 }
+
+window.openVideoTaskViewer = openVideoTaskViewer;
 
 function closeVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
     modal.style.display = 'none';
     document.body.classList.remove('modal-open');
+    closeVideoManagerMenu();
+    if (window.location.pathname === '/videos/video-manager') {
+        window.NexeraRouter?.replaceStateSilently?.('/videos');
+    }
 }
 
 function renderVideosTopBar() {
@@ -9826,16 +9964,39 @@ function captureVideoProfileReturn(videoId) {
         videoId,
         currentTime: player?.currentTime || 0
     };
-    closeVideoDetailModalHandler();
+    minimizeVideoDetail({ updateRoute: false });
 }
 
-function closeVideoDetailModalHandler() {
+function getVideoModalPlayer() {
+    return document.getElementById('video-modal-player');
+}
+
+function getVideoModalPlayerContainer() {
+    return document.querySelector('.video-modal-player');
+}
+
+function captureVideoDetailReturnPath() {
+    const path = window.location.pathname || '';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    if (path.startsWith('/video/')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = '/videos';
+}
+
+function closeVideoDetailModalHandler(options = {}) {
+    const { keepPlayback = false } = options;
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
-    const player = document.getElementById('video-modal-player');
-    if (player) {
+    const player = getVideoModalPlayer();
+    if (player && !keepPlayback) {
         player.pause();
-        player.src = '';
+        player.removeAttribute('src');
+        player.load();
     }
     delete modal.dataset.videoId;
     modal.style.display = 'none';
@@ -9843,12 +10004,16 @@ function closeVideoDetailModalHandler() {
 }
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
-window.closeVideoDetail = closeVideoDetailModalHandler;
+window.closeVideoDetail = function () {
+    minimizeVideoDetail({ updateRoute: true, preferPiP: true });
+};
 
 function getMiniPlayerElements() {
     return {
         container: document.getElementById('video-mini-player'),
-        player: document.getElementById('video-mini-player-video')
+        slot: document.getElementById('video-mini-player-slot'),
+        status: document.getElementById('video-mini-player-status'),
+        indicator: document.getElementById('video-mini-player-indicator')
     };
 }
 
@@ -9856,59 +10021,179 @@ function shouldHideMiniPlayer(viewId) {
     return viewId === 'live' || viewId === 'live-setup';
 }
 
-function showMiniPlayer({ videoId, src, currentTime = 0 } = {}) {
-    const { container, player } = getMiniPlayerElements();
-    if (!container || !player) return;
-    if (!videoId || !src) return;
-    if (shouldHideMiniPlayer(currentViewId)) return;
-    miniPlayerState = { videoId, src, currentTime };
-    player.src = src;
-    player.onloadedmetadata = function () {
-        try {
-            player.currentTime = currentTime || 0;
-        } catch (err) {
-            console.warn('Unable to resume mini player time', err);
-        }
-    };
-    player.ontimeupdate = function () {
+function updateMiniPlayerIndicator(player) {
+    const { status, indicator } = getMiniPlayerElements();
+    if (!status || !indicator || !player) return;
+    const playing = !player.paused && !player.ended;
+    status.textContent = playing ? 'Playing' : 'Paused';
+    indicator.classList.toggle('is-playing', playing);
+    indicator.classList.toggle('is-paused', !playing);
+}
+
+function bindMiniPlayerEvents(player) {
+    if (!player || player.dataset.miniPlayerBound) return;
+    player.dataset.miniPlayerBound = 'true';
+    player.addEventListener('timeupdate', function () {
         if (miniPlayerState) miniPlayerState.currentTime = player.currentTime || 0;
-    };
-    player.play().catch(function () {});
+    });
+    player.addEventListener('play', function () { updateMiniPlayerIndicator(player); });
+    player.addEventListener('pause', function () { updateMiniPlayerIndicator(player); });
+    player.addEventListener('ended', function () { updateMiniPlayerIndicator(player); });
+}
+
+function moveVideoPlayerTo(container) {
+    const player = getVideoModalPlayer();
+    if (!player || !container) return;
+    if (player.parentElement !== container) {
+        container.appendChild(player);
+    }
+}
+
+function showMiniPlayer() {
+    const { container, slot } = getMiniPlayerElements();
+    if (!container || !slot) return;
+    if (!miniPlayerState?.videoId) return;
+    if (miniPlayerMode !== 'dock') return;
+    if (shouldHideMiniPlayer(currentViewId)) return;
+    moveVideoPlayerTo(slot);
+    const player = getVideoModalPlayer();
+    bindMiniPlayerEvents(player);
+    updateMiniPlayerIndicator(player);
     container.style.display = 'flex';
 }
 
-function hideMiniPlayer() {
-    const { container, player } = getMiniPlayerElements();
-    if (!container || !player) return;
-    player.pause();
-    player.src = '';
-    container.style.display = 'none';
+function hideMiniPlayer({ stopPlayback = true } = {}) {
+    const { container } = getMiniPlayerElements();
+    const player = getVideoModalPlayer();
+    if (container) container.style.display = 'none';
+    if (!player) return;
+    if (stopPlayback) {
+        player.pause();
+        player.removeAttribute('src');
+        player.load();
+    }
+    if (stopPlayback || player.closest('#video-mini-player')) {
+        moveVideoPlayerTo(getVideoModalPlayerContainer());
+    }
 }
 
 window.closeMiniPlayer = function () {
+    const player = getVideoModalPlayer();
+    if (document.pictureInPictureElement === player) {
+        document.exitPictureInPicture?.().catch(function () {});
+    }
+    miniPlayerMode = null;
     miniPlayerState = null;
-    hideMiniPlayer();
+    hideMiniPlayer({ stopPlayback: true });
 };
 
-function transitionModalToMiniPlayer() {
+window.expandMiniPlayer = function () {
+    restoreModalFromMiniPlayer();
+};
+
+async function maybeEnterPictureInPicture(player) {
+    if (!player) return false;
+    if (!document.pictureInPictureEnabled || player.disablePictureInPicture) return false;
+    try {
+        await player.requestPictureInPicture();
+        return true;
+    } catch (err) {
+        console.warn('Picture-in-Picture failed', err);
+        return false;
+    }
+}
+
+async function minimizeVideoDetail({ updateRoute = true, preferPiP = true } = {}) {
     const modal = document.getElementById('video-detail-modal');
-    const player = document.getElementById('video-modal-player');
+    const player = getVideoModalPlayer();
     if (!modal || !player) return;
     const videoId = modal.dataset.videoId;
-    if (!videoId || player.paused || player.ended) return;
-    const src = player.currentSrc || player.src;
-    const currentTime = player.currentTime || 0;
-    closeVideoDetailModalHandler();
-    showMiniPlayer({ videoId, src, currentTime });
+    if (!videoId) {
+        closeVideoDetailModalHandler();
+        return;
+    }
+    miniPlayerState = { videoId, currentTime: player.currentTime || 0 };
+    closeVideoDetailModalHandler({ keepPlayback: true });
+
+    if (updateRoute) {
+        const nextPath = videoDetailReturnPath || '/videos';
+        if (window.location.pathname !== nextPath) {
+            window.NexeraRouter?.replaceStateSilently?.(nextPath);
+        }
+    }
+
+    if (preferPiP) {
+        const pipActive = await maybeEnterPictureInPicture(player);
+        if (pipActive) {
+            miniPlayerMode = 'pip';
+            return;
+        }
+    }
+    miniPlayerMode = 'dock';
+    showMiniPlayer();
+}
+
+function transitionModalToMiniPlayer() {
+    minimizeVideoDetail({ updateRoute: false });
 }
 
 function restoreModalFromMiniPlayer() {
     if (!miniPlayerState) return;
-    const { videoId, currentTime } = miniPlayerState;
-    videoModalResumeTime = currentTime;
-    hideMiniPlayer();
+    const { videoId } = miniPlayerState;
+    const player = getVideoModalPlayer();
+    if (miniPlayerMode === 'pip' && document.pictureInPictureElement === player) {
+        document.exitPictureInPicture?.().catch(function () {});
+    }
+    miniPlayerMode = null;
+    hideMiniPlayer({ stopPlayback: false });
     miniPlayerState = null;
     window.openVideoDetail(videoId);
+}
+
+document.addEventListener('leavepictureinpicture', function () {
+    if (miniPlayerMode === 'pip' && miniPlayerState && !document.pictureInPictureElement) {
+        miniPlayerMode = 'dock';
+        showMiniPlayer();
+    }
+});
+
+function normalizeProfileLinks(rawLinks) {
+    if (!Array.isArray(rawLinks)) return [];
+    return rawLinks.map(function (link) {
+        if (!link) return null;
+        if (typeof link === 'string') {
+            return { label: link, url: link };
+        }
+        if (typeof link === 'object') {
+            return { label: link.label || link.url || '', url: link.url || '' };
+        }
+        return null;
+    }).filter(Boolean).map(function (link) {
+        let url = (link.url || '').trim();
+        if (!url) return null;
+        if (!/^https?:\/\//i.test(url)) {
+            url = `https://${url}`;
+        }
+        if (!/^https?:\/\//i.test(url)) return null;
+        let label = (link.label || '').trim();
+        if (!label) {
+            try {
+                label = new URL(url).hostname.replace(/^www\./, '');
+            } catch (err) {
+                label = url;
+            }
+        }
+        return { label, url };
+    }).filter(Boolean);
+}
+
+function renderProfileLinks(links = []) {
+    if (!links.length) return '';
+    return links.map(function (link) {
+        const safeLabel = escapeHtml(link.label || link.url || '');
+        const safeUrl = escapeHtml(link.url || '');
+        return `<a class="video-modal-link-chip" href="${safeUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${safeLabel}</a>`;
+    }).join('');
 }
 
 window.openVideoDetail = async function (videoId) {
@@ -9917,12 +10202,17 @@ window.openVideoDetail = async function (videoId) {
     const video = videosCache.find(function (entry) { return entry.id === videoId; });
     if (!video) return;
 
-    const player = document.getElementById('video-modal-player');
+    captureVideoDetailReturnPath();
+
+    const player = getVideoModalPlayer();
     const title = document.getElementById('video-modal-title');
     const description = document.getElementById('video-modal-description');
     const avatar = document.getElementById('video-modal-avatar');
     const channelName = document.getElementById('video-modal-channel-name');
     const channelHandle = document.getElementById('video-modal-channel-handle');
+    const channelCard = document.getElementById('video-modal-channel-card');
+    const channelBio = document.getElementById('video-modal-channel-bio');
+    const channelLinks = document.getElementById('video-modal-channel-links');
     const followBtn = document.getElementById('video-modal-follow');
     const likeBtn = document.getElementById('video-modal-like');
     const dislikeBtn = document.getElementById('video-modal-dislike');
@@ -9932,25 +10222,46 @@ window.openVideoDetail = async function (videoId) {
     modal.dataset.videoId = video.id;
     ensureVideoStats(video);
 
-    if (miniPlayerState) {
-        hideMiniPlayer();
+    if (miniPlayerState && miniPlayerState.videoId !== video.id) {
+        window.closeMiniPlayer();
+    }
+    if (miniPlayerState && miniPlayerState.videoId === video.id) {
+        if (miniPlayerMode === 'pip' && document.pictureInPictureElement === player) {
+            await document.exitPictureInPicture?.().catch(function () {});
+        }
+        miniPlayerMode = null;
+        hideMiniPlayer({ stopPlayback: false });
         miniPlayerState = null;
+        moveVideoPlayerTo(getVideoModalPlayerContainer());
     }
 
     if (player) {
-        player.src = video.videoURL || '';
-        player.onloadedmetadata = function () {
-            if (typeof videoModalResumeTime === 'number') {
-                try {
-                    player.currentTime = videoModalResumeTime;
-                } catch (err) {
-                    console.warn('Unable to resume video time', err);
-                } finally {
-                    videoModalResumeTime = null;
+        const videoSrc = video.videoURL || '';
+        const currentSrc = player.currentSrc || player.src || '';
+        const shouldReset = videoSrc && currentSrc !== videoSrc;
+        if (shouldReset) {
+            player.src = videoSrc;
+            player.onloadedmetadata = function () {
+                if (typeof videoModalResumeTime === 'number') {
+                    try {
+                        player.currentTime = videoModalResumeTime;
+                    } catch (err) {
+                        console.warn('Unable to resume video time', err);
+                    } finally {
+                        videoModalResumeTime = null;
+                    }
                 }
+            };
+            player.load();
+        } else if (typeof videoModalResumeTime === 'number') {
+            try {
+                player.currentTime = videoModalResumeTime;
+            } catch (err) {
+                console.warn('Unable to resume video time', err);
+            } finally {
+                videoModalResumeTime = null;
             }
-        };
-        player.load();
+        }
     }
 
     const author = await resolveUserProfile(video.ownerId || '');
@@ -9960,6 +10271,16 @@ window.openVideoDetail = async function (videoId) {
     if (avatar) applyAvatarToElement(avatar, author || {}, { size: 44 });
     if (channelName) channelName.textContent = authorDisplay;
     if (channelHandle) channelHandle.textContent = authorHandle;
+    if (channelBio) {
+        const bioText = (author?.bio || '').trim();
+        channelBio.textContent = bioText;
+        channelBio.style.display = bioText ? 'block' : 'none';
+    }
+    if (channelLinks) {
+        const links = normalizeProfileLinks(author?.links || []);
+        channelLinks.innerHTML = renderProfileLinks(links);
+        channelLinks.style.display = links.length ? 'flex' : 'none';
+    }
     const videoTitle = video.title || video.caption || 'Untitled video';
     const videoDescription = video.description || '';
     const tagLine = Array.isArray(video.tags) && video.tags.length
@@ -10009,6 +10330,13 @@ window.openVideoDetail = async function (videoId) {
                 window.openUserProfile(video.ownerId, event);
             };
         }
+        if (channelCard) {
+            channelCard.onclick = function (event) {
+                if (event.target.closest('button') || event.target.closest('a')) return;
+                captureVideoProfileReturn(video.id);
+                window.openUserProfile(video.ownerId, event);
+            };
+        }
     }
 
     if (likeBtn) {
@@ -10044,7 +10372,7 @@ window.openVideoDetail = async function (videoId) {
 };
 
 document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') closeVideoDetailModalHandler();
+    if (event.key === 'Escape') window.closeVideoDetail();
 });
 
 window.uploadVideo = async function () {
