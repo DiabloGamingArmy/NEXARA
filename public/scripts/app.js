@@ -90,6 +90,8 @@ let replyExpansionState = {};
 let currentEditPost = null;
 let goLiveController = null;
 let tagSuggestionPool = [];
+let composerNewTagNotice = '';
+let videoNewTagNotice = '';
 let mentionSearchTimer = null;
 let currentThreadComments = [];
 let liveSessionsCache = [];
@@ -3110,7 +3112,29 @@ async function uploadFileToStorage(file, path) {
 }
 
 function normalizeTagValue(tag = '') {
-    return tag.trim().replace(/^#/, '').toLowerCase();
+    return tag.trim().replace(/^#/, '').toLowerCase().replace(/[^\w]/g, '');
+}
+
+function getHashtagQuery(inputValue = '') {
+    const trimmed = (inputValue || '').trim();
+    if (!trimmed.startsWith('#')) return '';
+    if (trimmed.length <= 1) return '';
+    return normalizeTagValue(trimmed);
+}
+
+function rankTagSuggestions(knownTags = [], query = '', selectedTags = []) {
+    const seen = new Set(selectedTags);
+    const startsWith = [];
+    const contains = [];
+    knownTags.forEach(function (tag) {
+        if (!query || seen.has(tag)) return;
+        if (tag.startsWith(query)) {
+            startsWith.push(tag);
+        } else if (tag.includes(query)) {
+            contains.push(tag);
+        }
+    });
+    return startsWith.concat(contains).slice(0, 5);
 }
 
 function ensurePollOptionSlots() {
@@ -3201,6 +3225,9 @@ function resetComposerState() {
     renderComposerTags();
     renderComposerMentions();
     renderPollOptions();
+    updateComposerTagLimit(false);
+    composerNewTagNotice = '';
+    updateComposerTagHelper('', '', getKnownTags());
     const scheduleInput = document.getElementById('schedule-input');
     if (scheduleInput) scheduleInput.value = '';
     setComposerLocation('');
@@ -3230,14 +3257,26 @@ function getKnownTags() {
 function addComposerTag(tag = '') {
     const normalized = normalizeTagValue(tag);
     if (!normalized) return;
+    if (composerTags.length >= 10) {
+        updateComposerTagLimit(true);
+        return;
+    }
     if (composerTags.includes(normalized)) return;
+    updateComposerTagLimit(false);
     composerTags.push(normalized);
     renderComposerTags();
+    composerNewTagNotice = '';
+    const input = document.getElementById('tag-input');
+    if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
 }
 
 function removeComposerTag(tag = '') {
     composerTags = composerTags.filter(function (t) { return t !== tag; });
     renderComposerTags();
+    updateComposerTagLimit(false);
 }
 
 function renderComposerTags() {
@@ -3255,18 +3294,44 @@ function renderComposerTags() {
 function filterTagSuggestions(queryText = '') {
     const listEl = document.getElementById('tag-suggestions');
     if (!listEl) return;
-    const cleaned = normalizeTagValue(queryText);
+    // Only show suggestions after a valid hashtag prefix (# + 1 char).
+    const cleaned = getHashtagQuery(queryText);
     const known = getKnownTags();
-    const matches = cleaned ? known.filter(function (t) { return t.includes(cleaned) && !composerTags.includes(t); }).slice(0, 5) : known.slice(0, 5);
+    const matches = cleaned ? rankTagSuggestions(known, cleaned, composerTags) : [];
     if (!matches.length) {
         listEl.innerHTML = '';
         listEl.style.display = 'none';
+    } else {
+        listEl.style.display = 'block';
+        listEl.innerHTML = matches.map(function (tag) {
+            return `<button type="button" class="suggestion-chip" onmousedown="event.preventDefault()" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
+        }).join('');
+    }
+    updateComposerTagHelper(queryText, cleaned, known);
+}
+
+function updateComposerTagHelper(rawValue = '', cleaned = '', known = []) {
+    const helper = document.getElementById('tag-helper-text');
+    if (!helper) return;
+    const normalized = cleaned || getHashtagQuery(rawValue);
+    if (composerNewTagNotice) {
+        helper.textContent = composerNewTagNotice;
+        helper.style.display = 'block';
         return;
     }
-    listEl.style.display = 'block';
-    listEl.innerHTML = matches.map(function (tag) {
-        return `<button type="button" class="suggestion-chip" onclick="window.addComposerTag('${tag}')">#${escapeHtml(tag)}</button>`;
-    }).join('');
+    if (normalized && !known.includes(normalized)) {
+        helper.textContent = `Creating new tag #${normalized}`;
+        helper.style.display = 'block';
+        return;
+    }
+    helper.textContent = '';
+    helper.style.display = 'none';
+}
+
+function updateComposerTagLimit(show) {
+    const note = document.getElementById('tag-limit-note');
+    if (!note) return;
+    note.style.display = show ? 'block' : 'none';
 }
 
 function toggleTagInput(show) {
@@ -3280,6 +3345,8 @@ function toggleTagInput(show) {
             input.focus();
             filterTagSuggestions(input.value);
         }
+        updateComposerTagLimit(false);
+        composerNewTagNotice = '';
     }
 }
 
@@ -3287,10 +3354,25 @@ function handleTagInputKey(event) {
     if (event.key === 'Enter') {
         event.preventDefault();
         const input = event.target;
-        addComposerTag(input.value || '');
+        const raw = input.value || '';
+        const query = getHashtagQuery(raw);
+        if (!query) {
+            filterTagSuggestions(raw);
+            return;
+        }
+        // Enter adds the normalized tag and shows "creating new tag" when unknown.
+        const knownTags = getKnownTags();
+        addComposerTag(raw);
+        if (query && !knownTags.includes(query)) {
+            composerNewTagNotice = `Creating new tag #${query}`;
+        } else {
+            composerNewTagNotice = '';
+        }
         input.value = '';
+        updateComposerTagHelper(raw, query, knownTags);
         filterTagSuggestions('');
     } else {
+        composerNewTagNotice = '';
         filterTagSuggestions(event.target.value || '');
     }
 }
@@ -8405,6 +8487,9 @@ function resetVideoUploadMeta() {
     videoMentions = [];
     renderVideoTags();
     renderVideoMentions();
+    updateVideoTagLimit(false);
+    videoNewTagNotice = '';
+    updateVideoTagHelper('', '', getKnownTags());
     const tagRow = document.getElementById('video-tag-input-row');
     const mentionRow = document.getElementById('video-mention-input-row');
     const tagSuggestions = document.getElementById('video-tag-suggestions');
@@ -8426,30 +8511,59 @@ function toggleVideoTagInput(show) {
             input.focus();
             filterVideoTagSuggestions(input.value);
         }
+        updateVideoTagLimit(false);
+        videoNewTagNotice = '';
     }
 }
 
 function addVideoTag(raw = '') {
     const normalized = normalizeTagValue(raw);
     if (!normalized) return;
+    if (videoTags.length >= 10) {
+        updateVideoTagLimit(true);
+        return;
+    }
     if (videoTags.includes(normalized)) return;
+    updateVideoTagLimit(false);
     videoTags.push(normalized);
     renderVideoTags();
+    videoNewTagNotice = '';
+    const input = document.getElementById('video-tag-input');
+    if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
 }
 
 function removeVideoTag(tag = '') {
     videoTags = videoTags.filter(function (t) { return t !== tag; });
     renderVideoTags();
+    updateVideoTagLimit(false);
 }
 
 function handleVideoTagInputKey(event) {
     if (event.key === 'Enter') {
         event.preventDefault();
         const input = event.target;
-        addVideoTag(input.value || '');
+        const raw = input.value || '';
+        const query = getHashtagQuery(raw);
+        if (!query) {
+            filterVideoTagSuggestions(raw);
+            return;
+        }
+        // Enter adds the normalized tag and shows "creating new tag" when unknown.
+        const knownTags = getKnownTags();
+        addVideoTag(raw);
+        if (query && !knownTags.includes(query)) {
+            videoNewTagNotice = `Creating new tag #${query}`;
+        } else {
+            videoNewTagNotice = '';
+        }
         input.value = '';
+        updateVideoTagHelper(raw, query, knownTags);
         filterVideoTagSuggestions('');
     } else {
+        videoNewTagNotice = '';
         filterVideoTagSuggestions(event.target.value || '');
     }
 }
@@ -8457,20 +8571,20 @@ function handleVideoTagInputKey(event) {
 function filterVideoTagSuggestions(term = '') {
     const container = document.getElementById('video-tag-suggestions');
     if (!container) return;
-    const cleaned = normalizeTagValue(term);
+    // Only show suggestions after a valid hashtag prefix (# + 1 char).
+    const cleaned = getHashtagQuery(term);
     const known = getKnownTags();
-    const matches = cleaned
-        ? known.filter(function (t) { return t.includes(cleaned) && !videoTags.includes(t); }).slice(0, 5)
-        : known.filter(function (t) { return !videoTags.includes(t); }).slice(0, 5);
+    const matches = cleaned ? rankTagSuggestions(known, cleaned, videoTags) : [];
     if (!matches.length) {
         container.innerHTML = '';
         container.style.display = 'none';
-        return;
+    } else {
+        container.style.display = 'flex';
+        container.innerHTML = matches.map(function (tag) {
+            return `<button type="button" class="tag-suggestion" onmousedown="event.preventDefault()" onclick="window.addVideoTag('${tag}')">#${escapeHtml(tag)}</button>`;
+        }).join('');
     }
-    container.style.display = 'flex';
-    container.innerHTML = matches.map(function (tag) {
-        return `<button type="button" class="tag-suggestion" onclick="window.addVideoTag('${tag}')">#${escapeHtml(tag)}</button>`;
-    }).join('');
+    updateVideoTagHelper(term, cleaned, known);
 }
 
 function renderVideoTags() {
@@ -8483,6 +8597,30 @@ function renderVideoTags() {
     container.innerHTML = videoTags.map(function (tag) {
         return `<span class="tag-chip">#${escapeHtml(tag)}<button type="button" class="chip-remove" onclick="window.removeVideoTag('${tag}')">&times;</button></span>`;
     }).join('');
+}
+
+function updateVideoTagHelper(rawValue = '', cleaned = '', known = []) {
+    const helper = document.getElementById('video-tag-helper-text');
+    if (!helper) return;
+    const normalized = cleaned || getHashtagQuery(rawValue);
+    if (videoNewTagNotice) {
+        helper.textContent = videoNewTagNotice;
+        helper.style.display = 'block';
+        return;
+    }
+    if (normalized && !known.includes(normalized)) {
+        helper.textContent = `Creating new tag #${normalized}`;
+        helper.style.display = 'block';
+        return;
+    }
+    helper.textContent = '';
+    helper.style.display = 'none';
+}
+
+function updateVideoTagLimit(show) {
+    const note = document.getElementById('video-tag-limit-note');
+    if (!note) return;
+    note.style.display = show ? 'block' : 'none';
 }
 
 function addVideoMention(rawUser) {
