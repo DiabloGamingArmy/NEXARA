@@ -110,7 +110,8 @@ let mentionSuggestionState = {
     lastDoc: null,
     hasMore: false,
     loading: false,
-    results: []
+    results: [],
+    visibleCount: 5
 };
 const MENTION_SUGGESTION_PAGE_SIZE = 30;
 let currentThreadComments = [];
@@ -3572,12 +3573,44 @@ function renderComposerMentions() {
     }).join('');
 }
 
+function renderMentionSuggestionsList(listEl) {
+    if (!listEl) return;
+    if (!mentionSuggestionState.results.length) {
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    listEl.style.display = 'flex';
+    const visible = mentionSuggestionState.results.slice(0, mentionSuggestionState.visibleCount);
+    listEl.innerHTML = visible.map(function (profile) {
+        const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
+        return `<button type="button" class="mention-suggestion" onmousedown="event.preventDefault()" onclick='window.addComposerMention(${JSON.stringify({
+            uid: profile.id || profile.uid,
+            username: profile.username,
+            displayName: profile.name || profile.nickname || profile.displayName || '',
+            accountRoles: profile.accountRoles || [],
+            photoURL: profile.photoURL || '',
+            avatarColor: profile.avatarColor || '',
+            followersCount: profile.followersCount || profile.followerCount || 0
+        }).replace(/'/g, "&apos;")})'>
+            ${avatar}
+            <div class="mention-suggestion-meta">
+                <div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div>
+                <div class="mention-handle">@${escapeHtml(profile.username || '')}</div>
+                <div class="mention-handle">${formatCompactNumber(profile.followersCount || profile.followerCount || 0)} followers</div>
+            </div>
+        </button>`;
+    }).join('');
+}
+
 async function searchMentionSuggestions(term = '') {
     const listEl = document.getElementById('mention-suggestions');
     if (!listEl) return;
+    listEl.classList.add('mention-suggestions-list');
+    listEl.classList.remove('suggestion-row');
     const raw = (term || '').trim();
     if (!raw.startsWith('@') || raw.length <= 1) {
-        mentionSuggestionState = { query: '', lastDoc: null, hasMore: false, loading: false, results: [] };
+        mentionSuggestionState = { query: '', lastDoc: null, hasMore: false, loading: false, results: [], visibleCount: 5 };
         listEl.innerHTML = '';
         listEl.style.display = 'none';
         return;
@@ -3585,23 +3618,30 @@ async function searchMentionSuggestions(term = '') {
     const cleaned = raw.replace(/^@/, '').toLowerCase();
     const isNewQuery = cleaned !== mentionSuggestionState.query;
     if (isNewQuery) {
-        mentionSuggestionState = { query: cleaned, lastDoc: null, hasMore: true, loading: false, results: [] };
+        mentionSuggestionState = { query: cleaned, lastDoc: null, hasMore: true, loading: false, results: [], visibleCount: 5 };
     }
     if (mentionSuggestionState.loading) return;
     if (!mentionSuggestionState.hasMore) return;
     mentionSuggestionState.loading = true;
     try {
-        const baseConstraints = [
-            collection(db, 'users'),
-            orderBy('username'),
-            startAt(cleaned),
-            endAt(cleaned + '\uf8ff')
-        ];
-        const paging = mentionSuggestionState.lastDoc ? [startAfter(mentionSuggestionState.lastDoc)] : [];
-        const userQuery = query.apply(null, baseConstraints.concat(paging, [limit(MENTION_SUGGESTION_PAGE_SIZE)]));
-        const snap = await getDocs(userQuery);
+        const buildQuery = function (field) {
+            return query(
+                collection(db, 'users'),
+                orderBy(field),
+                startAt(cleaned),
+                endAt(cleaned + '\uf8ff'),
+                ...(mentionSuggestionState.lastDoc ? [startAfter(mentionSuggestionState.lastDoc)] : []),
+                limit(50)
+            );
+        };
+        let snap = null;
+        try {
+            snap = await getDocs(buildQuery('usernameLower'));
+        } catch (err) {
+            snap = await getDocs(buildQuery('username'));
+        }
         mentionSuggestionState.lastDoc = snap.docs[snap.docs.length - 1] || mentionSuggestionState.lastDoc;
-        mentionSuggestionState.hasMore = snap.docs.length === MENTION_SUGGESTION_PAGE_SIZE;
+        mentionSuggestionState.hasMore = snap.docs.length === 50;
         const batch = snap.docs.map(function (d) {
             const data = normalizeUserProfileData(d.data(), d.id);
             const followersCount = data.followersCount || data.followerCount || 0;
@@ -3614,37 +3654,23 @@ async function searchMentionSuggestions(term = '') {
         mentionSuggestionState.results = merged.sort(function (a, b) {
             return (b.followersCount || 0) - (a.followersCount || 0);
         });
-        if (!mentionSuggestionState.results.length) {
-            listEl.innerHTML = '';
-            listEl.style.display = 'none';
-            return;
-        }
-        listEl.style.display = 'flex';
-        listEl.innerHTML = mentionSuggestionState.results.map(function (profile) {
-            const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
-            return `<button type="button" class="mention-suggestion" onmousedown="event.preventDefault()" onclick='window.addComposerMention(${JSON.stringify({
-                uid: profile.id || profile.uid,
-                username: profile.username,
-                displayName: profile.name || profile.nickname || profile.displayName || '',
-                accountRoles: profile.accountRoles || [],
-                photoURL: profile.photoURL || '',
-                avatarColor: profile.avatarColor || '',
-                followersCount: profile.followersCount || profile.followerCount || 0
-            }).replace(/'/g, "&apos;")})'>
-                ${avatar}
-                <div class="mention-suggestion-meta">
-                    <div class="mention-name">${escapeHtml(profile.name || profile.nickname || profile.displayName || profile.username)}</div>
-                    <div class="mention-handle">@${escapeHtml(profile.username || '')}</div>
-                </div>
-            </button>`;
-        }).join('');
+        renderMentionSuggestionsList(listEl);
         if (!listEl.dataset.scrollBound) {
             listEl.addEventListener('scroll', function () {
                 const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 12;
-                if (nearBottom) searchMentionSuggestions(`@${mentionSuggestionState.query}`);
+                if (nearBottom) {
+                    if (mentionSuggestionState.visibleCount < mentionSuggestionState.results.length) {
+                        mentionSuggestionState.visibleCount = Math.min(mentionSuggestionState.visibleCount + 5, mentionSuggestionState.results.length);
+                        renderMentionSuggestionsList(listEl);
+                    } else {
+                        searchMentionSuggestions(`@${mentionSuggestionState.query}`);
+                    }
+                }
             });
             listEl.dataset.scrollBound = 'true';
         }
+        const input = document.getElementById('mention-input');
+        if (input) input.focus({ preventScroll: true });
     } catch (err) {
         console.warn('Mention search failed', err);
         listEl.innerHTML = '';
