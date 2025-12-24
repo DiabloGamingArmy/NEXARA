@@ -66,6 +66,9 @@ let miniPlayerState = null;
 let videoModalResumeTime = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
+let conversationListFilter = 'all';
+let conversationListSearchTerm = '';
+let conversationListVisibleCount = 30;
 const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
 var activeUploadId = window.activeUploadId || null;
@@ -153,7 +156,7 @@ const MOBILE_SECTION_LABELS = {
     feed: 'Home',
     live: 'Live',
     videos: 'Videos',
-    messages: 'Messages',
+    messages: 'Inbox',
     discover: 'Discover',
     saved: 'Saved',
     profile: 'Profile',
@@ -6255,11 +6258,19 @@ function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
     if (!listEl) return;
     listEl.innerHTML = '';
+    const emptyEl = document.getElementById('conversation-list-empty');
+    const pinnedEl = document.getElementById('pinned-conversations');
 
     if (conversationMappings.length === 0) {
-        listEl.innerHTML = '<div class="empty-state">No conversations yet.</div>';
+        if (emptyEl) {
+            emptyEl.textContent = 'Start a conversation';
+            emptyEl.style.display = 'block';
+        } else {
+            listEl.innerHTML = '<div class="empty-state">Start a conversation</div>';
+        }
         return;
     }
+    if (emptyEl) emptyEl.style.display = 'none';
 
     const orderedMappings = conversationMappings
         .slice()
@@ -6273,7 +6284,30 @@ function renderConversationList() {
             return bTs - aTs;
         });
 
-    orderedMappings.forEach(function (mapping) {
+    const search = (conversationListSearchTerm || '').toLowerCase();
+    let filtered = orderedMappings.filter(function (mapping) {
+        if (conversationListFilter === 'unread' && !(mapping.unreadCount > 0)) return false;
+        if (conversationListFilter === 'pinned' && !mapping.pinned) return false;
+        if (conversationListFilter === 'archived' && !mapping.archived) return false;
+        return true;
+    });
+
+    if (search) {
+        filtered = filtered.filter(function (mapping) {
+            const details = conversationDetailsCache[mapping.id] || {};
+            const participants = details.participants || mapping.otherParticipantIds || [];
+            const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
+            const labels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).join(' ').toLowerCase();
+            const preview = (mapping.lastMessagePreview || details.lastMessagePreview || '').toLowerCase();
+            return labels.includes(search) || preview.includes(search);
+        });
+    }
+
+    const pinned = filtered.filter(function (mapping) { return mapping.pinned; });
+    const unpinned = filtered.filter(function (mapping) { return !mapping.pinned; });
+    const visible = unpinned.slice(0, conversationListVisibleCount);
+
+    const renderRow = function (mapping, targetEl) {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
@@ -6327,18 +6361,52 @@ function renderConversationList() {
                </div>`
             : '';
         const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
+        const tsSource = mapping.lastMessageAt || mapping.createdAt;
+        const tsLabel = tsSource ? formatMessageHoverTimestamp(tsSource) : '';
         const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
         item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
             <div class="conversation-body">
                 <div class="conversation-title-row">
                     <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                    <div class="conversation-time">${escapeHtml(tsLabel)}</div>
                     ${flagHtml}
                 </div>
                 <div class="conversation-preview">${previewText}</div>
             </div>`;
         item.onclick = function () { openConversation(mapping.id); };
-        listEl.appendChild(item);
-    });
+        targetEl.appendChild(item);
+    };
+
+    if (pinnedEl) {
+        pinnedEl.innerHTML = '';
+        if (pinned.length) {
+            pinnedEl.style.display = 'block';
+            pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            pinned.forEach(function (mapping) { renderRow(mapping, pinnedEl); });
+        } else {
+            pinnedEl.style.display = 'none';
+        }
+    }
+
+    if (!visible.length && !pinned.length) {
+        if (emptyEl) {
+            emptyEl.textContent = 'No conversations match your filters.';
+            emptyEl.style.display = 'block';
+        }
+        return;
+    }
+
+    visible.forEach(function (mapping) { renderRow(mapping, listEl); });
+    if (listEl.dataset.scrollBound !== 'true') {
+        listEl.addEventListener('scroll', function () {
+            const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 24;
+            if (nearBottom && unpinned.length > conversationListVisibleCount) {
+                conversationListVisibleCount = Math.min(unpinned.length, conversationListVisibleCount + 30);
+                renderConversationList();
+            }
+        });
+        listEl.dataset.scrollBound = 'true';
+    }
 }
 
 function renderPinnedMessages(convo = {}, msgs = []) {
@@ -6402,6 +6470,7 @@ function renderMessageHeader(convo = {}) {
         ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
         : 'class="message-thread-profile-btn" type="button" disabled';
 
+    const avatarStack = buildParticipantAvatarStack(participants);
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
             ${avatar}
@@ -6410,10 +6479,28 @@ function renderMessageHeader(convo = {}) {
                 <div class="message-thread-subtitle">${subtitle}</div>
             </div>
         </button>
+        ${avatarStack}
         <div class="message-header-actions">
             <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"><i class="ph ph-dots-three-outline"></i></button>
         </div>
     </div>`;
+}
+
+function buildParticipantAvatarStack(participants = []) {
+    if (!Array.isArray(participants) || participants.length <= 1) return '';
+    const others = participants.filter(function (uid) { return uid !== currentUser?.uid; }).slice(0, 3);
+    if (!others.length) return '';
+    const avatars = others.map(function (uid) {
+        const meta = resolveParticipantDisplay({ participants }, uid);
+        return renderAvatar({
+            uid,
+            username: meta.username,
+            displayName: meta.displayName,
+            photoURL: meta.avatar,
+            avatarColor: meta.avatarColor
+        }, { size: 26, className: 'message-avatar-stack-item' });
+    }).join('');
+    return `<div class="message-avatar-stack">${avatars}</div>`;
 }
 
 function renderMessages(msgs = [], convo = {}) {
@@ -6611,7 +6698,16 @@ function renderMessages(msgs = [], convo = {}) {
 
     body.appendChild(fragment);
     if (shouldStickToBottom) {
-        scrollRegion.scrollTop = scrollRegion.scrollHeight;
+        scrollMessagesToBottom();
+        const media = scrollRegion.querySelectorAll('img, video');
+        media.forEach(function (node) {
+            const handler = function () { scrollMessagesToBottom(); };
+            if (node.tagName === 'IMG') {
+                if (!node.complete) node.addEventListener('load', handler, { once: true });
+            } else {
+                node.addEventListener('loadedmetadata', handler, { once: true });
+            }
+        });
     } else {
         scrollRegion.scrollTop = Math.max(0, scrollRegion.scrollHeight - previousOffset);
     }
@@ -6666,6 +6762,21 @@ function handleConversationSearch(term = '') {
     const convo = conversationDetailsCache[activeConversationId] || {};
     renderMessages(messageThreadCache[activeConversationId] || [], convo);
     if (conversationSearchHits.length) navigateConversationSearch(0);
+}
+
+function handleConversationListSearch(event) {
+    conversationListSearchTerm = (event?.target?.value || '').trim();
+    conversationListVisibleCount = 30;
+    renderConversationList();
+}
+
+function setConversationFilter(filter = 'all') {
+    conversationListFilter = filter || 'all';
+    conversationListVisibleCount = 30;
+    document.querySelectorAll('.inbox-filter').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.filter === conversationListFilter);
+    });
+    renderConversationList();
 }
 
 function navigateConversationSearch(step = 0) {
@@ -8024,6 +8135,8 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
 };
 
 window.handleConversationSearch = handleConversationSearch;
+window.handleConversationListSearch = handleConversationListSearch;
+window.setConversationFilter = setConversationFilter;
 window.navigateConversationSearch = navigateConversationSearch;
 window.clearReplyContext = clearReplyContext;
 
@@ -8281,7 +8394,13 @@ window.openConversation = openConversation;
 
 window.openMessagesPage = async function () {
     if (!requireAuth()) return;
+    conversationListFilter = 'all';
+    conversationListSearchTerm = '';
+    conversationListVisibleCount = 30;
+    const searchInput = document.getElementById('conversation-list-search');
+    if (searchInput) searchInput.value = '';
     window.navigateTo('messages');
+    setConversationFilter('all');
     await initConversations();
 };
 

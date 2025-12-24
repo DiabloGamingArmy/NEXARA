@@ -6,6 +6,7 @@
     live: 'live',
     videos: 'videos',
     messages: 'messages',
+    inbox: 'messages',
     discover: 'discover',
     saved: 'saved',
     profile: 'profile',
@@ -53,7 +54,7 @@
       feed: '/home',
       live: '/live',
       videos: '/videos',
-      messages: '/messages',
+      messages: '/inbox',
       discover: '/discover',
       saved: '/saved',
       profile: '/profile',
@@ -96,9 +97,9 @@
     const search = new URLSearchParams(params);
     const suffix = search.toString();
     if (conversationId) {
-      return `/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
+      return `/inbox/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
     }
-    return `/messages${suffix ? `?${suffix}` : ''}`;
+    return `/inbox${suffix ? `?${suffix}` : ''}`;
   }
 
   function updateUrl(path, replace = false) {
@@ -153,6 +154,9 @@
     }
     if (SECTION_ROUTES[head]) {
       if (head === 'messages' && segments[1]) {
+        return { type: 'messages', conversationId: segments[1], route };
+      }
+      if (head === 'inbox' && segments[1]) {
         return { type: 'messages', conversationId: segments[1], route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
