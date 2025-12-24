@@ -130,6 +130,14 @@ service firebase.storage {
             || (request.auth.uid in convoParticipants() && userId in convoParticipants()));
     }
 
+    match /notifications/{targetUid}/items/{nid} {
+      allow read: if isSignedIn() && request.auth.uid == targetUid;
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.actorUid
+        && request.resource.data.targetUid == targetUid;
+      allow update, delete: if false;
+    }
+
     // -------------------------
     // Videos
     // -------------------------
