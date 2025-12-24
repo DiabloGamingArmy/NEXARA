@@ -56,6 +56,7 @@ let videoSortMode = 'recent';
 let pendingVideoPreviewUrl = null;
 let pendingVideoThumbnailBlob = null;
 let pendingVideoThumbnailUrl = null;
+let pendingVideoHasCustomThumbnail = false;
 let videoTags = [];
 let videoMentions = [];
 let videoMentionSearchTimer = null;
@@ -8703,6 +8704,7 @@ function setVideoUploadModalMode(mode, video = null) {
     videoUploadMode = mode === 'edit' ? 'edit' : 'create';
     editingVideoId = videoUploadMode === 'edit' ? video?.id || null : null;
     editingVideoData = videoUploadMode === 'edit' ? video : null;
+    if (videoUploadMode === 'create') pendingVideoHasCustomThumbnail = false;
     const titleEl = document.getElementById('video-upload-modal-title');
     const subtitleEl = document.getElementById('video-upload-modal-subtitle');
     const submitBtn = document.getElementById('video-upload-submit');
@@ -8738,6 +8740,7 @@ function populateVideoUploadForm(video = {}) {
     }
     if (preview) preview.classList.add('active');
     if (thumbPreview) thumbPreview.src = resolveVideoThumbnail(video);
+    pendingVideoHasCustomThumbnail = !!(video?.hasCustomThumbnail || video?.thumbURL || video?.thumbnail);
 }
 
 window.openVideoUploadModal = function () {
@@ -8776,6 +8779,7 @@ window.toggleVideoUploadModal = function (show = true) {
             pendingVideoThumbnailUrl = null;
         }
         pendingVideoThumbnailBlob = null;
+        pendingVideoHasCustomThumbnail = false;
         resetVideoUploadMeta();
         setVideoUploadModalMode('create');
     }
@@ -9210,6 +9214,8 @@ window.handleVideoFileChange = async function (event) {
         if (preview) preview.classList.remove('active');
         if (previewPlayer) previewPlayer.src = '';
         if (thumbPreview) thumbPreview.src = '';
+        pendingVideoThumbnailBlob = null;
+        pendingVideoHasCustomThumbnail = false;
         return;
     }
 
@@ -9231,14 +9237,16 @@ window.handleVideoFileChange = async function (event) {
     }
     if (preview) preview.classList.add('active');
 
-    pendingVideoThumbnailBlob = await generateThumbnailFromVideo(file);
-    if (pendingVideoThumbnailUrl) {
-        URL.revokeObjectURL(pendingVideoThumbnailUrl);
-        pendingVideoThumbnailUrl = null;
-    }
-    if (pendingVideoThumbnailBlob && thumbPreview) {
-        const dataUrl = await blobToDataUrl(pendingVideoThumbnailBlob);
-        thumbPreview.src = dataUrl;
+    if (!pendingVideoHasCustomThumbnail) {
+        pendingVideoThumbnailBlob = await generateThumbnailFromVideo(file);
+        if (pendingVideoThumbnailUrl) {
+            URL.revokeObjectURL(pendingVideoThumbnailUrl);
+            pendingVideoThumbnailUrl = null;
+        }
+        if (pendingVideoThumbnailBlob && thumbPreview) {
+            const dataUrl = await blobToDataUrl(pendingVideoThumbnailBlob);
+            thumbPreview.src = dataUrl;
+        }
     }
 
 };
@@ -9256,6 +9264,8 @@ window.handleThumbnailChange = function (event) {
 
     if (!file) return;
 
+    pendingVideoHasCustomThumbnail = true;
+    pendingVideoThumbnailBlob = file;
     pendingVideoThumbnailUrl = URL.createObjectURL(file);
     if (thumbPreview) thumbPreview.src = pendingVideoThumbnailUrl;
 };
@@ -9270,6 +9280,7 @@ window.handleVideoSubmit = function () {
 
 window.openVideoEditModal = async function (videoId) {
     if (!requireAuth() || !videoId) return;
+    closeVideoTaskViewer();
     let video = getVideoById(videoId);
     if (!video) {
         try {
@@ -9297,6 +9308,7 @@ window.openVideoEditModal = async function (videoId) {
         pendingVideoThumbnailUrl = null;
     }
     pendingVideoThumbnailBlob = null;
+    pendingVideoHasCustomThumbnail = !!(video?.hasCustomThumbnail || video?.thumbURL || video?.thumbnail);
 
     const videoData = {
         ...video,
@@ -9319,6 +9331,7 @@ window.updateVideoDetails = async function () {
     const visibility = document.getElementById('video-visibility').value || 'public';
     const videoId = editingVideoId;
     let thumbURL = editingVideoData?.thumbURL || editingVideoData?.thumbnail || '';
+    let hasCustomThumbnail = !!(editingVideoData?.hasCustomThumbnail || thumbURL);
     const storagePath = editingVideoData?.storagePath || `videos/${currentUser.uid}/${videoId}`;
 
     try {
@@ -9338,6 +9351,7 @@ window.updateVideoDetails = async function () {
             const thumbRef = ref(storage, `${storagePath}/thumb.jpg`);
             await uploadBytes(thumbRef, thumbBlob);
             thumbURL = await getDownloadURL(thumbRef);
+            hasCustomThumbnail = true;
         }
 
         await updateDoc(doc(db, 'videos', videoId), {
@@ -9348,6 +9362,7 @@ window.updateVideoDetails = async function () {
             mentions,
             visibility,
             thumbURL,
+            hasCustomThumbnail,
             updatedAt: serverTimestamp()
         });
 
@@ -9360,6 +9375,7 @@ window.updateVideoDetails = async function () {
             cached.mentions = mentions;
             cached.visibility = visibility;
             if (thumbURL) cached.thumbURL = thumbURL;
+            cached.hasCustomThumbnail = hasCustomThumbnail;
         }
 
         toast('Video updated.', 'success');
@@ -9444,7 +9460,10 @@ function ensureVideoTaskViewerBindings() {
         const editBtn = event.target.closest('[data-video-edit]');
         if (editBtn) {
             const videoId = editBtn.getAttribute('data-video-edit');
-            if (videoId) window.openVideoEditModal(videoId);
+            if (videoId) {
+                closeVideoTaskViewer();
+                window.openVideoEditModal(videoId);
+            }
         }
     });
 }
@@ -10118,13 +10137,17 @@ window.uploadVideo = async function () {
         console.info('[VideoUpload] Video URL ready', { videoId });
         let thumbURL = '';
         let thumbBlob = null;
+        let hasCustomThumbnail = false;
 
         if (thumbInput && thumbInput.files && thumbInput.files[0]) {
             thumbBlob = thumbInput.files[0];
+            hasCustomThumbnail = true;
         } else if (pendingVideoThumbnailBlob) {
             thumbBlob = pendingVideoThumbnailBlob;
+            hasCustomThumbnail = pendingVideoHasCustomThumbnail;
         } else {
             thumbBlob = await generateThumbnailFromVideo(file);
+            hasCustomThumbnail = false;
         }
 
         if (thumbBlob) {
@@ -10147,6 +10170,7 @@ window.uploadVideo = async function () {
             videoURL,
             thumbURL,
             visibility,
+            hasCustomThumbnail,
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
 

@@ -524,6 +524,56 @@ body {
     font-size: 1.3rem;
 }
 
+.nexera-alert-banner {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-main);
+    font-weight: 600;
+    border-radius: 0 0 16px 16px;
+}
+
+.nexera-alert-banner.banner-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 2500;
+    border-radius: 0 0 16px 16px;
+}
+
+.nexera-alert-banner.banner-static {
+    position: relative;
+    width: 100%;
+}
+
+.nexera-alert-banner .banner-content {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+}
+
+.nexera-alert-banner .banner-icon {
+    font-size: 1.2rem;
+    opacity: 0.9;
+}
+
+.nexera-alert-banner .banner-close {
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 1.1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .create-btn-sidebar {
     background: linear-gradient(120deg, #00f2ea, #00c5c2, #004a9f);
     color: #000;
@@ -3364,9 +3414,15 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .video-feed {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 22px;
     padding: 1rem 1rem 2rem;
+}
+
+@media (max-width: 768px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
 }
 
 .video-card {
@@ -5031,7 +5087,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .live-view-shell {
     max-width: 100%;
     margin: 0 auto;
-    padding: 0 1rem 1.25rem;
+    padding: 0 !important;
     width: 100%;
 }
 

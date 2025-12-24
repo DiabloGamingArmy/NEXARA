@@ -8,3 +8,4 @@
  */
 import '/scripts/app.js';
 import '/assets/js/router.js';
+import '/scripts/ui/banner.js';
