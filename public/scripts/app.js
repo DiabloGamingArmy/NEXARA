@@ -6535,6 +6535,27 @@ function computeUnreadNotificationTotal() {
     }, 0);
 }
 
+function updateInboxTabBadges() {
+    const counts = {
+        messages: computeUnreadMessageTotal(),
+        posts: inboxNotificationCounts.posts || 0,
+        videos: inboxNotificationCounts.videos || 0,
+        livestreams: inboxNotificationCounts.livestreams || 0,
+        account: inboxNotificationCounts.account || 0
+    };
+    document.querySelectorAll('.inbox-tab-badge').forEach(function (badge) {
+        const mode = badge.dataset.mode;
+        const total = counts[mode] || 0;
+        if (total <= 0) {
+            badge.textContent = '';
+            badge.style.display = 'none';
+            return;
+        }
+        badge.textContent = total > 99 ? '99+' : String(total);
+        badge.style.display = 'inline-flex';
+    });
+}
+
 function updateInboxNavBadge() {
     const total = computeUnreadMessageTotal() + computeUnreadNotificationTotal();
     const label = total > 99 ? '99+' : String(total);
@@ -6548,6 +6569,7 @@ function updateInboxNavBadge() {
         badge.textContent = label;
         badge.style.display = 'inline-flex';
     });
+    updateInboxTabBadges();
 }
 
 function updateInboxNotificationCounts() {
@@ -6559,6 +6581,16 @@ function updateInboxNotificationCounts() {
     });
     inboxNotificationCounts = counts;
     updateInboxNavBadge();
+}
+
+function markNotificationRead(notif) {
+    if (!currentUser || !notif || notif.read || !notif.id) return;
+    notif.read = true;
+    updateInboxNotificationCounts();
+    const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
+    updateDoc(notifRef, { read: true }).catch(function (err) {
+        console.warn('Failed to mark notification read', err?.message || err);
+    });
 }
 
 function renderInboxNotifications(mode = 'posts') {
@@ -6601,21 +6633,18 @@ function renderInboxNotifications(mode = 'posts') {
                 ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
             </div>
         `;
-        if (notif.entityType === 'post' && notif.entityId) {
-            row.onclick = function () { window.openThread(notif.entityId); };
-        } else if (notif.entityType === 'video' && notif.entityId && typeof window.openVideoDetail === 'function') {
-            row.onclick = function () { window.openVideoDetail(notif.entityId); };
-        }
+        row.onclick = function () {
+            markNotificationRead(notif);
+            const entityType = (notif.entityType || '').toLowerCase();
+            if ((entityType === 'post' || entityType === 'posts') && notif.entityId) {
+                window.openThread(notif.entityId);
+            } else if ((entityType === 'video' || entityType === 'videos') && notif.entityId && typeof window.openVideoDetail === 'function') {
+                window.openVideoDetail(notif.entityId);
+            } else if ((entityType === 'livestream' || entityType === 'live' || entityType === 'stream') && notif.entityId && typeof window.openLiveSession === 'function') {
+                window.openLiveSession(notif.entityId);
+            }
+        };
         listEl.appendChild(row);
-    });
-}
-
-async function markInboxNotificationsRead(mode = '') {
-    if (!currentUser || !mode) return;
-    inboxNotifications.forEach(function (notif) {
-        if (getNotificationBucket(notif) === mode) {
-            notif.read = true;
-        }
     });
 }
 
@@ -6639,7 +6668,6 @@ function setInboxMode(mode = 'messages') {
     });
     if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
-        markInboxNotificationsRead(inboxMode).catch(function () {});
     }
 }
 
