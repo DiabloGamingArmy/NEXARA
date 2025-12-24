@@ -1483,6 +1483,33 @@ body.light-mode .category-pill.active .topic-verified-icon {
     transform: translateY(-1px);
 }
 
+.feed-type-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 1rem 0.75rem;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.feed-type-toggle {
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.feed-type-toggle.active {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: rgba(0, 242, 234, 0.08);
+}
+
 .category-badge {
     font-size: 0.7rem;
     padding: 4px 10px;
@@ -1694,6 +1721,23 @@ body.light-mode .category-pill.active .topic-verified-icon {
     color: var(--text-main);
 }
 
+.trend-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.trend-select {
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-radius: 10px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
 .trend-item {
     display: flex;
     justify-content: space-between;
@@ -1701,6 +1745,101 @@ body.light-mode .category-pill.active .topic-verified-icon {
     cursor: pointer;
     padding: 8px;
     border-radius: 8px;
+}
+
+.trend-count {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.feed-video-card,
+.feed-live-card {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--bg-card);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.feed-video-card:hover,
+.feed-live-card:hover {
+    border-color: rgba(0, 242, 234, 0.4);
+    box-shadow: 0 12px 24px rgba(0, 80, 110, 0.18);
+}
+
+.feed-video-thumb {
+    width: 100%;
+    height: 180px;
+    border-radius: 12px;
+    background-size: cover;
+    background-position: center;
+    position: relative;
+}
+
+.feed-video-duration {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.feed-video-title {
+    font-weight: 800;
+    font-size: 1rem;
+}
+
+.feed-video-channel {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.feed-video-stats {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.feed-live-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.feed-live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 61, 61, 0.15);
+    color: #ff3d3d;
+    font-size: 0.75rem;
+    font-weight: 800;
+    padding: 4px 8px;
+    border-radius: 999px;
+}
+
+.feed-live-viewers {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.feed-live-title {
+    font-weight: 800;
+    font-size: 1rem;
+}
+
+.feed-live-host {
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }
 
 .trend-item:hover {
@@ -2640,12 +2779,30 @@ body.light-mode .category-pill.active .topic-verified-icon {
     font-weight: 600;
     cursor: pointer;
     transition: 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .inbox-tab.active {
     border-color: var(--primary);
     color: var(--primary);
     background: rgba(0, 242, 234, 0.08);
+}
+
+.inbox-tab-badge {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #0a0a0a;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
 }
 
 .inbox-panel {

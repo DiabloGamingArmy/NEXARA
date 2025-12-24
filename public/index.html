@@ -643,6 +643,14 @@
                     style="display: none;" onclick="window.scrollCategoryHeader(1)">
                     <i class="ph ph-caret-right"></i>
                 </button>
+                <div id="home-feed-type-toggles" class="feed-type-row">
+                    <button class="feed-type-toggle active" data-type="threads" aria-pressed="true"
+                        onclick="window.toggleHomeFeedType('threads')">Threads</button>
+                    <button class="feed-type-toggle active" data-type="videos" aria-pressed="true"
+                        onclick="window.toggleHomeFeedType('videos')">Videos</button>
+                    <button class="feed-type-toggle active" data-type="livestreams" aria-pressed="true"
+                        onclick="window.toggleHomeFeedType('livestreams')">Livestreams</button>
+                </div>
                 <div id="feed-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
             </div>
 
@@ -788,11 +796,26 @@
 
             <div id="view-messages" class="view-section" style="display:none;">
                 <div class="inbox-tabs">
-                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">Posts</button>
-                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">Videos</button>
-                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">Livestreams</button>
-                    <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">Messages</button>
-                    <button class="inbox-tab" data-mode="account" onclick="window.setInboxMode('account')">Account Notifications</button>
+                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">
+                        <span class="inbox-tab-label">Posts</span>
+                        <span class="inbox-tab-badge" data-mode="posts"></span>
+                    </button>
+                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">
+                        <span class="inbox-tab-label">Videos</span>
+                        <span class="inbox-tab-badge" data-mode="videos"></span>
+                    </button>
+                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">
+                        <span class="inbox-tab-label">Livestreams</span>
+                        <span class="inbox-tab-badge" data-mode="livestreams"></span>
+                    </button>
+                    <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">
+                        <span class="inbox-tab-label">Messages</span>
+                        <span class="inbox-tab-badge" data-mode="messages"></span>
+                    </button>
+                    <button class="inbox-tab" data-mode="account" onclick="window.setInboxMode('account')">
+                        <span class="inbox-tab-label">Account Notifications</span>
+                        <span class="inbox-tab-badge" data-mode="account"></span>
+                    </button>
                 </div>
                 <div id="inbox-panel-messages" class="inbox-panel active">
                     <div class="inbox-layout">
@@ -1541,9 +1564,19 @@
 
     <aside class="sidebar-right glass-panel">
         <div class="trend-box">
-            <div class="trend-title">Trending <i class="ph-fill ph-trend-up"></i></div>
-            <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
-            <div class="trend-item"><span>#AI</span><span style="color:var(--text-muted);">8k</span></div>
+            <div class="trend-title trend-title-row">
+                <span>Trending <i class="ph-fill ph-trend-up"></i></span>
+                <select id="trending-timeframe" class="trend-select" onchange="window.setTrendingTimeframe(this.value)">
+                    <option value="day">1 day</option>
+                    <option value="week" selected>7 days</option>
+                    <option value="month">1 month</option>
+                    <option value="halfYear">6 months</option>
+                    <option value="year">1 year</option>
+                    <option value="fiveYears">5 years</option>
+                    <option value="lifetime">lifetime</option>
+                </select>
+            </div>
+            <div id="trending-topics-list"></div>
         </div>
 
         <div class="trend-box">

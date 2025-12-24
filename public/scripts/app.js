@@ -88,6 +88,12 @@ let liveTagSearchDebounce = null;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
+let homeFeedItems = [];
+let homeFeedTypeToggles = { threads: true, videos: true, livestreams: true };
+let homeFeedTypeTogglesLoaded = false;
+const HOME_FEED_TOGGLE_KEY = 'homeFeedTypeToggles';
+let topicStatsCache = [];
+let trendingTimeframe = 'week';
 let composerTags = [];
 let composerCreatedTags = new Set();
 let composerMentions = [];
@@ -1123,6 +1129,7 @@ function initApp(onReady) {
                 await ensureOfficialCategories();
                 startCategoryStreams(user.uid);
                 await loadFeedData({ showSplashDuringLoad: true });
+                loadTopicStats();
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 initInboxNotifications(user.uid);
                 updateTimeCapsule();
@@ -1550,18 +1557,27 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     feedHydrationPromise = (async function () {
         if (showSplashDuringLoad) showSplash();
         const postsRef = collection(db, 'posts');
-        const q = query(postsRef);
-        const snapshot = await getDocs(q);
+        const postsQuery = query(postsRef);
+        const videoQuery = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
+        const liveQuery = query(collection(db, 'liveStreams'), orderBy('createdAt', 'desc'));
+        const [postsSnapshot, videosSnapshot, liveSnapshot] = await Promise.all([
+            getDocs(postsQuery),
+            getDocs(videoQuery),
+            getDocs(liveQuery)
+        ]);
         const nextCache = {};
         allPosts = [];
-        snapshot.forEach(function (docSnap) {
+        postsSnapshot.forEach(function (docSnap) {
             const data = docSnap.data();
             const normalized = normalizePostData(docSnap.id, data);
             allPosts.push(normalized);
             nextCache[docSnap.id] = data;
         });
+        videosCache = videosSnapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        liveSessionsCache = liveSnapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
 
         allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
+        buildHomeFeedItems();
 
         if (currentUser) {
             const ownLocs = allPosts.filter(function (p) { return p.userId === currentUser.uid && p.location; }).map(function (p) { return p.location; });
@@ -1608,6 +1624,7 @@ function startCategoryStreams(uid) {
         renderDestinationPicker();
         syncPostButtonState();
         renderFeed();
+        renderTrendingTopics();
     }, function () {
         destinationPickerLoading = false;
         destinationPickerError = 'Unable to load destinations.';
@@ -2921,6 +2938,65 @@ function getPostHTML(post) {
     }
 }
 
+function formatDurationLabel(totalSeconds = 0) {
+    if (!totalSeconds || !Number.isFinite(totalSeconds)) return '—';
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function renderHomeVideoCard(video) {
+    const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
+    const title = video.title || video.caption || 'Untitled video';
+    const channelName = author.displayName || author.name || author.username || 'Nexera Creator';
+    const views = video.stats?.views || 0;
+    const duration = video.duration || video.lengthSeconds || 0;
+    const thumb = resolveVideoThumbnail(video);
+    const topicLabel = video.category || video.categoryName || '';
+    const channelMarkup = video.ownerId
+        ? `<div class="feed-video-channel" onclick="event.stopPropagation(); window.openUserProfile('${video.ownerId}', event)">${escapeHtml(channelName)}</div>`
+        : `<div class="feed-video-channel">${escapeHtml(channelName)}</div>`;
+    return `
+        <div class="feed-video-card" onclick="window.openVideoDetail('${video.id}')">
+            <div class="feed-video-thumb" style="background-image:url('${thumb}')">
+                <span class="feed-video-duration">${formatDurationLabel(duration)}</span>
+            </div>
+            <div class="feed-video-meta">
+                <div class="feed-video-title">${escapeHtml(title)}</div>
+                ${channelMarkup}
+                <div class="feed-video-stats">${formatCompactNumber(views)} views • ${formatVideoTimestamp(video.createdAt)}</div>
+                ${topicLabel ? `<div class="category-badge">${escapeHtml(topicLabel)}</div>` : ''}
+            </div>
+        </div>`;
+}
+
+function renderHomeLiveCard(session) {
+    const host = getCachedUser(session.hostId) || { name: 'Host', username: 'host' };
+    const title = session.title || 'Live now';
+    const viewers = session.viewerCount || session.stats?.viewerCount || 0;
+    const topicLabel = session.category || session.categoryName || '';
+    return `
+        <div class="feed-live-card" onclick="window.openLiveSessionFromFeed('${session.id}')">
+            <div class="feed-live-banner">
+                <span class="feed-live-pill"><i class="ph-fill ph-circle"></i> LIVE</span>
+                <span class="feed-live-viewers">${formatCompactNumber(viewers)} watching</span>
+            </div>
+            <div class="feed-live-title">${escapeHtml(title)}</div>
+            <div class="feed-live-host">${escapeHtml(host.displayName || host.name || host.username || 'Host')}</div>
+            ${topicLabel ? `<div class="category-badge">${escapeHtml(topicLabel)}</div>` : ''}
+        </div>`;
+}
+
+window.openLiveSessionFromFeed = function (sessionId) {
+    if (!sessionId) return;
+    window.navigateTo('live');
+    setTimeout(function () {
+        if (typeof window.openLiveSession === 'function') {
+            window.openLiveSession(sessionId);
+        }
+    }, 200);
+};
+
 function renderFeed(targetId = 'feed-content') {
     if (window.localStorage?.getItem('NEXERA_DEBUG_ROUTER') === '1') {
         window.__nexeraFeedRenderCount = (window.__nexeraFeedRenderCount || 0) + 1;
@@ -2930,52 +3006,94 @@ function renderFeed(targetId = 'feed-content') {
     if (!container) return;
 
     renderCategoryPills();
+    ensureHomeFeedTypeToggles();
+    renderHomeFeedTypeToggles();
+    buildHomeFeedItems();
     container.innerHTML = "";
 
     if (feedLoading && allPosts.length === 0) {
         container.innerHTML = `<div class="empty-state"><p>Loading Posts...</p></div>`;
         return;
     }
-    let displayPosts = allPosts.filter(function (post) {
-        if (post.visibility === 'private') return currentUser && post.userId === currentUser.uid;
-        return true;
-    });
 
-    displayPosts = displayPosts.filter(function (post) {
-        if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
-        return true;
-    });
-
-    if (currentCategory === 'Following') {
-        displayPosts = allPosts.filter(function (post) { return followedCategories.has(post.category); });
-    } else if (currentCategory === 'Saved') {
-        displayPosts = allPosts.filter(function (post) { return userProfile.savedPosts && userProfile.savedPosts.includes(post.id); });
+    if (currentCategory === 'Saved') {
+        let displayPosts = allPosts.filter(function (post) { return userProfile.savedPosts && userProfile.savedPosts.includes(post.id); });
         if (savedSearchTerm) displayPosts = displayPosts.filter(function (post) { return post.title.toLowerCase().includes(savedSearchTerm); });
         if (savedFilter === 'Recent') displayPosts.sort(function (a, b) { return userProfile.savedPosts.indexOf(b.id) - userProfile.savedPosts.indexOf(a.id); });
         else if (savedFilter === 'Oldest') displayPosts.sort(function (a, b) { return userProfile.savedPosts.indexOf(a.id) - userProfile.savedPosts.indexOf(b.id); });
         else if (savedFilter === 'Videos') displayPosts = displayPosts.filter(function (p) { return p.type === 'video'; });
         else if (savedFilter === 'Images') displayPosts = displayPosts.filter(function (p) { return p.type === 'image'; });
-    } else if (currentCategory !== 'For You') {
-        displayPosts = allPosts.filter(function (post) { return post.category === currentCategory; });
-    }
 
-    if (currentCategory === 'For You') {
-        displayPosts = displayPosts.slice().sort(function (a, b) {
-            return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
+        if (displayPosts.length === 0) {
+            const emptyLabel = feedLoading ? 'Loading Posts...' : 'No posts found.';
+            container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>${emptyLabel}</p></div>`;
+            return;
+        }
+
+        displayPosts.forEach(function (post) {
+            container.innerHTML += getPostHTML(post);
         });
+        displayPosts.forEach(function (post) {
+            const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+            const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
+            applyReviewButtonState(reviewBtn, reviewValue);
+        });
+        applyMyReviewStylesToDOM();
+        return;
     }
 
-    if (displayPosts.length === 0) {
+    const allowedTypes = {
+        post: !!homeFeedTypeToggles.threads,
+        video: !!homeFeedTypeToggles.videos,
+        live: !!homeFeedTypeToggles.livestreams
+    };
+
+    const matchesCategory = function (topicId) {
+        if (currentCategory === 'For You') return true;
+        if (currentCategory === 'Following') return followedCategories.has(topicId);
+        return topicId === currentCategory;
+    };
+
+    const displayItems = homeFeedItems.filter(function (item) {
+        if (!allowedTypes[item.type]) return false;
+        if (item.type === 'post') {
+            const post = item.data;
+            if (post.visibility === 'private' && (!currentUser || post.userId !== currentUser.uid)) return false;
+            if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
+            return matchesCategory(post.category);
+        }
+        if (item.type === 'video') {
+            const video = item.data;
+            if (video.visibility === 'private' && (!currentUser || video.ownerId !== currentUser.uid)) return false;
+            return matchesCategory(video.category || video.categoryId);
+        }
+        if (item.type === 'live') {
+            const session = item.data;
+            if (session.isLive === false) return false;
+            if (session.visibility === 'private' && (!currentUser || session.hostId !== currentUser.uid)) return false;
+            return matchesCategory(session.category || session.categoryId);
+        }
+        return false;
+    });
+
+    if (displayItems.length === 0) {
         const emptyLabel = feedLoading ? 'Loading Posts...' : 'No posts found.';
         container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>${emptyLabel}</p></div>`;
         return;
     }
 
-    displayPosts.forEach(post => {
-        container.innerHTML += getPostHTML(post);
+    displayItems.forEach(function (item) {
+        if (item.type === 'post') {
+            container.innerHTML += getPostHTML(item.data);
+        } else if (item.type === 'video') {
+            container.innerHTML += renderHomeVideoCard(item.data);
+        } else if (item.type === 'live') {
+            container.innerHTML += renderHomeLiveCard(item.data);
+        }
     });
 
-    displayPosts.forEach(post => {
+    displayItems.filter(function (item) { return item.type === 'post'; }).forEach(function (item) {
+        const post = item.data;
         const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
         const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
         applyReviewButtonState(reviewBtn, reviewValue);
@@ -5828,12 +5946,167 @@ function collectFollowedCategoryNames() {
 }
 
 function computeTrendingCategories(limit = 8) {
-    const counts = {};
-    allPosts.forEach(function (post) {
-        if (post.category) counts[post.category] = (counts[post.category] || 0) + 1;
-    });
-    return Object.entries(counts).sort(function (a, b) { return b[1] - a[1]; }).slice(0, limit).map(function (entry) { return entry[0]; });
+    const entries = topicStatsCache.map(function (stat) {
+        return { id: stat.id, count: getTopicStatCount(stat, trendingTimeframe) };
+    }).filter(function (entry) { return entry.count > 0; });
+    return entries.sort(function (a, b) { return b.count - a.count; }).slice(0, limit).map(function (entry) { return entry.id; });
 }
+
+function ensureHomeFeedTypeToggles() {
+    if (homeFeedTypeTogglesLoaded) return;
+    homeFeedTypeTogglesLoaded = true;
+    try {
+        const raw = window.localStorage?.getItem(HOME_FEED_TOGGLE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+            homeFeedTypeToggles = {
+                threads: parsed.threads !== false,
+                videos: parsed.videos !== false,
+                livestreams: parsed.livestreams !== false
+            };
+        }
+    } catch (err) {
+        console.warn('Unable to load home feed toggles', err);
+    }
+}
+
+function persistHomeFeedTypeToggles() {
+    try {
+        window.localStorage?.setItem(HOME_FEED_TOGGLE_KEY, JSON.stringify(homeFeedTypeToggles));
+    } catch (err) {
+        console.warn('Unable to persist home feed toggles', err);
+    }
+}
+
+function renderHomeFeedTypeToggles() {
+    const container = document.getElementById('home-feed-type-toggles');
+    if (!container) return;
+    container.querySelectorAll('.feed-type-toggle').forEach(function (btn) {
+        const type = btn.dataset.type;
+        const active = !!homeFeedTypeToggles[type];
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+
+window.toggleHomeFeedType = function (type) {
+    ensureHomeFeedTypeToggles();
+    if (!homeFeedTypeToggles.hasOwnProperty(type)) return;
+    homeFeedTypeToggles[type] = !homeFeedTypeToggles[type];
+    persistHomeFeedTypeToggles();
+    renderHomeFeedTypeToggles();
+    renderFeed();
+};
+
+function resolveFeedCreatedAtMs(value) {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (typeof value.seconds === 'number') return value.seconds * 1000;
+    const date = toDateSafe(value);
+    if (date) return date.getTime();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+function buildHomeFeedItems() {
+    const items = [];
+    allPosts.forEach(function (post) {
+        items.push({
+            type: 'post',
+            id: post.id,
+            createdAt: post.timestamp || post.createdAt || post.updatedAt || null,
+            topicId: post.categoryId || post.category || null,
+            data: post
+        });
+    });
+    videosCache.forEach(function (video) {
+        items.push({
+            type: 'video',
+            id: video.id,
+            createdAt: video.createdAt || video.updatedAt || null,
+            topicId: video.categoryId || video.category || null,
+            data: video
+        });
+    });
+    liveSessionsCache.forEach(function (session) {
+        items.push({
+            type: 'live',
+            id: session.id,
+            createdAt: session.startedAt || session.createdAt || null,
+            topicId: session.categoryId || session.category || null,
+            data: session
+        });
+    });
+    items.sort(function (a, b) {
+        return resolveFeedCreatedAtMs(b.createdAt) - resolveFeedCreatedAtMs(a.createdAt);
+    });
+    homeFeedItems = items;
+}
+
+function getTopicStatCount(stat, timeframe) {
+    if (!stat || !stat.counts) return 0;
+    const map = {
+        day: 'day',
+        week: 'week',
+        month: 'month',
+        halfYear: 'halfYear',
+        year: 'year',
+        fiveYears: 'fiveYears',
+        lifetime: 'lifetime'
+    };
+    const key = map[timeframe] || 'week';
+    return stat.counts?.[key] || 0;
+}
+
+function resolveTopicLabel(topicId) {
+    if (!topicId) return 'Topic';
+    const match = categories.find(function (cat) {
+        return cat.id === topicId || cat.slug === topicId || cat.name === topicId;
+    });
+    return match?.name || topicId;
+}
+
+function renderTrendingTopics() {
+    const list = document.getElementById('trending-topics-list');
+    if (!list) return;
+    const select = document.getElementById('trending-timeframe');
+    if (select) select.value = trendingTimeframe;
+    const entries = topicStatsCache.map(function (stat) {
+        return {
+            id: stat.id,
+            label: resolveTopicLabel(stat.id),
+            count: getTopicStatCount(stat, trendingTimeframe)
+        };
+    }).filter(function (entry) { return entry.count > 0; })
+        .sort(function (a, b) { return b.count - a.count; })
+        .slice(0, 5);
+    if (!entries.length) {
+        list.innerHTML = '<div class="trend-item"><span>No trending topics yet.</span></div>';
+        return;
+    }
+    list.innerHTML = entries.map(function (entry) {
+        return `<div class="trend-item"><span>${escapeHtml(entry.label)}</span><span class="trend-count">${formatCompactNumber(entry.count)}</span></div>`;
+    }).join('');
+}
+
+async function loadTopicStats() {
+    try {
+        const snap = await getDocs(collection(db, 'topicStats'));
+        topicStatsCache = snap.docs.map(function (docSnap) {
+            return { id: docSnap.id, ...docSnap.data() };
+        });
+        renderTrendingTopics();
+    } catch (err) {
+        console.warn('Unable to load topic stats', err);
+    }
+}
+
+window.setTrendingTimeframe = function (value) {
+    const allowed = ['day', 'week', 'month', 'halfYear', 'year', 'fiveYears', 'lifetime'];
+    trendingTimeframe = allowed.includes(value) ? value : 'week';
+    renderTrendingTopics();
+};
 
 function renderCategoryPills() {
     const header = document.getElementById('category-header');
@@ -6535,6 +6808,27 @@ function computeUnreadNotificationTotal() {
     }, 0);
 }
 
+function updateInboxTabBadges() {
+    const counts = {
+        messages: computeUnreadMessageTotal(),
+        posts: inboxNotificationCounts.posts || 0,
+        videos: inboxNotificationCounts.videos || 0,
+        livestreams: inboxNotificationCounts.livestreams || 0,
+        account: inboxNotificationCounts.account || 0
+    };
+    document.querySelectorAll('.inbox-tab-badge').forEach(function (badge) {
+        const mode = badge.dataset.mode;
+        const total = counts[mode] || 0;
+        if (total <= 0) {
+            badge.textContent = '';
+            badge.style.display = 'none';
+            return;
+        }
+        badge.textContent = total > 99 ? '99+' : String(total);
+        badge.style.display = 'inline-flex';
+    });
+}
+
 function updateInboxNavBadge() {
     const total = computeUnreadMessageTotal() + computeUnreadNotificationTotal();
     const label = total > 99 ? '99+' : String(total);
@@ -6548,6 +6842,7 @@ function updateInboxNavBadge() {
         badge.textContent = label;
         badge.style.display = 'inline-flex';
     });
+    updateInboxTabBadges();
 }
 
 function updateInboxNotificationCounts() {
@@ -6559,6 +6854,16 @@ function updateInboxNotificationCounts() {
     });
     inboxNotificationCounts = counts;
     updateInboxNavBadge();
+}
+
+function markNotificationRead(notif) {
+    if (!currentUser || !notif || notif.read || !notif.id) return;
+    notif.read = true;
+    updateInboxNotificationCounts();
+    const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
+    updateDoc(notifRef, { read: true }).catch(function (err) {
+        console.warn('Failed to mark notification read', err?.message || err);
+    });
 }
 
 function renderInboxNotifications(mode = 'posts') {
@@ -6601,21 +6906,18 @@ function renderInboxNotifications(mode = 'posts') {
                 ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
             </div>
         `;
-        if (notif.entityType === 'post' && notif.entityId) {
-            row.onclick = function () { window.openThread(notif.entityId); };
-        } else if (notif.entityType === 'video' && notif.entityId && typeof window.openVideoDetail === 'function') {
-            row.onclick = function () { window.openVideoDetail(notif.entityId); };
-        }
+        row.onclick = function () {
+            markNotificationRead(notif);
+            const entityType = (notif.entityType || '').toLowerCase();
+            if ((entityType === 'post' || entityType === 'posts') && notif.entityId) {
+                window.openThread(notif.entityId);
+            } else if ((entityType === 'video' || entityType === 'videos') && notif.entityId && typeof window.openVideoDetail === 'function') {
+                window.openVideoDetail(notif.entityId);
+            } else if ((entityType === 'livestream' || entityType === 'live' || entityType === 'stream') && notif.entityId && typeof window.openLiveSession === 'function') {
+                window.openLiveSession(notif.entityId);
+            }
+        };
         listEl.appendChild(row);
-    });
-}
-
-async function markInboxNotificationsRead(mode = '') {
-    if (!currentUser || !mode) return;
-    inboxNotifications.forEach(function (notif) {
-        if (getNotificationBucket(notif) === mode) {
-            notif.read = true;
-        }
     });
 }
 
@@ -6639,7 +6941,6 @@ function setInboxMode(mode = 'messages') {
     });
     if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
-        markInboxNotificationsRead(inboxMode).catch(function () {});
     }
 }
 
