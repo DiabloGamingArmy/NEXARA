@@ -4055,6 +4055,21 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-wrap: wrap;
 }
 
+.mention-suggestions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.tag-helper-text {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
 .suggestion-chip {
     background: var(--bg-hover);
     border: 1px solid var(--border);
