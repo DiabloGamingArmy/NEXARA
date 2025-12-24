@@ -258,7 +258,33 @@
 
   function goHomeFromNotFound() {
     history.pushState({}, '', '/home');
+    hideNotFound();
     applyCurrentRoute('not-found');
+  }
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function ensureMainViewVisible() {
+    const views = Array.from(document.querySelectorAll('.view-section'));
+    const visible = views.find((el) => isElementVisible(el));
+    if (visible && (visible.children.length > 0 || visible.textContent.trim())) {
+      return;
+    }
+    if (isDebugEnabled()) {
+      console.warn('[NexeraRouter] main view blank, forcing home fallback');
+    }
+    history.replaceState({}, '', '/home');
+    if (window.Nexera?.navigateTo) {
+      window.Nexera.navigateTo({ view: 'feed' });
+    } else if (typeof window.navigateTo === 'function') {
+      window.navigateTo('feed', false);
+    }
   }
 
   async function applyRoute(route) {
