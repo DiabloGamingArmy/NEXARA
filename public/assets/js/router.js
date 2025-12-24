@@ -200,6 +200,13 @@
     if (container) return container;
     container = document.createElement('div');
     container.id = 'nexera-not-found';
+    container.style.position = 'fixed';
+    container.style.inset = '0';
+    container.style.zIndex = '9999';
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.style.justifyContent = 'center';
+    container.style.background = 'rgba(0, 0, 0, 0.65)';
     container.innerHTML = `
       <div id="auth-screen" style="display:flex;">
         <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo"
@@ -234,8 +241,6 @@
   }
 
   function showNotFound() {
-    const appLayout = document.getElementById('app-layout');
-    if (appLayout) appLayout.style.display = 'none';
     ensureNotFoundShell();
   }
 
@@ -253,7 +258,33 @@
 
   function goHomeFromNotFound() {
     history.pushState({}, '', '/home');
+    hideNotFound();
     applyCurrentRoute('not-found');
+  }
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function ensureMainViewVisible() {
+    const views = Array.from(document.querySelectorAll('.view-section'));
+    const visible = views.find((el) => isElementVisible(el));
+    if (visible && (visible.children.length > 0 || visible.textContent.trim())) {
+      return;
+    }
+    if (isDebugEnabled()) {
+      console.warn('[NexeraRouter] main view blank, forcing home fallback');
+    }
+    history.replaceState({}, '', '/home');
+    if (window.Nexera?.navigateTo) {
+      window.Nexera.navigateTo({ view: 'feed' });
+    } else if (typeof window.navigateTo === 'function') {
+      window.navigateTo('feed', false);
+    }
   }
 
   async function applyRoute(route) {
@@ -371,6 +402,7 @@
     debugLog('route applied', parsed.type, `${done}ms`);
 
     window.Nexera?.releaseSplash?.();
+    setTimeout(ensureMainViewVisible, 0);
     state.applying = false;
     state.restoring = false;
   }
