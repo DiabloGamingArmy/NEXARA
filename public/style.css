@@ -524,54 +524,148 @@ body {
     font-size: 1.3rem;
 }
 
+/* Nexera Alert Banner (banner-color only; no hardcoded accent hue) */
 .nexera-alert-banner {
-    display: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 18px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-card);
-    color: var(--text-main);
-    font-weight: 600;
-    border-radius: 0 0 16px 16px;
+  display: none;
+  position: relative;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-main);
+  font-weight: 700;
+  border-radius: 0 0 16px 16px;
+
+  /* REQUIRED: set this from JS each time banner renders:
+     el.style.setProperty('--banner-color', bannerColorFromFirebase);
+  */
+  --banner-color: var(--banner-color);
+
+  /* Derived shades: only mix bannerColor with black (no extra hue) */
+  --banner-d1: color-mix(in srgb, var(--banner-color) 82%, black 18%);
+  --banner-d2: color-mix(in srgb, var(--banner-color) 68%, black 32%);
+  --banner-d3: color-mix(in srgb, var(--banner-color) 55%, black 45%);
+
+  /* Gradient background using ONLY banner color darkened */
+  background:
+    radial-gradient(1100px 240px at 20% 0%, rgba(255,255,255,0.10), transparent 55%),
+    linear-gradient(90deg, var(--banner-d3), var(--banner-d1), var(--banner-d3));
+
+  /* Border/outline that is ONLY banner color */
+  outline: 1px solid color-mix(in srgb, var(--banner-color) 55%, transparent);
+  outline-offset: -1px;
+
+  box-shadow:
+    0 10px 28px rgba(0,0,0,0.28),
+    inset 0 1px 0 rgba(255,255,255,0.12);
+
+  backdrop-filter: saturate(120%) blur(8px);
 }
 
 .nexera-alert-banner.banner-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 2500;
-    border-radius: 0 0 16px 16px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2500;
+  border-radius: 0 0 16px 16px;
 }
 
 .nexera-alert-banner.banner-static {
-    position: relative;
-    width: 100%;
+  position: relative;
+  width: 100%;
 }
 
+/* Center icon + text, keep close button on right */
 .nexera-alert-banner .banner-content {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: center;
+  text-align: center;
+  min-width: 0;
 }
 
 .nexera-alert-banner .banner-icon {
-    font-size: 1.2rem;
-    opacity: 0.9;
+  font-size: 1.15rem;
+  opacity: 0.95;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.35));
+}
+
+/* Text outline + glow ONLY from banner color (no other hue) */
+.nexera-alert-banner .banner-text {
+  line-height: 1.25;
+  letter-spacing: 0.2px;
+  text-shadow:
+    /* tight “stroke” */
+    1px 0 0 var(--banner-color),
+    -1px 0 0 var(--banner-color),
+    0 1px 0 var(--banner-color),
+    0 -1px 0 var(--banner-color),
+    /* subtle glow */
+    0 0 10px color-mix(in srgb, var(--banner-color) 45%, transparent),
+    /* depth */
+    0 2px 10px rgba(0,0,0,0.35);
+}
+
+/* Optional subtle shimmer (white only, no hue) */
+.nexera-alert-banner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    rgba(255,255,255,0.10) 35%,
+    transparent 70%
+  );
+  opacity: 0.30;
+  transform: translateX(-30%);
+  animation: nexeraBannerShimmer 6s ease-in-out infinite;
+}
+
+@keyframes nexeraBannerShimmer {
+  0%, 100% { transform: translateX(-35%); opacity: 0.22; }
+  50%      { transform: translateX(35%);  opacity: 0.36; }
 }
 
 .nexera-alert-banner .banner-close {
-    background: transparent;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    font-size: 1.1rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+  background: rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    0 8px 18px rgba(0,0,0,0.18);
+  transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.nexera-alert-banner .banner-close:hover {
+  background: rgba(0,0,0,0.26);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.12),
+    0 12px 22px rgba(0,0,0,0.22);
+}
+
+.nexera-alert-banner .banner-close:active {
+  transform: translateY(0px);
+  background: rgba(0,0,0,0.30);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nexera-alert-banner::before { animation: none; }
 }
 
 .create-btn-sidebar {
