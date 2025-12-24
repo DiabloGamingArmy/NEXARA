@@ -8720,6 +8720,60 @@ function setVideoUploadModalMode(mode, video = null) {
     if (submitBtn) submitBtn.textContent = videoUploadMode === 'edit' ? 'Save Changes' : 'Publish';
 }
 
+const VIDEO_UPLOAD_DEFAULTS = {
+    monetizable: false,
+    allowDownload: false,
+    allowEmbed: false,
+    allowComments: true,
+    notifyFollowers: true,
+    ageRestricted: false,
+    containsSensitiveContent: false,
+    category: 'General',
+    language: 'en',
+    license: 'Standard'
+};
+
+function setVideoToggleValue(id, value) {
+    const input = document.getElementById(id);
+    if (input) input.checked = !!value;
+}
+
+function getVideoToggleValue(id, fallback = false) {
+    const input = document.getElementById(id);
+    return input ? !!input.checked : fallback;
+}
+
+function setVideoSelectValue(id, value, fallback = '') {
+    const input = document.getElementById(id);
+    if (!input) return;
+    const finalValue = value || fallback;
+    if (finalValue) input.value = finalValue;
+}
+
+function applyVideoUploadDefaults() {
+    setVideoToggleValue('video-monetizable', VIDEO_UPLOAD_DEFAULTS.monetizable);
+    setVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    setVideoToggleValue('video-allow-embed', VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    setVideoToggleValue('video-allow-comments', VIDEO_UPLOAD_DEFAULTS.allowComments);
+    setVideoToggleValue('video-notify-followers', VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    setVideoToggleValue('video-age-restricted', VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    setVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
+    setVideoSelectValue('video-category', VIDEO_UPLOAD_DEFAULTS.category);
+    setVideoSelectValue('video-language', VIDEO_UPLOAD_DEFAULTS.language);
+    setVideoSelectValue('video-license', VIDEO_UPLOAD_DEFAULTS.license);
+    const scheduledInput = document.getElementById('video-scheduled-at');
+    if (scheduledInput) scheduledInput.value = '';
+}
+
+function parseVideoScheduleTimestamp() {
+    const scheduledInput = document.getElementById('video-scheduled-at');
+    const rawValue = scheduledInput?.value || '';
+    if (!rawValue) return null;
+    const date = new Date(rawValue);
+    if (Number.isNaN(date.getTime())) return null;
+    return Timestamp.fromDate(date);
+}
+
 function populateVideoUploadForm(video = {}) {
     const title = document.getElementById('video-title');
     const description = document.getElementById('video-description');
@@ -8744,16 +8798,41 @@ function populateVideoUploadForm(video = {}) {
     if (preview) preview.classList.add('active');
     if (thumbPreview) thumbPreview.src = resolveVideoThumbnail(video);
     pendingVideoHasCustomThumbnail = !!(video?.hasCustomThumbnail || video?.thumbURL || video?.thumbnail);
+
+    setVideoSelectValue('video-category', video.category, VIDEO_UPLOAD_DEFAULTS.category);
+    setVideoSelectValue('video-language', video.language, VIDEO_UPLOAD_DEFAULTS.language);
+    setVideoSelectValue('video-license', video.license, VIDEO_UPLOAD_DEFAULTS.license);
+    const scheduledInput = document.getElementById('video-scheduled-at');
+    if (scheduledInput) {
+        if (video.scheduledAt && typeof video.scheduledAt.toDate === 'function') {
+            const scheduledDate = video.scheduledAt.toDate();
+            scheduledInput.value = scheduledDate.toISOString().slice(0, 16);
+        } else {
+            scheduledInput.value = '';
+        }
+    }
+
+    setVideoToggleValue('video-monetizable', video.monetizable ?? VIDEO_UPLOAD_DEFAULTS.monetizable);
+    setVideoToggleValue('video-allow-download', video.allowDownload ?? VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    setVideoToggleValue('video-allow-embed', video.allowEmbed ?? VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    setVideoToggleValue('video-allow-comments', video.allowComments ?? VIDEO_UPLOAD_DEFAULTS.allowComments);
+    setVideoToggleValue('video-notify-followers', video.notifyFollowers ?? VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    setVideoToggleValue('video-age-restricted', video.ageRestricted ?? VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    setVideoToggleValue('video-sensitive-content', video.containsSensitiveContent ?? VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
 }
 
 window.openVideoUploadModal = function () {
     setVideoUploadModalMode('create');
+    applyVideoUploadDefaults();
     return window.toggleVideoUploadModal(true);
 };
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) modal.style.display = show ? 'flex' : 'none';
     document.body.classList.toggle('modal-open', show);
+    if (show && videoUploadMode === 'create') {
+        applyVideoUploadDefaults();
+    }
     if (!show) {
         const fileInput = document.getElementById('video-file');
         const thumbInput = document.getElementById('video-thumbnail');
@@ -8785,6 +8864,7 @@ window.toggleVideoUploadModal = function (show = true) {
         pendingVideoHasCustomThumbnail = false;
         resetVideoUploadMeta();
         setVideoUploadModalMode('create');
+        applyVideoUploadDefaults();
         if (window.location.pathname === '/videos/create-video' || window.location.pathname === '/create-video') {
             window.NexeraRouter?.replaceStateSilently?.('/videos');
         }
@@ -9355,6 +9435,16 @@ window.updateVideoDetails = async function () {
     const tags = Array.from(new Set((videoTags || []).map(normalizeTagValue).filter(Boolean)));
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
+    const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
+    const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
+    const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
+    const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    const allowEmbed = getVideoToggleValue('video-allow-embed', VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    const allowComments = getVideoToggleValue('video-allow-comments', VIDEO_UPLOAD_DEFAULTS.allowComments);
+    const notifyFollowers = getVideoToggleValue('video-notify-followers', VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    const ageRestricted = getVideoToggleValue('video-age-restricted', VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    const containsSensitiveContent = getVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
+    const scheduledAt = parseVideoScheduleTimestamp();
     const videoId = editingVideoId;
     let thumbURL = editingVideoData?.thumbURL || editingVideoData?.thumbnail || '';
     let hasCustomThumbnail = !!(editingVideoData?.hasCustomThumbnail || thumbURL);
@@ -9380,13 +9470,29 @@ window.updateVideoDetails = async function () {
             hasCustomThumbnail = true;
         }
 
+        const monetizable = editingVideoData?.monetizable ?? VIDEO_UPLOAD_DEFAULTS.monetizable;
+        const scheduledVisibility = scheduledAt ? visibility : null;
+        const effectiveVisibility = scheduledAt ? 'private' : visibility;
+
         await updateDoc(doc(db, 'videos', videoId), {
             title,
             caption: title,
             description,
             tags,
             mentions,
-            visibility,
+            visibility: effectiveVisibility,
+            scheduledVisibility,
+            scheduledAt,
+            category,
+            language,
+            license,
+            monetizable,
+            allowDownload,
+            allowEmbed,
+            allowComments,
+            notifyFollowers,
+            ageRestricted,
+            containsSensitiveContent,
             thumbURL,
             hasCustomThumbnail,
             updatedAt: serverTimestamp()
@@ -9399,7 +9505,19 @@ window.updateVideoDetails = async function () {
             cached.description = description;
             cached.tags = tags;
             cached.mentions = mentions;
-            cached.visibility = visibility;
+            cached.visibility = effectiveVisibility;
+            cached.scheduledVisibility = scheduledVisibility;
+            cached.scheduledAt = scheduledAt;
+            cached.category = category;
+            cached.language = language;
+            cached.license = license;
+            cached.monetizable = monetizable;
+            cached.allowDownload = allowDownload;
+            cached.allowEmbed = allowEmbed;
+            cached.allowComments = allowComments;
+            cached.notifyFollowers = notifyFollowers;
+            cached.ageRestricted = ageRestricted;
+            cached.containsSensitiveContent = containsSensitiveContent;
             if (thumbURL) cached.thumbURL = thumbURL;
             cached.hasCustomThumbnail = hasCustomThumbnail;
         }
@@ -10388,6 +10506,16 @@ window.uploadVideo = async function () {
     const tags = Array.from(new Set((videoTags || []).map(normalizeTagValue).filter(Boolean)));
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
+    const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
+    const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
+    const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
+    const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
+    const allowEmbed = getVideoToggleValue('video-allow-embed', VIDEO_UPLOAD_DEFAULTS.allowEmbed);
+    const allowComments = getVideoToggleValue('video-allow-comments', VIDEO_UPLOAD_DEFAULTS.allowComments);
+    const notifyFollowers = getVideoToggleValue('video-notify-followers', VIDEO_UPLOAD_DEFAULTS.notifyFollowers);
+    const ageRestricted = getVideoToggleValue('video-age-restricted', VIDEO_UPLOAD_DEFAULTS.ageRestricted);
+    const containsSensitiveContent = getVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
+    const scheduledAt = parseVideoScheduleTimestamp();
     const file = fileInput.files[0];
     let uploadSession = null;
     let videoId = `${Date.now()}`;
@@ -10486,6 +10614,8 @@ window.uploadVideo = async function () {
             console.info('[VideoUpload] Thumbnail ready', { videoId });
         }
 
+        const scheduledVisibility = scheduledAt ? visibility : null;
+        const effectiveVisibility = scheduledAt ? 'private' : visibility;
         const docData = {
             ownerId: currentUser.uid,
             title,
@@ -10497,8 +10627,20 @@ window.uploadVideo = async function () {
             storagePath,
             videoURL,
             thumbURL,
-            visibility,
+            visibility: effectiveVisibility,
+            scheduledVisibility,
+            scheduledAt,
             hasCustomThumbnail,
+            monetizable: false,
+            allowDownload,
+            allowEmbed,
+            allowComments,
+            notifyFollowers,
+            ageRestricted,
+            containsSensitiveContent,
+            category,
+            language,
+            license,
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }
         };
 
