@@ -65,8 +65,6 @@ let liveSearchTerm = '';
 let liveSortMode = 'featured';
 let liveCategoryFilter = 'All';
 let liveTagFilter = '';
-const SEARCH_URL_DEBOUNCE_MS = 300;
-const searchUrlDebounceTimers = {};
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
@@ -698,7 +696,7 @@ if (!window.Nexera.ready) {
 window.Nexera.auth = auth;
 window.Nexera.db = db;
 window.Nexera.storage = storage;
-window.Nexera.firestore = { doc, getDoc, collection, query, orderBy, limit, getDocs };
+window.Nexera.firestore = { doc, getDoc };
 window.Nexera.onAuthReady = function (callback) {
     return onAuthStateChanged(auth, callback);
 };
@@ -706,19 +704,6 @@ window.Nexera.ensureVideoInCache = function (video) {
     if (!video || !video.id) return;
     if (videosCache.some(function (entry) { return entry.id === video.id; })) return;
     videosCache = [video].concat(videosCache);
-};
-window.Nexera.ensurePostInCache = function (post) {
-    if (!post || !post.id) return;
-    if (allPosts.some(function (entry) { return entry.id === post.id; })) return;
-    const normalized = normalizePostData(post.id, post);
-    allPosts = [normalized].concat(allPosts);
-};
-window.Nexera.getLatestConversationId = async function () {
-    if (!currentUser) return null;
-    const ref = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'), limit(1));
-    const snap = await getDocs(ref);
-    if (snap.empty) return null;
-    return snap.docs[0]?.id || null;
 };
 window.Nexera.navigateTo = function (routeObj) {
     if (!routeObj) return;
@@ -738,7 +723,6 @@ window.Nexera.openEntity = function (type, id, payload) {
         return;
     }
     if (type === 'post') {
-        if (payload && typeof window.Nexera.ensurePostInCache === 'function') window.Nexera.ensurePostInCache(payload);
         if (typeof window.openThread === 'function') window.openThread(id);
     }
 };
@@ -4682,13 +4666,11 @@ window.toggleCommentDislike = async function (commentId, event) {
 function renderDiscoverTopBar() {
     const container = document.getElementById('discover-topbar');
     if (!container) return;
-    const focusSnapshot = captureSearchFocus(container);
     const topBar = buildTopBar({
         title: 'Discover',
         searchPlaceholder: 'Search users, posts...',
         searchValue: discoverSearchTerm,
         onSearch: function (event) { window.handleSearchInput(event); },
-        onSearchCommit: function (event) { commitSearchUrlUpdate('discover', event.target.value); },
         filters: [
             { label: 'All Results', dataset: { filter: 'All Results' }, active: discoverFilter === 'All Results', onClick: function () { window.setDiscoverFilter('All Results'); } },
             { label: 'Posts', dataset: { filter: 'Posts' }, active: discoverFilter === 'Posts', onClick: function () { window.setDiscoverFilter('Posts'); } },
@@ -4730,14 +4712,10 @@ function renderDiscoverTopBar() {
     });
     container.innerHTML = '';
     container.appendChild(topBar);
-    restoreSearchFocus(container, focusSnapshot);
 }
 
-window.renderDiscover = async function (options = {}) {
-    const preserveTopBar = options?.preserveTopBar;
-    if (!preserveTopBar) {
-        renderDiscoverTopBar();
-    }
+window.renderDiscover = async function () {
+    renderDiscoverTopBar();
     const container = document.getElementById('discover-results');
     container.innerHTML = "";
 
@@ -5667,65 +5645,6 @@ function renderSaved() {
 }
 
 // Small Interaction Utils
-function captureSearchFocus(container) {
-    const active = document.activeElement;
-    if (!container || !active || active.tagName !== 'INPUT') return null;
-    if (!container.contains(active)) return null;
-    return {
-        value: active.value,
-        selectionStart: active.selectionStart,
-        selectionEnd: active.selectionEnd
-    };
-}
-
-function restoreSearchFocus(container, snapshot) {
-    if (!container || !snapshot) return;
-    const input = container.querySelector('input.form-input');
-    if (!input) return;
-    input.value = snapshot.value;
-    input.focus();
-    if (typeof input.setSelectionRange === 'function' &&
-        typeof snapshot.selectionStart === 'number' &&
-        typeof snapshot.selectionEnd === 'number') {
-        input.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
-    }
-}
-
-function buildSearchUrl(viewId, term) {
-    const base = window.NexeraRouter?.buildUrlForSection?.(viewId);
-    if (!base) return null;
-    const url = new URL(base, window.location.origin);
-    const clean = (term || '').trim();
-    if (clean) {
-        url.searchParams.set('q', clean);
-    } else {
-        url.searchParams.delete('q');
-    }
-    return url.pathname + url.search;
-}
-
-function scheduleSearchUrlUpdate(viewId, term) {
-    if (searchUrlDebounceTimers[viewId]) {
-        clearTimeout(searchUrlDebounceTimers[viewId]);
-    }
-    searchUrlDebounceTimers[viewId] = setTimeout(function () {
-        const nextUrl = buildSearchUrl(viewId, term);
-        if (!nextUrl) return;
-        if (window.NexeraRouter?.shallowReplaceUrl) {
-            window.NexeraRouter.shallowReplaceUrl(nextUrl);
-        } else {
-            history.replaceState({}, '', nextUrl);
-        }
-    }, SEARCH_URL_DEBOUNCE_MS);
-}
-
-function commitSearchUrlUpdate(viewId, term) {
-    const nextUrl = buildSearchUrl(viewId, term);
-    if (!nextUrl) return;
-    if (window.location.pathname + window.location.search === nextUrl) return;
-    history.pushState({}, '', nextUrl);
-}
-
 window.setDiscoverFilter = function (filter) {
     discoverFilter = filter;
     document.querySelectorAll('.discover-pill').forEach(function (el) {
@@ -5744,12 +5663,7 @@ window.setDiscoverFilter = function (filter) {
 }
 window.handlePostsSortChange = function (e) { discoverPostsSort = e.target.value; renderDiscover(); }
 window.handleCategoriesModeChange = function (e) { discoverCategoriesMode = e.target.value; renderDiscover(); }
-window.handleSearchInput = function (e) {
-    const raw = e.target.value || '';
-    discoverSearchTerm = raw.toLowerCase();
-    scheduleSearchUrlUpdate('discover', raw);
-    renderDiscover({ preserveTopBar: true });
-}
+window.handleSearchInput = function (e) { discoverSearchTerm = e.target.value.toLowerCase(); renderDiscover(); }
 window.setSavedFilter = function (filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function (el) { if (el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
 window.handleSavedSearch = function (e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
 window.openFullscreenMedia = function (url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if (!modal || !content) return; modal.style.display = 'flex'; if (type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
@@ -8734,10 +8648,9 @@ window.updateVideoDetails = async function () {
 };
 
 function handleVideoSearchInput(event) {
-    const raw = event.target.value || '';
-    videoSearchTerm = raw.toLowerCase();
-    scheduleSearchUrlUpdate('videos', raw);
-    refreshVideoFeedWithFilters({ preserveTopBar: true });
+    videoSearchTerm = (event.target.value || '').toLowerCase();
+    renderVideosTopBar();
+    refreshVideoFeedWithFilters();
 }
 
 function handleVideoSortChange(event) {
@@ -8817,7 +8730,6 @@ function closeVideoTaskViewer() {
 function renderVideosTopBar() {
     const container = document.getElementById('videos-topbar');
     if (!container) return;
-    const focusSnapshot = captureSearchFocus(container);
 
     const uploadBtn = document.createElement('button');
     uploadBtn.className = 'create-btn-sidebar topbar-action-btn';
@@ -8835,7 +8747,6 @@ function renderVideosTopBar() {
         searchPlaceholder: 'Search videos...',
         searchValue: videoSearchTerm,
         onSearch: handleVideoSearchInput,
-        onSearchCommit: function (event) { commitSearchUrlUpdate('videos', event.target.value); },
         filters: [
             { label: 'All Videos', className: 'discover-pill video-filter-pill', active: videoFilter === 'All', onClick: function () { setVideoFilter('All'); } },
             { label: 'Trending', className: 'discover-pill video-filter-pill', active: videoFilter === 'Trending', onClick: function () { setVideoFilter('Trending'); } },
@@ -8862,14 +8773,10 @@ function renderVideosTopBar() {
 
     container.innerHTML = '';
     container.appendChild(topBar);
-    restoreSearchFocus(container, focusSnapshot);
 }
 
-function refreshVideoFeedWithFilters(options = {}) {
-    const preserveTopBar = options?.preserveTopBar;
-    if (!preserveTopBar) {
-        renderVideosTopBar();
-    }
+function refreshVideoFeedWithFilters() {
+    renderVideosTopBar();
     let filtered = videosCache.slice();
 
     if (videoSearchTerm) {
@@ -8903,7 +8810,7 @@ function initVideoFeed() {
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
     getDocs(refVideos).then(function (snap) {
         videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
-        refreshVideoFeedWithFilters({ preserveTopBar: true });
+        refreshVideoFeedWithFilters();
         const modal = document.getElementById('video-detail-modal');
         const activeVideoId = modal?.dataset?.videoId;
         if (activeVideoId) updateVideoModalButtons(activeVideoId);
@@ -9705,10 +9612,8 @@ function resolveLiveThumbnail(session = {}) {
 }
 
 function handleLiveSearchInput(event) {
-    const raw = event.target.value || '';
-    liveSearchTerm = raw.toLowerCase();
-    scheduleSearchUrlUpdate('live', raw);
-    renderLiveDirectoryFromCache({ preserveControls: true });
+    liveSearchTerm = (event.target.value || '').toLowerCase();
+    renderLiveDirectoryFromCache();
 }
 
 function handleLiveTagFilterInput(event) {
@@ -9729,7 +9634,6 @@ function setLiveCategoryFilter(category) {
 function renderLiveTopBar() {
     const container = document.getElementById('live-topbar');
     if (!container) return;
-    const focusSnapshot = captureSearchFocus(container);
 
     const goLiveBtn = document.createElement('button');
     goLiveBtn.type = 'button';
@@ -9742,7 +9646,6 @@ function renderLiveTopBar() {
         searchPlaceholder: 'Search live streams...',
         searchValue: liveSearchTerm,
         onSearch: handleLiveSearchInput,
-        onSearchCommit: function (event) { commitSearchUrlUpdate('live', event.target.value); },
         filters: [
             { label: 'All Streams', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'All', onClick: function () { setLiveCategoryFilter('All'); } },
             { label: 'STEM', className: 'discover-pill live-filter-pill', active: liveCategoryFilter === 'STEM', onClick: function () { setLiveCategoryFilter('STEM'); } },
@@ -9772,7 +9675,6 @@ function renderLiveTopBar() {
 
     container.innerHTML = '';
     container.appendChild(topBar);
-    restoreSearchFocus(container, focusSnapshot);
 }
 
 function renderLiveFilterRow() {
@@ -9924,12 +9826,9 @@ function renderLiveGrid(sessions = []) {
     });
 }
 
-function renderLiveDirectoryFromCache(options = {}) {
-    const preserveControls = options?.preserveControls;
-    if (!preserveControls) {
-        renderLiveTopBar();
-        renderLiveFilterRow();
-    }
+function renderLiveDirectoryFromCache() {
+    renderLiveTopBar();
+    renderLiveFilterRow();
     const divider = document.getElementById('live-divider');
     const sessions = liveSessionsCache.slice();
 
