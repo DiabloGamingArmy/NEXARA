@@ -788,11 +788,26 @@
 
             <div id="view-messages" class="view-section" style="display:none;">
                 <div class="inbox-tabs">
-                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">Posts</button>
-                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">Videos</button>
-                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">Livestreams</button>
-                    <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">Messages</button>
-                    <button class="inbox-tab" data-mode="account" onclick="window.setInboxMode('account')">Account Notifications</button>
+                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">
+                        <span class="inbox-tab-label">Posts</span>
+                        <span class="inbox-tab-badge" data-mode="posts"></span>
+                    </button>
+                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">
+                        <span class="inbox-tab-label">Videos</span>
+                        <span class="inbox-tab-badge" data-mode="videos"></span>
+                    </button>
+                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">
+                        <span class="inbox-tab-label">Livestreams</span>
+                        <span class="inbox-tab-badge" data-mode="livestreams"></span>
+                    </button>
+                    <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">
+                        <span class="inbox-tab-label">Messages</span>
+                        <span class="inbox-tab-badge" data-mode="messages"></span>
+                    </button>
+                    <button class="inbox-tab" data-mode="account" onclick="window.setInboxMode('account')">
+                        <span class="inbox-tab-label">Account Notifications</span>
+                        <span class="inbox-tab-badge" data-mode="account"></span>
+                    </button>
                 </div>
                 <div id="inbox-panel-messages" class="inbox-panel active">
                     <div class="inbox-layout">

@@ -2640,12 +2640,30 @@ body.light-mode .category-pill.active .topic-verified-icon {
     font-weight: 600;
     cursor: pointer;
     transition: 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .inbox-tab.active {
     border-color: var(--primary);
     color: var(--primary);
     background: rgba(0, 242, 234, 0.08);
+}
+
+.inbox-tab-badge {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #0a0a0a;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
 }
 
 .inbox-panel {
