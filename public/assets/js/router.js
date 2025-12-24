@@ -247,6 +247,8 @@
   function hideNotFound() {
     const container = document.getElementById('nexera-not-found');
     if (container) container.remove();
+    const appLayout = document.getElementById('app-layout');
+    if (appLayout) appLayout.style.display = '';
   }
 
   function navigateToPath(path) {
