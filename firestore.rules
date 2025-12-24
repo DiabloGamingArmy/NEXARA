@@ -130,6 +130,14 @@ service firebase.storage {
             || (request.auth.uid in convoParticipants() && userId in convoParticipants()));
     }
 
+    match /notifications/{targetUid}/items/{nid} {
+      allow read: if isSignedIn() && request.auth.uid == targetUid;
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.actorUid
+        && request.resource.data.targetUid == targetUid;
+      allow update, delete: if false;
+    }
+
     // -------------------------
     // Videos
     // -------------------------
@@ -152,6 +160,15 @@ service firebase.storage {
       match /dislikes/{uid} { allow read: if isSignedIn(); allow write: if isSignedIn() && request.auth.uid == uid; }
       match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
       match /comments/{cid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
+    }
+
+    // -------------------------
+    // Tags
+    // -------------------------
+    match /tags/{tagId} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if false;
     }
 
     // -------------------------
