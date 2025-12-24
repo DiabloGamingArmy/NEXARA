@@ -4055,6 +4055,12 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-wrap: wrap;
 }
 
+.tag-helper-text {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
 .suggestion-chip {
     background: var(--bg-hover);
     border: 1px solid var(--border);
