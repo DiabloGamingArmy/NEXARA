@@ -2368,6 +2368,190 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-bottom: 1px solid var(--border);
 }
 
+.inbox-layout {
+    display: flex;
+    gap: 0px;
+    height: 100%;
+    min-height: 80vh;
+}
+
+.inbox-sidebar {
+    width: 320px;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-right: 1px solid var(--border);
+    padding: 1rem;
+}
+
+.inbox-thread {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.inbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.inbox-title {
+    font-size: 1.2rem;
+    font-weight: 800;
+}
+
+.inbox-search-input {
+    width: 100%;
+}
+
+.inbox-filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.inbox-filter {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.inbox-filter.active {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.inbox-requests {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-hover);
+}
+
+.inbox-requests-toggle {
+    background: none;
+    border: none;
+    color: var(--text-main);
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+}
+
+.inbox-requests-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 4px;
+}
+
+.inbox-pinned {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.inbox-section-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.inbox-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.inbox-tabs {
+    display: flex;
+    gap: 8px;
+    padding: 0 0 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.inbox-tab {
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.inbox-tab.active {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: rgba(0, 242, 234, 0.08);
+}
+
+.inbox-panel {
+    display: none;
+    min-height: 70vh;
+}
+
+.inbox-panel.active {
+    display: block;
+}
+
+.inbox-notification-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 0;
+}
+
+.inbox-notification-item {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-card);
+}
+
+.inbox-notification-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.92rem;
+}
+
+.inbox-notification-meta {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+.nav-badge {
+    margin-left: auto;
+    background: var(--primary);
+    color: #001016;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    line-height: 1.2;
+}
+
+.conversation-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
 .message-thread-header-row .mobile-thread-back {
     display: none;
 }
@@ -2434,11 +2618,22 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 8px;
 }
 
+.message-avatar-stack {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.message-avatar-stack-item {
+    border: 1px solid var(--border);
+}
+
 .message-header-tools {
     display: flex;
     gap: 8px;
     align-items: center;
     padding: 5px 1rem 0.5rem;
+    margin: 0;
 }
 
 .message-header-tools .form-input {
@@ -2935,6 +3130,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     gap: 12px;
     min-height: 100%;
+    min-width: 100%;
     padding: 1rem;
     overflow-y: auto;
 }
@@ -4053,6 +4249,21 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+}
+
+.mention-suggestions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.tag-helper-text {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
 }
 
 .suggestion-chip {
@@ -6392,6 +6603,7 @@ body.go-live-open {
     display: flex;
     gap: 10px;
     align-items: center;
+    margin: 0;
 }
 
 .messages-thread-inner {
@@ -6425,6 +6637,7 @@ body.go-live-open {
     padding: 1rem;
     max-width: 900px;
     margin: 0 auto;
+    min-width: 100%;
 }
 
 .messages-settings-header {
