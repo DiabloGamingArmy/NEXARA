@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
@@ -93,6 +93,14 @@ let tagSuggestionPool = [];
 let composerNewTagNotice = '';
 let videoNewTagNotice = '';
 let mentionSearchTimer = null;
+let mentionSuggestionState = {
+    query: '',
+    lastDoc: null,
+    hasMore: false,
+    loading: false,
+    results: []
+};
+const MENTION_SUGGESTION_PAGE_SIZE = 30;
 let currentThreadComments = [];
 let liveSessionsCache = [];
 let profileMediaPrefetching = {};
@@ -2063,8 +2071,7 @@ async function joinCategory(categoryId, role = 'member') {
             status: 'active',
             joinedAt: serverTimestamp(),
             updatedAt: serverTimestamp()
-        }, { merge: true }),
-        updateDoc(catRef, { memberCount: increment(1) })
+        }, { merge: true })
     ]);
 
     memberships[categoryId] = { ...membershipPayload, name: cat.name };
@@ -2096,12 +2103,10 @@ async function leaveCategory(categoryId) {
     if (!requireAuth()) return;
     const membershipRef = doc(db, `categories/${categoryId}/members/${currentUser.uid}`);
     const userMembershipRef = doc(db, `users/${currentUser.uid}/categoryMemberships/${categoryId}`);
-    const catRef = doc(db, 'categories', categoryId);
 
     await Promise.all([
         setDoc(membershipRef, { status: 'left', updatedAt: serverTimestamp(), updatedBy: currentUser.uid }, { merge: true }),
-        setDoc(userMembershipRef, { status: 'left', updatedAt: serverTimestamp() }, { merge: true }),
-        updateDoc(catRef, { memberCount: increment(-1) })
+        setDoc(userMembershipRef, { status: 'left', updatedAt: serverTimestamp() }, { merge: true })
     ]);
 
     await enforceCategoryPrivacy(categoryId, currentUser.uid);
@@ -2121,12 +2126,9 @@ async function kickMember(categoryId, targetUid, reason = '') {
 
     const membershipRef = doc(db, `categories/${categoryId}/members/${targetUid}`);
     const userMembershipRef = doc(db, `users/${targetUid}/categoryMemberships/${categoryId}`);
-    const catRef = doc(db, 'categories', categoryId);
-
     await Promise.all([
         setDoc(membershipRef, { status: 'kicked', updatedAt: serverTimestamp(), updatedBy: currentUser.uid, reason }, { merge: true }),
-        setDoc(userMembershipRef, { status: 'kicked', updatedAt: serverTimestamp(), reason }, { merge: true }),
-        updateDoc(catRef, { memberCount: increment(-1) })
+        setDoc(userMembershipRef, { status: 'kicked', updatedAt: serverTimestamp(), reason }, { merge: true })
     ]);
 
     await enforceCategoryPrivacy(categoryId, targetUid);
@@ -3395,6 +3397,11 @@ function addComposerMention(rawUser) {
     if (composerMentions.some(function (m) { return m.username === normalized.username; })) return;
     composerMentions.push(normalized);
     renderComposerMentions();
+    const input = document.getElementById('mention-input');
+    if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }
 }
 
 function removeComposerMention(username) {
@@ -3419,37 +3426,61 @@ function renderComposerMentions() {
 async function searchMentionSuggestions(term = '') {
     const listEl = document.getElementById('mention-suggestions');
     if (!listEl) return;
-    const cleaned = (term || '').trim().replace(/^@/, '').toLowerCase();
-    if (!cleaned) {
+    const raw = (term || '').trim();
+    if (!raw.startsWith('@') || raw.length <= 1) {
+        mentionSuggestionState = { query: '', lastDoc: null, hasMore: false, loading: false, results: [] };
         listEl.innerHTML = '';
         listEl.style.display = 'none';
         return;
     }
+    const cleaned = raw.replace(/^@/, '').toLowerCase();
+    const isNewQuery = cleaned !== mentionSuggestionState.query;
+    if (isNewQuery) {
+        mentionSuggestionState = { query: cleaned, lastDoc: null, hasMore: true, loading: false, results: [] };
+    }
+    if (mentionSuggestionState.loading) return;
+    if (!mentionSuggestionState.hasMore) return;
+    mentionSuggestionState.loading = true;
     try {
-        const userQuery = query(
+        const baseConstraints = [
             collection(db, 'users'),
             orderBy('username'),
             startAt(cleaned),
-            endAt(cleaned + '\uf8ff'),
-            limit(5)
-        );
+            endAt(cleaned + '\uf8ff')
+        ];
+        const paging = mentionSuggestionState.lastDoc ? [startAfter(mentionSuggestionState.lastDoc)] : [];
+        const userQuery = query.apply(null, baseConstraints.concat(paging, [limit(MENTION_SUGGESTION_PAGE_SIZE)]));
         const snap = await getDocs(userQuery);
-        const results = snap.docs.map(function (d) {
-            return { id: d.id, uid: d.id, ...normalizeUserProfileData(d.data(), d.id) };
+        mentionSuggestionState.lastDoc = snap.docs[snap.docs.length - 1] || mentionSuggestionState.lastDoc;
+        mentionSuggestionState.hasMore = snap.docs.length === MENTION_SUGGESTION_PAGE_SIZE;
+        const batch = snap.docs.map(function (d) {
+            const data = normalizeUserProfileData(d.data(), d.id);
+            const followersCount = data.followersCount || data.followerCount || 0;
+            return { id: d.id, uid: d.id, followersCount, ...data };
         });
-        if (!results.length) {
+        const merged = mentionSuggestionState.results.concat(batch).reduce(function (acc, item) {
+            if (!acc.some(function (existing) { return existing.uid === item.uid; })) acc.push(item);
+            return acc;
+        }, []);
+        mentionSuggestionState.results = merged.sort(function (a, b) {
+            return (b.followersCount || 0) - (a.followersCount || 0);
+        });
+        if (!mentionSuggestionState.results.length) {
             listEl.innerHTML = '';
             listEl.style.display = 'none';
             return;
         }
-        listEl.style.display = 'block';
-        listEl.innerHTML = results.map(function (profile) {
+        listEl.style.display = 'flex';
+        listEl.innerHTML = mentionSuggestionState.results.map(function (profile) {
             const avatar = renderAvatar({ ...profile, uid: profile.id || profile.uid }, { size: 28 });
-            return `<button type="button" class="mention-suggestion" onclick='window.addComposerMention(${JSON.stringify({
+            return `<button type="button" class="mention-suggestion" onmousedown="event.preventDefault()" onclick='window.addComposerMention(${JSON.stringify({
                 uid: profile.id || profile.uid,
                 username: profile.username,
                 displayName: profile.name || profile.nickname || profile.displayName || '',
-                accountRoles: profile.accountRoles || []
+                accountRoles: profile.accountRoles || [],
+                photoURL: profile.photoURL || '',
+                avatarColor: profile.avatarColor || '',
+                followersCount: profile.followersCount || profile.followerCount || 0
             }).replace(/'/g, "&apos;")})'>
                 ${avatar}
                 <div class="mention-suggestion-meta">
@@ -3458,10 +3489,19 @@ async function searchMentionSuggestions(term = '') {
                 </div>
             </button>`;
         }).join('');
+        if (!listEl.dataset.scrollBound) {
+            listEl.addEventListener('scroll', function () {
+                const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 12;
+                if (nearBottom) searchMentionSuggestions(`@${mentionSuggestionState.query}`);
+            });
+            listEl.dataset.scrollBound = 'true';
+        }
     } catch (err) {
         console.warn('Mention search failed', err);
         listEl.innerHTML = '';
         listEl.style.display = 'none';
+    } finally {
+        mentionSuggestionState.loading = false;
     }
 }
 
@@ -3711,10 +3751,18 @@ window.createPost = async function () {
     try {
         const targetCategoryId = currentEditPost ? currentEditPost.categoryId : selectedCategoryId;
         if (targetCategoryId && currentUser?.uid && !currentEditPost) {
-            const joined = await ensureJoinedCategory(targetCategoryId, currentUser.uid);
-            if (!joined) {
-                setComposerError('Unable to join this category. Please try again.');
-                return;
+            try {
+                const joined = await ensureJoinedCategory(targetCategoryId, currentUser.uid);
+                if (!joined) {
+                    toast("You don’t have permission to post in this destination.", 'error');
+                    return;
+                }
+            } catch (error) {
+                if (error?.code === 'permission-denied') {
+                    toast("You don’t have permission to post in this destination.", 'error');
+                    return;
+                }
+                throw error;
             }
         }
 
