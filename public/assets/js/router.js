@@ -22,7 +22,8 @@
     initialized: true,
     applying: false,
     restoring: false,
-    lastRouteKey: null
+    lastRouteKey: null,
+    suppressNextApply: false
   };
 
   const isDebugEnabled = () => {
@@ -120,10 +121,22 @@
     }
 
     const head = segments[0];
-    if (SECTION_ROUTES[head]) {
-      if (head === 'messages' && segments[1]) {
-        return { type: 'messages', conversationId: segments[1], route };
+    if (head === 'messages') {
+      return { type: 'messages', conversationId: segments[1] || null, route };
+    }
+
+    if (head === 'profile') {
+      if (segments[1]) {
+        return { type: 'entity', entityType: 'profile', id: segments[1], route };
       }
+      const handle = params.get('handle');
+      if (handle) {
+        return { type: 'entity', entityType: 'profile', id: null, handle, route };
+      }
+      return { type: 'section', view: SECTION_ROUTES.profile, route };
+    }
+
+    if (SECTION_ROUTES[head]) {
       return { type: 'section', view: SECTION_ROUTES[head], route };
     }
 
@@ -167,11 +180,33 @@
     return { exists: true, data: { id: snap.id, ...snap.data() } };
   }
 
+  function getCurrentUserId() {
+    if (typeof window.getCurrentUser === 'function') {
+      const user = window.getCurrentUser();
+      return user?.uid || null;
+    }
+    return window.Nexera?.auth?.currentUser?.uid || null;
+  }
+
+  async function resolveLatestConversationId() {
+    if (typeof window.Nexera?.getLatestConversationId === 'function') {
+      return window.Nexera.getLatestConversationId();
+    }
+    return null;
+  }
+
   function ensureNotFoundShell() {
     let container = document.getElementById('nexera-not-found');
     if (container) return container;
     container = document.createElement('div');
     container.id = 'nexera-not-found';
+    container.style.position = 'fixed';
+    container.style.inset = '0';
+    container.style.zIndex = '9999';
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.style.justifyContent = 'center';
+    container.style.background = 'rgba(0, 0, 0, 0.65)';
     container.innerHTML = `
       <div id="auth-screen" style="display:flex;">
         <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo"
@@ -190,7 +225,7 @@
     document.body.appendChild(container);
     const btn = container.querySelector('#not-found-home');
     if (btn) {
-      btn.addEventListener('click', () => navigateToPath('/home'));
+      btn.addEventListener('click', () => goHomeFromNotFound());
     }
     fetch('/assets/data/notFoundMessages.json', { cache: 'no-cache' })
       .then((response) => response.json())
@@ -206,8 +241,6 @@
   }
 
   function showNotFound() {
-    const appLayout = document.getElementById('app-layout');
-    if (appLayout) appLayout.style.display = 'none';
     ensureNotFoundShell();
   }
 
@@ -219,6 +252,37 @@
   function navigateToPath(path) {
     history.pushState({}, '', path);
     applyCurrentRoute('push');
+  }
+
+  function goHomeFromNotFound() {
+    history.pushState({}, '', '/home');
+    hideNotFound();
+    applyCurrentRoute('not-found');
+  }
+
+  function isElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function ensureMainViewVisible() {
+    const views = Array.from(document.querySelectorAll('.view-section'));
+    const visible = views.find((el) => isElementVisible(el));
+    if (visible && (visible.children.length > 0 || visible.textContent.trim())) {
+      return;
+    }
+    if (isDebugEnabled()) {
+      console.warn('[NexeraRouter] main view blank, forcing home fallback');
+    }
+    history.replaceState({}, '', '/home');
+    if (window.Nexera?.navigateTo) {
+      window.Nexera.navigateTo({ view: 'feed' });
+    } else if (typeof window.navigateTo === 'function') {
+      window.navigateTo('feed', false);
+    }
   }
 
   async function applyRoute(route) {
@@ -247,11 +311,31 @@
       }
       if (route.conversationId && typeof window.openConversation === 'function') {
         window.openConversation(route.conversationId);
+        return;
+      }
+      if (!route.conversationId) {
+        const latestId = await resolveLatestConversationId();
+        if (latestId) {
+          history.replaceState({}, '', buildUrlForMessages(latestId));
+          if (typeof window.openConversation === 'function') {
+            window.openConversation(latestId);
+          }
+        }
       }
       return;
     }
 
     if (route.type === 'thread') {
+      if (route.threadId) {
+        const entity = await fetchEntity('post', route.threadId);
+        if (entity.exists === false) {
+          showNotFound();
+          return;
+        }
+        if (entity.data && typeof window.Nexera?.ensurePostInCache === 'function') {
+          window.Nexera.ensurePostInCache(entity.data);
+        }
+      }
       if (route.threadId && typeof window.openThread === 'function') {
         window.openThread(route.threadId);
       }
@@ -316,6 +400,7 @@
     debugLog('route applied', parsed.type, `${done}ms`);
 
     window.Nexera?.releaseSplash?.();
+    setTimeout(ensureMainViewVisible, 0);
     state.applying = false;
     state.restoring = false;
   }
@@ -370,7 +455,10 @@
       const original = window.navigateTo;
       window.navigateTo = function (viewId, pushToStack = true) {
         const result = original.call(this, viewId, pushToStack);
-        const path = buildUrlForSection(viewId);
+        const profileId = viewId === 'profile' ? getCurrentUserId() : null;
+        const path = viewId === 'profile'
+          ? (profileId ? buildUrlForProfile(profileId) : buildUrlForSection(viewId))
+          : buildUrlForSection(viewId);
         if (path) updateUrl(path);
         return result;
       };
@@ -421,7 +509,9 @@
       const original = window.openMessagesPage;
       window.openMessagesPage = async function () {
         const result = await original.call(this);
-        updateUrl(buildUrlForMessages());
+        const latestId = await resolveLatestConversationId();
+        const path = latestId ? buildUrlForMessages(latestId) : buildUrlForMessages();
+        updateUrl(path);
         return result;
       };
       window.openMessagesPage.__nexeraWrapped = true;
@@ -447,7 +537,8 @@
         if (uid && uid !== 'me') {
           updateUrl(buildUrlForProfile(uid, params));
         } else {
-          updateUrl(buildUrlForProfile(null, params));
+          const profileId = getCurrentUserId();
+          updateUrl(profileId ? buildUrlForProfile(profileId, params) : buildUrlForProfile(null, params));
         }
         return result;
       };
@@ -459,7 +550,13 @@
     patchHistory();
     document.addEventListener('click', interceptLinkClicks);
     window.addEventListener('popstate', () => applyCurrentRoute('popstate'));
-    window.addEventListener('nexera:navigation', () => applyCurrentRoute('history'));
+    window.addEventListener('nexera:navigation', () => {
+      if (state.suppressNextApply) {
+        state.suppressNextApply = false;
+        return;
+      }
+      applyCurrentRoute('history');
+    });
 
     wrapNavigationFunctions();
     applyCurrentRoute('init');
@@ -474,7 +571,13 @@
     buildUrlForPost,
     buildUrlForProfile,
     buildUrlForMessages,
-    buildUrlForThread
+    buildUrlForThread,
+    shallowReplaceUrl(path) {
+      if (!path) return;
+      if (window.location.pathname + window.location.search + window.location.hash === path) return;
+      state.suppressNextApply = true;
+      history.replaceState({}, '', path);
+    }
   };
 
   if (document.readyState === 'loading') {
