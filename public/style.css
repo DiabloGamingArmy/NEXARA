@@ -2368,6 +2368,114 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-bottom: 1px solid var(--border);
 }
 
+.inbox-layout {
+    display: flex;
+    gap: 16px;
+    height: 100%;
+    min-height: 80vh;
+}
+
+.inbox-sidebar {
+    width: 320px;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-right: 1px solid var(--border);
+    padding: 1rem;
+}
+
+.inbox-thread {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.inbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.inbox-title {
+    font-size: 1.2rem;
+    font-weight: 800;
+}
+
+.inbox-search-input {
+    width: 100%;
+}
+
+.inbox-filters {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.inbox-filter {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.inbox-filter.active {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.inbox-requests {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-hover);
+}
+
+.inbox-requests-toggle {
+    background: none;
+    border: none;
+    color: var(--text-main);
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+}
+
+.inbox-requests-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 4px;
+}
+
+.inbox-pinned {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.inbox-section-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.inbox-list {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.conversation-time {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
 .message-thread-header-row .mobile-thread-back {
     display: none;
 }
@@ -2432,6 +2540,16 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.message-avatar-stack {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.message-avatar-stack-item {
+    border: 1px solid var(--border);
 }
 
 .message-header-tools {
@@ -4053,6 +4171,21 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+}
+
+.mention-suggestions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.tag-helper-text {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
 }
 
 .suggestion-chip {

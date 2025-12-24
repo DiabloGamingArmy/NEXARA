@@ -613,7 +613,7 @@
             <a onclick="window.navigateTo('videos')" id="nav-videos" class="nav-item"><i
                     class="ph-bold ph-film-strip"></i> Videos</a>
             <a onclick="window.openMessagesPage()" id="nav-messages" class="nav-item"><i class="ph-bold ph-chats"></i>
-                Messages</a>
+                Inbox</a>
             <a onclick="window.navigateTo('discover')" id="nav-discover" class="nav-item"><i
                     class="ph-bold ph-compass"></i> Discover</a>
             <a onclick="window.navigateTo('saved')" id="nav-saved" class="nav-item"><i class="ph-bold ph-bookmark"></i>
@@ -782,17 +782,34 @@
             </div>
 
             <div id="view-messages" class="view-section" style="display:none;">
-                <div class="messages-layout">
-                    <div class="messages-sidebar">
-                        <div
-                            style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                            <h3 style="margin:0; font-weight:800;">Messages</h3>
+                <div class="inbox-layout">
+                    <div class="inbox-sidebar">
+                        <div class="inbox-header">
+                            <div class="inbox-title">Inbox</div>
                             <button class="icon-pill" onclick="window.openNewChatModal()"><i class="ph ph-plus"></i>
                                 New</button>
                         </div>
-                        <div id="conversation-list" class="conversation-list"></div>
+                        <input id="conversation-list-search" class="form-input inbox-search-input"
+                            placeholder="Search conversations" oninput="window.handleConversationListSearch(event)">
+                        <div class="inbox-filters">
+                            <button class="inbox-filter active" data-filter="all"
+                                onclick="window.setConversationFilter('all')">All</button>
+                            <button class="inbox-filter" data-filter="unread"
+                                onclick="window.setConversationFilter('unread')">Unread</button>
+                            <button class="inbox-filter" data-filter="pinned"
+                                onclick="window.setConversationFilter('pinned')">Pinned</button>
+                            <button class="inbox-filter" data-filter="archived"
+                                onclick="window.setConversationFilter('archived')">Archived</button>
+                        </div>
+                        <div class="inbox-requests">
+                            <button class="inbox-requests-toggle" type="button">Message requests</button>
+                            <div class="inbox-requests-empty">No requests yet.</div>
+                        </div>
+                        <div id="pinned-conversations" class="inbox-pinned" style="display:none;"></div>
+                        <div id="conversation-list" class="conversation-list inbox-list"></div>
+                        <div id="conversation-list-empty" class="empty-state" style="display:none;"></div>
                     </div>
-                    <div class="messages-thread">
+                    <div class="inbox-thread">
                         <div class="message-thread-header-row">
                             <button id="mobile-thread-back" class="mobile-thread-back" type="button"
                                 onclick="window.mobileMessagesBack()" aria-label="Back to conversations"
