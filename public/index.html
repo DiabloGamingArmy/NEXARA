@@ -759,36 +759,53 @@
                         <button class="video-modal-close" type="button" onclick="window.closeVideoDetail()"
                             aria-label="Close video details">&times;</button>
                         <div class="video-modal-body">
-                            <aside class="video-modal-side">
-                                <div class="video-modal-channel-card">
-                                    <div id="video-modal-avatar" class="video-modal-avatar"></div>
-                                    <div class="video-modal-channel-info">
-                                        <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
-                                        <div class="video-modal-channel-handle" id="video-modal-channel-handle"></div>
+                            <div class="video-modal-header">
+                                <button class="video-modal-menu" type="button" onclick="window.toggleVideoSidebarOverlay(true)" aria-label="Open menu">
+                                    <span></span><span></span><span></span>
+                                </button>
+                                <div class="video-modal-brand">
+                                    <img class="video-modal-logo" src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e" alt="Nexera">
+                                    <span class="nexera-gradient-text">Videos</span>
+                                </div>
+                            </div>
+                            <div class="video-modal-content">
+                                <aside class="video-modal-side">
+                                    <div class="video-modal-channel-card" id="video-modal-channel-card">
+                                        <div id="video-modal-avatar" class="video-modal-avatar"></div>
+                                        <div class="video-modal-channel-info">
+                                            <div class="video-modal-channel-name" id="video-modal-channel-name"></div>
+                                            <div class="video-modal-channel-handle" id="video-modal-channel-handle"></div>
+                                        </div>
+                                        <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
                                     </div>
-                                    <button id="video-modal-follow" class="create-btn-sidebar">Follow</button>
-                                </div>
-                            </aside>
-                            <main class="video-modal-main">
-                                <div class="video-modal-player">
-                                    <video id="video-modal-player" controls playsinline></video>
-                                </div>
-                                <div class="video-modal-actions-bar">
-                                    <div class="video-modal-actions">
-                                        <button id="video-modal-like" class="icon-pill"></button>
-                                        <button id="video-modal-dislike" class="icon-pill"></button>
-                                        <button id="video-modal-save" class="icon-pill"></button>
-                                        <button id="video-modal-share" class="icon-pill"></button>
+                                    <div id="video-modal-channel-bio" class="video-modal-channel-bio"></div>
+                                    <div id="video-modal-channel-links" class="video-modal-channel-links"></div>
+                                </aside>
+                                <main class="video-modal-main">
+                                    <div class="video-modal-player">
+                                        <video id="video-modal-player" controls playsinline></video>
                                     </div>
-                                    <div class="video-modal-views" id="video-modal-views"></div>
-                                </div>
-                                <div class="video-modal-title" id="video-modal-title"></div>
-                                <div class="video-modal-description" id="video-modal-description"></div>
-                                <div class="video-modal-comments">
-                                    <div class="video-modal-comments-header">Comments</div>
-                                    <div class="video-modal-comments-empty">No Comments Yet</div>
-                                </div>
-                            </main>
+                                    <div class="video-modal-actions-bar">
+                                        <div class="video-modal-actions">
+                                            <button id="video-modal-like" class="icon-pill"></button>
+                                            <button id="video-modal-dislike" class="icon-pill"></button>
+                                            <button id="video-modal-save" class="icon-pill"></button>
+                                            <button id="video-modal-share" class="icon-pill"></button>
+                                        </div>
+                                        <div class="video-modal-views" id="video-modal-views"></div>
+                                    </div>
+                                    <div class="video-modal-title" id="video-modal-title"></div>
+                                    <div class="video-modal-description" id="video-modal-description"></div>
+                                    <div class="video-modal-comments">
+                                        <div class="video-modal-comments-header">Comments</div>
+                                        <div class="video-modal-comments-empty">No Comments Yet</div>
+                                    </div>
+                                </main>
+                            </div>
+                            <div id="video-sidebar-overlay" class="video-sidebar-overlay" aria-hidden="true">
+                                <div class="video-sidebar-backdrop" onclick="window.toggleVideoSidebarOverlay(false)"></div>
+                                <div class="video-sidebar-panel" role="dialog" aria-label="Video menu"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1657,10 +1674,18 @@
 
     <div id="video-mini-player" class="video-mini-player" style="display:none;">
         <div class="video-mini-player-header" data-mini-drag>
-            <span>Now Playing</span>
-            <button type="button" class="video-mini-player-close" onclick="window.closeMiniPlayer()">×</button>
+            <div class="video-mini-player-status">
+                <span id="video-mini-player-indicator" class="video-mini-player-indicator"></span>
+                <span id="video-mini-player-status">Playing</span>
+            </div>
+            <div class="video-mini-player-actions">
+                <button type="button" class="video-mini-player-expand" onclick="window.expandMiniPlayer()" aria-label="Expand video">
+                    <i class="ph ph-corner-up-left"></i>
+                </button>
+                <button type="button" class="video-mini-player-close" onclick="window.closeMiniPlayer()" aria-label="Close mini player">×</button>
+            </div>
         </div>
-        <video id="video-mini-player-video" controls playsinline></video>
+        <div id="video-mini-player-slot" class="video-mini-player-slot"></div>
     </div>
 
     <!-- Main JS logic -->

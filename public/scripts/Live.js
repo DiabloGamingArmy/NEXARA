@@ -1,10 +1,11 @@
 // scripts/Live.js
 // Live viewing controller for Nexera liveStreams
 
-import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { NexeraLivePlayer } from "/scripts/VideoPlayer.js";
 import { initLiveChat } from "/scripts/LiveChat.js";
 import { sendLike, followStreamer } from "/scripts/LiveInteractions.js";
+import { safeOnSnapshot } from "/scripts/firestoreSafe.js";
 
 let player = null;
 let playerLoaded = false;
@@ -75,7 +76,8 @@ export function initialize(streamId, currentUser) {
 
     const db = getFirestore();
 
-    liveUnsubscribe = onSnapshot(
+    liveUnsubscribe = safeOnSnapshot(
+        `live:session:${resolvedStreamId}`,
         doc(db, "liveStreams", resolvedStreamId),
         async snap => {
             try {

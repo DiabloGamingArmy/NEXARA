@@ -1,4 +1,5 @@
-import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { safeOnSnapshot } from "/scripts/firestoreSafe.js";
 
 const BANNER_ID = 'nexera-alert-banner';
 const DISMISS_KEY = 'nexeraBannerDismissedVersion';
@@ -86,7 +87,7 @@ async function initBanner() {
     if (!db) return;
     const banner = ensureBannerElement();
     const configRef = doc(db, 'app_config', 'ui');
-    onSnapshot(configRef, function (snap) {
+    safeOnSnapshot('app_config:ui', configRef, function (snap) {
         if (!snap.exists()) {
             hideBanner(banner);
             return;

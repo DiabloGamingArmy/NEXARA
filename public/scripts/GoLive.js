@@ -2,7 +2,8 @@
 // Nexera Go Live Controller – Browser First
 
 import { getAuth } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, onSnapshot, updateDoc, serverTimestamp, setDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, doc, updateDoc, serverTimestamp, setDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { safeOnSnapshot } from "/scripts/firestoreSafe.js";
 
 const UI_MODE_STORAGE_KEY = "nexera_go_live_ui_mode";
 const LEGACY_UI_MODE_STORAGE_KEY = "nexera-go-live-mode";
@@ -2363,7 +2364,7 @@ export class NexeraGoLiveController {
 
         this.updateEncoderTab();
 
-        this.unsubscribeLiveDoc = onSnapshot(doc(this.db, "liveStreams", this.session.sessionId), (snap) => {
+        this.unsubscribeLiveDoc = safeOnSnapshot(`go-live:session:${this.session.sessionId}`, doc(this.db, "liveStreams", this.session.sessionId), (snap) => {
             if (snap.exists() && snap.data().isLive) {
                 this.setStatus("live");
             }

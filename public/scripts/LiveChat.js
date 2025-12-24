@@ -6,17 +6,17 @@ import {
     collection,
     query,
     orderBy,
-    onSnapshot,
     addDoc,
     serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { safeOnSnapshot } from "/scripts/firestoreSafe.js";
 
 export function initLiveChat(streamId, currentUser) {
     const messagesEl = document.getElementById("live-chat-messages");
     const inputEl = document.getElementById("live-chat-input");
     const sendBtn = document.getElementById("live-chat-send");
 
-    if (!streamId || !messagesEl) return null;
+    if (!streamId || !messagesEl || !currentUser?.uid) return null;
 
     const db = getFirestore();
 
@@ -25,7 +25,7 @@ export function initLiveChat(streamId, currentUser) {
         orderBy("createdAt")
     );
 
-    const unsubscribe = onSnapshot(chatQuery, snap => {
+    const unsubscribe = safeOnSnapshot(`live:chat:${streamId}`, chatQuery, snap => {
         messagesEl.innerHTML = "";
 
         snap.forEach(docSnap => {

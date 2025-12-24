@@ -6,8 +6,8 @@ import {
   collection,
   query,
   where,
-  onSnapshot
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { safeOnSnapshot } from "/scripts/firestoreSafe.js";
 
 export function initializeLiveDiscover() {
   const root = document.getElementById("live-discover-root");
@@ -21,7 +21,8 @@ export function initializeLiveDiscover() {
     where("visibility", "==", "public")
   );
 
-  onSnapshot(
+  safeOnSnapshot(
+    "live:discover",
     q,
     snapshot => {
       try {

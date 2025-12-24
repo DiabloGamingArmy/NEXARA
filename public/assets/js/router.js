@@ -74,11 +74,11 @@
   }
 
   function buildUrlForVideoManager() {
-    return '/videos/video-manager';
+    return '/video-manager';
   }
 
   function buildUrlForCreateVideo() {
-    return '/videos/create-video';
+    return '/create-video';
   }
 
   function buildUrlForPost(postId) {
@@ -154,28 +154,28 @@
     if (head === 'videos' && segments[1] === 'video-manager') {
       return {
         type: 'video-manager',
-        canonicalPath: '/videos/video-manager',
+        canonicalPath: '/video-manager',
         route
       };
     }
     if (head === 'videos' && segments[1] === 'create-video') {
       return {
         type: 'video-create',
-        canonicalPath: '/videos/create-video',
+        canonicalPath: '/create-video',
         route
       };
     }
-    if (head === 'video' && segments[1] === 'video-manager') {
+    if (head === 'video-manager') {
       return {
         type: 'video-manager',
-        canonicalPath: '/videos/video-manager',
+        canonicalPath: '/video-manager',
         route
       };
     }
     if (head === 'create-video') {
       return {
         type: 'video-create',
-        canonicalPath: '/videos/create-video',
+        canonicalPath: '/create-video',
         route
       };
     }

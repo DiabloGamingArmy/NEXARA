@@ -111,6 +111,11 @@ service cloud.firestore {
                        && request.resource.data.followersCount >= 0);
     }
 
+    match /app_config/{docId} {
+      allow read: if docId == 'ui';
+      allow write: if isStaffAccount();
+    }
+
     match /users/{userId}/followers/{followerId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isSignedIn() && request.auth.uid == followerId;

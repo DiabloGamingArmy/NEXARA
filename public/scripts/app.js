@@ -1,12 +1,13 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 import { createUploadManager } from "/scripts/uploadManager.js";
+import { safeOnSnapshot } from "/scripts/firestoreSafe.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -1612,7 +1613,7 @@ function startCategoryStreams(uid) {
     destinationPickerError = '';
 
     const categoryRef = collection(db, 'categories');
-    categoryUnsubscribe = ListenerRegistry.register('categories:all', onSnapshot(categoryRef, function (snapshot) {
+    categoryUnsubscribe = ListenerRegistry.register('categories:all', safeOnSnapshot('categories:all', categoryRef, function (snapshot) {
         categories = snapshot.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         });
@@ -1633,7 +1634,7 @@ function startCategoryStreams(uid) {
     }));
 
     const membershipRef = collection(db, `users/${uid}/categoryMemberships`);
-    membershipUnsubscribe = ListenerRegistry.register(`memberships:${uid}`, onSnapshot(membershipRef, function (snapshot) {
+    membershipUnsubscribe = ListenerRegistry.register(`memberships:${uid}`, safeOnSnapshot(`memberships:${uid}`, membershipRef, function (snapshot) {
         memberships = {};
         snapshot.forEach(function (docSnap) {
             memberships[docSnap.id] = normalizeMembershipData(docSnap.data());
@@ -2235,7 +2236,7 @@ async function startUserReviewListener(uid) {
         return; // Skip listener when access is not allowed
     }
 
-    ListenerRegistry.register(`reviews:user:${uid}`, onSnapshot(q, handleSnapshot, function (error) {
+    ListenerRegistry.register(`reviews:user:${uid}`, safeOnSnapshot(`reviews:user:${uid}`, q, handleSnapshot, function (error) {
         if (error.code !== 'permission-denied') {
             console.log("Review listener note:", error.message);
         }
@@ -2707,7 +2708,7 @@ async function hydrateFollowedCategories(uid, profileData = {}) {
 
     try {
         const userRef = doc(db, 'users', uid);
-        followedTopicsUnsubscribe = onSnapshot(userRef, function (snap) {
+        followedTopicsUnsubscribe = safeOnSnapshot(`topics:followed:${uid}`, userRef, function (snap) {
             if (!snap.exists()) return;
             const next = normalizeFollowedTopicsFromProfile(snap.data());
             applyFollowedCategoryList(next);
@@ -2817,7 +2818,7 @@ async function hydrateFollowingState(uid, profileData = {}) {
 
     try {
         const followingRef = collection(db, 'users', uid, 'following');
-        followingUnsubscribe = onSnapshot(followingRef, function (snap) {
+        followingUnsubscribe = safeOnSnapshot(`following:${uid}`, followingRef, function (snap) {
             const ids = [];
             snap.forEach(function (docSnap) { ids.push(docSnap.id); });
             const merged = [...normalizeFollowingArray(userProfile), ...ids];
@@ -4375,7 +4376,7 @@ window.openPeerReview = function (postId) {
     const reviewsRef = collection(db, 'posts', postId, 'reviews');
     const q = query(reviewsRef);
 
-    ListenerRegistry.register(`reviews:post:${postId}`, onSnapshot(q, function (snapshot) {
+    ListenerRegistry.register(`reviews:post:${postId}`, safeOnSnapshot(`reviews:post:${postId}`, q, function (snapshot) {
         const container = document.getElementById('review-list');
         container.innerHTML = "";
 
@@ -4575,7 +4576,7 @@ function attachThreadComments(postId) {
 
     if (threadUnsubscribe) threadUnsubscribe();
 
-    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function (snapshot) {
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, safeOnSnapshot(`comments:${postId}`, q, function (snapshot) {
         const comments = snapshot.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
         const missingCommentUsers = comments.filter(function (c) { return !userCache[c.userId]; }).map(function (c) { return ({ userId: c.userId }); });
         if (missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
@@ -7469,7 +7470,7 @@ function initInboxNotifications(userId) {
     }
     if (!userId) return;
     const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(50));
-    inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+    inboxNotificationsUnsubscribe = safeOnSnapshot(`notifications:${userId}`, notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
         if (inboxMode && inboxMode !== 'messages') {
@@ -7787,7 +7788,7 @@ function attachMessageInputHandlers(conversationId) {
 function listenToConversationDetails(convoId) {
     if (conversationDetailsUnsubscribe) conversationDetailsUnsubscribe();
     const convoRef = doc(db, 'conversations', convoId);
-    conversationDetailsUnsubscribe = ListenerRegistry.register(`conversation:details:${convoId}`, onSnapshot(convoRef, function (snap) {
+    conversationDetailsUnsubscribe = ListenerRegistry.register(`conversation:details:${convoId}`, safeOnSnapshot(`conversation:details:${convoId}`, convoRef, function (snap) {
         if (!snap.exists()) { handleConversationAccessLoss(convoId); return; }
         const data = { id: convoId, ...snap.data() };
         if (!(data.participants || []).includes(currentUser?.uid)) { handleConversationAccessLoss(convoId); return; }
@@ -7924,7 +7925,7 @@ async function fetchConversation(conversationId) {
 async function listenToMessages(convoId) {
     if (messagesUnsubscribe) messagesUnsubscribe();
     const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
-    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
+    messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, safeOnSnapshot(`messages:thread:${convoId}`, msgRef, function (snap) {
         const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
         messageThreadCache[convoId] = msgs;
         const details = conversationDetailsCache[convoId] || {};
@@ -7986,7 +7987,7 @@ async function initConversations(autoOpen = true) {
     bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
-    conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
+    conversationsUnsubscribe = ListenerRegistry.register('messages:list', safeOnSnapshot('messages:list', convRef, async function (snap) {
         conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
 
         const missingDetails = conversationMappings
@@ -9307,7 +9308,7 @@ window.toggleVideoUploadModal = function (show = true) {
         resetVideoUploadMeta();
         setVideoUploadModalMode('create');
         applyVideoUploadDefaults();
-        if (window.location.pathname === '/videos/create-video' || window.location.pathname === '/create-video') {
+        if (window.location.pathname === '/create-video' || window.location.pathname === '/videos/create-video') {
             window.NexeraRouter?.replaceStateSilently?.('/videos');
         }
     }
@@ -10175,7 +10176,7 @@ function closeVideoTaskViewer() {
     modal.style.display = 'none';
     document.body.classList.remove('modal-open');
     closeVideoManagerMenu();
-    if (window.location.pathname === '/videos/video-manager') {
+    if (window.location.pathname === '/video-manager' || window.location.pathname === '/videos/video-manager') {
         window.NexeraRouter?.replaceStateSilently?.('/videos');
     }
 }
@@ -10552,6 +10553,7 @@ function closeVideoDetailModalHandler(options = {}) {
     const { keepPlayback = false } = options;
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
+    window.toggleVideoSidebarOverlay?.(false);
     const player = getVideoModalPlayer();
     if (player && !keepPlayback) {
         player.pause();
@@ -10565,7 +10567,32 @@ function closeVideoDetailModalHandler(options = {}) {
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = function () {
-    minimizeVideoDetail({ updateRoute: true, preferPiP: true });
+    minimizeVideoDetail({ updateRoute: true, preferPiP: false });
+};
+
+function buildVideoSidebarOverlay() {
+    const overlay = document.getElementById('video-sidebar-overlay');
+    if (!overlay) return null;
+    if (overlay.dataset.ready === 'true') return overlay;
+    const panel = overlay.querySelector('.video-sidebar-panel');
+    const sidebar = document.querySelector('.sidebar-left');
+    if (panel && sidebar) {
+        const clone = sidebar.cloneNode(true);
+        clone.removeAttribute('id');
+        clone.classList.add('video-sidebar-clone');
+        clone.querySelectorAll('[id]').forEach(function (node) { node.removeAttribute('id'); });
+        panel.innerHTML = '';
+        panel.appendChild(clone);
+    }
+    overlay.dataset.ready = 'true';
+    return overlay;
+}
+
+window.toggleVideoSidebarOverlay = function (show = true) {
+    const overlay = buildVideoSidebarOverlay();
+    if (!overlay) return;
+    overlay.classList.toggle('active', !!show);
+    overlay.setAttribute('aria-hidden', show ? 'false' : 'true');
 };
 
 function getMiniPlayerElements() {
@@ -12190,7 +12217,7 @@ function renderLiveSessions() {
         orderBy('startedAt', 'desc'),
         orderBy('createdAt', 'desc')
     );
-    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function (snap) {
+    liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', safeOnSnapshot('live:sessions', liveRef, function (snap) {
         try {
             liveSessionsCache = snap.docs.map(function (d) {
                 const data = d.data();
@@ -12275,7 +12302,7 @@ window.openLiveSession = function (sessionId) {
 
 function listenLiveChat(sessionId) {
     const chatRef = query(collection(db, 'liveStreams', sessionId, 'chat'), orderBy('createdAt'));
-    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function (snap) {
+    ListenerRegistry.register(`live:chat:${sessionId}`, safeOnSnapshot(`live:chat:${sessionId}`, chatRef, function (snap) {
         try {
             const chatEl = document.getElementById('live-chat');
             if (!chatEl) return;
@@ -12327,7 +12354,7 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if (staffRequestsUnsub) return;
-    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function (snap) {
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', safeOnSnapshot('staff:verificationRequests', collection(db, 'verificationRequests'), function (snap) {
         const container = document.getElementById('verification-requests');
         if (!container) return;
         container.innerHTML = '';
@@ -12354,7 +12381,7 @@ window.denyVerification = async function (requestId) {
 
 function listenReports() {
     if (staffReportsUnsub) return;
-    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function (snap) {
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', safeOnSnapshot('staff:reports', collection(db, 'reports'), function (snap) {
         const container = document.getElementById('reports-queue');
         if (!container) return;
         container.innerHTML = '';
@@ -12370,7 +12397,7 @@ function listenReports() {
 
 function listenAdminLogs() {
     if (staffLogsUnsub) return;
-    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function (snap) {
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', safeOnSnapshot('staff:adminLogs', collection(db, 'adminLogs'), function (snap) {
         const container = document.getElementById('admin-logs');
         if (!container) return;
         container.innerHTML = '';
