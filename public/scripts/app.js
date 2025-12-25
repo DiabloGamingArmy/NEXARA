@@ -13005,7 +13005,7 @@ function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
-    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(inferredView));
+    document.body.classList.toggle('sidebar-wide', isHome);
     if (isHome) {
         mountFeedTypeToggleBar();
     }
