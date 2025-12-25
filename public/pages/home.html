@@ -959,7 +959,8 @@
                         <div id="conversation-list-empty" class="empty-state" style="display:none;"></div>
                     </div>
                         <div class="inbox-thread">
-                        <div class="message-thread-header-row">
+                        <div class="messages-thread-inner">
+                            <div class="message-thread-header-row">
                             <button id="mobile-thread-back" class="mobile-thread-back" type="button"
                                 onclick="window.mobileMessagesBack()" aria-label="Back to conversations"
                                 style="display:none;">
@@ -967,7 +968,7 @@
                             </button>
                             <div id="message-header" class="message-thread-header">Select a conversation</div>
                         </div>
-                        <div class="message-header-tools">
+                            <div class="message-header-tools">
                             <input id="conversation-search" class="form-input" placeholder="Search in conversation"
                                 oninput="window.handleConversationSearch(this.value)">
                             <div class="search-nav">
@@ -977,17 +978,15 @@
                                         class="ph ph-caret-down"></i></button>
                             </div>
                         </div>
-                        <div class="messages-thread-inner">
                             <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
                             <div class="message-scroll-region">
                                 <div id="message-thread" class="message-thread-body"></div>
                                 <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                             </div>
+                            <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
+                            <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
                         </div>
-                        <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
-                        <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
-                        </div>
-                        <div class="message-compose">
+                            <div class="message-compose">
                             <input type="file" id="message-media" accept="image/*,video/*" multiple
                                 style="display:none;" onchange="window.handleMessageFileChange(event)">
                             <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i
@@ -995,6 +994,7 @@
                             <input id="message-input" class="form-input" placeholder="Message" />
                             <button class="create-btn-sidebar" style="width:auto;"
                                 onclick="window.sendMessage()">Send</button>
+                        </div>
                         </div>
                     </div>
                     </div>
