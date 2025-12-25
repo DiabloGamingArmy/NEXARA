@@ -1535,6 +1535,7 @@ function initApp(onReady) {
                         recentLocations = Array.isArray(userProfile.locationHistory) ? userProfile.locationHistory.slice() : [];
 
                         await backfillAvatarColorIfMissing(user.uid, userProfile);
+                        await syncPublicProfile(user.uid, userProfile);
 
                         // Apply stored theme preference
                         const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
@@ -1557,6 +1558,7 @@ function initApp(onReady) {
                         recentLocations = [];
                         applyTheme(storedTheme);
                         syncSavedVideosFromProfile(userProfile);
+                        await syncPublicProfile(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = 'none';
                     }
@@ -2005,6 +2007,7 @@ async function ensureUserDocument(user) {
     }
 
     await setDoc(ref, { updatedAt: now }, { merge: true });
+    await syncPublicProfile(user.uid, snap.data() || {});
     return await getDoc(ref);
 }
 
@@ -2015,6 +2018,7 @@ async function backfillAvatarColorIfMissing(uid, profile = {}) {
         profile.avatarColor = color;
         try {
             await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
+            await syncPublicProfile(uid, { ...profile, avatarColor: color });
             avatarColorBackfilled = true;
         } catch (e) {
             console.warn('Unable to backfill avatar color', e);
@@ -2128,6 +2132,13 @@ window.handleSignup = async function (e) {
             onPermissionDenied: function () {
                 document.getElementById('auth-error').textContent = 'Profile can’t be updated due to permissions.';
             }
+        });
+        await syncPublicProfile(cred.user.uid, {
+            displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
+            username: cred.user.email.split('@')[0],
+            photoURL: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
+            bio: ""
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
@@ -3050,6 +3061,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -11464,7 +11476,7 @@ function getVideoRouteVideoId() {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
     }
-    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    const queryId = url.searchParams.get('open') || url.searchParams.get('video') || url.searchParams.get('v');
     if (queryId) return queryId;
     if (url.hash && url.hash.startsWith('#video=')) {
         return url.hash.replace('#video=', '');
