@@ -2222,7 +2222,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     opacity: 0;
     transform: scale(1.02);
     pointer-events: none;
-    visibility: hidden;
 }
 
 @keyframes nexeraLogoPulse {
@@ -2268,6 +2267,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 #loading-overlay {
     background: var(--bg-body);
+}
+
+#auth-screen {
+    display: none;
 }
 
 /* Glass Shard Auth Box */

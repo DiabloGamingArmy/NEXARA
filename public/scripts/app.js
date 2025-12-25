@@ -212,6 +212,15 @@ function refreshBrandLogos() {
 }
 window.refreshBrandLogos = refreshBrandLogos;
 
+function isUiDebugEnabled() {
+    return window.DEBUG_UI === true;
+}
+
+function uiDebugLog(...args) {
+    if (!isUiDebugEnabled()) return;
+    console.debug('[NexeraUI]', ...args);
+}
+
 function showSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
@@ -240,12 +249,13 @@ function hideSplash(options = {}) {
     logSplashEvent('hide', reason);
     splash.classList.add('nexera-splash-hidden');
     splash.style.pointerEvents = 'none';
-    splash.style.visibility = 'hidden';
     splash.setAttribute('aria-hidden', 'true');
+    uiDebugLog('splash hidden', reason);
     clearSplashFailsafeTimer();
     const TRANSITION_BUFFER = 520;
     setTimeout(function () {
         if (splash.classList.contains('nexera-splash-hidden')) {
+            splash.style.visibility = 'hidden';
             splash.style.display = 'none';
         }
     }, TRANSITION_BUFFER);
@@ -796,6 +806,7 @@ if (!window.Nexera.ready) {
     window.Nexera.ready = new Promise(function (resolve) { readyResolve = resolve; });
     window.Nexera.__resolveReady = readyResolve;
 }
+window.Nexera.authResolved = false;
 window.Nexera.auth = auth;
 window.Nexera.db = db;
 window.Nexera.storage = storage;
@@ -1327,6 +1338,8 @@ function initApp(onReady) {
         const loadingOverlay = document.getElementById('loading-overlay');
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
+        window.Nexera.authResolved = true;
+        uiDebugLog('auth resolved', { signedIn: !!user });
 
         try {
             if (user) {
@@ -1548,6 +1561,7 @@ async function updateTimeCapsule(forceReload = false) {
 
     timeCapsuleState.loading = false;
     renderTimeCapsule();
+    uiDebugLog('time capsule loaded', { source: timeCapsuleState.source, hasUrl: !!timeCapsuleState.event?.url });
 }
 
 function showAnotherTimeCapsuleEvent() {
@@ -12595,6 +12609,16 @@ function bindMobileScrollHelper() {
     }
 }
 
+function syncSidebarHomeState() {
+    const path = window.location.pathname || '/';
+    const isHome = path === '/' || path === '/home';
+    document.body.classList.toggle('sidebar-home', isHome);
+    if (isHome) {
+        mountFeedTypeToggleBar();
+    }
+    uiDebugLog('sidebar home sync', { path, isHome });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
@@ -12610,6 +12634,8 @@ document.addEventListener('DOMContentLoaded', function () {
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
     startSplashFailsafeTimer();
+    syncSidebarHomeState();
+    updateTimeCapsule();
     initializeNexeraApp();
     setTimeout(function () {
         if (window.Nexera?.releaseSplash) {
