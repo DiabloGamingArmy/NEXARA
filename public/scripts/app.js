@@ -899,6 +899,12 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+function shouldShowRightSidebar(viewId) {
+    return viewId === 'feed';
+}
+
+window.shouldShowRightSidebar = shouldShowRightSidebar;
+
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
 const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';

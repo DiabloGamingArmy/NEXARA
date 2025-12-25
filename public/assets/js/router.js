@@ -464,6 +464,10 @@
     state.applying = true;
     state.restoring = true;
 
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+      replaceStateSilently('/home');
+    }
+
     const start = performance.now();
     const initialUrl = source === 'init' && window.__NEXERA_INITIAL_URL ? window.__NEXERA_INITIAL_URL : null;
     const parsed = parseRoute(initialUrl || undefined);
