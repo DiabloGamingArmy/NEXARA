@@ -3197,15 +3197,6 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     const activeTypes = getActiveFeedTypes();
-    const typeFilterActive = activeTypes.length < FEED_TYPE_TOGGLES.length;
-    if (typeFilterActive) {
-        displayPosts = displayPosts.filter(function (post) {
-            const type = getPostFeedType(post);
-            return activeTypes.includes(type);
-        });
-    }
-
-    const activeTypes = getActiveFeedTypes();
     const items = [];
 
     if (activeTypes.includes('threads')) {
