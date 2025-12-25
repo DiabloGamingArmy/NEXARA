@@ -103,6 +103,7 @@
 
   function buildUrlForMessages(conversationId, params = {}) {
     const search = new URLSearchParams(params);
+    const suffix = search && typeof search.toString === 'function' ? search.toString() : '';
     if (conversationId) {
       return `/inbox/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
     }

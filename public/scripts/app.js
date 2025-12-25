@@ -935,6 +935,45 @@ function logMissingProfileOnce(uid) {
     console.warn('Profile not found for', uid);
 }
 
+const dmMediaUrlCache = new Map();
+const dmMediaUrlPromises = new Map();
+
+function resolveDmMediaUrl(rawUrl = '') {
+    if (!rawUrl) return null;
+    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    if (dmMediaUrlCache.has(rawUrl)) return dmMediaUrlCache.get(rawUrl);
+    if (!dmMediaUrlPromises.has(rawUrl)) {
+        const promise = getDownloadURL(ref(storage, rawUrl))
+            .then(function (url) {
+                dmMediaUrlCache.set(rawUrl, url);
+                return url;
+            })
+            .catch(function (err) {
+                if (err?.code === 'storage/unauthorized' || err?.code === 'permission-denied') {
+                    logPermissionDeniedOnce(`dm_media:${rawUrl}`);
+                } else {
+                    console.warn('Unable to load attachment', err?.message || err);
+                }
+                dmMediaUrlCache.set(rawUrl, null);
+                return null;
+            })
+            .finally(function () {
+                dmMediaUrlPromises.delete(rawUrl);
+            });
+        dmMediaUrlPromises.set(rawUrl, promise);
+    }
+    return null;
+}
+
+function fetchDmMediaUrl(rawUrl = '') {
+    if (!rawUrl) return Promise.resolve(null);
+    if (/^https?:\/\//i.test(rawUrl)) return Promise.resolve(rawUrl);
+    const cached = dmMediaUrlCache.get(rawUrl);
+    if (cached) return Promise.resolve(cached);
+    const pending = dmMediaUrlPromises.get(rawUrl);
+    return pending || Promise.resolve(null);
+}
+
 function buildPublicProfilePayload(uid, profile = {}) {
     return {
         uid,
@@ -2122,7 +2161,9 @@ async function fetchMissingProfiles(posts) {
                 fallbackDocs.forEach(function (docSnap) {
                     if (docSnap.exists()) {
                         const profile = storeUserInCache(docSnap.id, docSnap.data());
-                        syncPublicProfile(docSnap.id, profile);
+                        if (docSnap.id === getViewerUid()) {
+                            syncPublicProfile(docSnap.id, profile);
+                        }
                     } else {
                         logMissingProfileOnce(docSnap.id);
                         storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
@@ -7133,7 +7174,9 @@ async function resolveUserProfile(uid, options = {}) {
                 const fallbackSnap = await getDoc(doc(db, 'users', uid));
                 if (fallbackSnap.exists()) {
                     const profile = storeUserInCache(uid, fallbackSnap.data());
-                    syncPublicProfile(uid, profile);
+                    if (uid === getViewerUid()) {
+                        syncPublicProfile(uid, profile);
+                    }
                     return profile;
                 }
                 logMissingProfileOnce(uid);
@@ -7793,6 +7836,7 @@ function renderMessages(msgs = [], convo = {}) {
     let lastSenderId = null;
     let latestSelfMessage = null;
     const missingSenders = new Set();
+    const missingMedia = new Set();
     const fragment = document.createDocumentFragment();
     const searchTerm = (conversationSearchTerm || '').toLowerCase();
     conversationSearchHits = [];
@@ -7875,9 +7919,21 @@ function renderMessages(msgs = [], convo = {}) {
         const hasMediaAttachment = attachments.length > 0;
 
         if (!hasMediaAttachment && msg.type === 'image' && msg.mediaURL) {
-            content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
+            const resolved = resolveDmMediaUrl(msg.mediaURL);
+            if (!resolved && msg.mediaURL && !/^https?:\/\//i.test(msg.mediaURL)) {
+                missingMedia.add(msg.mediaURL);
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">Attachment unavailable</div>`;
+            } else {
+                content = `<img src="${resolved || msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
+            }
         } else if (!hasMediaAttachment && msg.type === 'video' && msg.mediaURL) {
-            content = `<video src="${msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
+            const resolved = resolveDmMediaUrl(msg.mediaURL);
+            if (!resolved && msg.mediaURL && !/^https?:\/\//i.test(msg.mediaURL)) {
+                missingMedia.add(msg.mediaURL);
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">Attachment unavailable</div>`;
+            } else {
+                content = `<video src="${resolved || msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
+            }
         }
 
         const forwardedTag = (msg.forwardedFromSenderId || msg.forwardedFromConversationId)
@@ -7902,9 +7958,12 @@ function renderMessages(msgs = [], convo = {}) {
                 const tile = document.createElement('div');
                 tile.className = 'message-attachment-tile';
                 const isImage = (att.type || '').includes('image');
+                const resolvedUrl = resolveDmMediaUrl(att.url || '');
                 if (isImage) {
                     const img = document.createElement('img');
-                    img.src = att.url;
+                    if (resolvedUrl) {
+                        img.src = resolvedUrl;
+                    }
                     img.alt = att.name || 'Attachment';
                     tile.appendChild(img);
                 } else if ((att.type || '').includes('video')) {
@@ -7912,7 +7971,10 @@ function renderMessages(msgs = [], convo = {}) {
                 } else {
                     tile.innerHTML = '<div class="attachment-icon"><i class="ph ph-paperclip"></i></div>';
                 }
-                tile.onclick = function (e) { e.stopPropagation(); openFullscreenMedia(att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
+                if (!resolvedUrl && att.url && !/^https?:\/\//i.test(att.url)) {
+                    missingMedia.add(att.url);
+                }
+                tile.onclick = function (e) { e.stopPropagation(); openFullscreenMedia(resolvedUrl || att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
                 attachmentRow.appendChild(tile);
             });
             bubble.appendChild(attachmentRow);
@@ -7983,6 +8045,14 @@ function renderMessages(msgs = [], convo = {}) {
         refreshUserProfiles(Array.from(missingSenders), { force: true }).then(function () {
             if (activeConversationId === convo.id) {
                 renderMessageHeader(convo);
+                renderMessages(msgs, convo);
+            }
+        });
+    }
+
+    if (missingMedia.size && convo.id) {
+        Promise.all(Array.from(missingMedia).map(fetchDmMediaUrl)).then(function () {
+            if (activeConversationId === convo.id) {
                 renderMessages(msgs, convo);
             }
         });
@@ -8288,11 +8358,20 @@ function closeMessageActionsMenu() {
 }
 
 function resolvePrimaryImageAttachment(message = {}) {
-    if (message.type === 'image' && message.mediaURL) return { url: message.mediaURL, type: 'image' };
+    if (message.type === 'image' && message.mediaURL) {
+        const resolved = resolveDmMediaUrl(message.mediaURL);
+        if (resolved) return { url: resolved, type: 'image' };
+    }
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
     const imageAttachment = attachments.find(function (att) { return (att.type || '').includes('image') && att.url; });
-    if (imageAttachment) return { url: imageAttachment.url, type: 'image' };
-    if (message.mediaURL && ((message.mediaType || message.type || '').includes('image'))) return { url: message.mediaURL, type: 'image' };
+    if (imageAttachment) {
+        const resolved = resolveDmMediaUrl(imageAttachment.url);
+        if (resolved) return { url: resolved, type: 'image' };
+    }
+    if (message.mediaURL && ((message.mediaType || message.type || '').includes('image'))) {
+        const resolved = resolveDmMediaUrl(message.mediaURL);
+        if (resolved) return { url: resolved, type: 'image' };
+    }
     return null;
 }
 
