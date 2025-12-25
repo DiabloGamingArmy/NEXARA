@@ -2038,6 +2038,13 @@ window.handleSignup = async function (e) {
             tagAffinity: {},
             interests: []
         });
+        await syncPublicProfile(cred.user.uid, {
+            displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
+            username: cred.user.email.split('@')[0],
+            photoURL: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
+            bio: ""
+        });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
     } finally {
@@ -2100,14 +2107,36 @@ async function fetchMissingProfiles(posts) {
 
     try {
         const userDocs = await Promise.all(fetchPromises);
+        const missingProfiles = [];
         userDocs.forEach(function (docSnap) {
             if (docSnap.exists()) {
                 storeUserInCache(docSnap.id, docSnap.data());
             } else {
-                logMissingProfileOnce(docSnap.id);
-                storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
+                missingProfiles.push(docSnap.id);
             }
         });
+
+        if (missingProfiles.length) {
+            try {
+                const fallbackDocs = await Promise.all(missingProfiles.map(function (uid) { return getDoc(doc(db, "users", uid)); }));
+                fallbackDocs.forEach(function (docSnap) {
+                    if (docSnap.exists()) {
+                        const profile = storeUserInCache(docSnap.id, docSnap.data());
+                        syncPublicProfile(docSnap.id, profile);
+                    } else {
+                        logMissingProfileOnce(docSnap.id);
+                        storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
+                    }
+                });
+            } catch (e) {
+                if (e?.code === 'permission-denied') {
+                    logPermissionDeniedOnce('users:read:fetchMissingProfiles');
+                    missingProfiles.forEach(function (uid) { buildUnknownUserProfile(uid); });
+                } else {
+                    console.warn('Fallback profile read failed', e?.message || e);
+                }
+            }
+        }
 
         // Re-render dependent views once data arrives
         renderFeed();
@@ -7100,7 +7129,21 @@ async function resolveUserProfile(uid, options = {}) {
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
-            logMissingProfileOnce(uid);
+            try {
+                const fallbackSnap = await getDoc(doc(db, 'users', uid));
+                if (fallbackSnap.exists()) {
+                    const profile = storeUserInCache(uid, fallbackSnap.data());
+                    syncPublicProfile(uid, profile);
+                    return profile;
+                }
+                logMissingProfileOnce(uid);
+            } catch (fallbackError) {
+                if (fallbackError?.code === 'permission-denied') {
+                    logPermissionDeniedOnce(`users:read:${uid}`);
+                } else {
+                    console.warn('User fallback fetch failed', uid, fallbackError?.message || fallbackError);
+                }
+            }
         } catch (e) {
             if (e?.code === 'permission-denied') {
                 logPermissionDeniedOnce(`profiles:read:${uid}`);
@@ -7560,6 +7603,11 @@ function renderConversationList() {
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUid, details);
         const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+        if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
+            resolveUserProfile(otherId).then(function () {
+                if (currentViewId === 'messages') renderConversationList();
+            });
+        }
         const otherProfile = otherId ? getCachedUser(otherId) : null;
         const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
         const isGroup = (participants || []).length > 2 || details.type === 'group';
@@ -7680,6 +7728,11 @@ function renderMessageHeader(convo = {}) {
     const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
     const targetProfileId = primaryOtherId || meta.otherIds?.[0] || null;
     const fallbackAvatar = meta.avatars?.[0] || '';
+    if (targetProfileId && !getCachedUser(targetProfileId, { allowStale: false }) && !userFetchPromises[targetProfileId]) {
+        resolveUserProfile(targetProfileId).then(function () {
+            if (activeConversationId === (convo.id || activeConversationId)) renderMessageHeader(convo);
+        });
+    }
     let avatarUser = {
         uid: cid || primaryOtherId || 'conversation',
         username: label,
@@ -7739,6 +7792,7 @@ function renderMessages(msgs = [], convo = {}) {
     let lastDateDivider = null;
     let lastSenderId = null;
     let latestSelfMessage = null;
+    const missingSenders = new Set();
     const fragment = document.createDocumentFragment();
     const searchTerm = (conversationSearchTerm || '').toLowerCase();
     conversationSearchHits = [];
@@ -7766,6 +7820,9 @@ function renderMessages(msgs = [], convo = {}) {
         const nextIsNewDay = nextDate ? !isSameDay(createdDate, nextDate) : false;
         const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || nextIsNewDay || (nextDate && needsTimeGapDivider(createdDate, nextDate)));
         const isSelf = msg.senderId === currentUser?.uid;
+        if (!isSelf && msg.senderId && !getCachedUser(msg.senderId, { allowStale: false }) && !userFetchPromises[msg.senderId]) {
+            missingSenders.add(msg.senderId);
+        }
         const row = document.createElement('div');
         row.className = 'message-row ' + (isSelf ? 'self' : 'other');
         if (lastSenderId === msg.senderId) row.classList.add('stacked');
@@ -7921,6 +7978,15 @@ function renderMessages(msgs = [], convo = {}) {
     }
 
     body.appendChild(fragment);
+
+    if (missingSenders.size && convo.id) {
+        refreshUserProfiles(Array.from(missingSenders), { force: true }).then(function () {
+            if (activeConversationId === convo.id) {
+                renderMessageHeader(convo);
+                renderMessages(msgs, convo);
+            }
+        });
+    }
     if (shouldStickToBottom) {
         scrollMessagesToBottom();
         const media = scrollRegion.querySelectorAll('img, video');
@@ -8734,6 +8800,24 @@ function refreshConversationUsers(convo = {}, options = {}) {
     const participants = convo.participants || [];
     if (!participants.length) return Promise.resolve([]);
     return refreshUserProfiles(participants, { force: options.force === true }).then(function (profiles) {
+        if (convo.id && profiles.length) {
+            const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
+            const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+            const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
+            conversationDetailsCache[convo.id] = {
+                ...(conversationDetailsCache[convo.id] || convo),
+                participantNames,
+                participantUsernames,
+                participantAvatars
+            };
+        }
+        if (window.localStorage?.getItem('NEXERA_DEBUG_PROFILE') === '1') {
+            console.debug('[Profiles] conversation users', {
+                id: convo.id,
+                participants,
+                profiles: profiles.map(function (p) { return ({ uid: p.uid || p.id, displayName: p.displayName, username: p.username, photoURL: p.photoURL }); })
+            });
+        }
         if (options.updateUI) {
             renderConversationList();
             if (activeConversationId === (convo.id || activeConversationId)) {
@@ -8838,6 +8922,8 @@ function renderConversationSettings(convo = {}, mapping = {}) {
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
     const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+
+    refreshConversationUsers(convo, { force: true });
 
     if (titleEl) titleEl.textContent = label;
     if (subtitleEl) subtitleEl.textContent = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
