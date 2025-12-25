@@ -6623,9 +6623,25 @@ function buildHomeLiveCard(session) {
     return card;
 }
 
+function normalizeImageUrl(url) {
+    try {
+        if (!url || typeof url !== 'string') return '';
+        const trimmed = url.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+        if (trimmed.startsWith('gs://')) return trimmed;
+        return trimmed;
+    } catch (e) {
+        return '';
+    }
+}
 
 function getConversationAvatarUrl(convo = {}, fallback = '') {
-    return normalizeImageUrl(convo.avatarUrl || convo.avatarURL || fallback || '');
+    try {
+        return normalizeImageUrl(convo.avatarUrl || convo.avatarURL || fallback || '');
+    } catch (e) {
+        return '';
+    }
 }
 
 function handleSnapshotError(context, error) {
