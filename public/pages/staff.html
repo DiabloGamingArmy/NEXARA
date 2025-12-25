@@ -703,6 +703,7 @@
             </div>
         </div>
         <div class="mobile-app-bar__actions">
+            <button class="icon-btn sidebar-toggle-btn" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
             <button class="icon-btn" onclick="window.scrollTo({top:0, behavior:'smooth'});"
                 aria-label="Scroll to top"><i class="ph ph-arrow-up"></i></button>
             <button class="icon-btn" onclick="window.toggleDiscoverSearch()" aria-label="Search"><i
@@ -744,6 +745,9 @@
 
 
         <main class="main-feed">
+            <div class="desktop-app-bar">
+                <button class="icon-pill sidebar-toggle-btn" type="button" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
+            </div>
             <div id="view-feed" class="view-section">
                 <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
                     style="display: none;" onclick="window.scrollCategoryHeader(-1)">
@@ -951,7 +955,8 @@
                         <div id="conversation-list-empty" class="empty-state" style="display:none;"></div>
                     </div>
                         <div class="inbox-thread">
-                        <div class="message-thread-header-row">
+                        <div class="messages-thread-inner">
+                            <div class="message-thread-header-row">
                             <button id="mobile-thread-back" class="mobile-thread-back" type="button"
                                 onclick="window.mobileMessagesBack()" aria-label="Back to conversations"
                                 style="display:none;">
@@ -959,7 +964,7 @@
                             </button>
                             <div id="message-header" class="message-thread-header">Select a conversation</div>
                         </div>
-                        <div class="message-header-tools">
+                            <div class="message-header-tools">
                             <input id="conversation-search" class="form-input" placeholder="Search in conversation"
                                 oninput="window.handleConversationSearch(this.value)">
                             <div class="search-nav">
@@ -969,17 +974,15 @@
                                         class="ph ph-caret-down"></i></button>
                             </div>
                         </div>
-                        <div class="messages-thread-inner">
                             <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
                             <div class="message-scroll-region">
                                 <div id="message-thread" class="message-thread-body"></div>
                                 <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                             </div>
+                            <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
+                            <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
                         </div>
-                        <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
-                        <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
-                        </div>
-                        <div class="message-compose">
+                            <div class="message-compose">
                             <input type="file" id="message-media" accept="image/*,video/*" multiple
                                 style="display:none;" onchange="window.handleMessageFileChange(event)">
                             <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i
@@ -987,6 +990,7 @@
                             <input id="message-input" class="form-input" placeholder="Message" />
                             <button class="create-btn-sidebar" style="width:auto;"
                                 onclick="window.sendMessage()">Send</button>
+                        </div>
                         </div>
                     </div>
                     </div>
@@ -1668,6 +1672,10 @@
     </main>
 
     <aside class="sidebar-right glass-panel">
+        <div class="right-sidebar-header">
+            <div class="feed-type-toggle-bar" id="feed-type-toggle-bar"></div>
+        </div>
+        <div class="right-sidebar-content">
         <div class="trend-box">
             <div class="trend-title">Trending <i class="ph-fill ph-trend-up"></i></div>
             <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
@@ -1697,8 +1705,11 @@
         </div>
 
         <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexera Network</div>
+        </div>
     </aside>
     </div>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="window.Nexera?.closeSidebar?.()"></div>
 
     <nav id="mobile-bottom-nav" class="mobile-bottom-nav">
         <button class="mobile-nav-btn active" data-view="feed"><i class="ph ph-house"></i><span>Home</span></button>

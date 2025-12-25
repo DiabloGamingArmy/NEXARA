@@ -817,6 +817,131 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
+const FEED_TYPE_TOGGLES = [
+    { view: 'feed', label: 'Threads' },
+    { view: 'videos', label: 'Videos' },
+    { view: 'live', label: 'Livestreams' }
+];
+
+let sidebarCollapsed = false;
+
+function getFeedTypeToggleSlot() {
+    return document.getElementById('feed-type-toggle-bar') || document.querySelector('.feed-type-toggle-bar');
+}
+
+function buildFeedTypeToggleButtons(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    FEED_TYPE_TOGGLES.forEach(function (toggle) {
+        const btn = document.createElement('button');
+        btn.className = 'discover-pill feed-type-pill';
+        btn.textContent = toggle.label;
+        btn.dataset.view = toggle.view;
+        btn.addEventListener('click', function () {
+            if (typeof window.navigateTo === 'function') window.navigateTo(toggle.view);
+        });
+        container.appendChild(btn);
+    });
+}
+
+function mountFeedTypeToggleBar() {
+    const slot = getFeedTypeToggleSlot();
+    if (!slot) return;
+    const header = document.querySelector('.right-sidebar-header');
+    if (header && slot.parentElement !== header) {
+        header.appendChild(slot);
+    }
+    if (!slot.children.length) {
+        buildFeedTypeToggleButtons(slot);
+    }
+    syncFeedTypeToggleState(currentViewId);
+}
+
+function syncFeedTypeToggleState(viewId = currentViewId) {
+    document.querySelectorAll('.feed-type-toggle-bar [data-view]').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.view === viewId);
+    });
+}
+
+function applyDesktopSidebarState(collapsed, persist = true) {
+    sidebarCollapsed = !!collapsed;
+    if (!isMobileViewport()) {
+        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+    }
+    if (persist && window.localStorage) {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
+    }
+}
+
+function setSidebarOverlayOpen(open) {
+    document.body.classList.toggle('sidebar-overlay-open', !!open);
+}
+
+function initSidebarState() {
+    if (window.localStorage) {
+        sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+    }
+    applyDesktopSidebarState(sidebarCollapsed, false);
+    document.body.classList.toggle('has-desktop-app-bar', !isMobileViewport());
+}
+
+function openSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(true);
+        return;
+    }
+    applyDesktopSidebarState(false);
+}
+
+function closeSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(false);
+        return;
+    }
+    applyDesktopSidebarState(true);
+}
+
+function toggleSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
+        return;
+    }
+    applyDesktopSidebarState(!sidebarCollapsed);
+}
+
+function bindSidebarEvents() {
+    document.querySelectorAll('.sidebar-left .nav-item, .sidebar-left .create-btn-sidebar').forEach(function (item) {
+        item.addEventListener('click', function () {
+            if (isMobileViewport()) {
+                setSidebarOverlayOpen(false);
+            }
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && document.body.classList.contains('sidebar-overlay-open')) {
+            setSidebarOverlayOpen(false);
+        }
+    });
+
+    if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+        MOBILE_VIEWPORT.addEventListener('change', function () {
+            document.body.classList.toggle('has-desktop-app-bar', !isMobileViewport());
+            if (isMobileViewport()) {
+                document.body.classList.remove('sidebar-collapsed');
+            } else {
+                setSidebarOverlayOpen(false);
+                applyDesktopSidebarState(sidebarCollapsed);
+            }
+        });
+    }
+}
+
+window.Nexera.toggleSidebar = toggleSidebar;
+window.Nexera.openSidebar = openSidebar;
+window.Nexera.closeSidebar = closeSidebar;
+window.Nexera.mountFeedTypeToggleBar = mountFeedTypeToggleBar;
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
     { id: 'l1', title: '🔴 Mars Rover Landing Watch Party', viewerCount: '12.5k', author: 'SpaceX_Fan', category: 'STEM', color: '#00f2ea' },
@@ -2304,6 +2429,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(false);
+    }
+    syncFeedTypeToggleState(viewId);
 
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
@@ -6012,6 +6141,29 @@ function escapeHtml(text) {
 }
 
 function cleanText(text) { if (typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
+
+function normalizeImageUrl(raw = '') {
+    const value = (raw || '').trim();
+    if (!value) return '';
+    if (/^(https?:|data:|blob:)/i.test(value)) return value;
+    if (value.startsWith('/assets/')) return value;
+    return '';
+}
+
+function getConversationAvatarUrl(convo = {}, fallback = '') {
+    return normalizeImageUrl(convo.avatarUrl || convo.avatarURL || fallback || '');
+}
+
+function handleSnapshotError(context, error) {
+    const code = error?.code || '';
+    const message = code === 'permission-denied'
+        ? 'You do not have access to this data.'
+        : 'We had trouble loading this data.';
+    console.warn(`${context} snapshot error`, error?.message || error);
+    if (typeof window.toast === 'function') {
+        window.toast(message, 'error');
+    }
+}
 function renderSaved() {
     currentCategory = 'Saved';
     const container = document.getElementById('saved-content');
@@ -6741,11 +6893,12 @@ function renderConversationList() {
             title: details.title || null
         };
         const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
+        const convoAvatar = getConversationAvatarUrl(details);
         let avatarUser = {
             uid: mapping.id || otherId || 'conversation',
             username: name,
             displayName: name,
-            photoURL: details.avatarURL || '',
+            photoURL: convoAvatar,
             avatarColor: computeAvatarColor(name)
         };
         if (!isGroup && otherId) {
@@ -6754,11 +6907,11 @@ function renderConversationList() {
                 uid: otherId,
                 username: otherProfile?.username || name,
                 displayName: resolveDisplayName(otherProfile) || name,
-                photoURL: otherProfile?.photoURL || details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '',
+                photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
                 avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
             };
-        } else if (details.avatarURL || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
-            avatarUser.photoURL = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
+        } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
+            avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
         }
         const avatarHtml = renderAvatar(avatarUser, { size: 42 });
 
@@ -6846,28 +6999,28 @@ function renderMessageHeader(convo = {}) {
     const cid = convo.id || activeConversationId;
     const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
     const targetProfileId = primaryOtherId || meta.otherIds?.[0] || null;
+    const fallbackAvatar = meta.avatars?.[0] || '';
     let avatarUser = {
         uid: cid || primaryOtherId || 'conversation',
         username: label,
         displayName: label,
-        photoURL: convo.avatarURL || meta.avatars?.[0] || '',
+        photoURL: getConversationAvatarUrl(convo, fallbackAvatar),
         avatarColor: convo.avatarColor || computeAvatarColor(label)
     };
 
-    if (primaryOtherId && !convo.avatarURL) {
+    if (primaryOtherId && !getConversationAvatarUrl(convo)) {
         const otherMeta = resolveParticipantDisplay(convo, primaryOtherId);
         avatarUser = {
             ...otherMeta.profile,
             uid: primaryOtherId,
             username: otherMeta.username || label,
             displayName: otherMeta.displayName || label,
-            photoURL: otherMeta.avatar,
+            photoURL: normalizeImageUrl(otherMeta.avatar),
             avatarColor: otherMeta.avatarColor
         };
     }
 
     const avatar = renderAvatar(avatarUser, { size: 36 });
-    const verifiedBadge = (!convo.title && participants.length === 2) ? renderVerifiedBadge(avatarUser) : '';
     const targetProfile = targetProfileId ? resolveParticipantDisplay(convo, targetProfileId) : null;
     const participantCountLabel = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
     const subtitleUsername = targetProfile
@@ -6880,37 +7033,18 @@ function renderMessageHeader(convo = {}) {
         ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
         : 'class="message-thread-profile-btn" type="button" disabled';
 
-    const avatarStack = buildParticipantAvatarStack(participants);
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
             ${avatar}
             <div>
-                <div class="message-thread-title-row">${escapeHtml(label)}${verifiedBadge}</div>
+                <div class="message-thread-title-row">${escapeHtml(label)}</div>
                 <div class="message-thread-subtitle">${subtitle}</div>
             </div>
         </button>
-        ${avatarStack}
         <div class="message-header-actions">
             <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"><i class="ph ph-dots-three-outline"></i></button>
         </div>
     </div>`;
-}
-
-function buildParticipantAvatarStack(participants = []) {
-    if (!Array.isArray(participants) || participants.length <= 1) return '';
-    const others = participants.filter(function (uid) { return uid !== currentUser?.uid; }).slice(0, 3);
-    if (!others.length) return '';
-    const avatars = others.map(function (uid) {
-        const meta = resolveParticipantDisplay({ participants }, uid);
-        return renderAvatar({
-            uid,
-            username: meta.username,
-            displayName: meta.displayName,
-            photoURL: meta.avatar,
-            avatarColor: meta.avatarColor
-        }, { size: 26, className: 'message-avatar-stack-item' });
-    }).join('');
-    return `<div class="message-avatar-stack">${avatars}</div>`;
 }
 
 function renderMessages(msgs = [], convo = {}) {
@@ -7202,6 +7336,8 @@ function initInboxNotifications(userId) {
         if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
+    }, function (err) {
+        handleSnapshotError('Inbox notifications', err);
     });
 }
 
@@ -7524,7 +7660,7 @@ function listenToConversationDetails(convoId) {
         renderMessages(messageThreadCache[convoId] || [], data);
         renderTypingIndicator(data);
     }, function (err) {
-        console.warn('Conversation details listener error', err?.message || err);
+        handleSnapshotError('Conversation details', err);
         handleConversationAccessLoss(convoId);
     }));
 }
@@ -7561,7 +7697,7 @@ async function ensureConversation(convoId, participantId) {
             participantAvatars,
             type: 'direct',
             title: null,
-            avatarURL: null,
+            avatarUrl: null,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
             lastMessagePreview: '',
@@ -7660,7 +7796,7 @@ async function listenToMessages(convoId) {
         markMessagesDelivered(convoId, msgs);
         markConversationAsRead(convoId);
     }, function (err) {
-        console.warn('Messages listener error', err?.message || err);
+        handleSnapshotError('Messages thread', err);
         handleConversationAccessLoss(convoId);
     }));
 }
@@ -7748,7 +7884,7 @@ async function initConversations(autoOpen = true) {
             openConversation(conversationMappings[0].id);
         }
     }, function (err) {
-        console.warn('Conversation list listener error', err?.message || err);
+        handleSnapshotError('Conversation list', err);
     }));
 }
 
@@ -7826,7 +7962,7 @@ function renderConversationAvatarPreview(convo = {}, previewUrl = '', filename =
     const preview = document.getElementById('conversation-avatar-preview');
     if (!preview) return;
     const meta = deriveOtherParticipantMeta(convo.participants || [], currentUser?.uid, convo);
-    const src = previewUrl || convo.avatarURL || meta.avatars?.[0] || '';
+    const src = normalizeImageUrl(previewUrl) || getConversationAvatarUrl(convo, meta.avatars?.[0]) || '';
     if (src) {
         preview.innerHTML = `<img src="${src}" alt="Conversation avatar">${filename ? `<div class="participant-hint">${escapeHtml(filename)}</div>` : ''}`;
     } else {
@@ -8025,7 +8161,7 @@ function renderConversationSettings(convo = {}, mapping = {}) {
         avatarEl.innerHTML = renderAvatar({
             uid: convo.id || 'conversation',
             username: label,
-            photoURL: convo.avatarURL || meta.avatars?.[0] || '',
+            photoURL: getConversationAvatarUrl(convo, meta.avatars?.[0]),
             avatarColor: computeAvatarColor(label)
         }, { size: 48 });
     }
@@ -8240,14 +8376,29 @@ window.uploadConversationAvatar = async function () {
         helperText: 'This updates the chat image for all participants.',
         confirmText: 'Upload',
         onConfirm: async function () {
-            const uploadRef = ref(storage, path);
-            const snap = await uploadBytes(uploadRef, file);
-            const url = await getDownloadURL(snap.ref);
-            await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
-            conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
-            if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
-            await refreshConversationSettings(conversationSettingsId);
-            toast('Conversation image updated', 'info');
+            try {
+                const uploadRef = ref(storage, path);
+                const snap = await uploadBytes(uploadRef, file);
+                const url = await getDownloadURL(snap.ref);
+                await updateDoc(doc(db, 'conversations', conversationSettingsId), {
+                    avatarUrl: url,
+                    avatarURL: deleteField(),
+                    updatedAt: serverTimestamp()
+                });
+                conversationDetailsCache[conversationSettingsId] = {
+                    ...(conversationDetailsCache[conversationSettingsId] || {}),
+                    avatarUrl: url
+                };
+                if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+                await refreshConversationSettings(conversationSettingsId);
+                toast('Conversation image updated', 'info');
+            } catch (error) {
+                console.warn('Conversation avatar upload failed', error);
+                const message = error?.code === 'storage/unauthorized'
+                    ? 'You do not have permission to update this conversation image.'
+                    : 'Unable to upload conversation image right now.';
+                toast(message, 'error');
+            }
         }
     });
 };
@@ -8719,7 +8870,7 @@ async function createGroupConversation(participantIds = [], title = null) {
         participantAvatars,
         type: participants.length > 2 ? 'group' : 'direct',
         title: participants.length > 2 ? (title || null) : null,
-        avatarURL: null,
+        avatarUrl: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         lastMessagePreview: '',
@@ -11021,7 +11172,7 @@ function resolveLiveThumbnail(session = {}) {
     const candidates = [session.thumbnail, session.thumbnailUrl, session.coverImage, session.imageUrl];
     const resolved = candidates.find(Boolean);
     if (resolved) return resolved;
-    return 'https://images.unsplash.com/photo-1525186402429-b4ff38bedbec?auto=format&fit=crop&w=800&q=80';
+    return 'data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"450\" viewBox=\"0 0 800 450\"><defs><linearGradient id=\"g\" x1=\"0\" x2=\"1\" y1=\"0\" y2=\"1\"><stop offset=\"0%\" stop-color=\"%2300121a\"/><stop offset=\"100%\" stop-color=\"%23002633\"/></linearGradient></defs><rect width=\"800\" height=\"450\" fill=\"url(%23g)\"/><circle cx=\"120\" cy=\"120\" r=\"60\" fill=\"%2300f2ea\" opacity=\"0.6\"/><rect x=\"200\" y=\"190\" width=\"420\" height=\"120\" rx=\"18\" fill=\"%23ffffff\" opacity=\"0.08\"/><path d=\"M360 210l90 45-90 45z\" fill=\"%2300f2ea\"/></svg>';
 }
 
 function handleLiveSearchInput(event) {
@@ -12191,6 +12342,9 @@ function bindMobileScrollHelper() {
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
+    initSidebarState();
+    bindSidebarEvents();
+    mountFeedTypeToggleBar();
     syncMobileComposerState();
     bindAuthFormShortcuts();
     initMiniPlayerDrag();
