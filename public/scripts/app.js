@@ -1171,7 +1171,9 @@ const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
     loading: false,
     lastLoaded: 0,
-    visibleCount: TRENDING_PAGE_SIZE
+    visibleCount: TRENDING_PAGE_SIZE,
+    lastLoadSucceeded: false,
+    needsRefresh: false
 };
 
 const THEMES = {
@@ -1714,12 +1716,17 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
     trendingTopicsState.range = range || trendingTopicsState.range;
-    if (trendingTopicsState.loading) return;
+    if (trendingTopicsState.loading) {
+        trendingTopicsState.needsRefresh = true;
+        return;
+    }
     trendingTopicsState.loading = true;
+    trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
+        trendingTopicsState.lastLoadSucceeded = true;
         renderTrendingTopics(topics);
         trendingTopicsState.lastLoaded = Date.now();
         uiDebugLog('trending topics loaded', { range: trendingTopicsState.range, count: topics.length });
@@ -1728,6 +1735,10 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
         list.innerHTML = `<div class="trend-item"><span>Unable to load topics.</span><span></span></div>`;
     } finally {
         trendingTopicsState.loading = false;
+        if (trendingTopicsState.needsRefresh) {
+            trendingTopicsState.needsRefresh = false;
+            loadTrendingTopics(trendingTopicsState.range);
+        }
     }
 }
 
@@ -2039,6 +2050,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
 
         fetchMissingProfiles(allPosts);
         await loadHomeMediaData();
+        loadTrendingTopics(trendingTopicsState.range);
         feedLoading = false;
         renderFeed();
         await waitForFeedMedia();
@@ -2843,10 +2855,13 @@ window.navigateTo = function (viewId, pushToStack = true) {
     } else {
         document.body.classList.remove('mobile-thread-open');
     }
-    if (viewId === 'videos') { initVideoFeed(); }
-
-    if (viewId === 'videos' && miniPlayerState) {
-        restoreModalFromMiniPlayer();
+    if (viewId === 'videos') {
+        const routedVideoId = getVideoRouteVideoId();
+        clearVideoDetailState({ updateRoute: !routedVideoId });
+        initVideoFeed();
+        if (routedVideoId) {
+            window.openVideoDetail(routedVideoId);
+        }
     }
     if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
@@ -10937,6 +10952,62 @@ function captureVideoDetailReturnPath() {
     videoDetailReturnPath = '/videos';
 }
 
+function getVideoRouteVideoId() {
+    const url = new URL(window.location.href);
+    if (url.pathname.startsWith('/video/')) {
+        const raw = url.pathname.replace('/video/', '').split('/')[0];
+        return raw ? decodeURIComponent(raw) : null;
+    }
+    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    if (queryId) return queryId;
+    if (url.hash && url.hash.startsWith('#video=')) {
+        return url.hash.replace('#video=', '');
+    }
+    return null;
+}
+
+function clearVideoDetailRoute() {
+    const url = new URL(window.location.href);
+    let changed = false;
+    if (url.pathname.startsWith('/video/')) {
+        url.pathname = '/videos';
+        changed = true;
+    }
+    if (url.searchParams.has('video')) {
+        url.searchParams.delete('video');
+        changed = true;
+    }
+    if (url.searchParams.has('v')) {
+        url.searchParams.delete('v');
+        changed = true;
+    }
+    if (url.hash && url.hash.startsWith('#video')) {
+        url.hash = '';
+        changed = true;
+    }
+    if (!changed) return;
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    if (window.NexeraRouter?.replaceStateSilently) {
+        window.NexeraRouter.replaceStateSilently(next);
+    } else {
+        history.replaceState({}, '', next);
+    }
+}
+
+function clearVideoDetailState({ updateRoute = false } = {}) {
+    const player = getVideoModalPlayer();
+    if (miniPlayerMode === 'pip' && document.pictureInPictureElement === player) {
+        document.exitPictureInPicture?.().catch(function () {});
+    }
+    miniPlayerMode = null;
+    miniPlayerState = null;
+    videoModalResumeTime = null;
+    profileReturnContext = null;
+    hideMiniPlayer({ stopPlayback: true });
+    closeVideoDetailModalHandler({ keepPlayback: false });
+    if (updateRoute) clearVideoDetailRoute();
+}
+
 function closeVideoDetailModalHandler(options = {}) {
     const { keepPlayback = false } = options;
     const modal = document.getElementById('video-detail-modal');
@@ -10954,7 +11025,7 @@ function closeVideoDetailModalHandler(options = {}) {
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = function () {
-    minimizeVideoDetail({ updateRoute: true, preferPiP: true });
+    clearVideoDetailState({ updateRoute: true });
 };
 
 function getMiniPlayerElements() {
