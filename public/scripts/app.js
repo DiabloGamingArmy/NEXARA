@@ -904,7 +904,7 @@ let commentFilterQuery = '';
 let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
-const SIDEBAR_WIDE_VIEWS = new Set(['feed', 'live', 'videos', 'messages', 'discover', 'saved', 'profile', 'staff']);
+let lastAuthUid = null;
 
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
@@ -925,6 +925,42 @@ function logPermissionDeniedOnce(scope) {
     if (permissionDeniedLogCache.has(scope)) return;
     permissionDeniedLogCache.add(scope);
     console.warn('Permission denied for', scope);
+}
+
+const missingProfileLogCache = new Set();
+function logMissingProfileOnce(uid) {
+    const key = `profiles:missing:${uid}`;
+    if (missingProfileLogCache.has(key)) return;
+    missingProfileLogCache.add(key);
+    console.warn('Profile not found for', uid);
+}
+
+function buildPublicProfilePayload(uid, profile = {}) {
+    return {
+        uid,
+        displayName: profile.displayName || profile.name || profile.nickname || '',
+        username: profile.username || '',
+        photoURL: profile.photoURL || '',
+        bio: profile.bio || '',
+        avatarColor: profile.avatarColor || computeAvatarColor(uid || profile.username || 'user'),
+        verified: !!profile.verified || (Array.isArray(profile.accountRoles) && profile.accountRoles.includes('verified')),
+        followersCount: profile.followersCount || profile.followerCount || 0,
+        followingCount: profile.followingCount || 0,
+        updatedAt: serverTimestamp()
+    };
+}
+
+async function syncPublicProfile(uid, profile = {}) {
+    if (!uid) return;
+    try {
+        await setDoc(doc(db, 'profiles', uid), buildPublicProfilePayload(uid, profile), { merge: true });
+    } catch (e) {
+        if (e?.code === 'permission-denied') {
+            logPermissionDeniedOnce(`profiles:write:${uid}`);
+            return;
+        }
+        console.warn('Public profile sync failed', uid, e?.message || e);
+    }
 }
 
 
@@ -1399,6 +1435,11 @@ function initApp(onReady) {
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
         window.Nexera.authResolved = true;
+        if (user?.uid !== lastAuthUid) {
+            userCache = {};
+            userFetchPromises = {};
+            lastAuthUid = user?.uid || null;
+        }
         if (!window.Nexera.__authReadyResolved && window.Nexera.__resolveAuthReady) {
             window.Nexera.__authReadyResolved = true;
             window.Nexera.__resolveAuthReady();
@@ -1426,6 +1467,7 @@ function initApp(onReady) {
                         recentLocations = Array.isArray(userProfile.locationHistory) ? userProfile.locationHistory.slice() : [];
 
                         await backfillAvatarColorIfMissing(user.uid, userProfile);
+                        await syncPublicProfile(user.uid, userProfile);
 
                         // Apply stored theme preference
                         const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
@@ -1448,6 +1490,7 @@ function initApp(onReady) {
                         recentLocations = [];
                         applyTheme(storedTheme);
                         syncSavedVideosFromProfile(userProfile);
+                        await syncPublicProfile(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
                         if (staffNav) staffNav.style.display = 'none';
                     }
@@ -1881,10 +1924,18 @@ async function ensureUserDocument(user) {
             createdAt: now,
             updatedAt: now
         }, { merge: true });
+        await syncPublicProfile(user.uid, {
+            displayName: user.displayName || "Nexera User",
+            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
+            photoURL: user.photoURL || "",
+            avatarColor,
+            bio: ""
+        });
         return await getDoc(ref);
     }
 
     await setDoc(ref, { updatedAt: now }, { merge: true });
+    await syncPublicProfile(user.uid, snap.data() || {});
     return await getDoc(ref);
 }
 
@@ -1895,6 +1946,7 @@ async function backfillAvatarColorIfMissing(uid, profile = {}) {
         profile.avatarColor = color;
         try {
             await setDoc(doc(db, 'users', uid), { avatarColor: color }, { merge: true });
+            await syncPublicProfile(uid, { ...profile, avatarColor: color });
             avatarColorBackfilled = true;
         } catch (e) {
             console.warn('Unable to backfill avatar color', e);
@@ -2044,7 +2096,7 @@ async function fetchMissingProfiles(posts) {
         return;
     }
 
-    const fetchPromises = Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "users", uid)); });
+    const fetchPromises = Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "profiles", uid)); });
 
     try {
         const userDocs = await Promise.all(fetchPromises);
@@ -2052,6 +2104,7 @@ async function fetchMissingProfiles(posts) {
             if (docSnap.exists()) {
                 storeUserInCache(docSnap.id, docSnap.data());
             } else {
+                logMissingProfileOnce(docSnap.id);
                 storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
             }
         });
@@ -2061,7 +2114,7 @@ async function fetchMissingProfiles(posts) {
         if (activePostId) renderThreadMainPost(activePostId);
     } catch (e) {
         if (e?.code === 'permission-denied') {
-            logPermissionDeniedOnce('fetchMissingProfiles');
+            logPermissionDeniedOnce('profiles:read:fetchMissingProfiles');
             Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
             return;
         }
@@ -4828,6 +4881,7 @@ window.saveSettings = async function () {
 
     try {
         await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+        await syncPublicProfile(currentUser.uid, userProfile);
         if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
     } catch (e) {
         console.error("Save failed", e);
@@ -4870,6 +4924,7 @@ window.removeProfilePhoto = async function () {
 
     try {
         await setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+        await syncPublicProfile(currentUser.uid, userProfile);
     } catch (err) {
         console.error('Failed to clear Firestore photo data', err);
         toast('Could not update profile photo references', 'error');
@@ -5381,13 +5436,14 @@ function renderThreadMainPost(postId) {
     const container = document.getElementById('thread-main-post');
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
+    const viewerUid = getViewerUid();
 
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
+    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const isFollowingUser = followedUsers.has(post.userId);
     const isFollowingTopic = followedCategories.has(post.category);
-    const isSelfPost = currentUser && post.userId === currentUser.uid;
+    const isSelfPost = viewerUid ? post.userId === viewerUid : false;
     const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
@@ -5400,7 +5456,7 @@ function renderThreadMainPost(postId) {
     const tagListHtml = renderTagList(post.tags || []);
     const pollBlock = renderPollBlock(post);
     const locationBadge = renderLocationBadge(post.location);
-    const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+    const scheduledChip = isPostScheduledInFuture(post) && viewerUid && post.userId === viewerUid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     const verification = getVerificationState(post);
     const verificationBanner = verification && verification.bannerText ? `<div class="verification-banner ${verification.className}"><i class="ph ph-warning"></i><div>${verification.bannerText}</div></div>` : '';
     const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
@@ -6078,7 +6134,7 @@ window.renderDiscover = async function () {
 // --- Profile Rendering ---
 window.openUserProfile = async function (uid, event, pushToStack = true) {
     if (event) event.stopPropagation();
-    if (uid === currentUser.uid) {
+    if (uid === getViewerUid()) {
         window.navigateTo('profile', pushToStack);
         return;
     }
@@ -6089,12 +6145,7 @@ window.openUserProfile = async function (uid, event, pushToStack = true) {
 
     let profile = userCache[uid];
     if (!profile) {
-        const docSnap = await getDoc(doc(db, "users", uid));
-        if (docSnap.exists()) {
-            profile = storeUserInCache(uid, docSnap.data());
-        } else {
-            profile = { name: "Unknown User", username: "unknown" };
-        }
+        profile = await resolveUserProfile(uid);
     }
     renderPublicProfile(uid, profile);
 }
@@ -6106,7 +6157,7 @@ window.openUserProfileByHandle = async function (handle) {
         openUserProfile(cachedEntry[0], null, true);
         return;
     }
-    const q = query(collection(db, 'users'), where('username', '==', normalized));
+    const q = query(collection(db, 'profiles'), where('username', '==', normalized));
     const snap = await getDocs(q);
     if (!snap.empty) {
         const docSnap = snap.docs[0];
@@ -7045,13 +7096,14 @@ async function resolveUserProfile(uid, options = {}) {
             if (!getViewerUid()) {
                 return buildUnknownUserProfile(uid);
             }
-            const snap = await getDoc(doc(db, 'users', uid));
+            const snap = await getDoc(doc(db, 'profiles', uid));
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
+            logMissingProfileOnce(uid);
         } catch (e) {
             if (e?.code === 'permission-denied') {
-                logPermissionDeniedOnce('resolveUserProfile');
+                logPermissionDeniedOnce(`profiles:read:${uid}`);
             } else {
                 console.warn('User fetch failed', uid, e?.message || e);
             }
