@@ -750,6 +750,7 @@ function arrayShallowEqual(a = [], b = []) {
 const ListenerRegistry = (function () {
     const listeners = new Map();
     const loggedKeys = new Set();
+    const authUnsubs = new Map();
 
     function devLog(message, key) {
         const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
@@ -770,10 +771,12 @@ const ListenerRegistry = (function () {
             }
 
             listeners.set(key, unsubscribeFn);
+            authUnsubs.set(key, unsubscribeFn);
             return function deregister() {
                 if (!listeners.has(key)) return;
                 const current = listeners.get(key);
                 listeners.delete(key);
+                authUnsubs.delete(key);
                 try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             };
         },
@@ -781,6 +784,7 @@ const ListenerRegistry = (function () {
             if (!listeners.has(key)) return;
             const unsub = listeners.get(key);
             listeners.delete(key);
+            authUnsubs.delete(key);
             try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
         },
         clearAll() {
@@ -788,6 +792,7 @@ const ListenerRegistry = (function () {
                 try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             });
             listeners.clear();
+            authUnsubs.clear();
         },
         has(key) {
             return listeners.has(key);
@@ -806,6 +811,12 @@ if (!window.Nexera.ready) {
     let readyResolve;
     window.Nexera.ready = new Promise(function (resolve) { readyResolve = resolve; });
     window.Nexera.__resolveReady = readyResolve;
+}
+if (!window.Nexera.authReady) {
+    let authReadyResolve;
+    window.Nexera.authReady = new Promise(function (resolve) { authReadyResolve = resolve; });
+    window.Nexera.__resolveAuthReady = authReadyResolve;
+    window.Nexera.__authReadyResolved = false;
 }
 window.Nexera.authResolved = false;
 window.Nexera.auth = auth;
@@ -904,6 +915,17 @@ function shouldShowRightSidebar(viewId) {
 }
 
 window.shouldShowRightSidebar = shouldShowRightSidebar;
+
+function getViewerUid() {
+    return currentUser && currentUser.uid ? currentUser.uid : null;
+}
+
+const permissionDeniedLogCache = new Set();
+function logPermissionDeniedOnce(scope) {
+    if (permissionDeniedLogCache.has(scope)) return;
+    permissionDeniedLogCache.add(scope);
+    console.warn('Permission denied for', scope);
+}
 
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
@@ -1377,6 +1399,10 @@ function initApp(onReady) {
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
         window.Nexera.authResolved = true;
+        if (!window.Nexera.__authReadyResolved && window.Nexera.__resolveAuthReady) {
+            window.Nexera.__authReadyResolved = true;
+            window.Nexera.__resolveAuthReady();
+        }
         uiDebugLog('auth resolved', { signedIn: !!user });
 
         try {
@@ -1454,6 +1480,7 @@ function initApp(onReady) {
             } else {
                 currentUser = null;
                 updateAuthClaims({});
+                ListenerRegistry.clearAll(); // Cleanup listeners on logout to prevent permission errors.
                 if (followedTopicsUnsubscribe) {
                     try { followedTopicsUnsubscribe(); } catch (err) { }
                     followedTopicsUnsubscribe = null;
@@ -2012,6 +2039,11 @@ async function fetchMissingProfiles(posts) {
     if (missingIds.size === 0) return;
 
     // Fetch up to 10 at a time or simple Promise.all
+    if (!getViewerUid()) {
+        Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+        return;
+    }
+
     const fetchPromises = Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "users", uid)); });
 
     try {
@@ -2028,6 +2060,11 @@ async function fetchMissingProfiles(posts) {
         renderFeed();
         if (activePostId) renderThreadMainPost(activePostId);
     } catch (e) {
+        if (e?.code === 'permission-denied') {
+            logPermissionDeniedOnce('fetchMissingProfiles');
+            Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            return;
+        }
         console.error("Error fetching profiles:", e);
     }
 }
@@ -3378,6 +3415,7 @@ async function hydrateFollowingState(uid, profileData = {}) {
 function getPostHTML(post) {
     try {
         const date = formatDateTime(post.timestamp) || 'Just now';
+        const viewerUid = getViewerUid();
 
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
@@ -3386,10 +3424,10 @@ function getPostHTML(post) {
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
-        const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-        const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-        const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
-        const isSelfPost = currentUser && post.userId === currentUser.uid;
+        const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+        const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+        const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(post.id)) : false;
+        const isSelfPost = viewerUid ? post.userId === viewerUid : false;
         const isFollowingUser = followedUsers.has(post.userId);
         const isFollowingTopic = followedCategories.has(post.category);
         const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
@@ -3410,7 +3448,7 @@ function getPostHTML(post) {
         const tagListHtml = renderTagList(post.tags || []);
         const pollBlock = renderPollBlock(post);
         const locationBadge = renderLocationBadge(post.location);
-        const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+        const scheduledChip = isPostScheduledInFuture(post) && viewerUid && post.userId === viewerUid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
         const verification = getVerificationState(post);
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
@@ -3603,15 +3641,16 @@ function renderFeed(targetId = 'feed-content') {
 function refreshSinglePostUI(postId) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
+    const viewerUid = getViewerUid();
 
     const likeBtn = document.getElementById(`post-like-btn-${postId}`);
     const dislikeBtn = document.getElementById(`post-dislike-btn-${postId}`);
     const saveBtn = document.getElementById(`post-save-btn-${postId}`);
     const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
+    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
     function renderActionButton(btn, { iconClass, label, count = null, activeColor = 'inherit' }) {
@@ -7003,12 +7042,19 @@ async function resolveUserProfile(uid, options = {}) {
 
     const fetchPromise = (async function () {
         try {
+            if (!getViewerUid()) {
+                return buildUnknownUserProfile(uid);
+            }
             const snap = await getDoc(doc(db, 'users', uid));
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
         } catch (e) {
-            console.warn('User fetch failed', uid, e?.message || e);
+            if (e?.code === 'permission-denied') {
+                logPermissionDeniedOnce('resolveUserProfile');
+            } else {
+                console.warn('User fetch failed', uid, e?.message || e);
+            }
         }
         return buildUnknownUserProfile(uid);
     })();

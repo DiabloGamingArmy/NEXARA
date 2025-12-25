@@ -496,6 +496,10 @@
     state.applying = true;
     state.restoring = true;
 
+    if (window.Nexera?.authReady) {
+      await window.Nexera.authReady;
+    }
+
     if (window.location.pathname === '/' || window.location.pathname === '') {
       replaceStateSilently('/home');
     }
