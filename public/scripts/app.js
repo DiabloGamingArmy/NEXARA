@@ -818,10 +818,11 @@ function isMobileViewport() {
 }
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
+const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
 const FEED_TYPE_TOGGLES = [
-    { view: 'feed', label: 'Threads' },
-    { view: 'videos', label: 'Videos' },
-    { view: 'live', label: 'Livestreams' }
+    { key: 'threads', label: 'Threads' },
+    { key: 'videos', label: 'Videos' },
+    { key: 'livestreams', label: 'Livestreams' }
 ];
 
 let sidebarCollapsed = false;
@@ -837,12 +838,77 @@ function buildFeedTypeToggleButtons(container) {
         const btn = document.createElement('button');
         btn.className = 'discover-pill feed-type-pill';
         btn.textContent = toggle.label;
-        btn.dataset.view = toggle.view;
+        btn.dataset.type = toggle.key;
         btn.addEventListener('click', function () {
-            if (typeof window.navigateTo === 'function') window.navigateTo(toggle.view);
+            toggleFeedType(toggle.key);
         });
         container.appendChild(btn);
     });
+}
+
+function getDefaultFeedTypes() {
+    return { threads: true, videos: true, livestreams: true };
+}
+
+function loadFeedTypeState() {
+    const defaults = getDefaultFeedTypes();
+    let stored = null;
+    if (window.localStorage) {
+        try {
+            stored = JSON.parse(window.localStorage.getItem(FEED_TYPE_STORAGE_KEY) || '');
+        } catch (e) {
+            stored = null;
+        }
+    }
+    const next = { ...defaults, ...(stored && stored.types ? stored.types : stored) };
+    const anySelected = Object.values(next).some(Boolean);
+    if (!anySelected) {
+        Object.assign(next, defaults);
+    }
+    window.NexeraFeedState = window.NexeraFeedState || {};
+    window.NexeraFeedState.types = next;
+    persistFeedTypeState();
+}
+
+function persistFeedTypeState() {
+    if (!window.localStorage) return;
+    const payload = { types: { ...(window.NexeraFeedState?.types || getDefaultFeedTypes()) } };
+    window.localStorage.setItem(FEED_TYPE_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function getActiveFeedTypes() {
+    const types = window.NexeraFeedState?.types || getDefaultFeedTypes();
+    return Object.keys(types).filter(function (key) { return !!types[key]; });
+}
+
+function applyFeedTypeFilterAndRefresh({ preserveScroll = false } = {}) {
+    if (currentViewId !== 'feed') return;
+    const scrollY = preserveScroll ? window.scrollY : null;
+    renderFeed();
+    if (preserveScroll && typeof scrollY === 'number') {
+        if (window.Nexera?.restoreFeedScroll) {
+            window.Nexera.restoreFeedScroll(scrollY);
+        } else {
+            window.scrollTo(0, scrollY);
+        }
+    }
+}
+
+function toggleFeedType(typeKey) {
+    if (!typeKey) return;
+    window.NexeraFeedState = window.NexeraFeedState || {};
+    const types = window.NexeraFeedState.types || getDefaultFeedTypes();
+    types[typeKey] = !types[typeKey];
+    if (!Object.values(types).some(Boolean)) {
+        Object.assign(types, getDefaultFeedTypes());
+    }
+    window.NexeraFeedState.types = types;
+    persistFeedTypeState();
+    syncFeedTypeToggleState();
+    if (window?.location?.hostname === 'localhost' || window?.__DEV_FEED_TOGGLE_DEBUG__) {
+        console.debug('[FeedTypes] Active:', getActiveFeedTypes());
+    }
+    applyFeedTypeFilterAndRefresh({ preserveScroll: true });
 }
 
 function mountFeedTypeToggleBar() {
@@ -855,12 +921,13 @@ function mountFeedTypeToggleBar() {
     if (!slot.children.length) {
         buildFeedTypeToggleButtons(slot);
     }
-    syncFeedTypeToggleState(currentViewId);
+    syncFeedTypeToggleState();
 }
 
-function syncFeedTypeToggleState(viewId = currentViewId) {
-    document.querySelectorAll('.feed-type-toggle-bar [data-view]').forEach(function (btn) {
-        btn.classList.toggle('active', btn.dataset.view === viewId);
+function syncFeedTypeToggleState() {
+    const activeTypes = getActiveFeedTypes();
+    document.querySelectorAll('.feed-type-toggle-bar [data-type]').forEach(function (btn) {
+        btn.classList.toggle('active', activeTypes.includes(btn.dataset.type));
     });
 }
 
@@ -2432,7 +2499,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
-    syncFeedTypeToggleState(viewId);
+    syncFeedTypeToggleState();
 
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
@@ -3086,6 +3153,15 @@ function renderFeed(targetId = 'feed-content') {
         else if (savedFilter === 'Images') displayPosts = displayPosts.filter(function (p) { return p.type === 'image'; });
     } else if (currentCategory !== 'For You') {
         displayPosts = allPosts.filter(function (post) { return post.category === currentCategory; });
+    }
+
+    const activeTypes = getActiveFeedTypes();
+    const typeFilterActive = activeTypes.length < FEED_TYPE_TOGGLES.length;
+    if (typeFilterActive) {
+        displayPosts = displayPosts.filter(function (post) {
+            const type = getPostFeedType(post);
+            return activeTypes.includes(type);
+        });
     }
 
     if (currentCategory === 'For You') {
@@ -6141,6 +6217,13 @@ function escapeHtml(text) {
 }
 
 function cleanText(text) { if (typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
+
+function getPostFeedType(post = {}) {
+    const raw = (post.type || post.contentType || post.mediaType || '').toString().toLowerCase();
+    if (raw === 'video') return 'videos';
+    if (raw === 'livestream' || raw === 'live' || raw === 'stream') return 'livestreams';
+    return 'threads';
+}
 
 function normalizeImageUrl(raw = '') {
     const value = (raw || '').trim();
@@ -12344,6 +12427,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindMobileScrollHelper();
     initSidebarState();
     bindSidebarEvents();
+    loadFeedTypeState();
     mountFeedTypeToggleBar();
     syncMobileComposerState();
     bindAuthFormShortcuts();
