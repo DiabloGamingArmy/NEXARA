@@ -817,6 +817,131 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
+const FEED_TYPE_TOGGLES = [
+    { view: 'feed', label: 'Threads' },
+    { view: 'videos', label: 'Videos' },
+    { view: 'live', label: 'Livestreams' }
+];
+
+let sidebarCollapsed = false;
+
+function getFeedTypeToggleSlot() {
+    return document.getElementById('feed-type-toggle-bar') || document.querySelector('.feed-type-toggle-bar');
+}
+
+function buildFeedTypeToggleButtons(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    FEED_TYPE_TOGGLES.forEach(function (toggle) {
+        const btn = document.createElement('button');
+        btn.className = 'discover-pill feed-type-pill';
+        btn.textContent = toggle.label;
+        btn.dataset.view = toggle.view;
+        btn.addEventListener('click', function () {
+            if (typeof window.navigateTo === 'function') window.navigateTo(toggle.view);
+        });
+        container.appendChild(btn);
+    });
+}
+
+function mountFeedTypeToggleBar() {
+    const slot = getFeedTypeToggleSlot();
+    if (!slot) return;
+    const header = document.querySelector('.right-sidebar-header');
+    if (header && slot.parentElement !== header) {
+        header.appendChild(slot);
+    }
+    if (!slot.children.length) {
+        buildFeedTypeToggleButtons(slot);
+    }
+    syncFeedTypeToggleState(currentViewId);
+}
+
+function syncFeedTypeToggleState(viewId = currentViewId) {
+    document.querySelectorAll('.feed-type-toggle-bar [data-view]').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.view === viewId);
+    });
+}
+
+function applyDesktopSidebarState(collapsed, persist = true) {
+    sidebarCollapsed = !!collapsed;
+    if (!isMobileViewport()) {
+        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+    }
+    if (persist && window.localStorage) {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
+    }
+}
+
+function setSidebarOverlayOpen(open) {
+    document.body.classList.toggle('sidebar-overlay-open', !!open);
+}
+
+function initSidebarState() {
+    if (window.localStorage) {
+        sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+    }
+    applyDesktopSidebarState(sidebarCollapsed, false);
+    document.body.classList.toggle('has-desktop-app-bar', !isMobileViewport());
+}
+
+function openSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(true);
+        return;
+    }
+    applyDesktopSidebarState(false);
+}
+
+function closeSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(false);
+        return;
+    }
+    applyDesktopSidebarState(true);
+}
+
+function toggleSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
+        return;
+    }
+    applyDesktopSidebarState(!sidebarCollapsed);
+}
+
+function bindSidebarEvents() {
+    document.querySelectorAll('.sidebar-left .nav-item, .sidebar-left .create-btn-sidebar').forEach(function (item) {
+        item.addEventListener('click', function () {
+            if (isMobileViewport()) {
+                setSidebarOverlayOpen(false);
+            }
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && document.body.classList.contains('sidebar-overlay-open')) {
+            setSidebarOverlayOpen(false);
+        }
+    });
+
+    if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+        MOBILE_VIEWPORT.addEventListener('change', function () {
+            document.body.classList.toggle('has-desktop-app-bar', !isMobileViewport());
+            if (isMobileViewport()) {
+                document.body.classList.remove('sidebar-collapsed');
+            } else {
+                setSidebarOverlayOpen(false);
+                applyDesktopSidebarState(sidebarCollapsed);
+            }
+        });
+    }
+}
+
+window.Nexera.toggleSidebar = toggleSidebar;
+window.Nexera.openSidebar = openSidebar;
+window.Nexera.closeSidebar = closeSidebar;
+window.Nexera.mountFeedTypeToggleBar = mountFeedTypeToggleBar;
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
     { id: 'l1', title: '🔴 Mars Rover Landing Watch Party', viewerCount: '12.5k', author: 'SpaceX_Fan', category: 'STEM', color: '#00f2ea' },
@@ -2304,6 +2429,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(false);
+    }
+    syncFeedTypeToggleState(viewId);
 
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
@@ -12191,6 +12320,9 @@ function bindMobileScrollHelper() {
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
+    initSidebarState();
+    bindSidebarEvents();
+    mountFeedTypeToggleBar();
     syncMobileComposerState();
     bindAuthFormShortcuts();
     initMiniPlayerDrag();

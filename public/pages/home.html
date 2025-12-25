@@ -707,6 +707,7 @@
             </div>
         </div>
         <div class="mobile-app-bar__actions">
+            <button class="icon-btn sidebar-toggle-btn" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
             <button class="icon-btn" onclick="window.scrollTo({top:0, behavior:'smooth'});"
                 aria-label="Scroll to top"><i class="ph ph-arrow-up"></i></button>
             <button class="icon-btn" onclick="window.toggleDiscoverSearch()" aria-label="Search"><i
@@ -748,6 +749,9 @@
 
 
         <main class="main-feed">
+            <div class="desktop-app-bar">
+                <button class="icon-pill sidebar-toggle-btn" type="button" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
+            </div>
             <div id="view-feed" class="view-section">
                 <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
                     style="display: none;" onclick="window.scrollCategoryHeader(-1)">
@@ -1672,6 +1676,10 @@
     </main>
 
     <aside class="sidebar-right glass-panel">
+        <div class="right-sidebar-header">
+            <div class="feed-type-toggle-bar" id="feed-type-toggle-bar"></div>
+        </div>
+        <div class="right-sidebar-content">
         <div class="trend-box">
             <div class="trend-title">Trending <i class="ph-fill ph-trend-up"></i></div>
             <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
@@ -1701,8 +1709,11 @@
         </div>
 
         <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexera Network</div>
+        </div>
     </aside>
     </div>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="window.Nexera?.closeSidebar?.()"></div>
 
     <nav id="mobile-bottom-nav" class="mobile-bottom-nav">
         <button class="mobile-nav-btn active" data-view="feed"><i class="ph ph-house"></i><span>Home</span></button>
