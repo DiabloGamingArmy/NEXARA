@@ -393,6 +393,24 @@ body {
     width: 100%;
 }
 
+.desktop-app-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0.75rem 1rem;
+    position: sticky;
+    top: 0;
+    z-index: 15;
+    backdrop-filter: blur(12px);
+    background: rgba(6, 12, 20, 0.75);
+    border-bottom: 1px solid var(--border);
+    min-height: var(--desktop-app-bar-height, 56px);
+}
+
+body.has-desktop-app-bar {
+    --desktop-app-bar-height: 56px;
+}
+
 .sidebar-left,
 .sidebar-right {
     position: sticky;
@@ -421,6 +439,56 @@ body {
     padding: 2rem 1.5rem;
     z-index: 20;
     /* Appear in front of category-header */
+}
+
+.right-sidebar-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    margin: -2rem -1.5rem 1.5rem;
+    padding: 1rem 1.5rem;
+    backdrop-filter: blur(12px);
+    background: linear-gradient(180deg, rgba(6, 15, 26, 0.88) 0%, rgba(6, 12, 20, 0.82) 100%);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+}
+
+.feed-type-toggle-bar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 0.35rem 0;
+}
+
+.feed-type-toggle-bar .feed-type-pill {
+    border-radius: 999px;
+}
+
+.right-sidebar-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+body.sidebar-collapsed .sidebar-left {
+    width: 0;
+    padding: 1rem 0;
+    border-right: none;
+    overflow: hidden;
+    transform: translateX(-100%);
+}
+
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 12, 20, 0.6);
+    backdrop-filter: blur(6px);
+    z-index: 55;
+}
+
+body.sidebar-overlay-open .sidebar-backdrop {
+    display: block;
 }
 
 /* NEXARA FEED BACKGROUND */
@@ -457,6 +525,17 @@ body {
         width: calc(100vw - 570px);
         /* Screen width - (left 250px + right 320px) */
         max-width: calc(100vw - 570px);
+    }
+
+    body.sidebar-home.sidebar-collapsed .main-feed {
+        flex: 0 0 calc(100vw - 320px);
+        width: calc(100vw - 320px);
+        max-width: calc(100vw - 320px);
+    }
+
+    body.sidebar-home.sidebar-collapsed .category-header {
+        width: calc(100vw - 320px);
+        max-width: calc(100vw - 320px);
     }
 }
 
@@ -1315,6 +1394,10 @@ body {
     -webkit-overflow-scrolling: touch;
 }
 
+body.has-desktop-app-bar .category-header {
+    top: var(--desktop-app-bar-height, 56px);
+}
+
 .category-header::-webkit-scrollbar {
     display: none;
 }
@@ -1363,6 +1446,10 @@ body {
     transition: opacity 0.3s ease;
 }
 
+body.has-desktop-app-bar .category-scroll-btn {
+    top: calc(var(--desktop-app-bar-height, 56px) + 0.5rem);
+}
+
 .category-scroll-left {
     left: 250px;
     /* After left sidebar */
@@ -1380,6 +1467,10 @@ body {
 body.sidebar-home .category-scroll-right {
     right: 320px;
     /* Before right sidebar */
+}
+
+body.sidebar-collapsed .category-scroll-left {
+    left: 0;
 }
 
 .category-scroll-btn:hover {
@@ -2485,6 +2576,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     height: 100%;
     max-height: 100vh;
     min-height: calc(100vh - 0px);
+    background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
+    overflow: hidden;
 }
 
 .messages-page,
@@ -2541,6 +2634,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
 }
 
 .inbox-header {
@@ -2969,8 +3063,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     padding: 1rem;
     border-top: 1px solid var(--border);
     align-items: center;
-    position: sticky;
-    bottom: 0;
     background: var(--bg-card);
     flex: 0 0 auto;
 }
@@ -3643,7 +3735,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     color: var(--text-main);
     font-size: 1.8rem;
     cursor: pointer;
-    z-index: 2;
+    z-index: 6;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
 }
 
 .video-modal-body {
@@ -6859,34 +6955,6 @@ body.go-live-open {
     background: var(--bg-body);
 }
 
-/* --- Messages Page Layout --- */
-.messages-layout {
-    display: flex;
-    height: 100vh;
-    /* Fill entire viewport */
-    background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
-    /* Match app gradient */
-    overflow: hidden;
-}
-
-.messages-sidebar {
-    width: 320px;
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    padding: 16px;
-    background: rgba(255, 255, 255, 0.02);
-    /* Match sidebar-left subtle bg */
-}
-
-.messages-thread {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    background: var(--bg-body);
-}
-
 .conversation-list {
     flex: 1;
     overflow-y: auto;
@@ -6894,51 +6962,6 @@ body.go-live-open {
     flex-direction: column;
     gap: 8px;
     margin-top: 10px;
-}
-
-.message-thread-header-row {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: rgba(255, 255, 255, 0.04);
-    font-weight: 700;
-}
-
-.message-header-tools {
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    margin: 0;
-}
-
-.messages-thread-inner {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    position: relative;
-}
-
-.message-scroll-region {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.message-compose {
-    padding: 12px 16px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    background: rgba(255, 255, 255, 0.04);
 }
 
 /* Conversation Settings */
