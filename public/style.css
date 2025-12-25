@@ -2709,6 +2709,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     height: 100%;
     min-height: 80vh;
     min-height: 0;
+    flex: 1;
 }
 
 .inbox-sidebar {
@@ -2765,28 +2766,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .inbox-filter.active {
     border-color: var(--primary);
     color: var(--primary);
-}
-
-.inbox-requests {
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg-hover);
-}
-
-.inbox-requests-toggle {
-    background: none;
-    border: none;
-    color: var(--text-main);
-    font-weight: 700;
-    cursor: pointer;
-    padding: 0;
-}
-
-.inbox-requests-empty {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-    margin-top: 4px;
 }
 
 .inbox-pinned {
@@ -2860,8 +2839,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .inbox-panel.active {
-    display: block;
-    height: 100%;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--inbox-tabs-h, 0px));
+    min-height: 0;
 }
 
 .inbox-notification-list {

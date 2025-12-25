@@ -1171,7 +1171,9 @@ const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
     loading: false,
     lastLoaded: 0,
-    visibleCount: TRENDING_PAGE_SIZE
+    visibleCount: TRENDING_PAGE_SIZE,
+    lastLoadSucceeded: false,
+    needsRefresh: false
 };
 
 const THEMES = {
@@ -1714,12 +1716,17 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
     trendingTopicsState.range = range || trendingTopicsState.range;
-    if (trendingTopicsState.loading) return;
+    if (trendingTopicsState.loading) {
+        trendingTopicsState.needsRefresh = true;
+        return;
+    }
     trendingTopicsState.loading = true;
+    trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
+        trendingTopicsState.lastLoadSucceeded = true;
         renderTrendingTopics(topics);
         trendingTopicsState.lastLoaded = Date.now();
         uiDebugLog('trending topics loaded', { range: trendingTopicsState.range, count: topics.length });
@@ -1728,6 +1735,10 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
         list.innerHTML = `<div class="trend-item"><span>Unable to load topics.</span><span></span></div>`;
     } finally {
         trendingTopicsState.loading = false;
+        if (trendingTopicsState.needsRefresh) {
+            trendingTopicsState.needsRefresh = false;
+            loadTrendingTopics(trendingTopicsState.range);
+        }
     }
 }
 
@@ -2039,6 +2050,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
 
         fetchMissingProfiles(allPosts);
         await loadHomeMediaData();
+        loadTrendingTopics(trendingTopicsState.range);
         feedLoading = false;
         renderFeed();
         await waitForFeedMedia();
@@ -2843,10 +2855,13 @@ window.navigateTo = function (viewId, pushToStack = true) {
     } else {
         document.body.classList.remove('mobile-thread-open');
     }
-    if (viewId === 'videos') { initVideoFeed(); }
-
-    if (viewId === 'videos' && miniPlayerState) {
-        restoreModalFromMiniPlayer();
+    if (viewId === 'videos') {
+        const routedVideoId = getVideoRouteVideoId();
+        clearVideoDetailState({ updateRoute: !routedVideoId });
+        initVideoFeed();
+        if (routedVideoId) {
+            window.openVideoDetail(routedVideoId);
+        }
     }
     if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
@@ -6917,6 +6932,15 @@ function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
     return { otherIds, usernames, avatars, names, colors };
 }
 
+function isConversationRequest(mapping = {}, details = {}) {
+    const explicitFlag = mapping.isRequest ?? details.isRequest ?? mapping.requested ?? details.requested;
+    if (explicitFlag === true) return true;
+    const status = (mapping.requestStatus || details.requestStatus || mapping.status || details.status || '').toString().toLowerCase();
+    if (['request', 'requested', 'pending', 'invite', 'invited'].includes(status)) return true;
+    if (mapping.accepted === false || details.accepted === false) return true;
+    return false;
+}
+
 function buildUnknownUserProfile(uid) {
     return storeUserInCache(uid, {
         username: 'user',
@@ -7322,11 +7346,14 @@ function renderConversationList() {
     const currentUid = currentUser?.uid || '';
 
     if (conversationMappings.length === 0) {
+        const emptyText = conversationListFilter === 'requests'
+            ? 'No message requests yet.'
+            : 'Start a conversation';
         if (emptyEl) {
-            emptyEl.textContent = 'Start a conversation';
+            emptyEl.textContent = emptyText;
             emptyEl.style.display = 'block';
         } else {
-            listEl.innerHTML = '<div class="empty-state">Start a conversation</div>';
+            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
         }
         updateInboxNavBadge();
         return;
@@ -7347,6 +7374,8 @@ function renderConversationList() {
 
     const search = (conversationListSearchTerm || '').toLowerCase();
     let filtered = orderedMappings.filter(function (mapping) {
+        const details = conversationDetailsCache[mapping.id] || {};
+        if (conversationListFilter === 'requests' && !isConversationRequest(mapping, details)) return false;
         if (conversationListFilter === 'unread' && !(mapping.unreadCount > 0)) return false;
         if (conversationListFilter === 'pinned' && !mapping.pinned) return false;
         if (conversationListFilter === 'archived' && !mapping.archived) return false;
@@ -7448,7 +7477,9 @@ function renderConversationList() {
 
     if (!visible.length && !pinned.length) {
         if (emptyEl) {
-            emptyEl.textContent = 'No conversations match your filters.';
+            emptyEl.textContent = conversationListFilter === 'requests'
+                ? 'No message requests yet.'
+                : 'No conversations match your filters.';
             emptyEl.style.display = 'block';
         }
         updateInboxNavBadge();
@@ -10937,6 +10968,62 @@ function captureVideoDetailReturnPath() {
     videoDetailReturnPath = '/videos';
 }
 
+function getVideoRouteVideoId() {
+    const url = new URL(window.location.href);
+    if (url.pathname.startsWith('/video/')) {
+        const raw = url.pathname.replace('/video/', '').split('/')[0];
+        return raw ? decodeURIComponent(raw) : null;
+    }
+    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    if (queryId) return queryId;
+    if (url.hash && url.hash.startsWith('#video=')) {
+        return url.hash.replace('#video=', '');
+    }
+    return null;
+}
+
+function clearVideoDetailRoute() {
+    const url = new URL(window.location.href);
+    let changed = false;
+    if (url.pathname.startsWith('/video/')) {
+        url.pathname = '/videos';
+        changed = true;
+    }
+    if (url.searchParams.has('video')) {
+        url.searchParams.delete('video');
+        changed = true;
+    }
+    if (url.searchParams.has('v')) {
+        url.searchParams.delete('v');
+        changed = true;
+    }
+    if (url.hash && url.hash.startsWith('#video')) {
+        url.hash = '';
+        changed = true;
+    }
+    if (!changed) return;
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    if (window.NexeraRouter?.replaceStateSilently) {
+        window.NexeraRouter.replaceStateSilently(next);
+    } else {
+        history.replaceState({}, '', next);
+    }
+}
+
+function clearVideoDetailState({ updateRoute = false } = {}) {
+    const player = getVideoModalPlayer();
+    if (miniPlayerMode === 'pip' && document.pictureInPictureElement === player) {
+        document.exitPictureInPicture?.().catch(function () {});
+    }
+    miniPlayerMode = null;
+    miniPlayerState = null;
+    videoModalResumeTime = null;
+    profileReturnContext = null;
+    hideMiniPlayer({ stopPlayback: true });
+    closeVideoDetailModalHandler({ keepPlayback: false });
+    if (updateRoute) clearVideoDetailRoute();
+}
+
 function closeVideoDetailModalHandler(options = {}) {
     const { keepPlayback = false } = options;
     const modal = document.getElementById('video-detail-modal');
@@ -10954,7 +11041,7 @@ function closeVideoDetailModalHandler(options = {}) {
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = function () {
-    minimizeVideoDetail({ updateRoute: true, preferPiP: true });
+    clearVideoDetailState({ updateRoute: true });
 };
 
 function getMiniPlayerElements() {
@@ -12850,6 +12937,16 @@ function bindMobileScrollHelper() {
     }
 }
 
+function updateInboxTabsHeight() {
+    const tabs = document.querySelector('.inbox-tabs');
+    if (!tabs) return;
+    const styles = window.getComputedStyle ? window.getComputedStyle(tabs) : null;
+    const marginTop = styles ? parseFloat(styles.marginTop) || 0 : 0;
+    const marginBottom = styles ? parseFloat(styles.marginBottom) || 0 : 0;
+    const height = Math.ceil(tabs.getBoundingClientRect().height + marginTop + marginBottom);
+    document.documentElement.style.setProperty('--inbox-tabs-h', `${height}px`);
+}
+
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/' || path === '/home';
@@ -12863,6 +12960,7 @@ function syncSidebarHomeState() {
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
+    updateInboxTabsHeight();
     initSidebarState();
     bindSidebarEvents();
     loadFeedTypeState();
@@ -12886,6 +12984,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }, 1200);
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
+});
+
+window.addEventListener('resize', function () {
+    updateInboxTabsHeight();
 });
 
 window.addEventListener('hashchange', function () {

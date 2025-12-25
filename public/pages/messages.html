@@ -750,9 +750,6 @@
 
 
         <main class="main-feed">
-            <div class="desktop-app-bar">
-                <button class="icon-pill sidebar-toggle-btn" type="button" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
-            </div>
             <div id="view-feed" class="view-section">
                 <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
                     style="display: none;" onclick="window.scrollCategoryHeader(-1)">
@@ -946,14 +943,12 @@
                                 onclick="window.setConversationFilter('all')">All</button>
                             <button class="inbox-filter" data-filter="unread"
                                 onclick="window.setConversationFilter('unread')">Unread</button>
+                            <button class="inbox-filter" data-filter="requests"
+                                onclick="window.setConversationFilter('requests')">Message Requests</button>
                             <button class="inbox-filter" data-filter="pinned"
                                 onclick="window.setConversationFilter('pinned')">Pinned</button>
                             <button class="inbox-filter" data-filter="archived"
                                 onclick="window.setConversationFilter('archived')">Archived</button>
-                        </div>
-                        <div class="inbox-requests">
-                            <button class="inbox-requests-toggle" type="button">Message requests</button>
-                            <div class="inbox-requests-empty">No requests yet.</div>
                         </div>
                         <div id="pinned-conversations" class="inbox-pinned" style="display:none;"></div>
                         <div id="conversation-list" class="conversation-list inbox-list"></div>
