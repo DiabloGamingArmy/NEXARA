@@ -51,7 +51,7 @@
 
   function buildUrlForSection(view) {
     const map = {
-      feed: '/home',
+      feed: '/',
       live: '/live',
       videos: '/videos',
       messages: '/inbox',
