@@ -1485,7 +1485,7 @@ body.sidebar-overlay-open .sidebar-backdrop {
     color: var(--text-main);
     font-size: 1.5rem;
     cursor: pointer;
-    padding: 1rem;
+    padding: 1.25rem;
     margin-top: -1rem;
     transition: opacity 0.3s ease;
 }
