@@ -606,11 +606,15 @@
 
     <div id="app-layout" class="app-layout">
         <nav class="sidebar-left glass-panel">
-            <div class="brand-nav" style="margin-bottom:2rem;" onclick="window.navigateTo('feed')">
+            <div class="sidebar-header-row">
+                <button class="icon-pill sidebar-toggle-btn" type="button" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
+                <div class="brand-nav" onclick="window.navigateTo('feed')">
                 <img class="brand-logo brand-logo-nav" data-logo-variant="auto" alt="Nexera"
                     src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e">
                 <span class="brand-wordmark nexera-gradient-text">Nexera</span>
             </div>
+            </div>
+            <div class="sidebar-nav-body">
             <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i
                     class="ph-bold ph-house"></i> Home</a>
             <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i>
@@ -629,7 +633,8 @@
             <a onclick="window.navigateTo('staff')" id="nav-staff" class="nav-item" style="display:none;"><i
                     class="ph-bold ph-shield-star"></i> Staff</a>
             <button onclick="window.toggleCreateModal(true)" class="create-btn-sidebar"><i class="ph-bold ph-plus"></i>
-                Post</button>
+                <span class="btn-label">Post</span></button>
+        </div>
         </nav>
 
 

@@ -116,6 +116,10 @@ let mentionSuggestionState = {
 const MENTION_SUGGESTION_PAGE_SIZE = 30;
 let currentThreadComments = [];
 let liveSessionsCache = [];
+let homeVideosCache = [];
+let homeLiveSessionsCache = [];
+let homeMediaPromise = null;
+let homeMediaLoading = false;
 let profileMediaPrefetching = {};
 let uploadManager = null;
 let videoTaskViewerBound = false;
@@ -884,14 +888,16 @@ function getActiveFeedTypes() {
 function applyFeedTypeFilterAndRefresh({ preserveScroll = false } = {}) {
     if (currentViewId !== 'feed') return;
     const scrollY = preserveScroll ? window.scrollY : null;
-    renderFeed();
-    if (preserveScroll && typeof scrollY === 'number') {
-        if (window.Nexera?.restoreFeedScroll) {
-            window.Nexera.restoreFeedScroll(scrollY);
-        } else {
-            window.scrollTo(0, scrollY);
+    loadHomeMediaData().finally(function () {
+        renderFeed();
+        if (preserveScroll && typeof scrollY === 'number') {
+            if (window.Nexera?.restoreFeedScroll) {
+                window.Nexera.restoreFeedScroll(scrollY);
+            } else {
+                window.scrollTo(0, scrollY);
+            }
         }
-    }
+    });
 }
 
 function toggleFeedType(typeKey) {
@@ -950,7 +956,6 @@ function initSidebarState() {
         sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
     }
     applyDesktopSidebarState(sidebarCollapsed, false);
-    document.body.classList.toggle('has-desktop-app-bar', !isMobileViewport());
 }
 
 function openSidebar() {
@@ -994,7 +999,6 @@ function bindSidebarEvents() {
 
     if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
         MOBILE_VIEWPORT.addEventListener('change', function () {
-            document.body.classList.toggle('has-desktop-app-bar', !isMobileViewport());
             if (isMobileViewport()) {
                 document.body.classList.remove('sidebar-collapsed');
             } else {
@@ -1762,6 +1766,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         }
 
         fetchMissingProfiles(allPosts);
+        await loadHomeMediaData();
         feedLoading = false;
         renderFeed();
         await waitForFeedMedia();
@@ -1775,6 +1780,42 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     });
 
     return feedHydrationPromise;
+}
+
+async function loadHomeMediaData() {
+    if (homeMediaLoading && homeMediaPromise) return homeMediaPromise;
+    homeMediaLoading = true;
+    homeMediaPromise = Promise.all([loadHomeVideos(), loadHomeLiveSessions()])
+        .catch(function (error) {
+            console.warn('Home media load failed', error?.message || error);
+        })
+        .finally(function () {
+            homeMediaLoading = false;
+        });
+    return homeMediaPromise;
+}
+
+async function loadHomeVideos() {
+    try {
+        const snapshot = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(50)));
+        homeVideosCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        homeVideosCache.forEach(ensureVideoStats);
+    } catch (error) {
+        console.warn('Home videos load failed', error?.message || error);
+        homeVideosCache = [];
+    }
+    return homeVideosCache;
+}
+
+async function loadHomeLiveSessions() {
+    try {
+        const snapshot = await getDocs(query(collection(db, 'liveStreams'), orderBy('createdAt', 'desc'), limit(50)));
+        homeLiveSessionsCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+    } catch (error) {
+        console.warn('Home livestream load failed', error?.message || error);
+        homeLiveSessionsCache = [];
+    }
+    return homeLiveSessionsCache;
 }
 
 // Prime Live Directory layout
@@ -3164,23 +3205,61 @@ function renderFeed(targetId = 'feed-content') {
         });
     }
 
-    if (currentCategory === 'For You') {
-        displayPosts = displayPosts.slice().sort(function (a, b) {
-            return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
-        });
+    const activeTypes = getActiveFeedTypes();
+    const items = [];
+
+    if (activeTypes.includes('threads')) {
+        const threadItems = displayPosts
+            .filter(function (post) { return matchesCategoryFilter(post.category); })
+            .map(function (post) { return ({ type: 'threads', id: post.id, createdAt: getFeedItemTimestamp(post), data: post }); });
+        items.push(...threadItems);
     }
 
-    if (displayPosts.length === 0) {
+    if (activeTypes.includes('videos') && currentCategory !== 'Saved') {
+        const videos = (homeVideosCache || videosCache || []).filter(function (video) {
+            return matchesCategoryFilter(video.category || video.genre || video.categoryLabel);
+        }).map(function (video) {
+            return ({ type: 'videos', id: video.id, createdAt: getFeedItemTimestamp(video), data: video });
+        });
+        items.push(...videos);
+    }
+
+    if (activeTypes.includes('livestreams') && currentCategory !== 'Saved') {
+        const sessions = (homeLiveSessionsCache || liveSessionsCache || []).filter(function (session) {
+            return matchesCategoryFilter(session.category || session.categoryLabel);
+        }).map(function (session) {
+            return ({ type: 'livestreams', id: session.id, createdAt: getFeedItemTimestamp(session), data: session });
+        });
+        items.push(...sessions);
+    }
+
+    if (currentCategory === 'For You') {
+        items.sort(function (a, b) { return b.createdAt - a.createdAt; });
+    } else {
+        items.sort(function (a, b) { return b.createdAt - a.createdAt; });
+    }
+
+    if (items.length === 0) {
         const emptyLabel = feedLoading ? 'Loading Posts...' : 'No posts found.';
         container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>${emptyLabel}</p></div>`;
         return;
     }
 
-    displayPosts.forEach(post => {
-        container.innerHTML += getPostHTML(post);
+    items.forEach(function (item) {
+        if (item.type === 'threads') {
+            container.insertAdjacentHTML('beforeend', getPostHTML(item.data));
+            return;
+        }
+        if (item.type === 'videos') {
+            container.appendChild(buildVideoCard(item.data));
+            return;
+        }
+        if (item.type === 'livestreams') {
+            container.appendChild(buildHomeLiveCard(item.data));
+        }
     });
 
-    displayPosts.forEach(post => {
+    displayPosts.forEach(function (post) {
         const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
         const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
         applyReviewButtonState(reviewBtn, reviewValue);
@@ -6224,6 +6303,30 @@ function getPostFeedType(post = {}) {
     if (raw === 'livestream' || raw === 'live' || raw === 'stream') return 'livestreams';
     return 'threads';
 }
+
+function getFeedItemTimestamp(item) {
+    const ts = item?.createdAt || item?.timestamp || item?.updatedAt || item?.publishedAt || item?.startedAt || item?.startTime;
+    const date = toDateSafe(ts);
+    if (date) return date.getTime();
+    if (typeof ts === 'number') return ts;
+    if (typeof ts?.seconds === 'number') return ts.seconds * 1000;
+    return 0;
+}
+
+function matchesCategoryFilter(category) {
+    if (currentCategory === 'For You') return true;
+    if (currentCategory === 'Following') return !!category && followedCategories.has(category);
+    if (currentCategory === 'Saved') return true;
+    return !!category && category === currentCategory;
+}
+
+function buildHomeLiveCard(session) {
+    const card = document.createElement('div');
+    card.className = 'social-card live-directory-card';
+    card.onclick = function () { if (typeof window.openLiveSession === 'function') window.openLiveSession(session.id); };
+    const thumbnail = escapeHtml(resolveLiveThumbnail(session));
+    const viewerCount = escapeHtml(session.viewerCount || session.stats?.viewerCount || '0');
+    card.innerHTML = `\n        <div class=\"live-directory-thumb\">\n            <img src=\"${thumbnail}\" alt=\"Live thumbnail\" class=\"live-thumb-img\" loading=\"lazy\" />\n            <div class=\"live-directory-badge\">LIVE</div>\n            <div class=\"live-viewers live-directory-viewers\"><i class=\"ph-fill ph-eye\"></i> ${viewerCount}</div>\n        </div>\n        <div class=\"live-directory-body\">\n            <div class=\"live-directory-title\">${escapeHtml(session.title || 'Live Session')}</div>\n            <div class=\"live-directory-meta\">\n                <span class=\"live-streamer\">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>\n                <span class=\"live-viewers\"><i class=\"ph-fill ph-eye\"></i> ${viewerCount}</span>\n            </div>\n            <div class=\"live-directory-footer\">\n                <span class=\"live-directory-category\">${escapeHtml(session.category || 'Live')}</span>\n                <span class=\"live-directory-tags\">${escapeHtml((session.tags || []).join(', '))}</span>\n            </div>\n        </div>`;\n    return card;\n}\n*** End Patch"}]}assistant to=functions.apply_patch|commentary code_block  天天中彩票网_CODE_SNIPPET
 
 function normalizeImageUrl(raw = '') {
     const value = (raw || '').trim();

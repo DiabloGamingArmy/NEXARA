@@ -38,10 +38,6 @@
     border-right: 1px solid var(--border);
   }
 
-  .desktop-app-bar {
-    display: none;
-  }
-
   .mobile-app-bar {
     display: flex;
     position: sticky;

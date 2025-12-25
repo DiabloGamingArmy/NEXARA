@@ -426,6 +426,19 @@ body.has-desktop-app-bar {
     flex-direction: column;
 }
 
+.sidebar-header-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0.5rem 0;
+    margin-bottom: 1.5rem;
+}
+
+.sidebar-nav-body {
+    display: flex;
+    flex-direction: column;
+}
+
 .sidebar-right {
     width: 320px;
     border-left: 1px solid var(--border);
@@ -470,11 +483,34 @@ body.has-desktop-app-bar {
 }
 
 body.sidebar-collapsed .sidebar-left {
-    width: 0;
-    padding: 1rem 0;
-    border-right: none;
-    overflow: hidden;
-    transform: translateX(-100%);
+    width: 72px;
+    padding: 1.5rem 0.75rem;
+}
+
+body.sidebar-collapsed .sidebar-left .brand-wordmark,
+body.sidebar-collapsed .sidebar-left .btn-label {
+    display: none;
+}
+
+body.sidebar-collapsed .sidebar-left .nav-item {
+    justify-content: center;
+    gap: 0;
+    font-size: 0;
+    padding: 0.8rem 0;
+}
+
+body.sidebar-collapsed .sidebar-left .nav-item i {
+    font-size: 1.2rem;
+}
+
+body.sidebar-collapsed .sidebar-left .create-btn-sidebar {
+    justify-content: center;
+    padding: 0.8rem 0;
+    font-size: 0;
+}
+
+body.sidebar-collapsed .sidebar-left .create-btn-sidebar i {
+    font-size: 1.2rem;
 }
 
 .sidebar-backdrop {
@@ -527,14 +563,14 @@ body.sidebar-overlay-open .sidebar-backdrop {
     }
 
     body.sidebar-home.sidebar-collapsed .main-feed {
-        flex: 0 0 calc(100vw - 320px);
-        width: calc(100vw - 320px);
-        max-width: calc(100vw - 320px);
+        flex: 0 0 calc(100vw - 392px);
+        width: calc(100vw - 392px);
+        max-width: calc(100vw - 392px);
     }
 
     body.sidebar-home.sidebar-collapsed .category-header {
-        width: calc(100vw - 320px);
-        max-width: calc(100vw - 320px);
+        width: calc(100vw - 392px);
+        max-width: calc(100vw - 392px);
     }
 }
 
@@ -1393,9 +1429,6 @@ body.sidebar-overlay-open .sidebar-backdrop {
     -webkit-overflow-scrolling: touch;
 }
 
-body.has-desktop-app-bar .category-header {
-    top: var(--desktop-app-bar-height, 56px);
-}
 
 .category-header::-webkit-scrollbar {
     display: none;
@@ -1445,9 +1478,6 @@ body.has-desktop-app-bar .category-header {
     transition: opacity 0.3s ease;
 }
 
-body.has-desktop-app-bar .category-scroll-btn {
-    top: calc(var(--desktop-app-bar-height, 56px) + 0.5rem);
-}
 
 .category-scroll-left {
     left: 250px;
@@ -1469,7 +1499,7 @@ body.sidebar-home .category-scroll-right {
 }
 
 body.sidebar-collapsed .category-scroll-left {
-    left: 0;
+    left: 72px;
 }
 
 .category-scroll-btn:hover {
