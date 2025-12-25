@@ -1163,10 +1163,15 @@ const TRENDING_RANGE_WINDOWS = {
     lifetime: { label: 'All', ms: null }
 };
 
+const TRENDING_RANGE_STORAGE_KEY = 'nexera_trending_timeframe';
+const TRENDING_DEFAULT_RANGE = 'six_months';
+const TRENDING_PAGE_SIZE = 3;
+
 const trendingTopicsState = {
-    range: 'week',
+    range: TRENDING_DEFAULT_RANGE,
     loading: false,
-    lastLoaded: 0
+    lastLoaded: 0,
+    visibleCount: TRENDING_PAGE_SIZE
 };
 
 const THEMES = {
@@ -1593,6 +1598,7 @@ function normalizeTrendingTopic(entry) {
     if (!entry) return null;
     const name = (entry.name || entry.topic || entry.topicName || entry.label || '').toString().trim();
     if (!name) return null;
+    if (name.toLowerCase() === 'general') return null;
     const count = Number(entry.count || entry.total || entry.posts || entry.value || 0);
     return { topicId: entry.topicId || entry.id || slugifyCategory(name), name, count };
 }
@@ -1638,7 +1644,7 @@ function aggregateTrendingTopics(range) {
     const counts = new Map();
     const addTopic = function (topic, timestamp) {
         const label = typeof topic === 'string' ? topic.trim() : '';
-        if (!label) return;
+        if (!label || label.toLowerCase() === 'general') return;
         if (!shouldInclude(timestamp)) return;
         counts.set(label, (counts.get(label) || 0) + 1);
     };
@@ -1679,7 +1685,9 @@ function renderTrendingTopics(topics) {
         list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
         return;
     }
-    topics.forEach(function (topic) {
+    const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
+    list.classList.toggle('is-scrollable', visibleCount > TRENDING_PAGE_SIZE && topics.length > TRENDING_PAGE_SIZE);
+    topics.slice(0, visibleCount).forEach(function (topic) {
         const item = document.createElement('div');
         item.className = 'trend-item';
         item.innerHTML = `<span>${escapeHtml(topic.name)}</span><span style=\"color:var(--text-muted);\">${formatCompactNumber(topic.count || 0)}</span>`;
@@ -1688,6 +1696,18 @@ function renderTrendingTopics(topics) {
         });
         list.appendChild(item);
     });
+
+    if (visibleCount < topics.length) {
+        const loadMore = document.createElement('button');
+        loadMore.type = 'button';
+        loadMore.className = 'trend-load-more';
+        loadMore.textContent = 'Load More';
+        loadMore.addEventListener('click', function () {
+            trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
+            renderTrendingTopics(topics);
+        });
+        list.appendChild(loadMore);
+    }
 }
 
 async function loadTrendingTopics(range = trendingTopicsState.range) {
@@ -1696,6 +1716,7 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     trendingTopicsState.range = range || trendingTopicsState.range;
     if (trendingTopicsState.loading) return;
     trendingTopicsState.loading = true;
+    list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
@@ -1713,10 +1734,25 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
 function initTrendingTopicsUI() {
     const select = document.getElementById('trending-range-select');
     if (!select) return;
+    let storedRange = null;
+    try {
+        storedRange = window.localStorage?.getItem(TRENDING_RANGE_STORAGE_KEY);
+    } catch (error) {
+        storedRange = null;
+    }
+    const resolvedRange = TRENDING_RANGE_WINDOWS[storedRange] ? storedRange : TRENDING_DEFAULT_RANGE;
+    trendingTopicsState.range = resolvedRange;
+    trendingTopicsState.visibleCount = TRENDING_PAGE_SIZE;
     select.value = trendingTopicsState.range;
     if (!select.__nexeraBound) {
         select.addEventListener('change', function () {
             const nextRange = select.value || 'week';
+            trendingTopicsState.visibleCount = TRENDING_PAGE_SIZE;
+            try {
+                window.localStorage?.setItem(TRENDING_RANGE_STORAGE_KEY, nextRange);
+            } catch (error) {
+                // ignore storage failures
+            }
             loadTrendingTopics(nextRange);
         });
         select.__nexeraBound = true;

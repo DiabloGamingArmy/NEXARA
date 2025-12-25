@@ -1823,6 +1823,18 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 12px;
 }
 
+.trend-title.trend-header span {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.trend-box.trending-topics {
+    height: 260px;
+    display: flex;
+    flex-direction: column;
+}
+
 .trend-range-select {
     background: var(--bg-body);
     color: var(--text-main);
@@ -1836,6 +1848,29 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.trend-list.is-scrollable {
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.trend-load-more {
+    width: 100%;
+    border: 1px dashed var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+.trend-load-more:hover {
+    border-color: var(--primary);
+    color: var(--primary);
 }
 
 .trend-item {
