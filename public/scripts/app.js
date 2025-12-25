@@ -7,6 +7,7 @@ import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 import { createUploadManager } from "/scripts/uploadManager.js";
+import { buildMessagesUrl } from "/assets/js/routes.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -67,6 +68,7 @@ let miniPlayerState = null;
 let miniPlayerMode = null;
 let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
+let pendingVideoOpenId = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
 let conversationListFilter = 'all';
@@ -749,6 +751,7 @@ function arrayShallowEqual(a = [], b = []) {
 const ListenerRegistry = (function () {
     const listeners = new Map();
     const loggedKeys = new Set();
+    const authUnsubs = new Map();
 
     function devLog(message, key) {
         const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
@@ -769,10 +772,12 @@ const ListenerRegistry = (function () {
             }
 
             listeners.set(key, unsubscribeFn);
+            authUnsubs.set(key, unsubscribeFn);
             return function deregister() {
                 if (!listeners.has(key)) return;
                 const current = listeners.get(key);
                 listeners.delete(key);
+                authUnsubs.delete(key);
                 try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             };
         },
@@ -780,6 +785,7 @@ const ListenerRegistry = (function () {
             if (!listeners.has(key)) return;
             const unsub = listeners.get(key);
             listeners.delete(key);
+            authUnsubs.delete(key);
             try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
         },
         clearAll() {
@@ -787,6 +793,7 @@ const ListenerRegistry = (function () {
                 try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             });
             listeners.clear();
+            authUnsubs.clear();
         },
         has(key) {
             return listeners.has(key);
@@ -805,6 +812,12 @@ if (!window.Nexera.ready) {
     let readyResolve;
     window.Nexera.ready = new Promise(function (resolve) { readyResolve = resolve; });
     window.Nexera.__resolveReady = readyResolve;
+}
+if (!window.Nexera.authReady) {
+    let authReadyResolve;
+    window.Nexera.authReady = new Promise(function (resolve) { authReadyResolve = resolve; });
+    window.Nexera.__resolveAuthReady = authReadyResolve;
+    window.Nexera.__authReadyResolved = false;
 }
 window.Nexera.authResolved = false;
 window.Nexera.auth = auth;
@@ -892,10 +905,132 @@ let commentFilterQuery = '';
 let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
+let lastAuthUid = null;
 
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
+
+function shouldShowRightSidebar(viewId) {
+    return viewId === 'feed';
+}
+
+window.shouldShowRightSidebar = shouldShowRightSidebar;
+
+function getViewerUid() {
+    return currentUser && currentUser.uid ? currentUser.uid : null;
+}
+
+const permissionDeniedLogCache = new Set();
+function logPermissionDeniedOnce(scope) {
+    if (permissionDeniedLogCache.has(scope)) return;
+    permissionDeniedLogCache.add(scope);
+    console.warn('Permission denied for', scope);
+}
+
+function isPermissionDeniedError(error) {
+    return error?.code === 'permission-denied' || error?.code === 'storage/unauthorized';
+}
+
+async function guardFirebaseCall(actionKey, actionFn, options = {}) {
+    try {
+        const data = await actionFn();
+        return { ok: true, data, error: null, permissionDenied: false };
+    } catch (error) {
+        const permissionDenied = isPermissionDeniedError(error);
+        if (permissionDenied) {
+            logPermissionDeniedOnce(actionKey);
+            if (typeof options.onPermissionDenied === 'function') {
+                options.onPermissionDenied(error);
+            }
+        } else {
+            console.warn(`${actionKey} failed`, error?.message || error);
+        }
+        return { ok: false, data: null, error, permissionDenied };
+    }
+}
+
+const missingProfileLogCache = new Set();
+function logMissingProfileOnce(uid) {
+    const key = `profiles:missing:${uid}`;
+    if (missingProfileLogCache.has(key)) return;
+    missingProfileLogCache.add(key);
+    console.warn('Profile not found for', uid);
+}
+
+const dmMediaUrlCache = new Map();
+const dmMediaUrlPromises = new Map();
+
+function resolveDmMediaUrl(rawUrl = '') {
+    if (!rawUrl) return { url: null, status: 'empty' };
+    if (/^https?:\/\//i.test(rawUrl)) return { url: rawUrl, status: 'ok' };
+    if (dmMediaUrlCache.has(rawUrl)) return dmMediaUrlCache.get(rawUrl);
+    if (!dmMediaUrlPromises.has(rawUrl)) {
+        const promise = guardFirebaseCall('storage:dm_media', function () {
+            return getDownloadURL(ref(storage, rawUrl));
+        }).then(function (result) {
+            if (result.ok) {
+                const entry = { url: result.data, status: 'ok' };
+                dmMediaUrlCache.set(rawUrl, entry);
+                return entry;
+            }
+            const status = result.permissionDenied ? 'denied' : 'error';
+            const entry = { url: null, status };
+            dmMediaUrlCache.set(rawUrl, entry);
+            return entry;
+        }).finally(function () {
+            dmMediaUrlPromises.delete(rawUrl);
+        });
+        dmMediaUrlPromises.set(rawUrl, promise);
+    }
+    return { url: null, status: 'pending' };
+}
+
+function fetchDmMediaUrl(rawUrl = '') {
+    if (!rawUrl) return Promise.resolve({ url: null, status: 'empty' });
+    if (/^https?:\/\//i.test(rawUrl)) return Promise.resolve({ url: rawUrl, status: 'ok' });
+    const cached = dmMediaUrlCache.get(rawUrl);
+    if (cached) return Promise.resolve(cached);
+    const pending = dmMediaUrlPromises.get(rawUrl);
+    return pending || Promise.resolve({ url: null, status: 'pending' });
+}
+
+function getDmMediaFallbackText(status) {
+    if (status === 'denied') return "You don’t have access to this attachment";
+    return 'Attachment unavailable';
+}
+
+function buildPublicProfilePayload(uid, profile = {}) {
+    return {
+        uid,
+        displayName: profile.displayName || profile.name || profile.nickname || '',
+        username: profile.username || '',
+        photoURL: profile.photoURL || '',
+        bio: profile.bio || '',
+        avatarColor: profile.avatarColor || computeAvatarColor(uid || profile.username || 'user'),
+        verified: !!profile.verified || (Array.isArray(profile.accountRoles) && profile.accountRoles.includes('verified')),
+        followersCount: profile.followersCount || profile.followerCount || 0,
+        followingCount: profile.followingCount || 0,
+        updatedAt: serverTimestamp()
+    };
+}
+
+async function syncPublicProfile(uid, profile = {}, options = {}) {
+    if (!uid) return;
+    try {
+        const viewerUid = getViewerUid();
+        // Public profiles are written only for the signed-in user on first login/sign-up
+        // or explicit settings saves to avoid permission-denied writes per Firestore rules.
+        if (viewerUid && uid !== viewerUid) return { ok: false, permissionDenied: false };
+        return await guardFirebaseCall('profiles:write', function () {
+            return setDoc(doc(db, 'profiles', uid), buildPublicProfilePayload(uid, profile), { merge: true });
+        }, { onPermissionDenied: options.onPermissionDenied });
+    } catch (e) {
+        console.warn('Public profile sync failed', uid, e?.message || e);
+        return { ok: false, permissionDenied: isPermissionDeniedError(e), error: e };
+    }
+}
+
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
 const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
@@ -1021,6 +1156,9 @@ function applyDesktopSidebarState(collapsed, persist = true) {
     if (!isMobileViewport()) {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
     }
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1365,6 +1503,15 @@ function initApp(onReady) {
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
         window.Nexera.authResolved = true;
+        if (user?.uid !== lastAuthUid) {
+            userCache = {};
+            userFetchPromises = {};
+            lastAuthUid = user?.uid || null;
+        }
+        if (!window.Nexera.__authReadyResolved && window.Nexera.__resolveAuthReady) {
+            window.Nexera.__authReadyResolved = true;
+            window.Nexera.__resolveAuthReady();
+        }
         uiDebugLog('auth resolved', { signedIn: !!user });
 
         try {
@@ -1442,6 +1589,7 @@ function initApp(onReady) {
             } else {
                 currentUser = null;
                 updateAuthClaims({});
+                ListenerRegistry.clearAll(); // Cleanup listeners on logout to prevent permission errors.
                 if (followedTopicsUnsubscribe) {
                     try { followedTopicsUnsubscribe(); } catch (err) { }
                     followedTopicsUnsubscribe = null;
@@ -1682,9 +1830,17 @@ async function getTrendingTopics(range = trendingTopicsState.range) {
 function renderTrendingTopics(topics) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    let loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
+    if (box && !loadMoreWrap) {
+        loadMoreWrap = document.createElement('div');
+        loadMoreWrap.className = 'trend-load-more-wrapper';
+        box.appendChild(loadMoreWrap);
+    }
     list.innerHTML = '';
     if (!topics.length) {
         list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
     const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
@@ -1699,7 +1855,11 @@ function renderTrendingTopics(topics) {
         list.appendChild(item);
     });
 
-    if (visibleCount < topics.length) {
+    if (loadMoreWrap) {
+        loadMoreWrap.innerHTML = '';
+    }
+
+    if (visibleCount < topics.length && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
@@ -1708,13 +1868,15 @@ function renderTrendingTopics(topics) {
             trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
             renderTrendingTopics(topics);
         });
-        list.appendChild(loadMore);
+        loadMoreWrap.appendChild(loadMore);
     }
 }
 
 async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    const loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
     trendingTopicsState.range = range || trendingTopicsState.range;
     if (trendingTopicsState.loading) {
         trendingTopicsState.needsRefresh = true;
@@ -1724,6 +1886,7 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
+    if (loadMoreWrap) loadMoreWrap.innerHTML = '';
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
         trendingTopicsState.lastLoadSucceeded = true;
@@ -1809,24 +1972,35 @@ async function ensureUserDocument(user) {
 
     if (!snap.exists()) {
         const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
-        await setDoc(ref, {
-            displayName: user.displayName || "Nexera User",
-            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
-            photoURL: user.photoURL || "",
-            photoPath: "",
-            avatarColor,
-            bio: "",
-            website: "",
-            region: "",
-            email: user.email || "",
-            locationHistory: [],
-            accountRoles: [],
-            tagAffinity: {},
-            followedCategories: [],
-            interests: [],
-            createdAt: now,
-            updatedAt: now
-        }, { merge: true });
+        const createResult = await guardFirebaseCall('users:create', function () {
+            return setDoc(ref, {
+                displayName: user.displayName || "Nexera User",
+                username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
+                photoURL: user.photoURL || "",
+                photoPath: "",
+                avatarColor,
+                bio: "",
+                website: "",
+                region: "",
+                email: user.email || "",
+                locationHistory: [],
+                accountRoles: [],
+                tagAffinity: {},
+                followedCategories: [],
+                interests: [],
+                createdAt: now,
+                updatedAt: now
+            }, { merge: true });
+        });
+        if (createResult.ok) {
+            await syncPublicProfile(user.uid, {
+                displayName: user.displayName || "Nexera User",
+                username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
+                photoURL: user.photoURL || "",
+                avatarColor,
+                bio: ""
+            });
+        }
         return await getDoc(ref);
     }
 
@@ -1913,7 +2087,8 @@ window.handleSignup = async function (e) {
             document.getElementById('password').value
         );
         // Create initial user document
-        await setDoc(doc(db, "users", cred.user.uid), {
+        const createResult = await guardFirebaseCall('users:create', function () {
+            return setDoc(doc(db, "users", cred.user.uid), {
             displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
             username: cred.user.email.split('@')[0],
             email: cred.user.email,
@@ -1931,6 +2106,28 @@ window.handleSignup = async function (e) {
             accountRoles: [],
             tagAffinity: {},
             interests: []
+            });
+        }, {
+            onPermissionDenied: function () {
+                document.getElementById('auth-error').textContent = 'Profile can’t be updated due to permissions.';
+            }
+        });
+        if (!createResult.ok) {
+            if (!createResult.permissionDenied) {
+                document.getElementById('auth-error').textContent = 'Sign up failed. Please try again.';
+            }
+            return;
+        }
+        await syncPublicProfile(cred.user.uid, {
+            displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
+            username: cred.user.email.split('@')[0],
+            photoURL: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
+            bio: ""
+        }, {
+            onPermissionDenied: function () {
+                document.getElementById('auth-error').textContent = 'Profile can’t be updated due to permissions.';
+            }
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
@@ -1985,22 +2182,54 @@ async function fetchMissingProfiles(posts) {
     if (missingIds.size === 0) return;
 
     // Fetch up to 10 at a time or simple Promise.all
-    const fetchPromises = Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "users", uid)); });
+    if (!getViewerUid()) {
+        Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+        return;
+    }
+
+    const fetchPromises = Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "profiles", uid)); });
 
     try {
         const userDocs = await Promise.all(fetchPromises);
+        const missingProfiles = [];
         userDocs.forEach(function (docSnap) {
             if (docSnap.exists()) {
                 storeUserInCache(docSnap.id, docSnap.data());
             } else {
-                storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
+                missingProfiles.push(docSnap.id);
             }
         });
+
+        if (missingProfiles.length) {
+            try {
+                const fallbackDocs = await Promise.all(missingProfiles.map(function (uid) { return getDoc(doc(db, "users", uid)); }));
+                fallbackDocs.forEach(function (docSnap) {
+                    if (docSnap.exists()) {
+                        storeUserInCache(docSnap.id, docSnap.data());
+                    } else {
+                        logMissingProfileOnce(docSnap.id);
+                        storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
+                    }
+                });
+            } catch (e) {
+                if (e?.code === 'permission-denied') {
+                    logPermissionDeniedOnce('users:read:fetchMissingProfiles');
+                    missingProfiles.forEach(function (uid) { buildUnknownUserProfile(uid); });
+                } else {
+                    console.warn('Fallback profile read failed', e?.message || e);
+                }
+            }
+        }
 
         // Re-render dependent views once data arrives
         renderFeed();
         if (activePostId) renderThreadMainPost(activePostId);
     } catch (e) {
+        if (e?.code === 'permission-denied') {
+            logPermissionDeniedOnce('profiles:read:fetchMissingProfiles');
+            Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            return;
+        }
         console.error("Error fetching profiles:", e);
     }
 }
@@ -2851,17 +3080,21 @@ window.navigateTo = function (viewId, pushToStack = true) {
         releaseScrollLockIfSafe();
         initConversations();
         syncMobileMessagesShell();
-        setInboxMode(inboxMode || 'messages');
+        setInboxMode(inboxMode || 'messages', { skipRouteUpdate: !pushToStack, routeView: viewId });
+        refreshInboxLayout();
     } else {
         document.body.classList.remove('mobile-thread-open');
     }
     if (viewId === 'videos') {
         const routedVideoId = getVideoRouteVideoId();
-        clearVideoDetailState({ updateRoute: !routedVideoId });
+        const requestedVideoId = routedVideoId || pendingVideoOpenId;
+        clearVideoDetailState({ updateRoute: !requestedVideoId });
         initVideoFeed();
-        if (routedVideoId) {
-            window.openVideoDetail(routedVideoId);
+        if (requestedVideoId) {
+            pendingVideoOpenId = null;
+            window.openVideoDetail(requestedVideoId);
         }
+        pendingVideoOpenId = null;
     }
     if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
@@ -2885,6 +3118,13 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     document.body.classList.toggle('go-live-open', goLiveLock);
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
+
+    if (pushToStack && currentViewId === viewId && viewId !== 'messages') {
+        const path = window.NexeraRouter?.buildUrlForSection?.(viewId) || null;
+        if (path && window.location.pathname !== path) {
+            history.pushState({}, '', path);
+        }
+    }
 };
 
 function updateMobileNavState(viewId = 'feed') {
@@ -3339,6 +3579,7 @@ async function hydrateFollowingState(uid, profileData = {}) {
 function getPostHTML(post) {
     try {
         const date = formatDateTime(post.timestamp) || 'Just now';
+        const viewerUid = getViewerUid();
 
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
@@ -3347,10 +3588,10 @@ function getPostHTML(post) {
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
-        const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-        const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-        const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
-        const isSelfPost = currentUser && post.userId === currentUser.uid;
+        const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+        const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+        const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(post.id)) : false;
+        const isSelfPost = viewerUid ? post.userId === viewerUid : false;
         const isFollowingUser = followedUsers.has(post.userId);
         const isFollowingTopic = followedCategories.has(post.category);
         const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
@@ -3371,7 +3612,7 @@ function getPostHTML(post) {
         const tagListHtml = renderTagList(post.tags || []);
         const pollBlock = renderPollBlock(post);
         const locationBadge = renderLocationBadge(post.location);
-        const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+        const scheduledChip = isPostScheduledInFuture(post) && viewerUid && post.userId === viewerUid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
         const verification = getVerificationState(post);
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
@@ -3564,15 +3805,16 @@ function renderFeed(targetId = 'feed-content') {
 function refreshSinglePostUI(postId) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
+    const viewerUid = getViewerUid();
 
     const likeBtn = document.getElementById(`post-like-btn-${postId}`);
     const dislikeBtn = document.getElementById(`post-dislike-btn-${postId}`);
     const saveBtn = document.getElementById(`post-save-btn-${postId}`);
     const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
+    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
     function renderActionButton(btn, { iconClass, label, count = null, activeColor = 'inherit' }) {
@@ -4749,7 +4991,19 @@ window.saveSettings = async function () {
     storeUserInCache(currentUser.uid, userProfile);
 
     try {
-        await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+        const updateResult = await guardFirebaseCall('users:update', function () {
+            return setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+        }, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
+        if (!updateResult.ok) return;
+        await syncPublicProfile(currentUser.uid, userProfile, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
         if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
     } catch (e) {
         console.error("Save failed", e);
@@ -4791,7 +5045,19 @@ window.removeProfilePhoto = async function () {
     }
 
     try {
-        await setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+        const updateResult = await guardFirebaseCall('users:update:photo', function () {
+            return setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+        }, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
+        if (!updateResult.ok) return;
+        await syncPublicProfile(currentUser.uid, userProfile, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
     } catch (err) {
         console.error('Failed to clear Firestore photo data', err);
         toast('Could not update profile photo references', 'error');
@@ -5303,13 +5569,14 @@ function renderThreadMainPost(postId) {
     const container = document.getElementById('thread-main-post');
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
+    const viewerUid = getViewerUid();
 
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
+    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const isFollowingUser = followedUsers.has(post.userId);
     const isFollowingTopic = followedCategories.has(post.category);
-    const isSelfPost = currentUser && post.userId === currentUser.uid;
+    const isSelfPost = viewerUid ? post.userId === viewerUid : false;
     const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
 
     const authorData = userCache[post.userId] || { name: post.author, username: "user" };
@@ -5322,7 +5589,7 @@ function renderThreadMainPost(postId) {
     const tagListHtml = renderTagList(post.tags || []);
     const pollBlock = renderPollBlock(post);
     const locationBadge = renderLocationBadge(post.location);
-    const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+    const scheduledChip = isPostScheduledInFuture(post) && viewerUid && post.userId === viewerUid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     const verification = getVerificationState(post);
     const verificationBanner = verification && verification.bannerText ? `<div class="verification-banner ${verification.className}"><i class="ph ph-warning"></i><div>${verification.bannerText}</div></div>` : '';
     const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
@@ -6000,7 +6267,7 @@ window.renderDiscover = async function () {
 // --- Profile Rendering ---
 window.openUserProfile = async function (uid, event, pushToStack = true) {
     if (event) event.stopPropagation();
-    if (uid === currentUser.uid) {
+    if (uid === getViewerUid()) {
         window.navigateTo('profile', pushToStack);
         return;
     }
@@ -6011,12 +6278,7 @@ window.openUserProfile = async function (uid, event, pushToStack = true) {
 
     let profile = userCache[uid];
     if (!profile) {
-        const docSnap = await getDoc(doc(db, "users", uid));
-        if (docSnap.exists()) {
-            profile = storeUserInCache(uid, docSnap.data());
-        } else {
-            profile = { name: "Unknown User", username: "unknown" };
-        }
+        profile = await resolveUserProfile(uid);
     }
     renderPublicProfile(uid, profile);
 }
@@ -6028,7 +6290,7 @@ window.openUserProfileByHandle = async function (handle) {
         openUserProfile(cachedEntry[0], null, true);
         return;
     }
-    const q = query(collection(db, 'users'), where('username', '==', normalized));
+    const q = query(collection(db, 'profiles'), where('username', '==', normalized));
     const snap = await getDocs(q);
     if (!snap.empty) {
         const docSnap = snap.docs[0];
@@ -6908,6 +7170,35 @@ function getDirectConversationId(a, b) {
     return [a, b].sort().join('_');
 }
 
+const DM_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+const DM_MEDIA_ALLOWED_PREFIXES = ['image/', 'video/'];
+
+function validateDmAttachment(file) {
+    if (!file) return { ok: false, message: 'Attachment missing.' };
+    const type = file.type || '';
+    const isAllowed = DM_MEDIA_ALLOWED_PREFIXES.some(function (prefix) { return type.startsWith(prefix); });
+    if (!isAllowed) {
+        return { ok: false, message: 'Only image and video attachments are allowed.' };
+    }
+    if (file.size > DM_MEDIA_MAX_BYTES) {
+        return { ok: false, message: `Attachments must be under ${formatUploadFileSize(DM_MEDIA_MAX_BYTES)}.` };
+    }
+    return { ok: true };
+}
+
+function filterDmAttachments(files = []) {
+    const valid = [];
+    files.forEach(function (file) {
+        const result = validateDmAttachment(file);
+        if (!result.ok) {
+            toast(result.message, 'error');
+            return;
+        }
+        valid.push(file);
+    });
+    return valid;
+}
+
 function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
     const otherIds = participants.filter(function (uid) { return uid !== viewerId; });
     const usernames = otherIds.map(function (uid) {
@@ -6964,12 +7255,32 @@ async function resolveUserProfile(uid, options = {}) {
 
     const fetchPromise = (async function () {
         try {
-            const snap = await getDoc(doc(db, 'users', uid));
+            if (!getViewerUid()) {
+                return buildUnknownUserProfile(uid);
+            }
+            const snap = await getDoc(doc(db, 'profiles', uid));
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
+            try {
+                const fallbackSnap = await getDoc(doc(db, 'users', uid));
+                if (fallbackSnap.exists()) {
+                    return storeUserInCache(uid, fallbackSnap.data());
+                }
+                logMissingProfileOnce(uid);
+            } catch (fallbackError) {
+                if (fallbackError?.code === 'permission-denied') {
+                    logPermissionDeniedOnce(`users:read:${uid}`);
+                } else {
+                    console.warn('User fallback fetch failed', uid, fallbackError?.message || fallbackError);
+                }
+            }
         } catch (e) {
-            console.warn('User fetch failed', uid, e?.message || e);
+            if (e?.code === 'permission-denied') {
+                logPermissionDeniedOnce(`profiles:read:${uid}`);
+            } else {
+                console.warn('User fetch failed', uid, e?.message || e);
+            }
         }
         return buildUnknownUserProfile(uid);
     })();
@@ -7314,7 +7625,8 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
-function setInboxMode(mode = 'messages') {
+function setInboxMode(mode = 'messages', options = {}) {
+    const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
     inboxMode = allowed.includes(mode) ? mode : 'messages';
     document.querySelectorAll('.inbox-tab').forEach(function (btn) {
@@ -7334,6 +7646,20 @@ function setInboxMode(mode = 'messages') {
     });
     if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
+    }
+    refreshInboxLayout();
+    if (!skipRouteUpdate && routeView === 'messages') {
+        let nextPath = '/inbox';
+        if (inboxMode && inboxMode !== 'messages') {
+            nextPath = `/inbox/${inboxMode}`;
+        } else if (activeConversationId) {
+            nextPath = buildMessagesUrl({ conversationId: activeConversationId });
+        } else {
+            nextPath = buildMessagesUrl();
+        }
+        if (window.location.pathname !== nextPath) {
+            history.pushState({}, '', nextPath);
+        }
     }
 }
 
@@ -7408,6 +7734,11 @@ function renderConversationList() {
         const participants = details.participants || mapping.otherParticipantIds || [];
         const meta = deriveOtherParticipantMeta(participants, currentUid, details);
         const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+        if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
+            resolveUserProfile(otherId).then(function () {
+                if (currentViewId === 'messages') renderConversationList();
+            });
+        }
         const otherProfile = otherId ? getCachedUser(otherId) : null;
         const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
         const isGroup = (participants || []).length > 2 || details.type === 'group';
@@ -7528,6 +7859,11 @@ function renderMessageHeader(convo = {}) {
     const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
     const targetProfileId = primaryOtherId || meta.otherIds?.[0] || null;
     const fallbackAvatar = meta.avatars?.[0] || '';
+    if (targetProfileId && !getCachedUser(targetProfileId, { allowStale: false }) && !userFetchPromises[targetProfileId]) {
+        resolveUserProfile(targetProfileId).then(function () {
+            if (activeConversationId === (convo.id || activeConversationId)) renderMessageHeader(convo);
+        });
+    }
     let avatarUser = {
         uid: cid || primaryOtherId || 'conversation',
         username: label,
@@ -7587,6 +7923,8 @@ function renderMessages(msgs = [], convo = {}) {
     let lastDateDivider = null;
     let lastSenderId = null;
     let latestSelfMessage = null;
+    const missingSenders = new Set();
+    const missingMedia = new Set();
     const fragment = document.createDocumentFragment();
     const searchTerm = (conversationSearchTerm || '').toLowerCase();
     conversationSearchHits = [];
@@ -7614,6 +7952,9 @@ function renderMessages(msgs = [], convo = {}) {
         const nextIsNewDay = nextDate ? !isSameDay(createdDate, nextDate) : false;
         const showAvatar = msg.senderId !== currentUser?.uid && ((nextMsg?.senderId !== msg.senderId) || nextIsNewDay || (nextDate && needsTimeGapDivider(createdDate, nextDate)));
         const isSelf = msg.senderId === currentUser?.uid;
+        if (!isSelf && msg.senderId && !getCachedUser(msg.senderId, { allowStale: false }) && !userFetchPromises[msg.senderId]) {
+            missingSenders.add(msg.senderId);
+        }
         const row = document.createElement('div');
         row.className = 'message-row ' + (isSelf ? 'self' : 'other');
         if (lastSenderId === msg.senderId) row.classList.add('stacked');
@@ -7660,15 +8001,32 @@ function renderMessages(msgs = [], convo = {}) {
         }
 
         const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];
-        if (msg.mediaURL && !attachments.length) {
-            attachments.push({ url: msg.mediaURL, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
+        const mediaRef = msg.mediaPath || msg.mediaURL;
+        if (mediaRef && !attachments.length) {
+            attachments.push({ url: msg.mediaURL || null, storagePath: msg.mediaPath || null, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
         }
         const hasMediaAttachment = attachments.length > 0;
 
-        if (!hasMediaAttachment && msg.type === 'image' && msg.mediaURL) {
-            content = `<img src="${msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
-        } else if (!hasMediaAttachment && msg.type === 'video' && msg.mediaURL) {
-            content = `<video src="${msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
+        if (!hasMediaAttachment && msg.type === 'image' && mediaRef) {
+            const resolved = resolveDmMediaUrl(mediaRef);
+            if (resolved.status === 'denied') {
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText('denied')}</div>`;
+            } else if (!resolved.url && mediaRef && !/^https?:\/\//i.test(mediaRef)) {
+                missingMedia.add(mediaRef);
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText(resolved.status)}</div>`;
+            } else {
+                content = `<img src="${resolved.url || mediaRef}" style="max-width:240px; border-radius:12px;">`;
+            }
+        } else if (!hasMediaAttachment && msg.type === 'video' && mediaRef) {
+            const resolved = resolveDmMediaUrl(mediaRef);
+            if (resolved.status === 'denied') {
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText('denied')}</div>`;
+            } else if (!resolved.url && mediaRef && !/^https?:\/\//i.test(mediaRef)) {
+                missingMedia.add(mediaRef);
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText(resolved.status)}</div>`;
+            } else {
+                content = `<video src="${resolved.url || mediaRef}" controls style="max-width:260px; border-radius:12px;"></video>`;
+            }
         }
 
         const forwardedTag = (msg.forwardedFromSenderId || msg.forwardedFromConversationId)
@@ -7693,9 +8051,24 @@ function renderMessages(msgs = [], convo = {}) {
                 const tile = document.createElement('div');
                 tile.className = 'message-attachment-tile';
                 const isImage = (att.type || '').includes('image');
+                const mediaPointer = att.storagePath || att.url || '';
+                const resolvedEntry = resolveDmMediaUrl(mediaPointer);
+                if (resolvedEntry.status === 'denied') {
+                    tile.classList.add('denied');
+                    tile.innerHTML = `<div class="attachment-denied">${getDmMediaFallbackText('denied')}</div>`;
+                    tile.title = getDmMediaFallbackText('denied');
+                    tile.onclick = function (e) {
+                        e.stopPropagation();
+                        toast(getDmMediaFallbackText('denied'), 'error');
+                    };
+                    attachmentRow.appendChild(tile);
+                    return;
+                }
                 if (isImage) {
                     const img = document.createElement('img');
-                    img.src = att.url;
+                    if (resolvedEntry.url) {
+                        img.src = resolvedEntry.url;
+                    }
                     img.alt = att.name || 'Attachment';
                     tile.appendChild(img);
                 } else if ((att.type || '').includes('video')) {
@@ -7703,7 +8076,18 @@ function renderMessages(msgs = [], convo = {}) {
                 } else {
                     tile.innerHTML = '<div class="attachment-icon"><i class="ph ph-paperclip"></i></div>';
                 }
-                tile.onclick = function (e) { e.stopPropagation(); openFullscreenMedia(att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
+                if (!resolvedEntry.url && mediaPointer && !/^https?:\/\//i.test(mediaPointer)) {
+                    missingMedia.add(mediaPointer);
+                }
+                tile.onclick = function (e) {
+                    e.stopPropagation();
+                    const fallbackUrl = resolvedEntry.url || (/^https?:\/\//i.test(mediaPointer) ? mediaPointer : null);
+                    if (!fallbackUrl) {
+                        toast(getDmMediaFallbackText(resolvedEntry.status), 'error');
+                        return;
+                    }
+                    openFullscreenMedia(fallbackUrl, (att.type || '').includes('video') ? 'video' : 'image');
+                };
                 attachmentRow.appendChild(tile);
             });
             bubble.appendChild(attachmentRow);
@@ -7769,6 +8153,23 @@ function renderMessages(msgs = [], convo = {}) {
     }
 
     body.appendChild(fragment);
+
+    if (missingSenders.size && convo.id) {
+        refreshUserProfiles(Array.from(missingSenders), { force: true }).then(function () {
+            if (activeConversationId === convo.id) {
+                renderMessageHeader(convo);
+                renderMessages(msgs, convo);
+            }
+        });
+    }
+
+    if (missingMedia.size && convo.id) {
+        Promise.all(Array.from(missingMedia).map(fetchDmMediaUrl)).then(function () {
+            if (activeConversationId === convo.id) {
+                renderMessages(msgs, convo);
+            }
+        });
+    }
     if (shouldStickToBottom) {
         scrollMessagesToBottom();
         const media = scrollRegion.querySelectorAll('img, video');
@@ -7941,7 +8342,7 @@ function removePendingAttachment(index) {
 }
 
 function handleMessageFileChange(event) {
-    const files = Array.from(event?.target?.files || []);
+    const files = filterDmAttachments(Array.from(event?.target?.files || []));
     if (!files.length) return;
     pendingMessageAttachments = pendingMessageAttachments.concat(files);
     renderAttachmentPreview();
@@ -8070,11 +8471,21 @@ function closeMessageActionsMenu() {
 }
 
 function resolvePrimaryImageAttachment(message = {}) {
-    if (message.type === 'image' && message.mediaURL) return { url: message.mediaURL, type: 'image' };
+    const mediaRef = message.mediaPath || message.mediaURL;
+    if (message.type === 'image' && mediaRef) {
+        const resolved = resolveDmMediaUrl(mediaRef);
+        if (resolved.status === 'ok' && resolved.url) return { url: resolved.url, type: 'image' };
+    }
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-    const imageAttachment = attachments.find(function (att) { return (att.type || '').includes('image') && att.url; });
-    if (imageAttachment) return { url: imageAttachment.url, type: 'image' };
-    if (message.mediaURL && ((message.mediaType || message.type || '').includes('image'))) return { url: message.mediaURL, type: 'image' };
+    const imageAttachment = attachments.find(function (att) { return (att.type || '').includes('image') && (att.storagePath || att.url); });
+    if (imageAttachment) {
+        const resolved = resolveDmMediaUrl(imageAttachment.storagePath || imageAttachment.url);
+        if (resolved.status === 'ok' && resolved.url) return { url: resolved.url, type: 'image' };
+    }
+    if (mediaRef && ((message.mediaType || message.type || '').includes('image'))) {
+        const resolved = resolveDmMediaUrl(mediaRef);
+        if (resolved.status === 'ok' && resolved.url) return { url: resolved.url, type: 'image' };
+    }
     return null;
 }
 
@@ -8335,6 +8746,12 @@ async function openConversation(conversationId) {
         setTypingState(activeConversationId, false);
     }
     activeConversationId = conversationId;
+    if (window.location.pathname.startsWith('/inbox')) {
+        const nextPath = buildMessagesUrl({ conversationId });
+        if (window.location.pathname + window.location.search !== nextPath) {
+            history.pushState({}, '', nextPath);
+        }
+    }
     clearReplyContext();
     conversationSearchTerm = '';
     const searchInput = document.getElementById('conversation-search');
@@ -8362,6 +8779,7 @@ async function openConversation(conversationId) {
         document.body.classList.add('mobile-thread-open');
     }
     syncMobileMessagesShell();
+    refreshInboxLayout();
 
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
@@ -8370,6 +8788,7 @@ async function openConversation(conversationId) {
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
     await listenToMessages(conversationId);
+    refreshInboxLayout();
 }
 
 async function initConversations(autoOpen = true) {
@@ -8574,6 +8993,24 @@ function refreshConversationUsers(convo = {}, options = {}) {
     const participants = convo.participants || [];
     if (!participants.length) return Promise.resolve([]);
     return refreshUserProfiles(participants, { force: options.force === true }).then(function (profiles) {
+        if (convo.id && profiles.length) {
+            const participantNames = profiles.map(function (p) { return p.displayName || p.name || p.username || 'User'; });
+            const participantUsernames = profiles.map(function (p) { return p.username || p.name || 'user'; });
+            const participantAvatars = profiles.map(function (p) { return p.photoURL || ''; });
+            conversationDetailsCache[convo.id] = {
+                ...(conversationDetailsCache[convo.id] || convo),
+                participantNames,
+                participantUsernames,
+                participantAvatars
+            };
+        }
+        if (window.localStorage?.getItem('NEXERA_DEBUG_PROFILE') === '1') {
+            console.debug('[Profiles] conversation users', {
+                id: convo.id,
+                participants,
+                profiles: profiles.map(function (p) { return ({ uid: p.uid || p.id, displayName: p.displayName, username: p.username, photoURL: p.photoURL }); })
+            });
+        }
         if (options.updateUI) {
             renderConversationList();
             if (activeConversationId === (convo.id || activeConversationId)) {
@@ -8678,6 +9115,8 @@ function renderConversationSettings(convo = {}, mapping = {}) {
     const participants = convo.participants || [];
     const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
     const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+
+    refreshConversationUsers(convo, { force: true });
 
     if (titleEl) titleEl.textContent = label;
     if (subtitleEl) subtitleEl.textContent = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
@@ -9146,6 +9585,7 @@ async function sendChatPayload(conversationId, payload = {}) {
         text: payload.text || '',
         type: payload.type || (attachments.length ? (hasVideoAttachment ? 'video' : 'image') : 'text'),
         mediaURL: payload.mediaURL || (primaryImage ? primaryImage.url : null),
+        mediaPath: payload.mediaPath || (primaryImage ? primaryImage.storagePath : null),
         mediaType: payload.mediaType || (primaryImage ? primaryImage.type : null),
         attachments: attachments.length ? attachments : null,
         postId: payload.postId || null,
@@ -9173,15 +9613,33 @@ async function sendChatPayload(conversationId, payload = {}) {
 
 async function uploadAttachments(conversationId, files = []) {
     const uploads = [];
+    const filteredFiles = filterDmAttachments(files);
     let idx = 0;
-    for (const file of files) {
+    for (const file of filteredFiles) {
         if (!file) continue;
         const stamp = Date.now();
         const storageRef = ref(storage, `dm_media/${conversationId}/${stamp}_${idx}_${file.name}`);
-        const uploadTask = uploadBytesResumable(storageRef, file);
-        await uploadTask;
-        const mediaURL = await getDownloadURL(uploadTask.snapshot.ref);
-        uploads.push({ url: mediaURL, type: file.type || '', name: file.name || 'Attachment' });
+        try {
+            const uploadTask = uploadBytesResumable(storageRef, file);
+            await uploadTask;
+            const storagePath = uploadTask.snapshot.ref.fullPath;
+            const urlResult = await guardFirebaseCall('storage:dm_upload_url', function () {
+                return getDownloadURL(uploadTask.snapshot.ref);
+            }, {
+                onPermissionDenied: function () {
+                    toast(getDmMediaFallbackText('denied'), 'error');
+                }
+            });
+            uploads.push({
+                url: urlResult.ok ? urlResult.data : null,
+                storagePath,
+                type: file.type || '',
+                name: file.name || 'Attachment'
+            });
+        } catch (err) {
+            console.warn('Attachment upload failed', err?.message || err);
+            toast('Attachment upload failed', 'error');
+        }
         idx += 1;
     }
     return uploads;
@@ -9193,7 +9651,7 @@ window.sendMessage = async function (conversationId = activeConversationId) {
     const text = (input?.value || '').trim();
     const fileInput = document.getElementById('message-media');
     const directFiles = Array.from(fileInput?.files || []);
-    const combinedFiles = pendingMessageAttachments.concat(directFiles);
+    const combinedFiles = filterDmAttachments(pendingMessageAttachments.concat(directFiles));
     if (!text && !combinedFiles.length) return;
 
     if (editingMessageId && !combinedFiles.length) {
@@ -9209,7 +9667,10 @@ window.sendMessage = async function (conversationId = activeConversationId) {
         await sendChatPayload(conversationId, {
             text,
             attachments,
-            mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image') ? attachments[0].url : null,
+            mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image')
+                ? (attachments[0].storagePath || attachments[0].url)
+                : null,
+            mediaPath: attachments.length === 1 ? (attachments[0].storagePath || null) : null,
             mediaType: attachments.length === 1 ? attachments[0].type : null,
             type: attachments.length ? (attachments.some(function (att) { return (att.type || '').includes('video'); }) ? 'video' : 'image') : 'text'
         });
@@ -9225,12 +9686,15 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
     if (!conversationId || !requireAuth()) return;
     const fileInput = document.getElementById(fileInputElementId);
     if (!fileInput || !fileInput.files || !fileInput.files.length) return;
-    const uploads = await uploadAttachments(conversationId, Array.from(fileInput.files));
+    const uploads = await uploadAttachments(conversationId, filterDmAttachments(Array.from(fileInput.files)));
     const hasVideo = uploads.some(function (att) { return (att.type || '').includes('video'); });
     await sendChatPayload(conversationId, {
         text: caption,
         attachments: uploads,
-        mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image') ? uploads[0].url : null,
+        mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image')
+            ? (uploads[0].storagePath || uploads[0].url)
+            : null,
+        mediaPath: uploads.length === 1 ? (uploads[0].storagePath || null) : null,
         mediaType: uploads.length === 1 ? uploads[0].type : null,
         type: uploads.length ? (hasVideo ? 'video' : 'image') : 'text'
     });
@@ -10843,6 +11307,12 @@ async function hydrateVideoEngagement(videoId) {
     return getVideoEngagementStatus(videoId);
 }
 
+function openVideoFromFeed(videoId) {
+    if (!videoId) return;
+    pendingVideoOpenId = videoId;
+    window.navigateTo('videos');
+}
+
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
     const card = document.createElement('div');
@@ -10857,10 +11327,10 @@ function buildVideoCard(video) {
     thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
     thumb.style.cursor = 'pointer';
 
-    const duration = document.createElement('div');
-    duration.className = 'video-duration';
-    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
-    thumb.appendChild(duration);
+    const views = document.createElement('div');
+    views.className = 'video-views';
+    views.textContent = `${formatCompactNumber(getVideoViewCount(video))} views`;
+    thumb.appendChild(views);
 
     const meta = document.createElement('div');
     meta.className = 'video-meta';
@@ -10893,14 +11363,28 @@ function buildVideoCard(video) {
 
     card.appendChild(thumb);
     card.appendChild(meta);
-    card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    card.addEventListener('click', function () {
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
+        window.openVideoDetail(video.id);
+    });
     thumb.addEventListener('click', function (event) {
         event.stopPropagation();
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
         window.openVideoDetail(video.id);
     });
     card.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            if (currentViewId === 'feed') {
+                openVideoFromFeed(video.id);
+                return;
+            }
             window.openVideoDetail(video.id);
         }
     });
@@ -10956,20 +11440,26 @@ function getVideoModalPlayerContainer() {
 }
 
 function captureVideoDetailReturnPath() {
-    const path = window.location.pathname || '';
-    if (path.startsWith('/videos')) {
-        videoDetailReturnPath = '/videos';
-        return;
-    }
+    const path = window.location.pathname || '/';
+    const search = window.location.search || '';
+    const hash = window.location.hash || '';
     if (path.startsWith('/video/')) {
         videoDetailReturnPath = '/videos';
         return;
     }
-    videoDetailReturnPath = '/videos';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = `${path}${search}${hash}` || '/videos';
 }
 
 function getVideoRouteVideoId() {
     const url = new URL(window.location.href);
+    if (url.pathname.startsWith('/videos/')) {
+        const raw = url.pathname.replace('/videos/', '').split('/')[0];
+        return raw ? decodeURIComponent(raw) : null;
+    }
     if (url.pathname.startsWith('/video/')) {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
@@ -10984,29 +11474,25 @@ function getVideoRouteVideoId() {
 
 function clearVideoDetailRoute() {
     const url = new URL(window.location.href);
-    let changed = false;
-    if (url.pathname.startsWith('/video/')) {
+    const fallback = videoDetailReturnPath || '/videos';
+    if (url.pathname.startsWith('/videos')) {
         url.pathname = '/videos';
-        changed = true;
-    }
-    if (url.searchParams.has('video')) {
+        url.searchParams.delete('open');
         url.searchParams.delete('video');
-        changed = true;
-    }
-    if (url.searchParams.has('v')) {
         url.searchParams.delete('v');
-        changed = true;
+        if (url.hash && url.hash.startsWith('#video')) url.hash = '';
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        if (window.NexeraRouter?.replaceStateSilently) {
+            window.NexeraRouter.replaceStateSilently(next);
+        } else {
+            history.replaceState({}, '', next);
+        }
+        return;
     }
-    if (url.hash && url.hash.startsWith('#video')) {
-        url.hash = '';
-        changed = true;
-    }
-    if (!changed) return;
-    const next = `${url.pathname}${url.search}${url.hash}`;
     if (window.NexeraRouter?.replaceStateSilently) {
-        window.NexeraRouter.replaceStateSilently(next);
+        window.NexeraRouter.replaceStateSilently(fallback);
     } else {
-        history.replaceState({}, '', next);
+        history.replaceState({}, '', fallback);
     }
 }
 
@@ -12947,10 +13433,18 @@ function updateInboxTabsHeight() {
     document.documentElement.style.setProperty('--inbox-tabs-h', `${height}px`);
 }
 
+function refreshInboxLayout() {
+    requestAnimationFrame(function () {
+        updateInboxTabsHeight();
+        requestAnimationFrame(updateInboxTabsHeight);
+    });
+}
+
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
-    const isHome = path === '/' || path === '/home';
+    const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
+    document.body.classList.toggle('sidebar-wide', isHome);
     if (isHome) {
         mountFeedTypeToggleBar();
     }
