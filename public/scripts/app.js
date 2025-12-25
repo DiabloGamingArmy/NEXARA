@@ -12637,6 +12637,11 @@ document.addEventListener('DOMContentLoaded', function () {
     syncSidebarHomeState();
     updateTimeCapsule();
     initializeNexeraApp();
+    setTimeout(function () {
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash('domcontentloaded');
+        }
+    }, 1200);
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
 });
