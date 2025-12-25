@@ -8,6 +8,11 @@ import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 import { createUploadManager } from "/scripts/uploadManager.js";
 import { buildMessagesUrl } from "/assets/js/routes.js";
+import { buildVideosHeader } from "/scripts/ui/VideosHeader.js";
+import { buildVideoViewerLayout } from "/scripts/ui/VideoViewerPanel.js";
+import { renderDiscoverHub } from "/scripts/ui/DiscoverHub.js";
+import { enhanceInboxLayout } from "/scripts/ui/InboxEnhancements.js";
+import { buildVideoCardElement } from "/scripts/ui/VideoCard.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -39,6 +44,11 @@ let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
 let discoverSearchDebounce = null;
 let discoverPostsSort = 'recent';
+
+// UI scaffolding stubs (no backend calls yet).
+window.handleUiStubAction = function (action) {
+    console.log('UI placeholder action:', action);
+};
 let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
 let savedFilter = 'All Saved';
@@ -735,6 +745,7 @@ const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosFeedLoaded = false;
+let videosFeedLoading = false;
 let videosCache = [];
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
@@ -2046,6 +2057,19 @@ function setButtonLoadingState(btn, isLoading, labelText) {
     }
 }
 
+function buildActionButton(label, icon, onClick, options = {}) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = options.className || 'icon-pill';
+    btn.innerHTML = icon ? `<i class="${icon}"></i> ${label}` : label;
+    btn.setAttribute('aria-label', label);
+    if (options.disabled) btn.disabled = true;
+    if (typeof onClick === 'function') {
+        btn.addEventListener('click', onClick);
+    }
+    return btn;
+}
+
 // --- Auth Functions ---
 window.handleLogin = async function (e) {
     if (e && typeof e.preventDefault === "function") e.preventDefault();
@@ -2132,13 +2156,6 @@ window.handleSignup = async function (e) {
             onPermissionDenied: function () {
                 document.getElementById('auth-error').textContent = 'Profile can’t be updated due to permissions.';
             }
-        });
-        await syncPublicProfile(cred.user.uid, {
-            displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
-            username: cred.user.email.split('@')[0],
-            photoURL: "",
-            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
-            bio: ""
         });
     } catch (err) {
         document.getElementById('auth-error').textContent = err.message;
@@ -6019,6 +6036,10 @@ function renderDiscoverTopBar() {
                 onChange: function (event) { window.handleCategoriesModeChange(event); },
                 show: discoverFilter === 'Categories'
             }
+        ],
+        actions: [
+            { element: buildActionButton('Clear filters', 'ph ph-eraser', function () { window.clearDiscoverFilters(); }) },
+            { element: buildActionButton('Refresh', 'ph ph-arrow-clockwise', function () { window.handleUiStubAction?.('discover-refresh'); }) }
         ]
     });
     container.innerHTML = '';
@@ -6028,6 +6049,18 @@ function renderDiscoverTopBar() {
 async function renderDiscoverResults() {
     const container = document.getElementById('discover-results');
     container.innerHTML = "";
+
+    let hub = document.getElementById('discover-hub');
+    if (!hub) {
+        hub = document.createElement('div');
+        hub.id = 'discover-hub';
+        container.appendChild(hub);
+    }
+    if (!discoverSearchTerm && discoverFilter === 'All Results') {
+        renderDiscoverHub(hub);
+    } else {
+        hub.innerHTML = '';
+    }
 
     const postsSelect = document.getElementById('posts-sort-select');
     if (postsSelect) postsSelect.value = discoverPostsSort;
@@ -7052,6 +7085,14 @@ window.setDiscoverFilter = function (filter) {
     if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
     renderDiscover();
 }
+window.clearDiscoverFilters = function () {
+    discoverFilter = 'All Results';
+    discoverSearchTerm = '';
+    const input = document.querySelector('#discover-topbar input[type="text"]');
+    if (input) input.value = '';
+    updateSearchQueryParam('');
+    renderDiscover();
+};
 window.handlePostsSortChange = function (e) { discoverPostsSort = e.target.value; renderDiscover(); }
 window.handleCategoriesModeChange = function (e) { discoverCategoriesMode = e.target.value; renderDiscover(); }
 window.handleSearchInput = function (e) {
@@ -8296,6 +8337,12 @@ function navigateConversationSearch(step = 0) {
 window.mobileMessagesBack = function () {
     if (!isMobileViewport()) return;
     document.body.classList.remove('mobile-thread-open');
+};
+
+window.toggleConversationInfoPanel = function () {
+    const panel = document.getElementById('message-info-panel');
+    if (!panel) return;
+    panel.classList.toggle('is-open');
 };
 
 function clearReplyContext() {
@@ -11044,8 +11091,7 @@ async function confirmDeleteVideo(videoId) {
 function openVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    modal.style.display = 'flex';
-    document.body.classList.add('modal-open');
+    modal.style.display = 'block';
     renderUploadTasks();
 }
 
@@ -11066,6 +11112,16 @@ function renderVideosTopBar() {
     const container = document.getElementById('videos-topbar');
     if (!container) return;
 
+    const topBar = buildVideosHeader({
+        searchValue: videoSearchTerm,
+        onSearch: handleVideoSearchInput,
+        filter: videoFilter,
+        onFilter: setVideoFilter,
+        sort: videoSortMode,
+        onSort: handleVideoSortChange,
+        onAction: function (action) { window.handleUiStubAction?.(action); }
+    });
+
     const uploadBtn = document.createElement('button');
     uploadBtn.className = 'create-btn-sidebar topbar-action-btn';
     uploadBtn.style.width = 'auto';
@@ -11077,34 +11133,11 @@ function renderVideosTopBar() {
     taskBtn.innerHTML = '<i class="ph ph-list"></i> Video Manager';
     taskBtn.onclick = function () { window.toggleTaskViewer(true); };
 
-    const topBar = buildTopBar({
-        title: 'Videos',
-        searchPlaceholder: 'Search videos...',
-        searchValue: videoSearchTerm,
-        onSearch: handleVideoSearchInput,
-        filters: [
-            { label: 'All Videos', className: 'discover-pill video-filter-pill', active: videoFilter === 'All', onClick: function () { setVideoFilter('All'); } },
-            { label: 'Trending', className: 'discover-pill video-filter-pill', active: videoFilter === 'Trending', onClick: function () { setVideoFilter('Trending'); } },
-            { label: 'Shorts', className: 'discover-pill video-filter-pill', active: videoFilter === 'Shorts', onClick: function () { setVideoFilter('Shorts'); } },
-            { label: 'Saved', className: 'discover-pill video-filter-pill', active: videoFilter === 'Saved', onClick: function () { setVideoFilter('Saved'); } }
-        ],
-        dropdowns: [
-            {
-                id: 'video-sort-select',
-                className: 'discover-dropdown',
-                forId: 'video-sort-select',
-                label: 'Sort:',
-                options: [
-                    { value: 'recent', label: 'Recent' },
-                    { value: 'popular', label: 'Most Viewed' }
-                ],
-                selected: videoSortMode,
-                onChange: handleVideoSortChange,
-                show: true
-            }
-        ],
-        actions: [{ element: taskBtn }, { element: uploadBtn }]
-    });
+    const actionsSlot = topBar.querySelector('.topbar-actions');
+    if (actionsSlot) {
+        actionsSlot.appendChild(taskBtn);
+        actionsSlot.appendChild(uploadBtn);
+    }
 
     container.innerHTML = '';
     container.appendChild(topBar);
@@ -11118,9 +11151,10 @@ function refreshVideoFeedWithFilters(options = {}) {
 
     if (videoSearchTerm) {
         filtered = filtered.filter(function (video) {
+            const title = (video.title || '').toLowerCase();
             const caption = (video.caption || '').toLowerCase();
             const tags = (video.hashtags || []).map(function (t) { return (`#${t}`).toLowerCase(); });
-            return caption.includes(videoSearchTerm) || tags.some(function (tag) { return tag.includes(videoSearchTerm); });
+            return title.includes(videoSearchTerm) || caption.includes(videoSearchTerm) || tags.some(function (tag) { return tag.includes(videoSearchTerm); });
         });
     }
 
@@ -11143,10 +11177,13 @@ function refreshVideoFeedWithFilters(options = {}) {
 function initVideoFeed() {
     if (videosFeedLoaded) return;
     videosFeedLoaded = true;
+    videosFeedLoading = true;
     renderVideosTopBar();
+    renderVideoFeed([]);
     const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
     getDocs(refVideos).then(function (snap) {
         videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        videosFeedLoading = false;
         refreshVideoFeedWithFilters();
         const modal = document.getElementById('video-detail-modal');
         const activeVideoId = modal?.dataset?.videoId;
@@ -11154,6 +11191,7 @@ function initVideoFeed() {
     }).catch(function (error) {
         console.error('Unable to load videos', error);
         videosFeedLoaded = false;
+        videosFeedLoading = false;
     });
 }
 
@@ -11176,6 +11214,14 @@ function formatVideoTimestamp(ts) {
     if (days < 30) return `${Math.floor(days / 7)}w ago`;
     if (days < 365) return `${Math.floor(days / 30)}mo ago`;
     return `${Math.floor(days / 365)}y ago`;
+}
+
+function formatVideoDuration(video = {}) {
+    const seconds = Number(video.duration || video.lengthSeconds || 0) || 0;
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    if (!seconds) return '0:00';
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 function resolveVideoThumbnail(video = {}) {
@@ -11327,111 +11373,89 @@ function openVideoFromFeed(videoId) {
 
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
-    const card = document.createElement('div');
-    card.className = 'video-card';
-    card.tabIndex = 0;
-    card.setAttribute('role', 'button');
-    card.setAttribute('aria-label', `Open video ${video.title || video.caption || 'details'}`);
-    ensureVideoStats(video);
-
-    const thumb = document.createElement('div');
-    thumb.className = 'video-thumb';
-    thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
-    thumb.style.cursor = 'pointer';
-
-    const views = document.createElement('div');
-    views.className = 'video-views';
-    views.textContent = `${formatCompactNumber(getVideoViewCount(video))} views`;
-    thumb.appendChild(views);
-
-    const meta = document.createElement('div');
-    meta.className = 'video-meta';
-
-    const avatar = document.createElement('div');
-    avatar.className = 'video-avatar';
-    applyAvatarToElement(avatar, author, { size: 42 });
-
-    const info = document.createElement('div');
-    info.className = 'video-info';
-
-    const title = document.createElement('div');
-    title.className = 'video-title';
-    title.textContent = video.title || video.caption || 'Untitled video';
-
-    const channel = document.createElement('div');
-    channel.className = 'video-channel';
-    channel.textContent = author.displayName || author.name || author.username || 'Nexera Creator';
-
-    const stats = document.createElement('div');
-    stats.className = 'video-stats';
-    stats.textContent = `${formatCompactNumber(getVideoViewCount(video))} views • ${formatVideoTimestamp(video.createdAt)}`;
-
-    info.appendChild(title);
-    info.appendChild(channel);
-    info.appendChild(stats);
-
-    meta.appendChild(avatar);
-    meta.appendChild(info);
-
-    card.appendChild(thumb);
-    card.appendChild(meta);
-    card.addEventListener('click', function () {
-        if (currentViewId === 'feed') {
-            openVideoFromFeed(video.id);
-            return;
-        }
-        window.openVideoDetail(video.id);
-    });
-    thumb.addEventListener('click', function (event) {
-        event.stopPropagation();
-        if (currentViewId === 'feed') {
-            openVideoFromFeed(video.id);
-            return;
-        }
-        window.openVideoDetail(video.id);
-    });
-    card.addEventListener('keydown', function (event) {
-        if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
+    const result = buildVideoCardElement({
+        video,
+        author,
+        utils: {
+            formatCompactNumber,
+            formatVideoTimestamp,
+            resolveVideoThumbnail,
+            getVideoViewCount,
+            formatVideoDuration,
+            applyAvatarToElement,
+            ensureVideoStats
+        },
+        onOpen: function () {
             if (currentViewId === 'feed') {
                 openVideoFromFeed(video.id);
                 return;
             }
             window.openVideoDetail(video.id);
+        },
+        onOpenProfile: function (uid, event) {
+            window.openUserProfile(uid, event);
+        },
+        onOverflow: function () {
+            window.handleUiStubAction?.('video-card-overflow');
         }
     });
-
-    if (video.ownerId) {
-        avatar.addEventListener('click', function (event) {
-            event.stopPropagation();
-            window.openUserProfile(video.ownerId, event);
-        });
-        channel.addEventListener('click', function (event) {
-            event.stopPropagation();
-            window.openUserProfile(video.ownerId, event);
-        });
-    }
 
     if (video.ownerId && !getCachedUser(video.ownerId, { allowStale: false })) {
         resolveUserProfile(video.ownerId).then(function (profile) {
             if (!profile) return;
-            applyAvatarToElement(avatar, profile, { size: 42 });
-            channel.textContent = profile.displayName || profile.name || profile.username || 'Nexera Creator';
+            applyAvatarToElement(result.avatar, profile, { size: 42 });
+            result.channel.textContent = profile.displayName || profile.name || profile.username || 'Nexera Creator';
         });
     }
 
-    return card;
+    return result.card;
 }
 
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
     if (!feed) return;
     feed.innerHTML = '';
-    if (videos.length === 0) { feed.innerHTML = '<div class="empty-state">No videos yet.</div>'; return; }
+    if (videosFeedLoading) {
+        feed.appendChild(renderVideoSkeletons());
+        return;
+    }
+    if (videos.length === 0) {
+        feed.innerHTML = `
+            <div class="empty-state">
+                <div style="font-weight:700; margin-bottom:6px;">No videos match this filter.</div>
+                <div style="color:var(--text-muted);">Try clearing filters or refreshing the list.</div>
+                <div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">
+                    <button class="icon-pill" onclick="window.handleUiStubAction?.('videos-clear-filters')"><i class="ph ph-eraser"></i> Clear filters</button>
+                    <button class="icon-pill" onclick="window.handleUiStubAction?.('videos-refresh')"><i class="ph ph-arrow-clockwise"></i> Refresh</button>
+                </div>
+            </div>`;
+        return;
+    }
 
     videos.forEach(function (video) {
         feed.appendChild(buildVideoCard(video));
     });
+}
+
+function renderVideoSkeletons(count = 6) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'video-skeleton-grid';
+    for (let i = 0; i < count; i += 1) {
+        const card = document.createElement('div');
+        card.className = 'video-card skeleton';
+        card.innerHTML = `
+            <div class="video-thumb skeleton-block"></div>
+            <div class="video-meta">
+                <div class="video-avatar skeleton-circle"></div>
+                <div class="video-info">
+                    <div class="skeleton-line"></div>
+                    <div class="skeleton-line short"></div>
+                </div>
+            </div>
+        `;
+        wrapper.appendChild(card);
+    }
+    return wrapper;
 }
 
 function captureVideoProfileReturn(videoId) {
@@ -11449,6 +11473,140 @@ function getVideoModalPlayer() {
 
 function getVideoModalPlayerContainer() {
     return document.querySelector('.video-modal-player');
+}
+
+// UI scaffolding: rebuild video viewer layout to enable three-column layout and controls.
+function initVideoViewerLayout() {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal || modal.dataset.viewerScaffold) return;
+    modal.dataset.viewerScaffold = 'true';
+    modal.innerHTML = '';
+
+    const shell = document.createElement('div');
+    shell.className = 'video-modal-shell';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'video-modal-close';
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close video details');
+    closeBtn.innerHTML = '&times;';
+    closeBtn.onclick = function () { window.closeVideoDetail(); };
+
+    shell.appendChild(closeBtn);
+    shell.appendChild(buildVideoViewerLayout());
+    modal.appendChild(shell);
+}
+
+function updateVideoControlPlayState(player, button) {
+    if (!player || !button) return;
+    const icon = player.paused ? 'ph ph-play' : 'ph ph-pause';
+    button.innerHTML = `<i class="${icon}"></i>`;
+}
+
+function bindVideoViewerControls() {
+    const player = getVideoModalPlayer();
+    const playBtn = document.getElementById('video-control-play');
+    const scrub = document.getElementById('video-control-scrub');
+    const volumeBtn = document.getElementById('video-control-volume');
+    const volumeRange = document.getElementById('video-control-volume-range');
+    const theaterBtn = document.getElementById('video-control-theater');
+    const fullscreenBtn = document.getElementById('video-control-fullscreen');
+    if (!player || !playBtn || !scrub || !volumeBtn || !volumeRange || playBtn.dataset.bound) return;
+
+    playBtn.dataset.bound = 'true';
+    playBtn.addEventListener('click', function () {
+        if (player.paused) player.play();
+        else player.pause();
+    });
+    player.addEventListener('loadedmetadata', function () {
+        scrub.max = Math.floor(player.duration || 0).toString() || '0';
+        scrub.value = '0';
+    });
+    player.addEventListener('play', function () { updateVideoControlPlayState(player, playBtn); });
+    player.addEventListener('pause', function () { updateVideoControlPlayState(player, playBtn); });
+    player.addEventListener('timeupdate', function () {
+        if (!scrub.max || Number(scrub.max) === 100) {
+            scrub.max = Math.floor(player.duration || 0).toString() || '0';
+        }
+        scrub.value = Math.floor(player.currentTime || 0).toString();
+    });
+    scrub.addEventListener('input', function () {
+        if (!player.duration) return;
+        player.currentTime = Number(scrub.value) || 0;
+    });
+    volumeBtn.addEventListener('click', function () {
+        player.muted = !player.muted;
+        volumeBtn.innerHTML = player.muted ? '<i class="ph ph-speaker-slash"></i>' : '<i class="ph ph-speaker-high"></i>';
+    });
+    volumeRange.addEventListener('input', function () {
+        player.volume = Math.min(1, Math.max(0, Number(volumeRange.value) / 100));
+        if (player.volume > 0 && player.muted) player.muted = false;
+    });
+    if (theaterBtn) {
+        theaterBtn.addEventListener('click', function () { window.toggleVideoTheaterMode?.(); });
+    }
+    if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', function () { window.toggleVideoTheaterMode?.(); });
+    }
+}
+
+window.toggleVideoTheaterMode = function () {
+    const modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
+    modal.classList.toggle('video-theater');
+};
+
+function renderVideoUpNextList(currentVideoId) {
+    const list = document.getElementById('video-up-next-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const suggestions = videosCache.filter(function (video) { return video.id !== currentVideoId; }).slice(0, 6);
+    if (!suggestions.length) {
+        list.innerHTML = '<div class="empty-state">No recommendations yet.</div>';
+        return;
+    }
+    suggestions.forEach(function (video) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'video-up-next-item';
+        item.onclick = function () { window.openVideoDetail(video.id); };
+        item.innerHTML = `
+            <div class="video-up-next-thumb" style="background-image:url('${resolveVideoThumbnail(video)}')"></div>
+            <div class="video-up-next-meta">
+                <div class="video-up-next-title">${escapeHtml(video.title || video.caption || 'Untitled video')}</div>
+                <div class="video-up-next-channel">${escapeHtml((getCachedUser(video.ownerId)?.displayName || getCachedUser(video.ownerId)?.name || getCachedUser(video.ownerId)?.username || 'Nexera Creator'))}</div>
+                <div class="video-up-next-stats">${formatCompactNumber(getVideoViewCount(video))} views • ${formatVideoTimestamp(video.createdAt)}</div>
+            </div>
+        `;
+        list.appendChild(item);
+    });
+}
+
+function renderVideoCommentsPlaceholder(videoId) {
+    const list = document.getElementById('video-comments-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const samples = [
+        { id: `${videoId}-c1`, name: 'Nexera Viewer', text: 'Great breakdown—thanks for sharing!' },
+        { id: `${videoId}-c2`, name: 'Community', text: 'Can we get a follow-up on this topic?' }
+    ];
+    samples.forEach(function (sample) {
+        const item = document.createElement('div');
+        item.className = 'video-comment';
+        item.innerHTML = `
+            <div class="video-comment-avatar"></div>
+            <div class="video-comment-body">
+                <div class="video-comment-author">${escapeHtml(sample.name)}</div>
+                <div class="video-comment-text">${escapeHtml(sample.text)}</div>
+                <div class="video-comment-actions">
+                    <button class="icon-pill" onclick="window.handleUiStubAction?.('comment-like')"><i class="ph ph-thumbs-up"></i></button>
+                    <button class="icon-pill" onclick="window.handleUiStubAction?.('comment-reply')"><i class="ph ph-chat-centered"></i></button>
+                    <button class="icon-pill" onclick="window.handleUiStubAction?.('comment-more')"><i class="ph ph-dots-three"></i></button>
+                </div>
+            </div>
+        `;
+        list.appendChild(item);
+    });
 }
 
 function captureVideoDetailReturnPath() {
@@ -11534,6 +11692,7 @@ function closeVideoDetailModalHandler(options = {}) {
     }
     delete modal.dataset.videoId;
     modal.style.display = 'none';
+    modal.classList.remove('video-theater');
     document.body.classList.remove('modal-open');
 }
 
@@ -11737,6 +11896,8 @@ window.openVideoDetail = async function (videoId) {
     if (!video) return;
 
     captureVideoDetailReturnPath();
+    initVideoViewerLayout();
+    bindVideoViewerControls();
 
     const player = getVideoModalPlayer();
     const title = document.getElementById('video-modal-title');
@@ -11755,6 +11916,8 @@ window.openVideoDetail = async function (videoId) {
 
     modal.dataset.videoId = video.id;
     ensureVideoStats(video);
+    renderVideoUpNextList(video.id);
+    renderVideoCommentsPlaceholder(video.id);
 
     if (miniPlayerState && miniPlayerState.videoId !== video.id) {
         window.closeMiniPlayer();
@@ -13475,6 +13638,8 @@ document.addEventListener('DOMContentLoaded', function () {
     bindAuthFormShortcuts();
     initMiniPlayerDrag();
     initTrendingTopicsUI();
+    initVideoViewerLayout();
+    enhanceInboxLayout();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
