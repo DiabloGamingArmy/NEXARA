@@ -21,6 +21,23 @@
     display: none !important;
   }
 
+  body.sidebar-overlay-open {
+    overflow: hidden;
+  }
+
+  body.sidebar-overlay-open .sidebar-left {
+    display: flex !important;
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 260px;
+    max-width: 80vw;
+    z-index: 70;
+    transform: translateX(0);
+    border-right: 1px solid var(--border);
+  }
+
   .mobile-app-bar {
     display: flex;
     position: sticky;
@@ -128,7 +145,8 @@
     max-width: 100%;
     display: none;
     flex-direction: column;
-    min-height: 60vh;
+    min-height: 0;
+    height: 100%;
   }
 
   body.mobile-thread-open .messages-sidebar {
@@ -183,17 +201,15 @@
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: calc(var(--bottom-nav-height) + 140px);
+    padding-bottom: 1rem;
   }
 
   .message-compose {
-    position: sticky;
-    bottom: var(--bottom-nav-height);
     background: rgba(10, 10, 12, 0.95);
     backdrop-filter: blur(10px);
     padding: 10px 8px calc(12px + env(safe-area-inset-bottom));
     gap: 8px;
-    z-index: 40;
+    margin-bottom: var(--bottom-nav-height);
   }
 
   .message-compose .form-input {
