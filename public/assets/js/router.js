@@ -51,7 +51,7 @@
 
   function buildUrlForSection(view) {
     const map = {
-      feed: '/home',
+      feed: '/',
       live: '/live',
       videos: '/videos',
       messages: '/inbox',
@@ -103,7 +103,6 @@
 
   function buildUrlForMessages(conversationId, params = {}) {
     const search = new URLSearchParams(params);
-    const suffix = search.toString();
     if (conversationId) {
       return `/inbox/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
     }
@@ -334,7 +333,10 @@
     hideNotFound();
 
     if (route.type === 'not-found') {
-      showNotFound();
+      replaceStateSilently('/home');
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'feed' });
+      }
       return;
     }
 
