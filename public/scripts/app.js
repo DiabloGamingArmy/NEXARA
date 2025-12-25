@@ -2938,6 +2938,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -11159,7 +11160,7 @@ function getVideoRouteVideoId() {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
     }
-    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    const queryId = url.searchParams.get('open') || url.searchParams.get('video') || url.searchParams.get('v');
     if (queryId) return queryId;
     if (url.hash && url.hash.startsWith('#video=')) {
         return url.hash.replace('#video=', '');
