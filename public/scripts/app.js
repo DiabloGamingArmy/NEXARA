@@ -6317,15 +6317,26 @@ function buildHomeLiveCard(session) {
     card.onclick = function () { if (typeof window.openLiveSession === 'function') window.openLiveSession(session.id); };
     const thumbnail = escapeHtml(resolveLiveThumbnail(session));
     const viewerCount = escapeHtml(session.viewerCount || session.stats?.viewerCount || '0');
-    card.innerHTML = `\n        <div class=\"live-directory-thumb\">\n            <img src=\"${thumbnail}\" alt=\"Live thumbnail\" class=\"live-thumb-img\" loading=\"lazy\" />\n            <div class=\"live-directory-badge\">LIVE</div>\n            <div class=\"live-viewers live-directory-viewers\"><i class=\"ph-fill ph-eye\"></i> ${viewerCount}</div>\n        </div>\n        <div class=\"live-directory-body\">\n            <div class=\"live-directory-title\">${escapeHtml(session.title || 'Live Session')}</div>\n            <div class=\"live-directory-meta\">\n                <span class=\"live-streamer\">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>\n                <span class=\"live-viewers\"><i class=\"ph-fill ph-eye\"></i> ${viewerCount}</span>\n            </div>\n            <div class=\"live-directory-footer\">\n                <span class=\"live-directory-category\">${escapeHtml(session.category || 'Live')}</span>\n                <span class=\"live-directory-tags\">${escapeHtml((session.tags || []).join(', '))}</span>\n            </div>\n        </div>`;\n    return card;\n}\n*** End Patch"}]}assistant to=functions.apply_patch|commentary code_block  天天中彩票网_CODE_SNIPPET
-
-function normalizeImageUrl(raw = '') {
-    const value = (raw || '').trim();
-    if (!value) return '';
-    if (/^(https?:|data:|blob:)/i.test(value)) return value;
-    if (value.startsWith('/assets/')) return value;
-    return '';
+    card.innerHTML = `
+        <div class="live-directory-thumb">
+            <img src="${thumbnail}" alt="Live thumbnail" class="live-thumb-img" loading="lazy" />
+            <div class="live-directory-badge">LIVE</div>
+            <div class="live-viewers live-directory-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</div>
+        </div>
+        <div class="live-directory-body">
+            <div class="live-directory-title">${escapeHtml(session.title || 'Live Session')}</div>
+            <div class="live-directory-meta">
+                <span class="live-streamer">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>
+                <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</span>
+            </div>
+            <div class="live-directory-footer">
+                <span class="live-directory-category">${escapeHtml(session.category || 'Live')}</span>
+                <span class="live-directory-tags">${escapeHtml((session.tags || []).join(', '))}</span>
+            </div>
+        </div>`;
+    return card;
 }
+
 
 function getConversationAvatarUrl(convo = {}, fallback = '') {
     return normalizeImageUrl(convo.avatarUrl || convo.avatarURL || fallback || '');
