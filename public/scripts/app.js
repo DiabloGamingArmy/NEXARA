@@ -67,6 +67,7 @@ let miniPlayerState = null;
 let miniPlayerMode = null;
 let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
+let pendingVideoOpenId = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
 let conversationListFilter = 'all';
@@ -898,21 +899,6 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
-function shouldShowRightSidebar(viewId) {
-    return SIDEBAR_WIDE_VIEWS.has(viewId);
-}
-
-function inferViewFromPath(path = '') {
-    if (!path || path === '/' || path === '/home') return 'feed';
-    if (path.startsWith('/live')) return 'live';
-    if (path.startsWith('/videos') || path.startsWith('/video')) return 'videos';
-    if (path.startsWith('/inbox') || path.startsWith('/messages')) return 'messages';
-    if (path.startsWith('/discover')) return 'discover';
-    if (path.startsWith('/saved')) return 'saved';
-    if (path.startsWith('/profile')) return 'profile';
-    if (path.startsWith('/staff')) return 'staff';
-    return 'feed';
-}
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
 const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
@@ -2888,16 +2874,20 @@ window.navigateTo = function (viewId, pushToStack = true) {
         initConversations();
         syncMobileMessagesShell();
         setInboxMode(inboxMode || 'messages');
+        refreshInboxLayout();
     } else {
         document.body.classList.remove('mobile-thread-open');
     }
     if (viewId === 'videos') {
         const routedVideoId = getVideoRouteVideoId();
-        clearVideoDetailState({ updateRoute: !routedVideoId });
+        const requestedVideoId = routedVideoId || pendingVideoOpenId;
+        clearVideoDetailState({ updateRoute: !requestedVideoId });
         initVideoFeed();
-        if (routedVideoId) {
-            window.openVideoDetail(routedVideoId);
+        if (requestedVideoId) {
+            pendingVideoOpenId = null;
+            window.openVideoDetail(requestedVideoId);
         }
+        pendingVideoOpenId = null;
     }
     if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
@@ -7371,6 +7361,7 @@ function setInboxMode(mode = 'messages') {
     if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
+    refreshInboxLayout();
 }
 
 function renderConversationList() {
@@ -8398,6 +8389,7 @@ async function openConversation(conversationId) {
         document.body.classList.add('mobile-thread-open');
     }
     syncMobileMessagesShell();
+    refreshInboxLayout();
 
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
@@ -8406,6 +8398,7 @@ async function openConversation(conversationId) {
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
     await listenToMessages(conversationId);
+    refreshInboxLayout();
 }
 
 async function initConversations(autoOpen = true) {
@@ -10879,6 +10872,12 @@ async function hydrateVideoEngagement(videoId) {
     return getVideoEngagementStatus(videoId);
 }
 
+function openVideoFromFeed(videoId) {
+    if (!videoId) return;
+    pendingVideoOpenId = videoId;
+    window.navigateTo('videos');
+}
+
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
     const card = document.createElement('div');
@@ -10929,14 +10928,28 @@ function buildVideoCard(video) {
 
     card.appendChild(thumb);
     card.appendChild(meta);
-    card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    card.addEventListener('click', function () {
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
+        window.openVideoDetail(video.id);
+    });
     thumb.addEventListener('click', function (event) {
         event.stopPropagation();
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
         window.openVideoDetail(video.id);
     });
     card.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            if (currentViewId === 'feed') {
+                openVideoFromFeed(video.id);
+                return;
+            }
             window.openVideoDetail(video.id);
         }
     });
@@ -11012,7 +11025,7 @@ function getVideoRouteVideoId() {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
     }
-    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    const queryId = url.searchParams.get('open') || url.searchParams.get('video') || url.searchParams.get('v');
     if (queryId) return queryId;
     if (url.hash && url.hash.startsWith('#video=')) {
         return url.hash.replace('#video=', '');
@@ -11025,6 +11038,7 @@ function clearVideoDetailRoute() {
     const fallback = videoDetailReturnPath || '/videos';
     if (url.pathname.startsWith('/videos')) {
         url.pathname = '/videos';
+        url.searchParams.delete('open');
         url.searchParams.delete('video');
         url.searchParams.delete('v');
         if (url.hash && url.hash.startsWith('#video')) url.hash = '';
@@ -12980,10 +12994,16 @@ function updateInboxTabsHeight() {
     document.documentElement.style.setProperty('--inbox-tabs-h', `${height}px`);
 }
 
+function refreshInboxLayout() {
+    requestAnimationFrame(function () {
+        updateInboxTabsHeight();
+        requestAnimationFrame(updateInboxTabsHeight);
+    });
+}
+
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
-    const inferredView = inferViewFromPath(path);
-    const isHome = inferredView === 'feed';
+    const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
     document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(inferredView));
     if (isHome) {
