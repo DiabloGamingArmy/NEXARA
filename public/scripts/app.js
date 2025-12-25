@@ -67,6 +67,7 @@ let miniPlayerState = null;
 let miniPlayerMode = null;
 let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
+let pendingVideoOpenId = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
 let conversationListFilter = 'all';
@@ -749,6 +750,7 @@ function arrayShallowEqual(a = [], b = []) {
 const ListenerRegistry = (function () {
     const listeners = new Map();
     const loggedKeys = new Set();
+    const authUnsubs = new Map();
 
     function devLog(message, key) {
         const shouldLog = window?.location?.hostname === 'localhost' || window?.__DEV_LISTENER_DEBUG__;
@@ -769,10 +771,12 @@ const ListenerRegistry = (function () {
             }
 
             listeners.set(key, unsubscribeFn);
+            authUnsubs.set(key, unsubscribeFn);
             return function deregister() {
                 if (!listeners.has(key)) return;
                 const current = listeners.get(key);
                 listeners.delete(key);
+                authUnsubs.delete(key);
                 try { current(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             };
         },
@@ -780,6 +784,7 @@ const ListenerRegistry = (function () {
             if (!listeners.has(key)) return;
             const unsub = listeners.get(key);
             listeners.delete(key);
+            authUnsubs.delete(key);
             try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
         },
         clearAll() {
@@ -787,6 +792,7 @@ const ListenerRegistry = (function () {
                 try { unsub(); } catch (e) { console.warn('Listener cleanup failed for', key, e); }
             });
             listeners.clear();
+            authUnsubs.clear();
         },
         has(key) {
             return listeners.has(key);
@@ -805,6 +811,12 @@ if (!window.Nexera.ready) {
     let readyResolve;
     window.Nexera.ready = new Promise(function (resolve) { readyResolve = resolve; });
     window.Nexera.__resolveReady = readyResolve;
+}
+if (!window.Nexera.authReady) {
+    let authReadyResolve;
+    window.Nexera.authReady = new Promise(function (resolve) { authReadyResolve = resolve; });
+    window.Nexera.__resolveAuthReady = authReadyResolve;
+    window.Nexera.__authReadyResolved = false;
 }
 window.Nexera.authResolved = false;
 window.Nexera.auth = auth;
@@ -896,6 +908,24 @@ const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? win
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
+
+function shouldShowRightSidebar(viewId) {
+    return viewId === 'feed';
+}
+
+window.shouldShowRightSidebar = shouldShowRightSidebar;
+
+function getViewerUid() {
+    return currentUser && currentUser.uid ? currentUser.uid : null;
+}
+
+const permissionDeniedLogCache = new Set();
+function logPermissionDeniedOnce(scope) {
+    if (permissionDeniedLogCache.has(scope)) return;
+    permissionDeniedLogCache.add(scope);
+    console.warn('Permission denied for', scope);
+}
+
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
 const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
@@ -1021,6 +1051,9 @@ function applyDesktopSidebarState(collapsed, persist = true) {
     if (!isMobileViewport()) {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
     }
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1365,6 +1398,10 @@ function initApp(onReady) {
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
         window.Nexera.authResolved = true;
+        if (!window.Nexera.__authReadyResolved && window.Nexera.__resolveAuthReady) {
+            window.Nexera.__authReadyResolved = true;
+            window.Nexera.__resolveAuthReady();
+        }
         uiDebugLog('auth resolved', { signedIn: !!user });
 
         try {
@@ -1442,6 +1479,7 @@ function initApp(onReady) {
             } else {
                 currentUser = null;
                 updateAuthClaims({});
+                ListenerRegistry.clearAll(); // Cleanup listeners on logout to prevent permission errors.
                 if (followedTopicsUnsubscribe) {
                     try { followedTopicsUnsubscribe(); } catch (err) { }
                     followedTopicsUnsubscribe = null;
@@ -1682,9 +1720,17 @@ async function getTrendingTopics(range = trendingTopicsState.range) {
 function renderTrendingTopics(topics) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    let loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
+    if (box && !loadMoreWrap) {
+        loadMoreWrap = document.createElement('div');
+        loadMoreWrap.className = 'trend-load-more-wrapper';
+        box.appendChild(loadMoreWrap);
+    }
     list.innerHTML = '';
     if (!topics.length) {
         list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
     const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
@@ -1699,7 +1745,11 @@ function renderTrendingTopics(topics) {
         list.appendChild(item);
     });
 
-    if (visibleCount < topics.length) {
+    if (loadMoreWrap) {
+        loadMoreWrap.innerHTML = '';
+    }
+
+    if (visibleCount < topics.length && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
@@ -1708,13 +1758,15 @@ function renderTrendingTopics(topics) {
             trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
             renderTrendingTopics(topics);
         });
-        list.appendChild(loadMore);
+        loadMoreWrap.appendChild(loadMore);
     }
 }
 
 async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    const loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
     trendingTopicsState.range = range || trendingTopicsState.range;
     if (trendingTopicsState.loading) {
         trendingTopicsState.needsRefresh = true;
@@ -1724,6 +1776,7 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
+    if (loadMoreWrap) loadMoreWrap.innerHTML = '';
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
         trendingTopicsState.lastLoadSucceeded = true;
@@ -1985,6 +2038,11 @@ async function fetchMissingProfiles(posts) {
     if (missingIds.size === 0) return;
 
     // Fetch up to 10 at a time or simple Promise.all
+    if (!getViewerUid()) {
+        Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+        return;
+    }
+
     const fetchPromises = Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "users", uid)); });
 
     try {
@@ -2001,6 +2059,11 @@ async function fetchMissingProfiles(posts) {
         renderFeed();
         if (activePostId) renderThreadMainPost(activePostId);
     } catch (e) {
+        if (e?.code === 'permission-denied') {
+            logPermissionDeniedOnce('fetchMissingProfiles');
+            Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            return;
+        }
         console.error("Error fetching profiles:", e);
     }
 }
@@ -2851,17 +2914,21 @@ window.navigateTo = function (viewId, pushToStack = true) {
         releaseScrollLockIfSafe();
         initConversations();
         syncMobileMessagesShell();
-        setInboxMode(inboxMode || 'messages');
+        setInboxMode(inboxMode || 'messages', { skipRouteUpdate: !pushToStack, routeView: viewId });
+        refreshInboxLayout();
     } else {
         document.body.classList.remove('mobile-thread-open');
     }
     if (viewId === 'videos') {
         const routedVideoId = getVideoRouteVideoId();
-        clearVideoDetailState({ updateRoute: !routedVideoId });
+        const requestedVideoId = routedVideoId || pendingVideoOpenId;
+        clearVideoDetailState({ updateRoute: !requestedVideoId });
         initVideoFeed();
-        if (routedVideoId) {
-            window.openVideoDetail(routedVideoId);
+        if (requestedVideoId) {
+            pendingVideoOpenId = null;
+            window.openVideoDetail(requestedVideoId);
         }
+        pendingVideoOpenId = null;
     }
     if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
@@ -2885,6 +2952,13 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     document.body.classList.toggle('go-live-open', goLiveLock);
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
+
+    if (pushToStack && currentViewId === viewId && viewId !== 'messages') {
+        const path = window.NexeraRouter?.buildUrlForSection?.(viewId) || null;
+        if (path && window.location.pathname !== path) {
+            history.pushState({}, '', path);
+        }
+    }
 };
 
 function updateMobileNavState(viewId = 'feed') {
@@ -3339,6 +3413,7 @@ async function hydrateFollowingState(uid, profileData = {}) {
 function getPostHTML(post) {
     try {
         const date = formatDateTime(post.timestamp) || 'Just now';
+        const viewerUid = getViewerUid();
 
         let authorData = userCache[post.userId] || { name: post.author, username: "loading...", photoURL: null };
         if (!authorData.name) authorData.name = "Unknown User";
@@ -3347,10 +3422,10 @@ function getPostHTML(post) {
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
-        const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-        const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-        const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
-        const isSelfPost = currentUser && post.userId === currentUser.uid;
+        const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+        const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+        const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(post.id)) : false;
+        const isSelfPost = viewerUid ? post.userId === viewerUid : false;
         const isFollowingUser = followedUsers.has(post.userId);
         const isFollowingTopic = followedCategories.has(post.category);
         const topicClass = post.category.replace(/[^a-zA-Z0-9]/g, '');
@@ -3371,7 +3446,7 @@ function getPostHTML(post) {
         const tagListHtml = renderTagList(post.tags || []);
         const pollBlock = renderPollBlock(post);
         const locationBadge = renderLocationBadge(post.location);
-        const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
+        const scheduledChip = isPostScheduledInFuture(post) && viewerUid && post.userId === viewerUid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
         const verification = getVerificationState(post);
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
@@ -3564,15 +3639,16 @@ function renderFeed(targetId = 'feed-content') {
 function refreshSinglePostUI(postId) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
+    const viewerUid = getViewerUid();
 
     const likeBtn = document.getElementById(`post-like-btn-${postId}`);
     const dislikeBtn = document.getElementById(`post-dislike-btn-${postId}`);
     const saveBtn = document.getElementById(`post-save-btn-${postId}`);
     const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(postId);
+    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
+    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
     function renderActionButton(btn, { iconClass, label, count = null, activeColor = 'inherit' }) {
@@ -6964,12 +7040,19 @@ async function resolveUserProfile(uid, options = {}) {
 
     const fetchPromise = (async function () {
         try {
+            if (!getViewerUid()) {
+                return buildUnknownUserProfile(uid);
+            }
             const snap = await getDoc(doc(db, 'users', uid));
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
         } catch (e) {
-            console.warn('User fetch failed', uid, e?.message || e);
+            if (e?.code === 'permission-denied') {
+                logPermissionDeniedOnce('resolveUserProfile');
+            } else {
+                console.warn('User fetch failed', uid, e?.message || e);
+            }
         }
         return buildUnknownUserProfile(uid);
     })();
@@ -7314,7 +7397,8 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
-function setInboxMode(mode = 'messages') {
+function setInboxMode(mode = 'messages', options = {}) {
+    const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
     inboxMode = allowed.includes(mode) ? mode : 'messages';
     document.querySelectorAll('.inbox-tab').forEach(function (btn) {
@@ -7334,6 +7418,20 @@ function setInboxMode(mode = 'messages') {
     });
     if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
+    }
+    refreshInboxLayout();
+    if (!skipRouteUpdate && routeView === 'messages') {
+        let nextPath = '/inbox';
+        if (inboxMode && inboxMode !== 'messages') {
+            nextPath = `/inbox/${inboxMode}`;
+        } else if (activeConversationId) {
+            nextPath = `/inbox/messages/${encodeURIComponent(activeConversationId)}`;
+        } else {
+            nextPath = '/inbox/messages';
+        }
+        if (window.location.pathname !== nextPath) {
+            history.pushState({}, '', nextPath);
+        }
     }
 }
 
@@ -8335,6 +8433,12 @@ async function openConversation(conversationId) {
         setTypingState(activeConversationId, false);
     }
     activeConversationId = conversationId;
+    if (window.location.pathname.startsWith('/inbox')) {
+        const nextPath = `/inbox/messages/${encodeURIComponent(conversationId)}`;
+        if (window.location.pathname + window.location.search !== nextPath) {
+            history.pushState({}, '', nextPath);
+        }
+    }
     clearReplyContext();
     conversationSearchTerm = '';
     const searchInput = document.getElementById('conversation-search');
@@ -8362,6 +8466,7 @@ async function openConversation(conversationId) {
         document.body.classList.add('mobile-thread-open');
     }
     syncMobileMessagesShell();
+    refreshInboxLayout();
 
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
@@ -8370,6 +8475,7 @@ async function openConversation(conversationId) {
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
     await listenToMessages(conversationId);
+    refreshInboxLayout();
 }
 
 async function initConversations(autoOpen = true) {
@@ -10843,6 +10949,12 @@ async function hydrateVideoEngagement(videoId) {
     return getVideoEngagementStatus(videoId);
 }
 
+function openVideoFromFeed(videoId) {
+    if (!videoId) return;
+    pendingVideoOpenId = videoId;
+    window.navigateTo('videos');
+}
+
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
     const card = document.createElement('div');
@@ -10857,10 +10969,10 @@ function buildVideoCard(video) {
     thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
     thumb.style.cursor = 'pointer';
 
-    const duration = document.createElement('div');
-    duration.className = 'video-duration';
-    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
-    thumb.appendChild(duration);
+    const views = document.createElement('div');
+    views.className = 'video-views';
+    views.textContent = `${formatCompactNumber(getVideoViewCount(video))} views`;
+    thumb.appendChild(views);
 
     const meta = document.createElement('div');
     meta.className = 'video-meta';
@@ -10893,14 +11005,28 @@ function buildVideoCard(video) {
 
     card.appendChild(thumb);
     card.appendChild(meta);
-    card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    card.addEventListener('click', function () {
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
+        window.openVideoDetail(video.id);
+    });
     thumb.addEventListener('click', function (event) {
         event.stopPropagation();
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
         window.openVideoDetail(video.id);
     });
     card.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            if (currentViewId === 'feed') {
+                openVideoFromFeed(video.id);
+                return;
+            }
             window.openVideoDetail(video.id);
         }
     });
@@ -10956,20 +11082,26 @@ function getVideoModalPlayerContainer() {
 }
 
 function captureVideoDetailReturnPath() {
-    const path = window.location.pathname || '';
-    if (path.startsWith('/videos')) {
-        videoDetailReturnPath = '/videos';
-        return;
-    }
+    const path = window.location.pathname || '/';
+    const search = window.location.search || '';
+    const hash = window.location.hash || '';
     if (path.startsWith('/video/')) {
         videoDetailReturnPath = '/videos';
         return;
     }
-    videoDetailReturnPath = '/videos';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = `${path}${search}${hash}` || '/videos';
 }
 
 function getVideoRouteVideoId() {
     const url = new URL(window.location.href);
+    if (url.pathname.startsWith('/videos/')) {
+        const raw = url.pathname.replace('/videos/', '').split('/')[0];
+        return raw ? decodeURIComponent(raw) : null;
+    }
     if (url.pathname.startsWith('/video/')) {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
@@ -10984,29 +11116,25 @@ function getVideoRouteVideoId() {
 
 function clearVideoDetailRoute() {
     const url = new URL(window.location.href);
-    let changed = false;
-    if (url.pathname.startsWith('/video/')) {
+    const fallback = videoDetailReturnPath || '/videos';
+    if (url.pathname.startsWith('/videos')) {
         url.pathname = '/videos';
-        changed = true;
-    }
-    if (url.searchParams.has('video')) {
+        url.searchParams.delete('open');
         url.searchParams.delete('video');
-        changed = true;
-    }
-    if (url.searchParams.has('v')) {
         url.searchParams.delete('v');
-        changed = true;
+        if (url.hash && url.hash.startsWith('#video')) url.hash = '';
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        if (window.NexeraRouter?.replaceStateSilently) {
+            window.NexeraRouter.replaceStateSilently(next);
+        } else {
+            history.replaceState({}, '', next);
+        }
+        return;
     }
-    if (url.hash && url.hash.startsWith('#video')) {
-        url.hash = '';
-        changed = true;
-    }
-    if (!changed) return;
-    const next = `${url.pathname}${url.search}${url.hash}`;
     if (window.NexeraRouter?.replaceStateSilently) {
-        window.NexeraRouter.replaceStateSilently(next);
+        window.NexeraRouter.replaceStateSilently(fallback);
     } else {
-        history.replaceState({}, '', next);
+        history.replaceState({}, '', fallback);
     }
 }
 
@@ -12947,10 +13075,18 @@ function updateInboxTabsHeight() {
     document.documentElement.style.setProperty('--inbox-tabs-h', `${height}px`);
 }
 
+function refreshInboxLayout() {
+    requestAnimationFrame(function () {
+        updateInboxTabsHeight();
+        requestAnimationFrame(updateInboxTabsHeight);
+    });
+}
+
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
-    const isHome = path === '/' || path === '/home';
+    const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
+    document.body.classList.toggle('sidebar-wide', isHome);
     if (isHome) {
         mountFeedTypeToggleBar();
     }
