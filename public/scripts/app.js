@@ -215,25 +215,90 @@ window.refreshBrandLogos = refreshBrandLogos;
 function showSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
+    startSplashFailsafeTimer();
     splash.style.display = 'flex';
     splash.classList.remove('nexera-splash-hidden');
     splash.style.pointerEvents = 'auto';
     splash.style.visibility = 'visible';
+    splash.setAttribute('aria-hidden', 'false');
+    logSplashEvent('show');
 }
 
-function hideSplash() {
+function hideSplash(options = {}) {
     const splash = document.getElementById('nexera-splash');
-    if (!splash) return;
-    if (window.Nexera?.splashHold) {
-        window.Nexera.splashPending = true;
+    const { force = false, reason = 'hide' } = options || {};
+    if (!splash) {
+        clearSplashFailsafeTimer();
+        logSplashEvent('hide-missing', reason);
         return;
     }
+    if (!force && window.Nexera?.splashHold) {
+        window.Nexera.splashPending = true;
+        logSplashEvent('hold-pending', reason);
+        return;
+    }
+    logSplashEvent('hide', reason);
     splash.classList.add('nexera-splash-hidden');
     splash.style.pointerEvents = 'none';
+    splash.style.visibility = 'hidden';
+    splash.setAttribute('aria-hidden', 'true');
+    clearSplashFailsafeTimer();
     const TRANSITION_BUFFER = 520;
     setTimeout(function () {
-        splash.style.display = 'none';
+        if (splash.classList.contains('nexera-splash-hidden')) {
+            splash.style.display = 'none';
+        }
     }, TRANSITION_BUFFER);
+}
+
+const SPLASH_FAILSAFE_TIMEOUT = 8000;
+let splashFailsafeTimer = null;
+
+function getSplashDebugSummary() {
+    return {
+        path: `${window.location.pathname || '/'}${window.location.search || ''}${window.location.hash || ''}`,
+        user: currentUser?.uid || null,
+        hold: !!window.Nexera?.splashHold,
+        pending: !!window.Nexera?.splashPending
+    };
+}
+
+function isSplashDebugEnabled() {
+    return window.__NEXERA_DEBUG_SPLASH === true;
+}
+
+function logSplashEvent(event, detail) {
+    if (!isSplashDebugEnabled()) return;
+    const summary = getSplashDebugSummary();
+    if (detail !== undefined) {
+        console.log('[NexeraSplash]', event, detail, summary);
+        return;
+    }
+    console.log('[NexeraSplash]', event, summary);
+}
+
+function clearSplashFailsafeTimer() {
+    if (!splashFailsafeTimer) return;
+    clearTimeout(splashFailsafeTimer);
+    splashFailsafeTimer = null;
+}
+
+function startSplashFailsafeTimer() {
+    if (splashFailsafeTimer) return;
+    splashFailsafeTimer = setTimeout(function () {
+        const splash = document.getElementById('nexera-splash');
+        if (!splash) return;
+        const isHidden = splash.classList.contains('nexera-splash-hidden') || splash.style.display === 'none';
+        if (!isHidden) {
+            console.warn('[NexeraSplash] Failsafe hide triggered', getSplashDebugSummary());
+            if (window.Nexera) {
+                window.Nexera.splashHold = false;
+                window.Nexera.splashPending = false;
+            }
+            hideSplash({ force: true, reason: 'failsafe-timeout' });
+        }
+    }, SPLASH_FAILSAFE_TIMEOUT);
+    logSplashEvent('failsafe-start', SPLASH_FAILSAFE_TIMEOUT);
 }
 
 function getReviewDisplay(reviewValue) {
@@ -796,12 +861,12 @@ window.Nexera.openEntity = function (type, id, payload) {
     }
 };
 window.Nexera.splashHold = window.Nexera.splashHold !== false;
-window.Nexera.releaseSplash = function () {
+logSplashEvent('hold-init');
+window.Nexera.releaseSplash = function (reason = 'release') {
     window.Nexera.splashHold = false;
-    if (window.Nexera.splashPending) {
-        window.Nexera.splashPending = false;
-        hideSplash();
-    }
+    window.Nexera.splashPending = false;
+    logSplashEvent('release', reason);
+    hideSplash({ force: true, reason });
 };
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
@@ -1253,6 +1318,9 @@ function initApp(onReady) {
         if (typeof onReady === 'function') onReady();
         if (window.Nexera?.__resolveReady) window.Nexera.__resolveReady();
         if (readyResolver) readyResolver();
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash('auth-ready');
+        }
     };
 
     onAuthStateChanged(auth, async function (user) {
@@ -12541,7 +12609,13 @@ document.addEventListener('DOMContentLoaded', function () {
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
+    startSplashFailsafeTimer();
     initializeNexeraApp();
+    setTimeout(function () {
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash('domcontentloaded');
+        }
+    }, 1200);
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
 });
