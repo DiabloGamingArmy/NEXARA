@@ -892,9 +892,26 @@ let commentFilterQuery = '';
 let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
+const SIDEBAR_WIDE_VIEWS = new Set(['feed', 'live', 'videos', 'messages', 'discover', 'saved', 'profile', 'staff']);
 
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
+}
+
+function shouldShowRightSidebar(viewId) {
+    return SIDEBAR_WIDE_VIEWS.has(viewId);
+}
+
+function inferViewFromPath(path = '') {
+    if (!path || path === '/' || path === '/home') return 'feed';
+    if (path.startsWith('/live')) return 'live';
+    if (path.startsWith('/videos') || path.startsWith('/video')) return 'videos';
+    if (path.startsWith('/inbox') || path.startsWith('/messages')) return 'messages';
+    if (path.startsWith('/discover')) return 'discover';
+    if (path.startsWith('/saved')) return 'saved';
+    if (path.startsWith('/profile')) return 'profile';
+    if (path.startsWith('/staff')) return 'staff';
+    return 'feed';
 }
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
@@ -2839,6 +2856,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -10974,16 +10992,18 @@ function getVideoModalPlayerContainer() {
 }
 
 function captureVideoDetailReturnPath() {
-    const path = window.location.pathname || '';
-    if (path.startsWith('/videos')) {
-        videoDetailReturnPath = '/videos';
-        return;
-    }
+    const path = window.location.pathname || '/';
+    const search = window.location.search || '';
+    const hash = window.location.hash || '';
     if (path.startsWith('/video/')) {
         videoDetailReturnPath = '/videos';
         return;
     }
-    videoDetailReturnPath = '/videos';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = `${path}${search}${hash}` || '/videos';
 }
 
 function getVideoRouteVideoId() {
@@ -11002,29 +11022,24 @@ function getVideoRouteVideoId() {
 
 function clearVideoDetailRoute() {
     const url = new URL(window.location.href);
-    let changed = false;
-    if (url.pathname.startsWith('/video/')) {
+    const fallback = videoDetailReturnPath || '/videos';
+    if (url.pathname.startsWith('/videos')) {
         url.pathname = '/videos';
-        changed = true;
-    }
-    if (url.searchParams.has('video')) {
         url.searchParams.delete('video');
-        changed = true;
-    }
-    if (url.searchParams.has('v')) {
         url.searchParams.delete('v');
-        changed = true;
+        if (url.hash && url.hash.startsWith('#video')) url.hash = '';
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        if (window.NexeraRouter?.replaceStateSilently) {
+            window.NexeraRouter.replaceStateSilently(next);
+        } else {
+            history.replaceState({}, '', next);
+        }
+        return;
     }
-    if (url.hash && url.hash.startsWith('#video')) {
-        url.hash = '';
-        changed = true;
-    }
-    if (!changed) return;
-    const next = `${url.pathname}${url.search}${url.hash}`;
     if (window.NexeraRouter?.replaceStateSilently) {
-        window.NexeraRouter.replaceStateSilently(next);
+        window.NexeraRouter.replaceStateSilently(fallback);
     } else {
-        history.replaceState({}, '', next);
+        history.replaceState({}, '', fallback);
     }
 }
 
@@ -12967,8 +12982,10 @@ function updateInboxTabsHeight() {
 
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
-    const isHome = path === '/' || path === '/home';
+    const inferredView = inferViewFromPath(path);
+    const isHome = inferredView === 'feed';
     document.body.classList.toggle('sidebar-home', isHome);
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(inferredView));
     if (isHome) {
         mountFeedTypeToggleBar();
     }

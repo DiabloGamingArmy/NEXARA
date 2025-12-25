@@ -51,7 +51,7 @@
 
   function buildUrlForSection(view) {
     const map = {
-      feed: '/home',
+      feed: '/',
       live: '/live',
       videos: '/videos',
       messages: '/inbox',
@@ -105,9 +105,9 @@
     const search = new URLSearchParams(params);
     const suffix = search.toString();
     if (conversationId) {
-      return `/inbox/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
+      return `/inbox/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
     }
-    return `/inbox${suffix ? `?${suffix}` : ''}`;
+    return `/inbox/messages${suffix ? `?${suffix}` : ''}`;
   }
 
   function updateUrl(path, replace = false) {
@@ -193,6 +193,12 @@
         return { type: 'messages', conversationId: segments[1], route };
       }
       if (head === 'inbox' && segments[1]) {
+        if (segments[1] === 'messages') {
+          if (segments[2]) {
+            return { type: 'messages', conversationId: segments[2], route };
+          }
+          return { type: 'section', view: SECTION_ROUTES[head], route };
+        }
         return { type: 'messages', conversationId: segments[1], route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
@@ -335,6 +341,12 @@
           }
           return;
         }
+      }
+      if (route.view === 'feed' && route.route?.path === '/home') {
+        replaceStateSilently('/');
+      }
+      if (route.view === 'messages' && route.route?.path === '/inbox') {
+        replaceStateSilently(buildUrlForMessages());
       }
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: route.view });
