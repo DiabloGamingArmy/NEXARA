@@ -916,10 +916,12 @@ function buildFeedTypeToggleButtons(container) {
     container.innerHTML = '';
     FEED_TYPE_TOGGLES.forEach(function (toggle) {
         const btn = document.createElement('button');
+        btn.type = 'button';
         btn.className = 'discover-pill feed-type-pill';
         btn.textContent = toggle.label;
         btn.dataset.type = toggle.key;
-        btn.addEventListener('click', function () {
+        btn.addEventListener('click', function (event) {
+            event.preventDefault();
             toggleFeedType(toggle.key);
         });
         container.appendChild(btn);
@@ -964,6 +966,7 @@ function getActiveFeedTypes() {
 function applyFeedTypeFilterAndRefresh({ preserveScroll = false } = {}) {
     if (currentViewId !== 'feed') return;
     const scrollY = preserveScroll ? window.scrollY : null;
+    uiDebugLog('feed toggles', { active: getActiveFeedTypes() });
     loadHomeMediaData().finally(function () {
         renderFeed();
         if (preserveScroll && typeof scrollY === 'number') {
@@ -3289,7 +3292,8 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     if (activeTypes.includes('videos') && currentCategory !== 'Saved') {
-        const videos = (homeVideosCache || videosCache || []).filter(function (video) {
+        const videoSource = (homeVideosCache && homeVideosCache.length) ? homeVideosCache : (videosCache || []);
+        const videos = videoSource.filter(function (video) {
             return matchesCategoryFilter(video.category || video.genre || video.categoryLabel);
         }).map(function (video) {
             return ({ type: 'videos', id: video.id, createdAt: getFeedItemTimestamp(video), data: video });
@@ -3298,7 +3302,11 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     if (activeTypes.includes('livestreams') && currentCategory !== 'Saved') {
-        const sessions = (homeLiveSessionsCache || liveSessionsCache || []).filter(function (session) {
+        const sessionSource = (homeLiveSessionsCache && homeLiveSessionsCache.length) ? homeLiveSessionsCache : (liveSessionsCache || []);
+        const sessions = sessionSource.filter(function (session) {
+            const status = (session.status || session.state || '').toString().toLowerCase();
+            const isLive = session.isLive === true || status === 'live' || status === 'streaming' || session.endedAt == null;
+            if (!isLive) return false;
             return matchesCategoryFilter(session.category || session.categoryLabel);
         }).map(function (session) {
             return ({ type: 'livestreams', id: session.id, createdAt: getFeedItemTimestamp(session), data: session });
@@ -3315,7 +3323,16 @@ function renderFeed(targetId = 'feed-content') {
     if (items.length === 0) {
         const emptyLabel = feedLoading ? 'Loading Posts...' : 'No posts found.';
         container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>${emptyLabel}</p></div>`;
+        uiDebugLog('feed render empty', { activeTypes, count: 0 });
         return;
+    }
+
+    if (isUiDebugEnabled()) {
+        const counts = items.reduce(function (acc, item) {
+            acc[item.type] = (acc[item.type] || 0) + 1;
+            return acc;
+        }, {});
+        uiDebugLog('feed render', { activeTypes, counts, total: items.length });
     }
 
     items.forEach(function (item) {
