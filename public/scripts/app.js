@@ -2879,7 +2879,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
         releaseScrollLockIfSafe();
         initConversations();
         syncMobileMessagesShell();
-        setInboxMode(inboxMode || 'messages');
+        setInboxMode(inboxMode || 'messages', { skipRouteUpdate: !pushToStack });
         refreshInboxLayout();
     } else {
         document.body.classList.remove('mobile-thread-open');
@@ -2917,6 +2917,13 @@ window.navigateTo = function (viewId, pushToStack = true) {
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     document.body.classList.toggle('go-live-open', goLiveLock);
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
+
+    if (pushToStack && currentViewId === viewId && viewId !== 'messages') {
+        const path = window.NexeraRouter?.buildUrlForSection?.(viewId) || null;
+        if (path && window.location.pathname !== path) {
+            history.pushState({}, '', path);
+        }
+    }
 };
 
 function updateMobileNavState(viewId = 'feed') {
@@ -7346,7 +7353,8 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
-function setInboxMode(mode = 'messages') {
+function setInboxMode(mode = 'messages', options = {}) {
+    const { skipRouteUpdate = false } = options;
     const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
     inboxMode = allowed.includes(mode) ? mode : 'messages';
     document.querySelectorAll('.inbox-tab').forEach(function (btn) {
@@ -7368,6 +7376,19 @@ function setInboxMode(mode = 'messages') {
         renderInboxNotifications(inboxMode);
     }
     refreshInboxLayout();
+    if (!skipRouteUpdate && currentViewId === 'messages') {
+        let nextPath = '/inbox';
+        if (inboxMode && inboxMode !== 'messages') {
+            nextPath = `/inbox/${inboxMode}`;
+        } else if (activeConversationId) {
+            nextPath = `/inbox/messages/${encodeURIComponent(activeConversationId)}`;
+        } else {
+            nextPath = '/inbox/messages';
+        }
+        if (window.location.pathname !== nextPath) {
+            history.pushState({}, '', nextPath);
+        }
+    }
 }
 
 function renderConversationList() {
@@ -11027,6 +11048,10 @@ function captureVideoDetailReturnPath() {
 
 function getVideoRouteVideoId() {
     const url = new URL(window.location.href);
+    if (url.pathname.startsWith('/videos/')) {
+        const raw = url.pathname.replace('/videos/', '').split('/')[0];
+        return raw ? decodeURIComponent(raw) : null;
+    }
     if (url.pathname.startsWith('/video/')) {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;

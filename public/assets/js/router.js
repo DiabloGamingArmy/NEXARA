@@ -70,7 +70,7 @@
   }
 
   function buildUrlForVideo(videoId) {
-    return videoId ? `/videos?open=${encodeURIComponent(videoId)}` : '/videos';
+    return videoId ? `/videos/${encodeURIComponent(videoId)}` : '/videos';
   }
 
   function buildUrlForVideoManager() {
@@ -104,10 +104,9 @@
   function buildUrlForMessages(conversationId, params = {}) {
     const search = new URLSearchParams(params);
     if (conversationId) {
-      search.set('conversation', conversationId);
+      return `/inbox/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
     }
-    const suffix = search.toString();
-    return `/inbox${suffix ? `?${suffix}` : ''}`;
+    return `/inbox/messages${suffix ? `?${suffix}` : ''}`;
   }
 
   function updateUrl(path, replace = false) {
@@ -165,6 +164,9 @@
         route
       };
     }
+    if (head === 'videos' && segments[1]) {
+      return { type: 'entity', entityType: 'video', id: segments[1], route };
+    }
     if (head === 'video' && segments[1] === 'video-manager') {
       return {
         type: 'video-manager',
@@ -192,24 +194,24 @@
       if (head === 'messages' && segments[1]) {
         return { type: 'messages', conversationId: segments[1], route };
       }
-      if (head === 'messages') {
-        return { type: 'section', view: SECTION_ROUTES.inbox, route };
-      }
       if (head === 'inbox') {
-        const convoParam = params.get('conversation');
-        if (convoParam) {
-          return { type: 'messages', conversationId: convoParam, route };
+        const mode = segments[1] || 'messages';
+        const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
+        if (!allowed.includes(mode)) {
+          return { type: 'section', view: SECTION_ROUTES[head], route };
         }
-        if (segments[1]) {
-          return { type: 'messages', conversationId: segments[1], route };
-        }
-        return { type: 'section', view: SECTION_ROUTES[head], route };
+        const conversationId = mode === 'messages' ? (segments[2] || null) : null;
+        return { type: 'inbox', mode, conversationId, route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
     }
 
     if (head === 'view-thread' && segments[1]) {
       return { type: 'thread', threadId: segments[1], route };
+    }
+
+    if (head === 'discover' && segments[1] === 'search' && segments[2]) {
+      return { type: 'discover-search', query: segments.slice(2).join('/'), route };
     }
 
     if (ENTITY_ROUTES[head]) {
@@ -331,7 +333,10 @@
     hideNotFound();
 
     if (route.type === 'not-found') {
-      showNotFound();
+      replaceStateSilently('/home');
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'feed' });
+      }
       return;
     }
 
@@ -366,6 +371,22 @@
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: 'messages' });
       }
+      if (typeof window.setInboxMode === 'function') {
+        window.setInboxMode('messages', { skipRouteUpdate: true });
+      }
+      if (route.conversationId && typeof window.openConversation === 'function') {
+        window.openConversation(route.conversationId);
+      }
+      return;
+    }
+
+    if (route.type === 'inbox') {
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'messages' });
+      }
+      if (typeof window.setInboxMode === 'function') {
+        window.setInboxMode(route.mode || 'messages', { skipRouteUpdate: true });
+      }
       if (route.conversationId && typeof window.openConversation === 'function') {
         window.openConversation(route.conversationId);
       }
@@ -381,6 +402,17 @@
       }
       if (typeof window.openVideoTaskViewer === 'function') {
         window.openVideoTaskViewer();
+      }
+      return;
+    }
+
+    if (route.type === 'discover-search') {
+      if (route.query) {
+        const next = `/discover?q=${encodeURIComponent(route.query)}`;
+        replaceStateSilently(next);
+      }
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'discover' });
       }
       return;
     }
