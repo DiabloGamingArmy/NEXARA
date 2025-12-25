@@ -893,6 +893,7 @@ let commentFilterQuery = '';
 let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
+const SIDEBAR_WIDE_VIEWS = new Set(['feed', 'live', 'videos', 'messages', 'discover', 'saved', 'profile', 'staff']);
 
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
@@ -2841,6 +2842,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -13003,6 +13005,7 @@ function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(inferredView));
     if (isHome) {
         mountFeedTypeToggleBar();
     }
