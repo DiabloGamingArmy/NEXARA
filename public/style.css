@@ -2673,6 +2673,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 0px;
     height: 100%;
     min-height: 80vh;
+    min-height: 0;
 }
 
 .inbox-sidebar {
@@ -2683,6 +2684,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 12px;
     border-right: 1px solid var(--border);
     padding: 1rem;
+    min-height: 0;
 }
 
 .inbox-thread {
@@ -2819,10 +2821,12 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .inbox-panel {
     display: none;
     min-height: 70vh;
+    height: 100%;
 }
 
 .inbox-panel.active {
     display: block;
+    height: 100%;
 }
 
 .inbox-notification-list {

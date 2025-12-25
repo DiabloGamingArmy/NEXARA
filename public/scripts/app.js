@@ -7267,6 +7267,7 @@ function renderConversationList() {
     listEl.innerHTML = '';
     const emptyEl = document.getElementById('conversation-list-empty');
     const pinnedEl = document.getElementById('pinned-conversations');
+    const currentUid = currentUser?.uid || '';
 
     if (conversationMappings.length === 0) {
         if (emptyEl) {
@@ -7304,7 +7305,7 @@ function renderConversationList() {
         filtered = filtered.filter(function (mapping) {
             const details = conversationDetailsCache[mapping.id] || {};
             const participants = details.participants || mapping.otherParticipantIds || [];
-            const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
+            const meta = deriveOtherParticipantMeta(participants, currentUid, details);
             const labels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).join(' ').toLowerCase();
             const preview = (mapping.lastMessagePreview || details.lastMessagePreview || '').toLowerCase();
             return labels.includes(search) || preview.includes(search);
@@ -7314,11 +7315,17 @@ function renderConversationList() {
     const pinned = filtered.filter(function (mapping) { return mapping.pinned; });
     const unpinned = filtered.filter(function (mapping) { return !mapping.pinned; });
     const visible = unpinned.slice(0, conversationListVisibleCount);
+    uiDebugLog('conversation list', {
+        total: orderedMappings.length,
+        filtered: filtered.length,
+        filter: conversationListFilter,
+        searchActive: !!search
+    });
 
     const renderRow = function (mapping, targetEl) {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
-        const meta = deriveOtherParticipantMeta(participants, currentUser.uid, details);
+        const meta = deriveOtherParticipantMeta(participants, currentUid, details);
         const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
         const otherProfile = otherId ? getCachedUser(otherId) : null;
         const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
@@ -7357,7 +7364,7 @@ function renderConversationList() {
         item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
         const unread = mapping.unreadCount || 0;
         const muteState = resolveMuteState(mapping.id, mapping);
-        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUser.uid);
+        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
         updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
         const unreadLabel = unread > 10 ? '10+' : `${unread}`;
         const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
