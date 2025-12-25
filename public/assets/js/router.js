@@ -51,7 +51,7 @@
 
   function buildUrlForSection(view) {
     const map = {
-      feed: '/home',
+      feed: '/',
       live: '/live',
       videos: '/videos',
       messages: '/inbox',
@@ -334,7 +334,10 @@
     hideNotFound();
 
     if (route.type === 'not-found') {
-      showNotFound();
+      replaceStateSilently('/home');
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'feed' });
+      }
       return;
     }
 
