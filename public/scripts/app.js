@@ -893,6 +893,7 @@ let commentFilterQuery = '';
 let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
+const SIDEBAR_WIDE_VIEWS = new Set(['feed', 'live', 'videos', 'messages', 'discover', 'saved', 'profile', 'staff']);
 
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
@@ -2847,6 +2848,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -11054,7 +11056,7 @@ function getVideoRouteVideoId() {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
     }
-    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    const queryId = url.searchParams.get('open') || url.searchParams.get('video') || url.searchParams.get('v');
     if (queryId) return queryId;
     if (url.hash && url.hash.startsWith('#video=')) {
         return url.hash.replace('#video=', '');
