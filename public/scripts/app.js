@@ -892,9 +892,26 @@ let commentFilterQuery = '';
 let navStack = [];
 let currentViewId = 'feed';
 const MOBILE_VIEWPORT = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 820px)') : null;
+const SIDEBAR_WIDE_VIEWS = new Set(['feed', 'live', 'videos', 'messages', 'discover', 'saved', 'profile', 'staff']);
 
 function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
+}
+
+function shouldShowRightSidebar(viewId) {
+    return SIDEBAR_WIDE_VIEWS.has(viewId);
+}
+
+function inferViewFromPath(path = '') {
+    if (!path || path === '/' || path === '/home') return 'feed';
+    if (path.startsWith('/live')) return 'live';
+    if (path.startsWith('/videos') || path.startsWith('/video')) return 'videos';
+    if (path.startsWith('/inbox') || path.startsWith('/messages')) return 'messages';
+    if (path.startsWith('/discover')) return 'discover';
+    if (path.startsWith('/saved')) return 'saved';
+    if (path.startsWith('/profile')) return 'profile';
+    if (path.startsWith('/staff')) return 'staff';
+    return 'feed';
 }
 
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
@@ -1021,6 +1038,9 @@ function applyDesktopSidebarState(collapsed, persist = true) {
     if (!isMobileViewport()) {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
     }
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1682,9 +1702,17 @@ async function getTrendingTopics(range = trendingTopicsState.range) {
 function renderTrendingTopics(topics) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    let loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
+    if (box && !loadMoreWrap) {
+        loadMoreWrap = document.createElement('div');
+        loadMoreWrap.className = 'trend-load-more-wrapper';
+        box.appendChild(loadMoreWrap);
+    }
     list.innerHTML = '';
     if (!topics.length) {
         list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
     const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
@@ -1699,7 +1727,11 @@ function renderTrendingTopics(topics) {
         list.appendChild(item);
     });
 
-    if (visibleCount < topics.length) {
+    if (loadMoreWrap) {
+        loadMoreWrap.innerHTML = '';
+    }
+
+    if (visibleCount < topics.length && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
@@ -1708,13 +1740,15 @@ function renderTrendingTopics(topics) {
             trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
             renderTrendingTopics(topics);
         });
-        list.appendChild(loadMore);
+        loadMoreWrap.appendChild(loadMore);
     }
 }
 
 async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    const loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
     trendingTopicsState.range = range || trendingTopicsState.range;
     if (trendingTopicsState.loading) {
         trendingTopicsState.needsRefresh = true;
@@ -1724,6 +1758,7 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
+    if (loadMoreWrap) loadMoreWrap.innerHTML = '';
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
         trendingTopicsState.lastLoadSucceeded = true;
@@ -2821,6 +2856,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -10857,10 +10893,10 @@ function buildVideoCard(video) {
     thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
     thumb.style.cursor = 'pointer';
 
-    const duration = document.createElement('div');
-    duration.className = 'video-duration';
-    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
-    thumb.appendChild(duration);
+    const views = document.createElement('div');
+    views.className = 'video-views';
+    views.textContent = `${formatCompactNumber(getVideoViewCount(video))} views`;
+    thumb.appendChild(views);
 
     const meta = document.createElement('div');
     meta.className = 'video-meta';
@@ -10956,16 +10992,18 @@ function getVideoModalPlayerContainer() {
 }
 
 function captureVideoDetailReturnPath() {
-    const path = window.location.pathname || '';
-    if (path.startsWith('/videos')) {
-        videoDetailReturnPath = '/videos';
-        return;
-    }
+    const path = window.location.pathname || '/';
+    const search = window.location.search || '';
+    const hash = window.location.hash || '';
     if (path.startsWith('/video/')) {
         videoDetailReturnPath = '/videos';
         return;
     }
-    videoDetailReturnPath = '/videos';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = `${path}${search}${hash}` || '/videos';
 }
 
 function getVideoRouteVideoId() {
@@ -10984,29 +11022,24 @@ function getVideoRouteVideoId() {
 
 function clearVideoDetailRoute() {
     const url = new URL(window.location.href);
-    let changed = false;
-    if (url.pathname.startsWith('/video/')) {
+    const fallback = videoDetailReturnPath || '/videos';
+    if (url.pathname.startsWith('/videos')) {
         url.pathname = '/videos';
-        changed = true;
-    }
-    if (url.searchParams.has('video')) {
         url.searchParams.delete('video');
-        changed = true;
-    }
-    if (url.searchParams.has('v')) {
         url.searchParams.delete('v');
-        changed = true;
+        if (url.hash && url.hash.startsWith('#video')) url.hash = '';
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        if (window.NexeraRouter?.replaceStateSilently) {
+            window.NexeraRouter.replaceStateSilently(next);
+        } else {
+            history.replaceState({}, '', next);
+        }
+        return;
     }
-    if (url.hash && url.hash.startsWith('#video')) {
-        url.hash = '';
-        changed = true;
-    }
-    if (!changed) return;
-    const next = `${url.pathname}${url.search}${url.hash}`;
     if (window.NexeraRouter?.replaceStateSilently) {
-        window.NexeraRouter.replaceStateSilently(next);
+        window.NexeraRouter.replaceStateSilently(fallback);
     } else {
-        history.replaceState({}, '', next);
+        history.replaceState({}, '', fallback);
     }
 }
 
@@ -12949,8 +12982,10 @@ function updateInboxTabsHeight() {
 
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
-    const isHome = path === '/' || path === '/home';
+    const inferredView = inferViewFromPath(path);
+    const isHome = inferredView === 'feed';
     document.body.classList.toggle('sidebar-home', isHome);
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(inferredView));
     if (isHome) {
         mountFeedTypeToggleBar();
     }
