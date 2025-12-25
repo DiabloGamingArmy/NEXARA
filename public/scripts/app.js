@@ -6164,10 +6164,10 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
 function renderProfileVideoCard(video) {
     const poster = video.thumbURL || video.videoURL || '';
     const caption = escapeHtml(video.caption || 'Untitled video');
-    const views = video.stats?.views || 0;
+    const views = getVideoViewCount(video);
     return `<div class="social-card profile-collage-card" style="min-width:240px;">
-        <div class="profile-video-thumb" style="background-image:url('${poster}')">
-            <div class="profile-video-meta">${views} views</div>
+        <div class="profile-video-thumb" style="background-image:url('${poster}')" onclick="window.openVideoDetail('${video.id}')">
+            <div class="profile-video-meta">${formatCompactNumber(views)} views</div>
         </div>
         <div class="card-content" style="gap:6px;">
             <div style="font-weight:700;">${caption}</div>
@@ -6320,7 +6320,7 @@ function renderProfile() {
     const displayName = userProfile.name || userProfile.nickname || "Nexera User";
     const verifiedBadge = renderVerifiedBadge(userProfile, 'with-gap');
     const avatarHtml = renderAvatar({ ...userProfile, uid: currentUser?.uid }, { size: 100, className: 'profile-pic' });
-    const showReturnBar = !!profileReturnContext;
+    const showReturnBar = !!profileReturnContext || navStack.length > 0;
 
     let linkHtml = '';
     if (userProfile.links) {
@@ -10659,6 +10659,12 @@ function resolveVideoThumbnail(video = {}) {
     return video.thumbURL || video.thumbnail || video.previewImage || 'https://images.unsplash.com/photo-1516117172878-fd2c41f4a759?auto=format&fit=crop&w=1200&q=80';
 }
 
+function getVideoViewCount(video = {}) {
+    const statsViews = typeof video.stats?.views === 'number' ? video.stats.views : null;
+    const directViews = typeof video.views === 'number' ? video.views : null;
+    return statsViews ?? directViews ?? 0;
+}
+
 function ensureVideoStats(video = {}) {
     if (!video.stats || typeof video.stats !== 'object') video.stats = {};
     if (typeof video.stats.likes !== 'number') video.stats.likes = 0;
@@ -10670,7 +10676,9 @@ function ensureVideoStats(video = {}) {
 }
 
 function getVideoById(videoId) {
-    return videosCache.find(function (entry) { return entry.id === videoId; }) || null;
+    const fromVideos = videosCache.find(function (entry) { return entry.id === videoId; });
+    if (fromVideos) return fromVideos;
+    return (homeVideosCache || []).find(function (entry) { return entry.id === videoId; }) || null;
 }
 
 function getVideoEngagementStatus(videoId) {
@@ -10795,10 +10803,12 @@ function buildVideoCard(video) {
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
     card.setAttribute('aria-label', `Open video ${video.title || video.caption || 'details'}`);
+    ensureVideoStats(video);
 
     const thumb = document.createElement('div');
     thumb.className = 'video-thumb';
     thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
+    thumb.style.cursor = 'pointer';
 
     const duration = document.createElement('div');
     duration.className = 'video-duration';
@@ -10825,7 +10835,7 @@ function buildVideoCard(video) {
 
     const stats = document.createElement('div');
     stats.className = 'video-stats';
-    stats.textContent = `${formatCompactNumber(video.stats?.views || 0)} views • ${formatVideoTimestamp(video.createdAt)}`;
+    stats.textContent = `${formatCompactNumber(getVideoViewCount(video))} views • ${formatVideoTimestamp(video.createdAt)}`;
 
     info.appendChild(title);
     info.appendChild(channel);
@@ -10837,6 +10847,10 @@ function buildVideoCard(video) {
     card.appendChild(thumb);
     card.appendChild(meta);
     card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    thumb.addEventListener('click', function (event) {
+        event.stopPropagation();
+        window.openVideoDetail(video.id);
+    });
     card.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
@@ -11118,7 +11132,7 @@ function renderProfileLinks(links = []) {
 window.openVideoDetail = async function (videoId) {
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
-    const video = videosCache.find(function (entry) { return entry.id === videoId; });
+    const video = getVideoById(videoId);
     if (!video) return;
 
     captureVideoDetailReturnPath();
