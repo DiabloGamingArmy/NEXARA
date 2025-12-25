@@ -1686,9 +1686,19 @@
         </div>
         <div class="right-sidebar-content">
         <div class="trend-box">
-            <div class="trend-title">Trending <i class="ph-fill ph-trend-up"></i></div>
-            <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
-            <div class="trend-item"><span>#AI</span><span style="color:var(--text-muted);">8k</span></div>
+            <div class="trend-title trend-header">
+                <span>Trending <i class="ph-fill ph-trend-up"></i></span>
+                <select id="trending-range-select" class="trend-range-select" aria-label="Trending range">
+                    <option value="day">1d</option>
+                    <option value="week" selected>7d</option>
+                    <option value="month">1mo</option>
+                    <option value="six_months">6mo</option>
+                    <option value="year">1y</option>
+                    <option value="five_years">5y</option>
+                    <option value="lifetime">All</option>
+                </select>
+            </div>
+            <div class="trend-list" id="trending-topic-list"></div>
         </div>
 
         <div class="trend-box">

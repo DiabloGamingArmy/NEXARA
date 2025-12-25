@@ -1153,6 +1153,22 @@ const timeCapsuleState = {
     loading: false
 };
 
+const TRENDING_RANGE_WINDOWS = {
+    day: { label: '1d', ms: 24 * 60 * 60 * 1000 },
+    week: { label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
+    month: { label: '1mo', ms: 30 * 24 * 60 * 60 * 1000 },
+    six_months: { label: '6mo', ms: 182 * 24 * 60 * 60 * 1000 },
+    year: { label: '1y', ms: 365 * 24 * 60 * 60 * 1000 },
+    five_years: { label: '5y', ms: 5 * 365 * 24 * 60 * 60 * 1000 },
+    lifetime: { label: 'All', ms: null }
+};
+
+const trendingTopicsState = {
+    range: 'week',
+    loading: false,
+    lastLoaded: 0
+};
+
 const THEMES = {
     'For You': '#00f2ea', 'Following': '#ffffff', 'STEM': '#00f2ea',
     'History': '#ffd700', 'Coding': '#00ff41', 'Art': '#ff0050',
@@ -1572,6 +1588,141 @@ function showAnotherTimeCapsuleEvent() {
 }
 
 window.showAnotherTimeCapsuleEvent = showAnotherTimeCapsuleEvent;
+
+function normalizeTrendingTopic(entry) {
+    if (!entry) return null;
+    const name = (entry.name || entry.topic || entry.topicName || entry.label || '').toString().trim();
+    if (!name) return null;
+    const count = Number(entry.count || entry.total || entry.posts || entry.value || 0);
+    return { topicId: entry.topicId || entry.id || slugifyCategory(name), name, count };
+}
+
+async function fetchTopicStats(range) {
+    if (!range) return [];
+    try {
+        const rangeDoc = await getDoc(doc(db, 'topicStats', range));
+        if (rangeDoc.exists()) {
+            const data = rangeDoc.data() || {};
+            const topics = data.topics || data.items || data.trending || [];
+            if (Array.isArray(topics) && topics.length) {
+                return topics.map(normalizeTrendingTopic).filter(Boolean);
+            }
+        }
+    } catch (error) {
+        console.debug('Trending topics range doc missing', error?.message || error);
+    }
+
+    try {
+        const statsRef = collection(db, 'topicStats');
+        const snapshot = await getDocs(query(statsRef, where('range', '==', range), orderBy('count', 'desc'), limit(10)));
+        if (!snapshot.empty) {
+            return snapshot.docs.map(function (docSnap) {
+                return normalizeTrendingTopic({ ...docSnap.data(), topicId: docSnap.id });
+            }).filter(Boolean);
+        }
+    } catch (error) {
+        console.debug('Trending topics query failed', error?.message || error);
+    }
+
+    return [];
+}
+
+function aggregateTrendingTopics(range) {
+    const windowMs = TRENDING_RANGE_WINDOWS[range]?.ms;
+    const cutoff = windowMs ? Date.now() - windowMs : null;
+    const shouldInclude = function (ts) {
+        if (!cutoff) return true;
+        return ts >= cutoff;
+    };
+
+    const counts = new Map();
+    const addTopic = function (topic, timestamp) {
+        const label = typeof topic === 'string' ? topic.trim() : '';
+        if (!label) return;
+        if (!shouldInclude(timestamp)) return;
+        counts.set(label, (counts.get(label) || 0) + 1);
+    };
+
+    allPosts.forEach(function (post) {
+        addTopic(post.category, getFeedItemTimestamp(post));
+    });
+
+    const videoSource = (homeVideosCache && homeVideosCache.length) ? homeVideosCache : (videosCache || []);
+    videoSource.forEach(function (video) {
+        addTopic(video.category || video.genre || video.categoryLabel, getFeedItemTimestamp(video));
+    });
+
+    const sessionSource = (homeLiveSessionsCache && homeLiveSessionsCache.length) ? homeLiveSessionsCache : (liveSessionsCache || []);
+    sessionSource.forEach(function (session) {
+        addTopic(session.category || session.categoryLabel, getFeedItemTimestamp(session));
+    });
+
+    return Array.from(counts.entries())
+        .sort(function (a, b) { return b[1] - a[1]; })
+        .slice(0, 8)
+        .map(function ([name, count]) {
+            return { topicId: slugifyCategory(name), name, count };
+        });
+}
+
+async function getTrendingTopics(range = trendingTopicsState.range) {
+    const stats = await fetchTopicStats(range);
+    if (stats.length) return stats;
+    return aggregateTrendingTopics(range);
+}
+
+function renderTrendingTopics(topics) {
+    const list = document.getElementById('trending-topic-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!topics.length) {
+        list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        return;
+    }
+    topics.forEach(function (topic) {
+        const item = document.createElement('div');
+        item.className = 'trend-item';
+        item.innerHTML = `<span>${escapeHtml(topic.name)}</span><span style=\"color:var(--text-muted);\">${formatCompactNumber(topic.count || 0)}</span>`;
+        item.addEventListener('click', function () {
+            if (typeof window.setCategory === 'function') window.setCategory(topic.name);
+        });
+        list.appendChild(item);
+    });
+}
+
+async function loadTrendingTopics(range = trendingTopicsState.range) {
+    const list = document.getElementById('trending-topic-list');
+    if (!list) return;
+    trendingTopicsState.range = range || trendingTopicsState.range;
+    if (trendingTopicsState.loading) return;
+    trendingTopicsState.loading = true;
+    list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
+    try {
+        const topics = await getTrendingTopics(trendingTopicsState.range);
+        renderTrendingTopics(topics);
+        trendingTopicsState.lastLoaded = Date.now();
+        uiDebugLog('trending topics loaded', { range: trendingTopicsState.range, count: topics.length });
+    } catch (error) {
+        console.warn('Trending topics load failed', error?.message || error);
+        list.innerHTML = `<div class="trend-item"><span>Unable to load topics.</span><span></span></div>`;
+    } finally {
+        trendingTopicsState.loading = false;
+    }
+}
+
+function initTrendingTopicsUI() {
+    const select = document.getElementById('trending-range-select');
+    if (!select) return;
+    select.value = trendingTopicsState.range;
+    if (!select.__nexeraBound) {
+        select.addEventListener('change', function () {
+            const nextRange = select.value || 'week';
+            loadTrendingTopics(nextRange);
+        });
+        select.__nexeraBound = true;
+    }
+    loadTrendingTopics(trendingTopicsState.range);
+}
 
 function getSystemTheme() {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
@@ -12646,6 +12797,7 @@ document.addEventListener('DOMContentLoaded', function () {
     syncMobileComposerState();
     bindAuthFormShortcuts();
     initMiniPlayerDrag();
+    initTrendingTopicsUI();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
