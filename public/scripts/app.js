@@ -6932,6 +6932,15 @@ function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
     return { otherIds, usernames, avatars, names, colors };
 }
 
+function isConversationRequest(mapping = {}, details = {}) {
+    const explicitFlag = mapping.isRequest ?? details.isRequest ?? mapping.requested ?? details.requested;
+    if (explicitFlag === true) return true;
+    const status = (mapping.requestStatus || details.requestStatus || mapping.status || details.status || '').toString().toLowerCase();
+    if (['request', 'requested', 'pending', 'invite', 'invited'].includes(status)) return true;
+    if (mapping.accepted === false || details.accepted === false) return true;
+    return false;
+}
+
 function buildUnknownUserProfile(uid) {
     return storeUserInCache(uid, {
         username: 'user',
@@ -7337,11 +7346,14 @@ function renderConversationList() {
     const currentUid = currentUser?.uid || '';
 
     if (conversationMappings.length === 0) {
+        const emptyText = conversationListFilter === 'requests'
+            ? 'No message requests yet.'
+            : 'Start a conversation';
         if (emptyEl) {
-            emptyEl.textContent = 'Start a conversation';
+            emptyEl.textContent = emptyText;
             emptyEl.style.display = 'block';
         } else {
-            listEl.innerHTML = '<div class="empty-state">Start a conversation</div>';
+            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
         }
         updateInboxNavBadge();
         return;
@@ -7362,6 +7374,8 @@ function renderConversationList() {
 
     const search = (conversationListSearchTerm || '').toLowerCase();
     let filtered = orderedMappings.filter(function (mapping) {
+        const details = conversationDetailsCache[mapping.id] || {};
+        if (conversationListFilter === 'requests' && !isConversationRequest(mapping, details)) return false;
         if (conversationListFilter === 'unread' && !(mapping.unreadCount > 0)) return false;
         if (conversationListFilter === 'pinned' && !mapping.pinned) return false;
         if (conversationListFilter === 'archived' && !mapping.archived) return false;
@@ -7463,7 +7477,9 @@ function renderConversationList() {
 
     if (!visible.length && !pinned.length) {
         if (emptyEl) {
-            emptyEl.textContent = 'No conversations match your filters.';
+            emptyEl.textContent = conversationListFilter === 'requests'
+                ? 'No message requests yet.'
+                : 'No conversations match your filters.';
             emptyEl.style.display = 'block';
         }
         updateInboxNavBadge();
@@ -12921,6 +12937,16 @@ function bindMobileScrollHelper() {
     }
 }
 
+function updateInboxTabsHeight() {
+    const tabs = document.querySelector('.inbox-tabs');
+    if (!tabs) return;
+    const styles = window.getComputedStyle ? window.getComputedStyle(tabs) : null;
+    const marginTop = styles ? parseFloat(styles.marginTop) || 0 : 0;
+    const marginBottom = styles ? parseFloat(styles.marginBottom) || 0 : 0;
+    const height = Math.ceil(tabs.getBoundingClientRect().height + marginTop + marginBottom);
+    document.documentElement.style.setProperty('--inbox-tabs-h', `${height}px`);
+}
+
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/' || path === '/home';
@@ -12934,6 +12960,7 @@ function syncSidebarHomeState() {
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
+    updateInboxTabsHeight();
     initSidebarState();
     bindSidebarEvents();
     loadFeedTypeState();
@@ -12957,6 +12984,10 @@ document.addEventListener('DOMContentLoaded', function () {
     }, 1200);
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
+});
+
+window.addEventListener('resize', function () {
+    updateInboxTabsHeight();
 });
 
 window.addEventListener('hashchange', function () {
