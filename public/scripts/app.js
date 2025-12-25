@@ -7,6 +7,7 @@ import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 import { createUploadManager } from "/scripts/uploadManager.js";
+import { buildMessagesUrl } from "/assets/js/routes.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -927,6 +928,28 @@ function logPermissionDeniedOnce(scope) {
     console.warn('Permission denied for', scope);
 }
 
+function isPermissionDeniedError(error) {
+    return error?.code === 'permission-denied' || error?.code === 'storage/unauthorized';
+}
+
+async function guardFirebaseCall(actionKey, actionFn, options = {}) {
+    try {
+        const data = await actionFn();
+        return { ok: true, data, error: null, permissionDenied: false };
+    } catch (error) {
+        const permissionDenied = isPermissionDeniedError(error);
+        if (permissionDenied) {
+            logPermissionDeniedOnce(actionKey);
+            if (typeof options.onPermissionDenied === 'function') {
+                options.onPermissionDenied(error);
+            }
+        } else {
+            console.warn(`${actionKey} failed`, error?.message || error);
+        }
+        return { ok: false, data: null, error, permissionDenied };
+    }
+}
+
 const missingProfileLogCache = new Set();
 function logMissingProfileOnce(uid) {
     const key = `profiles:missing:${uid}`;
@@ -939,39 +962,42 @@ const dmMediaUrlCache = new Map();
 const dmMediaUrlPromises = new Map();
 
 function resolveDmMediaUrl(rawUrl = '') {
-    if (!rawUrl) return null;
-    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    if (!rawUrl) return { url: null, status: 'empty' };
+    if (/^https?:\/\//i.test(rawUrl)) return { url: rawUrl, status: 'ok' };
     if (dmMediaUrlCache.has(rawUrl)) return dmMediaUrlCache.get(rawUrl);
     if (!dmMediaUrlPromises.has(rawUrl)) {
-        const promise = getDownloadURL(ref(storage, rawUrl))
-            .then(function (url) {
-                dmMediaUrlCache.set(rawUrl, url);
-                return url;
-            })
-            .catch(function (err) {
-                if (err?.code === 'storage/unauthorized' || err?.code === 'permission-denied') {
-                    logPermissionDeniedOnce(`dm_media:${rawUrl}`);
-                } else {
-                    console.warn('Unable to load attachment', err?.message || err);
-                }
-                dmMediaUrlCache.set(rawUrl, null);
-                return null;
-            })
-            .finally(function () {
-                dmMediaUrlPromises.delete(rawUrl);
-            });
+        const promise = guardFirebaseCall('storage:dm_media', function () {
+            return getDownloadURL(ref(storage, rawUrl));
+        }).then(function (result) {
+            if (result.ok) {
+                const entry = { url: result.data, status: 'ok' };
+                dmMediaUrlCache.set(rawUrl, entry);
+                return entry;
+            }
+            const status = result.permissionDenied ? 'denied' : 'error';
+            const entry = { url: null, status };
+            dmMediaUrlCache.set(rawUrl, entry);
+            return entry;
+        }).finally(function () {
+            dmMediaUrlPromises.delete(rawUrl);
+        });
         dmMediaUrlPromises.set(rawUrl, promise);
     }
-    return null;
+    return { url: null, status: 'pending' };
 }
 
 function fetchDmMediaUrl(rawUrl = '') {
-    if (!rawUrl) return Promise.resolve(null);
-    if (/^https?:\/\//i.test(rawUrl)) return Promise.resolve(rawUrl);
+    if (!rawUrl) return Promise.resolve({ url: null, status: 'empty' });
+    if (/^https?:\/\//i.test(rawUrl)) return Promise.resolve({ url: rawUrl, status: 'ok' });
     const cached = dmMediaUrlCache.get(rawUrl);
     if (cached) return Promise.resolve(cached);
     const pending = dmMediaUrlPromises.get(rawUrl);
-    return pending || Promise.resolve(null);
+    return pending || Promise.resolve({ url: null, status: 'pending' });
+}
+
+function getDmMediaFallbackText(status) {
+    if (status === 'denied') return "You don’t have access to this attachment";
+    return 'Attachment unavailable';
 }
 
 function buildPublicProfilePayload(uid, profile = {}) {
@@ -989,16 +1015,19 @@ function buildPublicProfilePayload(uid, profile = {}) {
     };
 }
 
-async function syncPublicProfile(uid, profile = {}) {
+async function syncPublicProfile(uid, profile = {}, options = {}) {
     if (!uid) return;
     try {
-        await setDoc(doc(db, 'profiles', uid), buildPublicProfilePayload(uid, profile), { merge: true });
+        const viewerUid = getViewerUid();
+        // Public profiles are written only for the signed-in user on first login/sign-up
+        // or explicit settings saves to avoid permission-denied writes per Firestore rules.
+        if (viewerUid && uid !== viewerUid) return { ok: false, permissionDenied: false };
+        return await guardFirebaseCall('profiles:write', function () {
+            return setDoc(doc(db, 'profiles', uid), buildPublicProfilePayload(uid, profile), { merge: true });
+        }, { onPermissionDenied: options.onPermissionDenied });
     } catch (e) {
-        if (e?.code === 'permission-denied') {
-            logPermissionDeniedOnce(`profiles:write:${uid}`);
-            return;
-        }
         console.warn('Public profile sync failed', uid, e?.message || e);
+        return { ok: false, permissionDenied: isPermissionDeniedError(e), error: e };
     }
 }
 
@@ -1945,31 +1974,35 @@ async function ensureUserDocument(user) {
 
     if (!snap.exists()) {
         const avatarColor = computeAvatarColor(user.uid || user.email || 'user');
-        await setDoc(ref, {
-            displayName: user.displayName || "Nexera User",
-            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
-            photoURL: user.photoURL || "",
-            photoPath: "",
-            avatarColor,
-            bio: "",
-            website: "",
-            region: "",
-            email: user.email || "",
-            locationHistory: [],
-            accountRoles: [],
-            tagAffinity: {},
-            followedCategories: [],
-            interests: [],
-            createdAt: now,
-            updatedAt: now
-        }, { merge: true });
-        await syncPublicProfile(user.uid, {
-            displayName: user.displayName || "Nexera User",
-            username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
-            photoURL: user.photoURL || "",
-            avatarColor,
-            bio: ""
+        const createResult = await guardFirebaseCall('users:create', function () {
+            return setDoc(ref, {
+                displayName: user.displayName || "Nexera User",
+                username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
+                photoURL: user.photoURL || "",
+                photoPath: "",
+                avatarColor,
+                bio: "",
+                website: "",
+                region: "",
+                email: user.email || "",
+                locationHistory: [],
+                accountRoles: [],
+                tagAffinity: {},
+                followedCategories: [],
+                interests: [],
+                createdAt: now,
+                updatedAt: now
+            }, { merge: true });
         });
+        if (createResult.ok) {
+            await syncPublicProfile(user.uid, {
+                displayName: user.displayName || "Nexera User",
+                username: user.email ? user.email.split('@')[0] : `user_${user.uid.slice(0, 6)}`,
+                photoURL: user.photoURL || "",
+                avatarColor,
+                bio: ""
+            });
+        }
         return await getDoc(ref);
     }
 
@@ -2058,7 +2091,8 @@ window.handleSignup = async function (e) {
             document.getElementById('password').value
         );
         // Create initial user document
-        await setDoc(doc(db, "users", cred.user.uid), {
+        const createResult = await guardFirebaseCall('users:create', function () {
+            return setDoc(doc(db, "users", cred.user.uid), {
             displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
             username: cred.user.email.split('@')[0],
             email: cred.user.email,
@@ -2076,6 +2110,28 @@ window.handleSignup = async function (e) {
             accountRoles: [],
             tagAffinity: {},
             interests: []
+            });
+        }, {
+            onPermissionDenied: function () {
+                document.getElementById('auth-error').textContent = 'Profile can’t be updated due to permissions.';
+            }
+        });
+        if (!createResult.ok) {
+            if (!createResult.permissionDenied) {
+                document.getElementById('auth-error').textContent = 'Sign up failed. Please try again.';
+            }
+            return;
+        }
+        await syncPublicProfile(cred.user.uid, {
+            displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
+            username: cred.user.email.split('@')[0],
+            photoURL: "",
+            avatarColor: computeAvatarColor(cred.user.uid || cred.user.email || 'user'),
+            bio: ""
+        }, {
+            onPermissionDenied: function () {
+                document.getElementById('auth-error').textContent = 'Profile can’t be updated due to permissions.';
+            }
         });
         await syncPublicProfile(cred.user.uid, {
             displayName: cred.user.displayName || cred.user.email.split('@')[0] || "Nexera User",
@@ -2160,10 +2216,7 @@ async function fetchMissingProfiles(posts) {
                 const fallbackDocs = await Promise.all(missingProfiles.map(function (uid) { return getDoc(doc(db, "users", uid)); }));
                 fallbackDocs.forEach(function (docSnap) {
                     if (docSnap.exists()) {
-                        const profile = storeUserInCache(docSnap.id, docSnap.data());
-                        if (docSnap.id === getViewerUid()) {
-                            syncPublicProfile(docSnap.id, profile);
-                        }
+                        storeUserInCache(docSnap.id, docSnap.data());
                     } else {
                         logMissingProfileOnce(docSnap.id);
                         storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
@@ -4950,8 +5003,19 @@ window.saveSettings = async function () {
     storeUserInCache(currentUser.uid, userProfile);
 
     try {
-        await setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
-        await syncPublicProfile(currentUser.uid, userProfile);
+        const updateResult = await guardFirebaseCall('users:update', function () {
+            return setDoc(doc(db, "users", currentUser.uid), updates, { merge: true });
+        }, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
+        if (!updateResult.ok) return;
+        await syncPublicProfile(currentUser.uid, userProfile, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
         if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
     } catch (e) {
         console.error("Save failed", e);
@@ -4993,8 +5057,19 @@ window.removeProfilePhoto = async function () {
     }
 
     try {
-        await setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
-        await syncPublicProfile(currentUser.uid, userProfile);
+        const updateResult = await guardFirebaseCall('users:update:photo', function () {
+            return setDoc(doc(db, 'users', currentUser.uid), { photoURL: '', photoPath: '' }, { merge: true });
+        }, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
+        if (!updateResult.ok) return;
+        await syncPublicProfile(currentUser.uid, userProfile, {
+            onPermissionDenied: function () {
+                toast('Profile can’t be updated due to permissions', 'error');
+            }
+        });
     } catch (err) {
         console.error('Failed to clear Firestore photo data', err);
         toast('Could not update profile photo references', 'error');
@@ -7107,6 +7182,35 @@ function getDirectConversationId(a, b) {
     return [a, b].sort().join('_');
 }
 
+const DM_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+const DM_MEDIA_ALLOWED_PREFIXES = ['image/', 'video/'];
+
+function validateDmAttachment(file) {
+    if (!file) return { ok: false, message: 'Attachment missing.' };
+    const type = file.type || '';
+    const isAllowed = DM_MEDIA_ALLOWED_PREFIXES.some(function (prefix) { return type.startsWith(prefix); });
+    if (!isAllowed) {
+        return { ok: false, message: 'Only image and video attachments are allowed.' };
+    }
+    if (file.size > DM_MEDIA_MAX_BYTES) {
+        return { ok: false, message: `Attachments must be under ${formatUploadFileSize(DM_MEDIA_MAX_BYTES)}.` };
+    }
+    return { ok: true };
+}
+
+function filterDmAttachments(files = []) {
+    const valid = [];
+    files.forEach(function (file) {
+        const result = validateDmAttachment(file);
+        if (!result.ok) {
+            toast(result.message, 'error');
+            return;
+        }
+        valid.push(file);
+    });
+    return valid;
+}
+
 function deriveOtherParticipantMeta(participants = [], viewerId, details = {}) {
     const otherIds = participants.filter(function (uid) { return uid !== viewerId; });
     const usernames = otherIds.map(function (uid) {
@@ -7173,11 +7277,7 @@ async function resolveUserProfile(uid, options = {}) {
             try {
                 const fallbackSnap = await getDoc(doc(db, 'users', uid));
                 if (fallbackSnap.exists()) {
-                    const profile = storeUserInCache(uid, fallbackSnap.data());
-                    if (uid === getViewerUid()) {
-                        syncPublicProfile(uid, profile);
-                    }
-                    return profile;
+                    return storeUserInCache(uid, fallbackSnap.data());
                 }
                 logMissingProfileOnce(uid);
             } catch (fallbackError) {
@@ -7565,9 +7665,9 @@ function setInboxMode(mode = 'messages', options = {}) {
         if (inboxMode && inboxMode !== 'messages') {
             nextPath = `/inbox/${inboxMode}`;
         } else if (activeConversationId) {
-            nextPath = `/inbox/messages/${encodeURIComponent(activeConversationId)}`;
+            nextPath = buildMessagesUrl({ conversationId: activeConversationId });
         } else {
-            nextPath = '/inbox/messages';
+            nextPath = buildMessagesUrl();
         }
         if (window.location.pathname !== nextPath) {
             history.pushState({}, '', nextPath);
@@ -7913,26 +8013,31 @@ function renderMessages(msgs = [], convo = {}) {
         }
 
         const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];
-        if (msg.mediaURL && !attachments.length) {
-            attachments.push({ url: msg.mediaURL, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
+        const mediaRef = msg.mediaPath || msg.mediaURL;
+        if (mediaRef && !attachments.length) {
+            attachments.push({ url: msg.mediaURL || null, storagePath: msg.mediaPath || null, type: msg.mediaType || msg.type, name: msg.fileName || 'Attachment' });
         }
         const hasMediaAttachment = attachments.length > 0;
 
-        if (!hasMediaAttachment && msg.type === 'image' && msg.mediaURL) {
-            const resolved = resolveDmMediaUrl(msg.mediaURL);
-            if (!resolved && msg.mediaURL && !/^https?:\/\//i.test(msg.mediaURL)) {
-                missingMedia.add(msg.mediaURL);
-                content = `<div style="font-size:0.8rem; color:var(--text-muted);">Attachment unavailable</div>`;
+        if (!hasMediaAttachment && msg.type === 'image' && mediaRef) {
+            const resolved = resolveDmMediaUrl(mediaRef);
+            if (resolved.status === 'denied') {
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText('denied')}</div>`;
+            } else if (!resolved.url && mediaRef && !/^https?:\/\//i.test(mediaRef)) {
+                missingMedia.add(mediaRef);
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText(resolved.status)}</div>`;
             } else {
-                content = `<img src="${resolved || msg.mediaURL}" style="max-width:240px; border-radius:12px;">`;
+                content = `<img src="${resolved.url || mediaRef}" style="max-width:240px; border-radius:12px;">`;
             }
-        } else if (!hasMediaAttachment && msg.type === 'video' && msg.mediaURL) {
-            const resolved = resolveDmMediaUrl(msg.mediaURL);
-            if (!resolved && msg.mediaURL && !/^https?:\/\//i.test(msg.mediaURL)) {
-                missingMedia.add(msg.mediaURL);
-                content = `<div style="font-size:0.8rem; color:var(--text-muted);">Attachment unavailable</div>`;
+        } else if (!hasMediaAttachment && msg.type === 'video' && mediaRef) {
+            const resolved = resolveDmMediaUrl(mediaRef);
+            if (resolved.status === 'denied') {
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText('denied')}</div>`;
+            } else if (!resolved.url && mediaRef && !/^https?:\/\//i.test(mediaRef)) {
+                missingMedia.add(mediaRef);
+                content = `<div style="font-size:0.8rem; color:var(--text-muted);">${getDmMediaFallbackText(resolved.status)}</div>`;
             } else {
-                content = `<video src="${resolved || msg.mediaURL}" controls style="max-width:260px; border-radius:12px;"></video>`;
+                content = `<video src="${resolved.url || mediaRef}" controls style="max-width:260px; border-radius:12px;"></video>`;
             }
         }
 
@@ -7958,11 +8063,23 @@ function renderMessages(msgs = [], convo = {}) {
                 const tile = document.createElement('div');
                 tile.className = 'message-attachment-tile';
                 const isImage = (att.type || '').includes('image');
-                const resolvedUrl = resolveDmMediaUrl(att.url || '');
+                const mediaPointer = att.storagePath || att.url || '';
+                const resolvedEntry = resolveDmMediaUrl(mediaPointer);
+                if (resolvedEntry.status === 'denied') {
+                    tile.classList.add('denied');
+                    tile.innerHTML = `<div class="attachment-denied">${getDmMediaFallbackText('denied')}</div>`;
+                    tile.title = getDmMediaFallbackText('denied');
+                    tile.onclick = function (e) {
+                        e.stopPropagation();
+                        toast(getDmMediaFallbackText('denied'), 'error');
+                    };
+                    attachmentRow.appendChild(tile);
+                    return;
+                }
                 if (isImage) {
                     const img = document.createElement('img');
-                    if (resolvedUrl) {
-                        img.src = resolvedUrl;
+                    if (resolvedEntry.url) {
+                        img.src = resolvedEntry.url;
                     }
                     img.alt = att.name || 'Attachment';
                     tile.appendChild(img);
@@ -7971,10 +8088,18 @@ function renderMessages(msgs = [], convo = {}) {
                 } else {
                     tile.innerHTML = '<div class="attachment-icon"><i class="ph ph-paperclip"></i></div>';
                 }
-                if (!resolvedUrl && att.url && !/^https?:\/\//i.test(att.url)) {
-                    missingMedia.add(att.url);
+                if (!resolvedEntry.url && mediaPointer && !/^https?:\/\//i.test(mediaPointer)) {
+                    missingMedia.add(mediaPointer);
                 }
-                tile.onclick = function (e) { e.stopPropagation(); openFullscreenMedia(resolvedUrl || att.url, (att.type || '').includes('video') ? 'video' : 'image'); };
+                tile.onclick = function (e) {
+                    e.stopPropagation();
+                    const fallbackUrl = resolvedEntry.url || (/^https?:\/\//i.test(mediaPointer) ? mediaPointer : null);
+                    if (!fallbackUrl) {
+                        toast(getDmMediaFallbackText(resolvedEntry.status), 'error');
+                        return;
+                    }
+                    openFullscreenMedia(fallbackUrl, (att.type || '').includes('video') ? 'video' : 'image');
+                };
                 attachmentRow.appendChild(tile);
             });
             bubble.appendChild(attachmentRow);
@@ -8229,7 +8354,7 @@ function removePendingAttachment(index) {
 }
 
 function handleMessageFileChange(event) {
-    const files = Array.from(event?.target?.files || []);
+    const files = filterDmAttachments(Array.from(event?.target?.files || []));
     if (!files.length) return;
     pendingMessageAttachments = pendingMessageAttachments.concat(files);
     renderAttachmentPreview();
@@ -8358,19 +8483,20 @@ function closeMessageActionsMenu() {
 }
 
 function resolvePrimaryImageAttachment(message = {}) {
-    if (message.type === 'image' && message.mediaURL) {
-        const resolved = resolveDmMediaUrl(message.mediaURL);
-        if (resolved) return { url: resolved, type: 'image' };
+    const mediaRef = message.mediaPath || message.mediaURL;
+    if (message.type === 'image' && mediaRef) {
+        const resolved = resolveDmMediaUrl(mediaRef);
+        if (resolved.status === 'ok' && resolved.url) return { url: resolved.url, type: 'image' };
     }
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-    const imageAttachment = attachments.find(function (att) { return (att.type || '').includes('image') && att.url; });
+    const imageAttachment = attachments.find(function (att) { return (att.type || '').includes('image') && (att.storagePath || att.url); });
     if (imageAttachment) {
-        const resolved = resolveDmMediaUrl(imageAttachment.url);
-        if (resolved) return { url: resolved, type: 'image' };
+        const resolved = resolveDmMediaUrl(imageAttachment.storagePath || imageAttachment.url);
+        if (resolved.status === 'ok' && resolved.url) return { url: resolved.url, type: 'image' };
     }
-    if (message.mediaURL && ((message.mediaType || message.type || '').includes('image'))) {
-        const resolved = resolveDmMediaUrl(message.mediaURL);
-        if (resolved) return { url: resolved, type: 'image' };
+    if (mediaRef && ((message.mediaType || message.type || '').includes('image'))) {
+        const resolved = resolveDmMediaUrl(mediaRef);
+        if (resolved.status === 'ok' && resolved.url) return { url: resolved.url, type: 'image' };
     }
     return null;
 }
@@ -8633,7 +8759,7 @@ async function openConversation(conversationId) {
     }
     activeConversationId = conversationId;
     if (window.location.pathname.startsWith('/inbox')) {
-        const nextPath = `/inbox/messages/${encodeURIComponent(conversationId)}`;
+        const nextPath = buildMessagesUrl({ conversationId });
         if (window.location.pathname + window.location.search !== nextPath) {
             history.pushState({}, '', nextPath);
         }
@@ -9471,6 +9597,7 @@ async function sendChatPayload(conversationId, payload = {}) {
         text: payload.text || '',
         type: payload.type || (attachments.length ? (hasVideoAttachment ? 'video' : 'image') : 'text'),
         mediaURL: payload.mediaURL || (primaryImage ? primaryImage.url : null),
+        mediaPath: payload.mediaPath || (primaryImage ? primaryImage.storagePath : null),
         mediaType: payload.mediaType || (primaryImage ? primaryImage.type : null),
         attachments: attachments.length ? attachments : null,
         postId: payload.postId || null,
@@ -9498,15 +9625,33 @@ async function sendChatPayload(conversationId, payload = {}) {
 
 async function uploadAttachments(conversationId, files = []) {
     const uploads = [];
+    const filteredFiles = filterDmAttachments(files);
     let idx = 0;
-    for (const file of files) {
+    for (const file of filteredFiles) {
         if (!file) continue;
         const stamp = Date.now();
         const storageRef = ref(storage, `dm_media/${conversationId}/${stamp}_${idx}_${file.name}`);
-        const uploadTask = uploadBytesResumable(storageRef, file);
-        await uploadTask;
-        const mediaURL = await getDownloadURL(uploadTask.snapshot.ref);
-        uploads.push({ url: mediaURL, type: file.type || '', name: file.name || 'Attachment' });
+        try {
+            const uploadTask = uploadBytesResumable(storageRef, file);
+            await uploadTask;
+            const storagePath = uploadTask.snapshot.ref.fullPath;
+            const urlResult = await guardFirebaseCall('storage:dm_upload_url', function () {
+                return getDownloadURL(uploadTask.snapshot.ref);
+            }, {
+                onPermissionDenied: function () {
+                    toast(getDmMediaFallbackText('denied'), 'error');
+                }
+            });
+            uploads.push({
+                url: urlResult.ok ? urlResult.data : null,
+                storagePath,
+                type: file.type || '',
+                name: file.name || 'Attachment'
+            });
+        } catch (err) {
+            console.warn('Attachment upload failed', err?.message || err);
+            toast('Attachment upload failed', 'error');
+        }
         idx += 1;
     }
     return uploads;
@@ -9518,7 +9663,7 @@ window.sendMessage = async function (conversationId = activeConversationId) {
     const text = (input?.value || '').trim();
     const fileInput = document.getElementById('message-media');
     const directFiles = Array.from(fileInput?.files || []);
-    const combinedFiles = pendingMessageAttachments.concat(directFiles);
+    const combinedFiles = filterDmAttachments(pendingMessageAttachments.concat(directFiles));
     if (!text && !combinedFiles.length) return;
 
     if (editingMessageId && !combinedFiles.length) {
@@ -9534,7 +9679,10 @@ window.sendMessage = async function (conversationId = activeConversationId) {
         await sendChatPayload(conversationId, {
             text,
             attachments,
-            mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image') ? attachments[0].url : null,
+            mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image')
+                ? (attachments[0].storagePath || attachments[0].url)
+                : null,
+            mediaPath: attachments.length === 1 ? (attachments[0].storagePath || null) : null,
             mediaType: attachments.length === 1 ? attachments[0].type : null,
             type: attachments.length ? (attachments.some(function (att) { return (att.type || '').includes('video'); }) ? 'video' : 'image') : 'text'
         });
@@ -9550,12 +9698,15 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
     if (!conversationId || !requireAuth()) return;
     const fileInput = document.getElementById(fileInputElementId);
     if (!fileInput || !fileInput.files || !fileInput.files.length) return;
-    const uploads = await uploadAttachments(conversationId, Array.from(fileInput.files));
+    const uploads = await uploadAttachments(conversationId, filterDmAttachments(Array.from(fileInput.files)));
     const hasVideo = uploads.some(function (att) { return (att.type || '').includes('video'); });
     await sendChatPayload(conversationId, {
         text: caption,
         attachments: uploads,
-        mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image') ? uploads[0].url : null,
+        mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image')
+            ? (uploads[0].storagePath || uploads[0].url)
+            : null,
+        mediaPath: uploads.length === 1 ? (uploads[0].storagePath || null) : null,
         mediaType: uploads.length === 1 ? uploads[0].type : null,
         type: uploads.length ? (hasVideo ? 'video' : 'image') : 'text'
     });

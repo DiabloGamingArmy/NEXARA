@@ -3649,6 +3649,19 @@ body.light-mode .category-pill.active .topic-verified-icon {
     color: var(--text-main);
 }
 
+.message-attachment-tile.denied {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.message-attachment-tile .attachment-denied {
+    font-size: 0.75rem;
+    text-align: center;
+    color: var(--text-muted);
+    padding: 8px;
+    line-height: 1.2;
+}
+
 .attachment-remove-btn {
     background: transparent;
     border: none;

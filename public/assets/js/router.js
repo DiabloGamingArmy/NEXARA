@@ -1,3 +1,5 @@
+import { buildMessagesUrl, buildProfileUrl } from './routes.js';
+
 (() => {
   if (window.NexeraRouter?.initialized) return;
 
@@ -90,24 +92,12 @@
   }
 
   function buildUrlForProfile(uidOrHandle, params = {}) {
-    const search = new URLSearchParams(params);
-    const suffix = search.toString();
-    if (params.handle && !uidOrHandle) {
-      return `/profile${suffix ? `?${suffix}` : ''}`;
-    }
-    if (uidOrHandle) {
-      return `/profile/${encodeURIComponent(uidOrHandle)}${suffix ? `?${suffix}` : ''}`;
-    }
-    return `/profile${suffix ? `?${suffix}` : ''}`;
+    const { handle, ...rest } = params || {};
+    return buildProfileUrl({ uid: uidOrHandle || null, handle: handle || null, params: rest });
   }
 
   function buildUrlForMessages(conversationId, params = {}) {
-    const search = new URLSearchParams(params);
-    const suffix = search && typeof search.toString === 'function' ? search.toString() : '';
-    if (conversationId) {
-      return `/inbox/messages/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
-    }
-    return `/inbox/messages${suffix ? `?${suffix}` : ''}`;
+    return buildMessagesUrl({ conversationId: conversationId || null, params });
   }
 
   function updateUrl(path, replace = false) {
