@@ -592,6 +592,7 @@
             </div>
         </div>
         <div class="mobile-app-bar__actions">
+            <button class="icon-btn sidebar-toggle-btn" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
             <button class="icon-btn" onclick="window.scrollTo({top:0, behavior:'smooth'});"
                 aria-label="Scroll to top"><i class="ph ph-arrow-up"></i></button>
             <button class="icon-btn" onclick="window.toggleDiscoverSearch()" aria-label="Search"><i
@@ -605,11 +606,15 @@
 
     <div id="app-layout" class="app-layout">
         <nav class="sidebar-left glass-panel">
-            <div class="brand-nav" style="margin-bottom:2rem;" onclick="window.navigateTo('feed')">
+            <div class="sidebar-header-row">
+                <button class="icon-pill sidebar-toggle-btn" type="button" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Toggle sidebar"><i class="ph ph-list"></i></button>
+                <div class="brand-nav" onclick="window.navigateTo('feed')">
                 <img class="brand-logo brand-logo-nav" data-logo-variant="auto" alt="Nexera"
                     src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e">
                 <span class="brand-wordmark nexera-gradient-text">Nexera</span>
             </div>
+            </div>
+            <div class="sidebar-nav-body">
             <a onclick="window.navigateTo('feed')" id="nav-feed" class="nav-item active"><i
                     class="ph-bold ph-house"></i> Home</a>
             <a onclick="window.navigateTo('live')" id="nav-live" class="nav-item"><i class="ph-bold ph-broadcast"></i>
@@ -628,7 +633,8 @@
             <a onclick="window.navigateTo('staff')" id="nav-staff" class="nav-item" style="display:none;"><i
                     class="ph-bold ph-shield-star"></i> Staff</a>
             <button onclick="window.toggleCreateModal(true)" class="create-btn-sidebar"><i class="ph-bold ph-plus"></i>
-                Post</button>
+                <span class="btn-label">Post</span></button>
+        </div>
         </nav>
 
 
@@ -838,7 +844,8 @@
                         <div id="conversation-list-empty" class="empty-state" style="display:none;"></div>
                     </div>
                         <div class="inbox-thread">
-                        <div class="message-thread-header-row">
+                        <div class="messages-thread-inner">
+                            <div class="message-thread-header-row">
                             <button id="mobile-thread-back" class="mobile-thread-back" type="button"
                                 onclick="window.mobileMessagesBack()" aria-label="Back to conversations"
                                 style="display:none;">
@@ -846,7 +853,7 @@
                             </button>
                             <div id="message-header" class="message-thread-header">Select a conversation</div>
                         </div>
-                        <div class="message-header-tools">
+                            <div class="message-header-tools">
                             <input id="conversation-search" class="form-input" placeholder="Search in conversation"
                                 oninput="window.handleConversationSearch(this.value)">
                             <div class="search-nav">
@@ -856,17 +863,15 @@
                                         class="ph ph-caret-down"></i></button>
                             </div>
                         </div>
-                        <div class="messages-thread-inner">
                             <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
                             <div class="message-scroll-region">
                                 <div id="message-thread" class="message-thread-body"></div>
                                 <div id="typing-indicator" class="typing-indicator" style="display:none;"></div>
                             </div>
+                            <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
+                            <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
                         </div>
-                        <div id="message-reply-preview" class="message-reply-preview" style="display:none;"></div>
-                        <div id="message-attachment-preview" class="message-attachment-preview" style="display:none;">
-                        </div>
-                        <div class="message-compose">
+                            <div class="message-compose">
                             <input type="file" id="message-media" accept="image/*,video/*" multiple
                                 style="display:none;" onchange="window.handleMessageFileChange(event)">
                             <button class="icon-pill" onclick="document.getElementById('message-media').click()"><i
@@ -874,6 +879,7 @@
                             <input id="message-input" class="form-input" placeholder="Message" />
                             <button class="create-btn-sidebar" style="width:auto;"
                                 onclick="window.sendMessage()">Send</button>
+                        </div>
                         </div>
                     </div>
                     </div>
@@ -1555,10 +1561,24 @@
     </main>
 
     <aside class="sidebar-right glass-panel">
-        <div class="trend-box">
-            <div class="trend-title">Trending <i class="ph-fill ph-trend-up"></i></div>
-            <div class="trend-item"><span>#SpaceX</span><span style="color:var(--text-muted);">12k</span></div>
-            <div class="trend-item"><span>#AI</span><span style="color:var(--text-muted);">8k</span></div>
+        <div class="right-sidebar-header">
+            <div class="feed-type-toggle-bar" id="feed-type-toggle-bar"></div>
+        </div>
+        <div class="right-sidebar-content">
+        <div class="trend-box trending-topics">
+            <div class="trend-title trend-header">
+                <span><i class="ph-fill ph-trend-up"></i> Trending</span>
+                <select id="trending-range-select" class="trend-range-select" aria-label="Trending range">
+                    <option value="day">1d</option>
+                    <option value="week" selected>7d</option>
+                    <option value="month">1mo</option>
+                    <option value="six_months">6mo</option>
+                    <option value="year">1y</option>
+                    <option value="five_years">5y</option>
+                    <option value="lifetime">All</option>
+                </select>
+            </div>
+            <div class="trend-list" id="trending-topic-list"></div>
         </div>
 
         <div class="trend-box">
@@ -1584,8 +1604,11 @@
         </div>
 
         <div style="margin-top:2rem; font-size:0.8rem; color:var(--text-muted);">© 2025 Nexera Network</div>
+        </div>
     </aside>
     </div>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="window.Nexera?.closeSidebar?.()"></div>
 
     <nav id="mobile-bottom-nav" class="mobile-bottom-nav">
         <button class="mobile-nav-btn active" data-view="feed"><i class="ph ph-house"></i><span>Home</span></button>
