@@ -1021,6 +1021,9 @@ function applyDesktopSidebarState(collapsed, persist = true) {
     if (!isMobileViewport()) {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
     }
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1682,9 +1685,17 @@ async function getTrendingTopics(range = trendingTopicsState.range) {
 function renderTrendingTopics(topics) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    let loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
+    if (box && !loadMoreWrap) {
+        loadMoreWrap = document.createElement('div');
+        loadMoreWrap.className = 'trend-load-more-wrapper';
+        box.appendChild(loadMoreWrap);
+    }
     list.innerHTML = '';
     if (!topics.length) {
         list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
     const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
@@ -1699,7 +1710,11 @@ function renderTrendingTopics(topics) {
         list.appendChild(item);
     });
 
-    if (visibleCount < topics.length) {
+    if (loadMoreWrap) {
+        loadMoreWrap.innerHTML = '';
+    }
+
+    if (visibleCount < topics.length && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
@@ -1708,13 +1723,15 @@ function renderTrendingTopics(topics) {
             trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
             renderTrendingTopics(topics);
         });
-        list.appendChild(loadMore);
+        loadMoreWrap.appendChild(loadMore);
     }
 }
 
 async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    const loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
     trendingTopicsState.range = range || trendingTopicsState.range;
     if (trendingTopicsState.loading) {
         trendingTopicsState.needsRefresh = true;
@@ -1724,6 +1741,7 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
+    if (loadMoreWrap) loadMoreWrap.innerHTML = '';
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
         trendingTopicsState.lastLoadSucceeded = true;
@@ -10857,10 +10875,10 @@ function buildVideoCard(video) {
     thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
     thumb.style.cursor = 'pointer';
 
-    const duration = document.createElement('div');
-    duration.className = 'video-duration';
-    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
-    thumb.appendChild(duration);
+    const views = document.createElement('div');
+    views.className = 'video-views';
+    views.textContent = `${formatCompactNumber(getVideoViewCount(video))} views`;
+    thumb.appendChild(views);
 
     const meta = document.createElement('div');
     meta.className = 'video-meta';
