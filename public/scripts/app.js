@@ -2879,7 +2879,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
         releaseScrollLockIfSafe();
         initConversations();
         syncMobileMessagesShell();
-        setInboxMode(inboxMode || 'messages', { skipRouteUpdate: !pushToStack });
+        setInboxMode(inboxMode || 'messages', { skipRouteUpdate: !pushToStack, routeView: viewId });
         refreshInboxLayout();
     } else {
         document.body.classList.remove('mobile-thread-open');
@@ -7354,7 +7354,7 @@ function renderInboxNotifications(mode = 'posts') {
 }
 
 function setInboxMode(mode = 'messages', options = {}) {
-    const { skipRouteUpdate = false } = options;
+    const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
     inboxMode = allowed.includes(mode) ? mode : 'messages';
     document.querySelectorAll('.inbox-tab').forEach(function (btn) {
@@ -7376,7 +7376,7 @@ function setInboxMode(mode = 'messages', options = {}) {
         renderInboxNotifications(inboxMode);
     }
     refreshInboxLayout();
-    if (!skipRouteUpdate && currentViewId === 'messages') {
+    if (!skipRouteUpdate && routeView === 'messages') {
         let nextPath = '/inbox';
         if (inboxMode && inboxMode !== 'messages') {
             nextPath = `/inbox/${inboxMode}`;
@@ -8389,6 +8389,12 @@ async function openConversation(conversationId) {
         setTypingState(activeConversationId, false);
     }
     activeConversationId = conversationId;
+    if (window.location.pathname.startsWith('/inbox')) {
+        const nextPath = `/inbox/messages/${encodeURIComponent(conversationId)}`;
+        if (window.location.pathname + window.location.search !== nextPath) {
+            history.pushState({}, '', nextPath);
+        }
+    }
     clearReplyContext();
     conversationSearchTerm = '';
     const searchInput = document.getElementById('conversation-search');
