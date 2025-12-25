@@ -70,7 +70,7 @@
   }
 
   function buildUrlForVideo(videoId) {
-    return videoId ? `/video/${encodeURIComponent(videoId)}` : '/videos';
+    return videoId ? `/videos?open=${encodeURIComponent(videoId)}` : '/videos';
   }
 
   function buildUrlForVideoManager() {
@@ -103,10 +103,10 @@
 
   function buildUrlForMessages(conversationId, params = {}) {
     const search = new URLSearchParams(params);
-    const suffix = search.toString();
     if (conversationId) {
-      return `/inbox/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
+      search.set('conversation', conversationId);
     }
+    const suffix = search.toString();
     return `/inbox${suffix ? `?${suffix}` : ''}`;
   }
 
@@ -192,8 +192,18 @@
       if (head === 'messages' && segments[1]) {
         return { type: 'messages', conversationId: segments[1], route };
       }
-      if (head === 'inbox' && segments[1]) {
-        return { type: 'messages', conversationId: segments[1], route };
+      if (head === 'messages') {
+        return { type: 'section', view: SECTION_ROUTES.inbox, route };
+      }
+      if (head === 'inbox') {
+        const convoParam = params.get('conversation');
+        if (convoParam) {
+          return { type: 'messages', conversationId: convoParam, route };
+        }
+        if (segments[1]) {
+          return { type: 'messages', conversationId: segments[1], route };
+        }
+        return { type: 'section', view: SECTION_ROUTES[head], route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
     }
@@ -335,6 +345,12 @@
           }
           return;
         }
+      }
+      if (route.view === 'feed' && (route.route?.path === '/' || route.route?.path === '')) {
+        replaceStateSilently('/home');
+      }
+      if (route.view === 'messages' && route.route?.path?.startsWith('/messages')) {
+        replaceStateSilently(buildUrlForMessages());
       }
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: route.view });

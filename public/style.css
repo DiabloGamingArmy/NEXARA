@@ -487,29 +487,40 @@ body.sidebar-collapsed .sidebar-left {
     padding: 1.5rem 0.75rem;
 }
 
+body.sidebar-collapsed .sidebar-left .brand-nav,
 body.sidebar-collapsed .sidebar-left .brand-wordmark,
-body.sidebar-collapsed .sidebar-left .btn-label {
+body.sidebar-collapsed .sidebar-left .btn-label,
+.sidebar-left.collapsed .brand-nav,
+.sidebar-left.collapsed .brand-wordmark,
+.sidebar-left.collapsed .btn-label {
     display: none;
 }
 
-body.sidebar-collapsed .sidebar-left .nav-item {
+body.sidebar-collapsed .sidebar-left .nav-item,
+.sidebar-left.collapsed .nav-item {
     justify-content: center;
     gap: 0;
     font-size: 0;
     padding: 0.8rem 0;
+    padding-left: 0;
+    padding-right: 0;
 }
 
-body.sidebar-collapsed .sidebar-left .nav-item i {
+body.sidebar-collapsed .sidebar-left .nav-item i,
+.sidebar-left.collapsed .nav-item i {
     font-size: 1.2rem;
+    margin-right: 0;
 }
 
-body.sidebar-collapsed .sidebar-left .create-btn-sidebar {
+body.sidebar-collapsed .sidebar-left .create-btn-sidebar,
+.sidebar-left.collapsed .create-btn-sidebar {
     justify-content: center;
     padding: 0.8rem 0;
     font-size: 0;
 }
 
-body.sidebar-collapsed .sidebar-left .create-btn-sidebar i {
+body.sidebar-collapsed .sidebar-left .create-btn-sidebar i,
+.sidebar-left.collapsed .create-btn-sidebar i {
     font-size: 1.2rem;
 }
 
@@ -1871,6 +1882,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .trend-load-more:hover {
     border-color: var(--primary);
     color: var(--primary);
+}
+
+.trend-load-more-wrapper {
+    padding-top: 0.75rem;
 }
 
 .trend-item {
@@ -3712,6 +3727,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     gap: 12px;
     cursor: pointer;
+    margin-bottom: 1rem;
+}
+
+.video-feed .video-card {
+    margin-bottom: 0;
 }
 
 .video-thumb {
@@ -3727,6 +3747,18 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .video-duration {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.video-views {
     position: absolute;
     right: 10px;
     bottom: 10px;
