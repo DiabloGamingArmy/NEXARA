@@ -67,6 +67,7 @@ let miniPlayerState = null;
 let miniPlayerMode = null;
 let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
+let pendingVideoOpenId = null;
 let profileReturnContext = null;
 let messageTypingTimer = null;
 let conversationListFilter = 'all';
@@ -897,6 +898,7 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+
 const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
 const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
 const FEED_TYPE_TOGGLES = [
@@ -1021,6 +1023,9 @@ function applyDesktopSidebarState(collapsed, persist = true) {
     if (!isMobileViewport()) {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
     }
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1682,9 +1687,17 @@ async function getTrendingTopics(range = trendingTopicsState.range) {
 function renderTrendingTopics(topics) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    let loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
+    if (box && !loadMoreWrap) {
+        loadMoreWrap = document.createElement('div');
+        loadMoreWrap.className = 'trend-load-more-wrapper';
+        box.appendChild(loadMoreWrap);
+    }
     list.innerHTML = '';
     if (!topics.length) {
         list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
     const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
@@ -1699,7 +1712,11 @@ function renderTrendingTopics(topics) {
         list.appendChild(item);
     });
 
-    if (visibleCount < topics.length) {
+    if (loadMoreWrap) {
+        loadMoreWrap.innerHTML = '';
+    }
+
+    if (visibleCount < topics.length && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
@@ -1708,13 +1725,15 @@ function renderTrendingTopics(topics) {
             trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
             renderTrendingTopics(topics);
         });
-        list.appendChild(loadMore);
+        loadMoreWrap.appendChild(loadMore);
     }
 }
 
 async function loadTrendingTopics(range = trendingTopicsState.range) {
     const list = document.getElementById('trending-topic-list');
     if (!list) return;
+    const box = list.closest('.trend-box');
+    const loadMoreWrap = box ? box.querySelector('.trend-load-more-wrapper') : null;
     trendingTopicsState.range = range || trendingTopicsState.range;
     if (trendingTopicsState.loading) {
         trendingTopicsState.needsRefresh = true;
@@ -1724,6 +1743,7 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     trendingTopicsState.lastLoadSucceeded = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
+    if (loadMoreWrap) loadMoreWrap.innerHTML = '';
     try {
         const topics = await getTrendingTopics(trendingTopicsState.range);
         trendingTopicsState.lastLoadSucceeded = true;
@@ -2852,16 +2872,20 @@ window.navigateTo = function (viewId, pushToStack = true) {
         initConversations();
         syncMobileMessagesShell();
         setInboxMode(inboxMode || 'messages');
+        refreshInboxLayout();
     } else {
         document.body.classList.remove('mobile-thread-open');
     }
     if (viewId === 'videos') {
         const routedVideoId = getVideoRouteVideoId();
-        clearVideoDetailState({ updateRoute: !routedVideoId });
+        const requestedVideoId = routedVideoId || pendingVideoOpenId;
+        clearVideoDetailState({ updateRoute: !requestedVideoId });
         initVideoFeed();
-        if (routedVideoId) {
-            window.openVideoDetail(routedVideoId);
+        if (requestedVideoId) {
+            pendingVideoOpenId = null;
+            window.openVideoDetail(requestedVideoId);
         }
+        pendingVideoOpenId = null;
     }
     if (shouldHideMiniPlayer(viewId) && miniPlayerMode !== 'pip') {
         hideMiniPlayer();
@@ -7335,6 +7359,7 @@ function setInboxMode(mode = 'messages') {
     if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
+    refreshInboxLayout();
 }
 
 function renderConversationList() {
@@ -8362,6 +8387,7 @@ async function openConversation(conversationId) {
         document.body.classList.add('mobile-thread-open');
     }
     syncMobileMessagesShell();
+    refreshInboxLayout();
 
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
@@ -8370,6 +8396,7 @@ async function openConversation(conversationId) {
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
     await listenToMessages(conversationId);
+    refreshInboxLayout();
 }
 
 async function initConversations(autoOpen = true) {
@@ -10843,6 +10870,12 @@ async function hydrateVideoEngagement(videoId) {
     return getVideoEngagementStatus(videoId);
 }
 
+function openVideoFromFeed(videoId) {
+    if (!videoId) return;
+    pendingVideoOpenId = videoId;
+    window.navigateTo('videos');
+}
+
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
     const card = document.createElement('div');
@@ -10857,10 +10890,10 @@ function buildVideoCard(video) {
     thumb.style.backgroundImage = `url('${resolveVideoThumbnail(video)}')`;
     thumb.style.cursor = 'pointer';
 
-    const duration = document.createElement('div');
-    duration.className = 'video-duration';
-    duration.textContent = video.duration ? `${Math.floor(video.duration / 60)}:${String(Math.floor(video.duration % 60)).padStart(2, '0')}` : '—';
-    thumb.appendChild(duration);
+    const views = document.createElement('div');
+    views.className = 'video-views';
+    views.textContent = `${formatCompactNumber(getVideoViewCount(video))} views`;
+    thumb.appendChild(views);
 
     const meta = document.createElement('div');
     meta.className = 'video-meta';
@@ -10893,14 +10926,28 @@ function buildVideoCard(video) {
 
     card.appendChild(thumb);
     card.appendChild(meta);
-    card.addEventListener('click', function () { window.openVideoDetail(video.id); });
+    card.addEventListener('click', function () {
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
+        window.openVideoDetail(video.id);
+    });
     thumb.addEventListener('click', function (event) {
         event.stopPropagation();
+        if (currentViewId === 'feed') {
+            openVideoFromFeed(video.id);
+            return;
+        }
         window.openVideoDetail(video.id);
     });
     card.addEventListener('keydown', function (event) {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            if (currentViewId === 'feed') {
+                openVideoFromFeed(video.id);
+                return;
+            }
             window.openVideoDetail(video.id);
         }
     });
@@ -10956,16 +11003,18 @@ function getVideoModalPlayerContainer() {
 }
 
 function captureVideoDetailReturnPath() {
-    const path = window.location.pathname || '';
-    if (path.startsWith('/videos')) {
-        videoDetailReturnPath = '/videos';
-        return;
-    }
+    const path = window.location.pathname || '/';
+    const search = window.location.search || '';
+    const hash = window.location.hash || '';
     if (path.startsWith('/video/')) {
         videoDetailReturnPath = '/videos';
         return;
     }
-    videoDetailReturnPath = '/videos';
+    if (path.startsWith('/videos')) {
+        videoDetailReturnPath = '/videos';
+        return;
+    }
+    videoDetailReturnPath = `${path}${search}${hash}` || '/videos';
 }
 
 function getVideoRouteVideoId() {
@@ -10974,7 +11023,7 @@ function getVideoRouteVideoId() {
         const raw = url.pathname.replace('/video/', '').split('/')[0];
         return raw ? decodeURIComponent(raw) : null;
     }
-    const queryId = url.searchParams.get('video') || url.searchParams.get('v');
+    const queryId = url.searchParams.get('open') || url.searchParams.get('video') || url.searchParams.get('v');
     if (queryId) return queryId;
     if (url.hash && url.hash.startsWith('#video=')) {
         return url.hash.replace('#video=', '');
@@ -10984,29 +11033,25 @@ function getVideoRouteVideoId() {
 
 function clearVideoDetailRoute() {
     const url = new URL(window.location.href);
-    let changed = false;
-    if (url.pathname.startsWith('/video/')) {
+    const fallback = videoDetailReturnPath || '/videos';
+    if (url.pathname.startsWith('/videos')) {
         url.pathname = '/videos';
-        changed = true;
-    }
-    if (url.searchParams.has('video')) {
+        url.searchParams.delete('open');
         url.searchParams.delete('video');
-        changed = true;
-    }
-    if (url.searchParams.has('v')) {
         url.searchParams.delete('v');
-        changed = true;
+        if (url.hash && url.hash.startsWith('#video')) url.hash = '';
+        const next = `${url.pathname}${url.search}${url.hash}`;
+        if (window.NexeraRouter?.replaceStateSilently) {
+            window.NexeraRouter.replaceStateSilently(next);
+        } else {
+            history.replaceState({}, '', next);
+        }
+        return;
     }
-    if (url.hash && url.hash.startsWith('#video')) {
-        url.hash = '';
-        changed = true;
-    }
-    if (!changed) return;
-    const next = `${url.pathname}${url.search}${url.hash}`;
     if (window.NexeraRouter?.replaceStateSilently) {
-        window.NexeraRouter.replaceStateSilently(next);
+        window.NexeraRouter.replaceStateSilently(fallback);
     } else {
-        history.replaceState({}, '', next);
+        history.replaceState({}, '', fallback);
     }
 }
 
@@ -12947,9 +12992,16 @@ function updateInboxTabsHeight() {
     document.documentElement.style.setProperty('--inbox-tabs-h', `${height}px`);
 }
 
+function refreshInboxLayout() {
+    requestAnimationFrame(function () {
+        updateInboxTabsHeight();
+        requestAnimationFrame(updateInboxTabsHeight);
+    });
+}
+
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
-    const isHome = path === '/' || path === '/home';
+    const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
     if (isHome) {
         mountFeedTypeToggleBar();
