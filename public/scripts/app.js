@@ -116,6 +116,10 @@ let mentionSuggestionState = {
 const MENTION_SUGGESTION_PAGE_SIZE = 30;
 let currentThreadComments = [];
 let liveSessionsCache = [];
+let homeVideosCache = [];
+let homeLiveSessionsCache = [];
+let homeMediaPromise = null;
+let homeMediaLoading = false;
 let profileMediaPrefetching = {};
 let uploadManager = null;
 let videoTaskViewerBound = false;
@@ -208,28 +212,103 @@ function refreshBrandLogos() {
 }
 window.refreshBrandLogos = refreshBrandLogos;
 
+function isUiDebugEnabled() {
+    return window.DEBUG_UI === true;
+}
+
+function uiDebugLog(...args) {
+    if (!isUiDebugEnabled()) return;
+    console.debug('[NexeraUI]', ...args);
+}
+
 function showSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
+    startSplashFailsafeTimer();
     splash.style.display = 'flex';
     splash.classList.remove('nexera-splash-hidden');
     splash.style.pointerEvents = 'auto';
     splash.style.visibility = 'visible';
+    splash.setAttribute('aria-hidden', 'false');
+    logSplashEvent('show');
 }
 
-function hideSplash() {
+function hideSplash(options = {}) {
     const splash = document.getElementById('nexera-splash');
-    if (!splash) return;
-    if (window.Nexera?.splashHold) {
-        window.Nexera.splashPending = true;
+    const { force = false, reason = 'hide' } = options || {};
+    if (!splash) {
+        clearSplashFailsafeTimer();
+        logSplashEvent('hide-missing', reason);
         return;
     }
+    if (!force && window.Nexera?.splashHold) {
+        window.Nexera.splashPending = true;
+        logSplashEvent('hold-pending', reason);
+        return;
+    }
+    logSplashEvent('hide', reason);
     splash.classList.add('nexera-splash-hidden');
     splash.style.pointerEvents = 'none';
+    splash.setAttribute('aria-hidden', 'true');
+    uiDebugLog('splash hidden', reason);
+    clearSplashFailsafeTimer();
     const TRANSITION_BUFFER = 520;
     setTimeout(function () {
-        splash.style.display = 'none';
+        if (splash.classList.contains('nexera-splash-hidden')) {
+            splash.style.visibility = 'hidden';
+            splash.style.display = 'none';
+        }
     }, TRANSITION_BUFFER);
+}
+
+const SPLASH_FAILSAFE_TIMEOUT = 8000;
+let splashFailsafeTimer = null;
+
+function getSplashDebugSummary() {
+    return {
+        path: `${window.location.pathname || '/'}${window.location.search || ''}${window.location.hash || ''}`,
+        user: currentUser?.uid || null,
+        hold: !!window.Nexera?.splashHold,
+        pending: !!window.Nexera?.splashPending
+    };
+}
+
+function isSplashDebugEnabled() {
+    return window.__NEXERA_DEBUG_SPLASH === true;
+}
+
+function logSplashEvent(event, detail) {
+    if (!isSplashDebugEnabled()) return;
+    const summary = getSplashDebugSummary();
+    if (detail !== undefined) {
+        console.log('[NexeraSplash]', event, detail, summary);
+        return;
+    }
+    console.log('[NexeraSplash]', event, summary);
+}
+
+function clearSplashFailsafeTimer() {
+    if (!splashFailsafeTimer) return;
+    clearTimeout(splashFailsafeTimer);
+    splashFailsafeTimer = null;
+}
+
+function startSplashFailsafeTimer() {
+    if (splashFailsafeTimer) return;
+    splashFailsafeTimer = setTimeout(function () {
+        const splash = document.getElementById('nexera-splash');
+        if (!splash) return;
+        const isHidden = splash.classList.contains('nexera-splash-hidden') || splash.style.display === 'none';
+        if (!isHidden) {
+            console.warn('[NexeraSplash] Failsafe hide triggered', getSplashDebugSummary());
+            if (window.Nexera) {
+                window.Nexera.splashHold = false;
+                window.Nexera.splashPending = false;
+            }
+            hideSplash({ force: true, reason: 'failsafe-timeout' });
+        }
+    }, SPLASH_FAILSAFE_TIMEOUT);
+    logSplashEvent('failsafe-start', SPLASH_FAILSAFE_TIMEOUT);
 }
 
 function getReviewDisplay(reviewValue) {
@@ -727,6 +806,7 @@ if (!window.Nexera.ready) {
     window.Nexera.ready = new Promise(function (resolve) { readyResolve = resolve; });
     window.Nexera.__resolveReady = readyResolve;
 }
+window.Nexera.authResolved = false;
 window.Nexera.auth = auth;
 window.Nexera.db = db;
 window.Nexera.storage = storage;
@@ -792,12 +872,12 @@ window.Nexera.openEntity = function (type, id, payload) {
     }
 };
 window.Nexera.splashHold = window.Nexera.splashHold !== false;
-window.Nexera.releaseSplash = function () {
+logSplashEvent('hold-init');
+window.Nexera.releaseSplash = function (reason = 'release') {
     window.Nexera.splashHold = false;
-    if (window.Nexera.splashPending) {
-        window.Nexera.splashPending = false;
-        hideSplash();
-    }
+    window.Nexera.splashPending = false;
+    logSplashEvent('release', reason);
+    hideSplash({ force: true, reason });
 };
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
@@ -817,6 +897,198 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
+const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
+const FEED_TYPE_TOGGLES = [
+    { key: 'threads', label: 'Threads' },
+    { key: 'videos', label: 'Videos' },
+    { key: 'livestreams', label: 'Livestreams' }
+];
+
+let sidebarCollapsed = false;
+
+function getFeedTypeToggleSlot() {
+    return document.getElementById('feed-type-toggle-bar') || document.querySelector('.feed-type-toggle-bar');
+}
+
+function buildFeedTypeToggleButtons(container) {
+    if (!container) return;
+    container.innerHTML = '';
+    FEED_TYPE_TOGGLES.forEach(function (toggle) {
+        const btn = document.createElement('button');
+        btn.className = 'discover-pill feed-type-pill';
+        btn.textContent = toggle.label;
+        btn.dataset.type = toggle.key;
+        btn.addEventListener('click', function () {
+            toggleFeedType(toggle.key);
+        });
+        container.appendChild(btn);
+    });
+}
+
+function getDefaultFeedTypes() {
+    return { threads: true, videos: true, livestreams: true };
+}
+
+function loadFeedTypeState() {
+    const defaults = getDefaultFeedTypes();
+    let stored = null;
+    if (window.localStorage) {
+        try {
+            stored = JSON.parse(window.localStorage.getItem(FEED_TYPE_STORAGE_KEY) || '');
+        } catch (e) {
+            stored = null;
+        }
+    }
+    const next = { ...defaults, ...(stored && stored.types ? stored.types : stored) };
+    const anySelected = Object.values(next).some(Boolean);
+    if (!anySelected) {
+        Object.assign(next, defaults);
+    }
+    window.NexeraFeedState = window.NexeraFeedState || {};
+    window.NexeraFeedState.types = next;
+    persistFeedTypeState();
+}
+
+function persistFeedTypeState() {
+    if (!window.localStorage) return;
+    const payload = { types: { ...(window.NexeraFeedState?.types || getDefaultFeedTypes()) } };
+    window.localStorage.setItem(FEED_TYPE_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function getActiveFeedTypes() {
+    const types = window.NexeraFeedState?.types || getDefaultFeedTypes();
+    return Object.keys(types).filter(function (key) { return !!types[key]; });
+}
+
+function applyFeedTypeFilterAndRefresh({ preserveScroll = false } = {}) {
+    if (currentViewId !== 'feed') return;
+    const scrollY = preserveScroll ? window.scrollY : null;
+    loadHomeMediaData().finally(function () {
+        renderFeed();
+        if (preserveScroll && typeof scrollY === 'number') {
+            if (window.Nexera?.restoreFeedScroll) {
+                window.Nexera.restoreFeedScroll(scrollY);
+            } else {
+                window.scrollTo(0, scrollY);
+            }
+        }
+    });
+}
+
+function toggleFeedType(typeKey) {
+    if (!typeKey) return;
+    window.NexeraFeedState = window.NexeraFeedState || {};
+    const types = window.NexeraFeedState.types || getDefaultFeedTypes();
+    types[typeKey] = !types[typeKey];
+    if (!Object.values(types).some(Boolean)) {
+        Object.assign(types, getDefaultFeedTypes());
+    }
+    window.NexeraFeedState.types = types;
+    persistFeedTypeState();
+    syncFeedTypeToggleState();
+    if (window?.location?.hostname === 'localhost' || window?.__DEV_FEED_TOGGLE_DEBUG__) {
+        console.debug('[FeedTypes] Active:', getActiveFeedTypes());
+    }
+    applyFeedTypeFilterAndRefresh({ preserveScroll: true });
+}
+
+function mountFeedTypeToggleBar() {
+    const slot = getFeedTypeToggleSlot();
+    if (!slot) return;
+    const header = document.querySelector('.right-sidebar-header');
+    if (header && slot.parentElement !== header) {
+        header.appendChild(slot);
+    }
+    if (!slot.children.length) {
+        buildFeedTypeToggleButtons(slot);
+    }
+    syncFeedTypeToggleState();
+}
+
+function syncFeedTypeToggleState() {
+    const activeTypes = getActiveFeedTypes();
+    document.querySelectorAll('.feed-type-toggle-bar [data-type]').forEach(function (btn) {
+        btn.classList.toggle('active', activeTypes.includes(btn.dataset.type));
+    });
+}
+
+function applyDesktopSidebarState(collapsed, persist = true) {
+    sidebarCollapsed = !!collapsed;
+    if (!isMobileViewport()) {
+        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+    }
+    if (persist && window.localStorage) {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
+    }
+}
+
+function setSidebarOverlayOpen(open) {
+    document.body.classList.toggle('sidebar-overlay-open', !!open);
+}
+
+function initSidebarState() {
+    if (window.localStorage) {
+        sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+    }
+    applyDesktopSidebarState(sidebarCollapsed, false);
+}
+
+function openSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(true);
+        return;
+    }
+    applyDesktopSidebarState(false);
+}
+
+function closeSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(false);
+        return;
+    }
+    applyDesktopSidebarState(true);
+}
+
+function toggleSidebar() {
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
+        return;
+    }
+    applyDesktopSidebarState(!sidebarCollapsed);
+}
+
+function bindSidebarEvents() {
+    document.querySelectorAll('.sidebar-left .nav-item, .sidebar-left .create-btn-sidebar').forEach(function (item) {
+        item.addEventListener('click', function () {
+            if (isMobileViewport()) {
+                setSidebarOverlayOpen(false);
+            }
+        });
+    });
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && document.body.classList.contains('sidebar-overlay-open')) {
+            setSidebarOverlayOpen(false);
+        }
+    });
+
+    if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
+        MOBILE_VIEWPORT.addEventListener('change', function () {
+            if (isMobileViewport()) {
+                document.body.classList.remove('sidebar-collapsed');
+            } else {
+                setSidebarOverlayOpen(false);
+                applyDesktopSidebarState(sidebarCollapsed);
+            }
+        });
+    }
+}
+
+window.Nexera.toggleSidebar = toggleSidebar;
+window.Nexera.openSidebar = openSidebar;
+window.Nexera.closeSidebar = closeSidebar;
+window.Nexera.mountFeedTypeToggleBar = mountFeedTypeToggleBar;
 // --- Mock Data ---
 const MOCK_LIVESTREAMS = [
     { id: 'l1', title: '🔴 Mars Rover Landing Watch Party', viewerCount: '12.5k', author: 'SpaceX_Fan', category: 'STEM', color: '#00f2ea' },
@@ -1057,12 +1329,17 @@ function initApp(onReady) {
         if (typeof onReady === 'function') onReady();
         if (window.Nexera?.__resolveReady) window.Nexera.__resolveReady();
         if (readyResolver) readyResolver();
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash('auth-ready');
+        }
     };
 
     onAuthStateChanged(auth, async function (user) {
         const loadingOverlay = document.getElementById('loading-overlay');
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
+        window.Nexera.authResolved = true;
+        uiDebugLog('auth resolved', { signedIn: !!user });
 
         try {
             if (user) {
@@ -1284,6 +1561,7 @@ async function updateTimeCapsule(forceReload = false) {
 
     timeCapsuleState.loading = false;
     renderTimeCapsule();
+    uiDebugLog('time capsule loaded', { source: timeCapsuleState.source, hasUrl: !!timeCapsuleState.event?.url });
 }
 
 function showAnotherTimeCapsuleEvent() {
@@ -1570,6 +1848,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         }
 
         fetchMissingProfiles(allPosts);
+        await loadHomeMediaData();
         feedLoading = false;
         renderFeed();
         await waitForFeedMedia();
@@ -1583,6 +1862,42 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     });
 
     return feedHydrationPromise;
+}
+
+async function loadHomeMediaData() {
+    if (homeMediaLoading && homeMediaPromise) return homeMediaPromise;
+    homeMediaLoading = true;
+    homeMediaPromise = Promise.all([loadHomeVideos(), loadHomeLiveSessions()])
+        .catch(function (error) {
+            console.warn('Home media load failed', error?.message || error);
+        })
+        .finally(function () {
+            homeMediaLoading = false;
+        });
+    return homeMediaPromise;
+}
+
+async function loadHomeVideos() {
+    try {
+        const snapshot = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(50)));
+        homeVideosCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        homeVideosCache.forEach(ensureVideoStats);
+    } catch (error) {
+        console.warn('Home videos load failed', error?.message || error);
+        homeVideosCache = [];
+    }
+    return homeVideosCache;
+}
+
+async function loadHomeLiveSessions() {
+    try {
+        const snapshot = await getDocs(query(collection(db, 'liveStreams'), orderBy('createdAt', 'desc'), limit(50)));
+        homeLiveSessionsCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+    } catch (error) {
+        console.warn('Home livestream load failed', error?.message || error);
+        homeLiveSessionsCache = [];
+    }
+    return homeLiveSessionsCache;
 }
 
 // Prime Live Directory layout
@@ -2304,6 +2619,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     if (targetView) targetView.style.display = 'block';
 
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
+    if (isMobileViewport()) {
+        setSidebarOverlayOpen(false);
+    }
+    syncFeedTypeToggleState();
 
     // Toggle Navbar Active State
     if (viewId !== 'thread' && viewId !== 'public-profile') {
@@ -2959,23 +3278,61 @@ function renderFeed(targetId = 'feed-content') {
         displayPosts = allPosts.filter(function (post) { return post.category === currentCategory; });
     }
 
-    if (currentCategory === 'For You') {
-        displayPosts = displayPosts.slice().sort(function (a, b) {
-            return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0);
-        });
+    const activeTypes = getActiveFeedTypes();
+    const items = [];
+
+    if (activeTypes.includes('threads')) {
+        const threadItems = displayPosts
+            .filter(function (post) { return matchesCategoryFilter(post.category); })
+            .map(function (post) { return ({ type: 'threads', id: post.id, createdAt: getFeedItemTimestamp(post), data: post }); });
+        items.push(...threadItems);
     }
 
-    if (displayPosts.length === 0) {
+    if (activeTypes.includes('videos') && currentCategory !== 'Saved') {
+        const videos = (homeVideosCache || videosCache || []).filter(function (video) {
+            return matchesCategoryFilter(video.category || video.genre || video.categoryLabel);
+        }).map(function (video) {
+            return ({ type: 'videos', id: video.id, createdAt: getFeedItemTimestamp(video), data: video });
+        });
+        items.push(...videos);
+    }
+
+    if (activeTypes.includes('livestreams') && currentCategory !== 'Saved') {
+        const sessions = (homeLiveSessionsCache || liveSessionsCache || []).filter(function (session) {
+            return matchesCategoryFilter(session.category || session.categoryLabel);
+        }).map(function (session) {
+            return ({ type: 'livestreams', id: session.id, createdAt: getFeedItemTimestamp(session), data: session });
+        });
+        items.push(...sessions);
+    }
+
+    if (currentCategory === 'For You') {
+        items.sort(function (a, b) { return b.createdAt - a.createdAt; });
+    } else {
+        items.sort(function (a, b) { return b.createdAt - a.createdAt; });
+    }
+
+    if (items.length === 0) {
         const emptyLabel = feedLoading ? 'Loading Posts...' : 'No posts found.';
         container.innerHTML = `<div class="empty-state"><i class="ph ph-magnifying-glass" style="font-size:3rem; margin-bottom:1rem;"></i><p>${emptyLabel}</p></div>`;
         return;
     }
 
-    displayPosts.forEach(post => {
-        container.innerHTML += getPostHTML(post);
+    items.forEach(function (item) {
+        if (item.type === 'threads') {
+            container.insertAdjacentHTML('beforeend', getPostHTML(item.data));
+            return;
+        }
+        if (item.type === 'videos') {
+            container.appendChild(buildVideoCard(item.data));
+            return;
+        }
+        if (item.type === 'livestreams') {
+            container.appendChild(buildHomeLiveCard(item.data));
+        }
     });
 
-    displayPosts.forEach(post => {
+    displayPosts.forEach(function (post) {
         const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
         const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
         applyReviewButtonState(reviewBtn, reviewValue);
@@ -6012,6 +6369,71 @@ function escapeHtml(text) {
 }
 
 function cleanText(text) { if (typeof text !== 'string') return ""; return text.replace(new RegExp(["badword", "hate"].join("|"), "gi"), "🤐"); }
+
+function getPostFeedType(post = {}) {
+    const raw = (post.type || post.contentType || post.mediaType || '').toString().toLowerCase();
+    if (raw === 'video') return 'videos';
+    if (raw === 'livestream' || raw === 'live' || raw === 'stream') return 'livestreams';
+    return 'threads';
+}
+
+function getFeedItemTimestamp(item) {
+    const ts = item?.createdAt || item?.timestamp || item?.updatedAt || item?.publishedAt || item?.startedAt || item?.startTime;
+    const date = toDateSafe(ts);
+    if (date) return date.getTime();
+    if (typeof ts === 'number') return ts;
+    if (typeof ts?.seconds === 'number') return ts.seconds * 1000;
+    return 0;
+}
+
+function matchesCategoryFilter(category) {
+    if (currentCategory === 'For You') return true;
+    if (currentCategory === 'Following') return !!category && followedCategories.has(category);
+    if (currentCategory === 'Saved') return true;
+    return !!category && category === currentCategory;
+}
+
+function buildHomeLiveCard(session) {
+    const card = document.createElement('div');
+    card.className = 'social-card live-directory-card';
+    card.onclick = function () { if (typeof window.openLiveSession === 'function') window.openLiveSession(session.id); };
+    const thumbnail = escapeHtml(resolveLiveThumbnail(session));
+    const viewerCount = escapeHtml(session.viewerCount || session.stats?.viewerCount || '0');
+    card.innerHTML = `
+        <div class="live-directory-thumb">
+            <img src="${thumbnail}" alt="Live thumbnail" class="live-thumb-img" loading="lazy" />
+            <div class="live-directory-badge">LIVE</div>
+            <div class="live-viewers live-directory-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</div>
+        </div>
+        <div class="live-directory-body">
+            <div class="live-directory-title">${escapeHtml(session.title || 'Live Session')}</div>
+            <div class="live-directory-meta">
+                <span class="live-streamer">@${escapeHtml(session.hostId || session.author || 'streamer')}</span>
+                <span class="live-viewers"><i class="ph-fill ph-eye"></i> ${viewerCount}</span>
+            </div>
+            <div class="live-directory-footer">
+                <span class="live-directory-category">${escapeHtml(session.category || 'Live')}</span>
+                <span class="live-directory-tags">${escapeHtml((session.tags || []).join(', '))}</span>
+            </div>
+        </div>`;
+    return card;
+}
+
+
+function getConversationAvatarUrl(convo = {}, fallback = '') {
+    return normalizeImageUrl(convo.avatarUrl || convo.avatarURL || fallback || '');
+}
+
+function handleSnapshotError(context, error) {
+    const code = error?.code || '';
+    const message = code === 'permission-denied'
+        ? 'You do not have access to this data.'
+        : 'We had trouble loading this data.';
+    console.warn(`${context} snapshot error`, error?.message || error);
+    if (typeof window.toast === 'function') {
+        window.toast(message, 'error');
+    }
+}
 function renderSaved() {
     currentCategory = 'Saved';
     const container = document.getElementById('saved-content');
@@ -6741,11 +7163,12 @@ function renderConversationList() {
             title: details.title || null
         };
         const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
+        const convoAvatar = getConversationAvatarUrl(details);
         let avatarUser = {
             uid: mapping.id || otherId || 'conversation',
             username: name,
             displayName: name,
-            photoURL: details.avatarURL || '',
+            photoURL: convoAvatar,
             avatarColor: computeAvatarColor(name)
         };
         if (!isGroup && otherId) {
@@ -6754,11 +7177,11 @@ function renderConversationList() {
                 uid: otherId,
                 username: otherProfile?.username || name,
                 displayName: resolveDisplayName(otherProfile) || name,
-                photoURL: otherProfile?.photoURL || details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '',
+                photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
                 avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
             };
-        } else if (details.avatarURL || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
-            avatarUser.photoURL = details.avatarURL || mapping.otherParticipantAvatars?.[0] || meta.avatars?.[0] || '';
+        } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
+            avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
         }
         const avatarHtml = renderAvatar(avatarUser, { size: 42 });
 
@@ -6846,28 +7269,28 @@ function renderMessageHeader(convo = {}) {
     const cid = convo.id || activeConversationId;
     const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
     const targetProfileId = primaryOtherId || meta.otherIds?.[0] || null;
+    const fallbackAvatar = meta.avatars?.[0] || '';
     let avatarUser = {
         uid: cid || primaryOtherId || 'conversation',
         username: label,
         displayName: label,
-        photoURL: convo.avatarURL || meta.avatars?.[0] || '',
+        photoURL: getConversationAvatarUrl(convo, fallbackAvatar),
         avatarColor: convo.avatarColor || computeAvatarColor(label)
     };
 
-    if (primaryOtherId && !convo.avatarURL) {
+    if (primaryOtherId && !getConversationAvatarUrl(convo)) {
         const otherMeta = resolveParticipantDisplay(convo, primaryOtherId);
         avatarUser = {
             ...otherMeta.profile,
             uid: primaryOtherId,
             username: otherMeta.username || label,
             displayName: otherMeta.displayName || label,
-            photoURL: otherMeta.avatar,
+            photoURL: normalizeImageUrl(otherMeta.avatar),
             avatarColor: otherMeta.avatarColor
         };
     }
 
     const avatar = renderAvatar(avatarUser, { size: 36 });
-    const verifiedBadge = (!convo.title && participants.length === 2) ? renderVerifiedBadge(avatarUser) : '';
     const targetProfile = targetProfileId ? resolveParticipantDisplay(convo, targetProfileId) : null;
     const participantCountLabel = `${participants.length} participant${participants.length === 1 ? '' : 's'}`;
     const subtitleUsername = targetProfile
@@ -6880,37 +7303,18 @@ function renderMessageHeader(convo = {}) {
         ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
         : 'class="message-thread-profile-btn" type="button" disabled';
 
-    const avatarStack = buildParticipantAvatarStack(participants);
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
             ${avatar}
             <div>
-                <div class="message-thread-title-row">${escapeHtml(label)}${verifiedBadge}</div>
+                <div class="message-thread-title-row">${escapeHtml(label)}</div>
                 <div class="message-thread-subtitle">${subtitle}</div>
             </div>
         </button>
-        ${avatarStack}
         <div class="message-header-actions">
             <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"><i class="ph ph-dots-three-outline"></i></button>
         </div>
     </div>`;
-}
-
-function buildParticipantAvatarStack(participants = []) {
-    if (!Array.isArray(participants) || participants.length <= 1) return '';
-    const others = participants.filter(function (uid) { return uid !== currentUser?.uid; }).slice(0, 3);
-    if (!others.length) return '';
-    const avatars = others.map(function (uid) {
-        const meta = resolveParticipantDisplay({ participants }, uid);
-        return renderAvatar({
-            uid,
-            username: meta.username,
-            displayName: meta.displayName,
-            photoURL: meta.avatar,
-            avatarColor: meta.avatarColor
-        }, { size: 26, className: 'message-avatar-stack-item' });
-    }).join('');
-    return `<div class="message-avatar-stack">${avatars}</div>`;
 }
 
 function renderMessages(msgs = [], convo = {}) {
@@ -7202,6 +7606,8 @@ function initInboxNotifications(userId) {
         if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
+    }, function (err) {
+        handleSnapshotError('Inbox notifications', err);
     });
 }
 
@@ -7524,7 +7930,7 @@ function listenToConversationDetails(convoId) {
         renderMessages(messageThreadCache[convoId] || [], data);
         renderTypingIndicator(data);
     }, function (err) {
-        console.warn('Conversation details listener error', err?.message || err);
+        handleSnapshotError('Conversation details', err);
         handleConversationAccessLoss(convoId);
     }));
 }
@@ -7561,7 +7967,7 @@ async function ensureConversation(convoId, participantId) {
             participantAvatars,
             type: 'direct',
             title: null,
-            avatarURL: null,
+            avatarUrl: null,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
             lastMessagePreview: '',
@@ -7660,7 +8066,7 @@ async function listenToMessages(convoId) {
         markMessagesDelivered(convoId, msgs);
         markConversationAsRead(convoId);
     }, function (err) {
-        console.warn('Messages listener error', err?.message || err);
+        handleSnapshotError('Messages thread', err);
         handleConversationAccessLoss(convoId);
     }));
 }
@@ -7748,7 +8154,7 @@ async function initConversations(autoOpen = true) {
             openConversation(conversationMappings[0].id);
         }
     }, function (err) {
-        console.warn('Conversation list listener error', err?.message || err);
+        handleSnapshotError('Conversation list', err);
     }));
 }
 
@@ -7826,7 +8232,7 @@ function renderConversationAvatarPreview(convo = {}, previewUrl = '', filename =
     const preview = document.getElementById('conversation-avatar-preview');
     if (!preview) return;
     const meta = deriveOtherParticipantMeta(convo.participants || [], currentUser?.uid, convo);
-    const src = previewUrl || convo.avatarURL || meta.avatars?.[0] || '';
+    const src = normalizeImageUrl(previewUrl) || getConversationAvatarUrl(convo, meta.avatars?.[0]) || '';
     if (src) {
         preview.innerHTML = `<img src="${src}" alt="Conversation avatar">${filename ? `<div class="participant-hint">${escapeHtml(filename)}</div>` : ''}`;
     } else {
@@ -8025,7 +8431,7 @@ function renderConversationSettings(convo = {}, mapping = {}) {
         avatarEl.innerHTML = renderAvatar({
             uid: convo.id || 'conversation',
             username: label,
-            photoURL: convo.avatarURL || meta.avatars?.[0] || '',
+            photoURL: getConversationAvatarUrl(convo, meta.avatars?.[0]),
             avatarColor: computeAvatarColor(label)
         }, { size: 48 });
     }
@@ -8240,14 +8646,29 @@ window.uploadConversationAvatar = async function () {
         helperText: 'This updates the chat image for all participants.',
         confirmText: 'Upload',
         onConfirm: async function () {
-            const uploadRef = ref(storage, path);
-            const snap = await uploadBytes(uploadRef, file);
-            const url = await getDownloadURL(snap.ref);
-            await updateDoc(doc(db, 'conversations', conversationSettingsId), { avatarURL: url, updatedAt: serverTimestamp() });
-            conversationDetailsCache[conversationSettingsId] = { ...(conversationDetailsCache[conversationSettingsId] || {}), avatarURL: url };
-            if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
-            await refreshConversationSettings(conversationSettingsId);
-            toast('Conversation image updated', 'info');
+            try {
+                const uploadRef = ref(storage, path);
+                const snap = await uploadBytes(uploadRef, file);
+                const url = await getDownloadURL(snap.ref);
+                await updateDoc(doc(db, 'conversations', conversationSettingsId), {
+                    avatarUrl: url,
+                    avatarURL: deleteField(),
+                    updatedAt: serverTimestamp()
+                });
+                conversationDetailsCache[conversationSettingsId] = {
+                    ...(conversationDetailsCache[conversationSettingsId] || {}),
+                    avatarUrl: url
+                };
+                if (activeConversationId === conversationSettingsId) renderMessageHeader(conversationDetailsCache[conversationSettingsId]);
+                await refreshConversationSettings(conversationSettingsId);
+                toast('Conversation image updated', 'info');
+            } catch (error) {
+                console.warn('Conversation avatar upload failed', error);
+                const message = error?.code === 'storage/unauthorized'
+                    ? 'You do not have permission to update this conversation image.'
+                    : 'Unable to upload conversation image right now.';
+                toast(message, 'error');
+            }
         }
     });
 };
@@ -8719,7 +9140,7 @@ async function createGroupConversation(participantIds = [], title = null) {
         participantAvatars,
         type: participants.length > 2 ? 'group' : 'direct',
         title: participants.length > 2 ? (title || null) : null,
-        avatarURL: null,
+        avatarUrl: null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
         lastMessagePreview: '',
@@ -11021,7 +11442,7 @@ function resolveLiveThumbnail(session = {}) {
     const candidates = [session.thumbnail, session.thumbnailUrl, session.coverImage, session.imageUrl];
     const resolved = candidates.find(Boolean);
     if (resolved) return resolved;
-    return 'https://images.unsplash.com/photo-1525186402429-b4ff38bedbec?auto=format&fit=crop&w=800&q=80';
+    return 'data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"450\" viewBox=\"0 0 800 450\"><defs><linearGradient id=\"g\" x1=\"0\" x2=\"1\" y1=\"0\" y2=\"1\"><stop offset=\"0%\" stop-color=\"%2300121a\"/><stop offset=\"100%\" stop-color=\"%23002633\"/></linearGradient></defs><rect width=\"800\" height=\"450\" fill=\"url(%23g)\"/><circle cx=\"120\" cy=\"120\" r=\"60\" fill=\"%2300f2ea\" opacity=\"0.6\"/><rect x=\"200\" y=\"190\" width=\"420\" height=\"120\" rx=\"18\" fill=\"%23ffffff\" opacity=\"0.08\"/><path d=\"M360 210l90 45-90 45z\" fill=\"%2300f2ea\"/></svg>';
 }
 
 function handleLiveSearchInput(event) {
@@ -12188,9 +12609,23 @@ function bindMobileScrollHelper() {
     }
 }
 
+function syncSidebarHomeState() {
+    const path = window.location.pathname || '/';
+    const isHome = path === '/' || path === '/home';
+    document.body.classList.toggle('sidebar-home', isHome);
+    if (isHome) {
+        mountFeedTypeToggleBar();
+    }
+    uiDebugLog('sidebar home sync', { path, isHome });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
+    initSidebarState();
+    bindSidebarEvents();
+    loadFeedTypeState();
+    mountFeedTypeToggleBar();
     syncMobileComposerState();
     bindAuthFormShortcuts();
     initMiniPlayerDrag();
@@ -12198,6 +12633,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
+    startSplashFailsafeTimer();
+    syncSidebarHomeState();
+    updateTimeCapsule();
     initializeNexeraApp();
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
