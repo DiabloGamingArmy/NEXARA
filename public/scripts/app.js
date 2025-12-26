@@ -105,6 +105,12 @@ let liveTagSearchDebounce = null;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
+const FEED_BATCH_SIZE = 5;
+const feedPagination = {
+    lastDoc: null,
+    loading: false,
+    done: false
+};
 let composerTags = [];
 let composerCreatedTags = new Set();
 let composerMentions = [];
@@ -761,6 +767,14 @@ let chatSearchResults = [];
 let videosFeedLoaded = false;
 let videosFeedLoading = false;
 let videosCache = [];
+let feedScrollObserver = null;
+let videosScrollObserver = null;
+const VIDEOS_BATCH_SIZE = 5;
+const videosPagination = {
+    lastDoc: null,
+    loading: false,
+    done: false
+};
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 
@@ -2296,25 +2310,44 @@ async function waitForFeedMedia(targetId = 'feed-content') {
     }));
 }
 
+async function fetchFeedBatch({ reset = false } = {}) {
+    // Fetch a small batch of posts to keep the initial load fast.
+    if (feedPagination.loading || feedPagination.done) return [];
+    feedPagination.loading = true;
+    try {
+        const postsRef = collection(db, 'posts');
+        const constraints = [orderBy('timestamp', 'desc'), limit(FEED_BATCH_SIZE)];
+        if (!reset && feedPagination.lastDoc) {
+            constraints.splice(1, 0, startAfter(feedPagination.lastDoc));
+        }
+        const snapshot = await getDocs(query(postsRef, ...constraints));
+        feedPagination.lastDoc = snapshot.docs[snapshot.docs.length - 1] || feedPagination.lastDoc;
+        if (snapshot.docs.length < FEED_BATCH_SIZE) {
+            feedPagination.done = true;
+        }
+        return snapshot.docs.map(function (docSnap) {
+            const data = docSnap.data();
+            return normalizePostData(docSnap.id, data);
+        });
+    } finally {
+        feedPagination.loading = false;
+    }
+}
+
 async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     if (feedLoading && feedHydrationPromise) return feedHydrationPromise;
 
     feedLoading = true;
     feedHydrationPromise = (async function () {
         if (showSplashDuringLoad) showSplash();
-        const postsRef = collection(db, 'posts');
-        const q = query(postsRef);
-        const snapshot = await getDocs(q);
+        feedPagination.lastDoc = null;
+        feedPagination.done = false;
+        const batch = await fetchFeedBatch({ reset: true });
         const nextCache = {};
-        allPosts = [];
-        snapshot.forEach(function (docSnap) {
-            const data = docSnap.data();
-            const normalized = normalizePostData(docSnap.id, data);
-            allPosts.push(normalized);
-            nextCache[docSnap.id] = data;
+        allPosts = batch.slice();
+        batch.forEach(function (post) {
+            nextCache[post.id] = post;
         });
-
-        allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
 
         if (currentUser) {
             const ownLocs = allPosts.filter(function (p) { return p.userId === currentUser.uid && p.location; }).map(function (p) { return p.location; });
@@ -2355,7 +2388,7 @@ async function loadHomeMediaData() {
 
 async function loadHomeVideos() {
     try {
-        const snapshot = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(50)));
+        const snapshot = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(5)));
         homeVideosCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         homeVideosCache.forEach(ensureVideoStats);
     } catch (error) {
@@ -2367,7 +2400,7 @@ async function loadHomeVideos() {
 
 async function loadHomeLiveSessions() {
     try {
-        const snapshot = await getDocs(query(collection(db, 'liveStreams'), orderBy('createdAt', 'desc'), limit(50)));
+        const snapshot = await getDocs(query(collection(db, 'liveStreams'), orderBy('createdAt', 'desc'), limit(5)));
         homeLiveSessionsCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
     } catch (error) {
         console.warn('Home livestream load failed', error?.message || error);
@@ -3845,6 +3878,48 @@ function renderFeed(targetId = 'feed-content') {
     });
 
     applyMyReviewStylesToDOM();
+
+    const sentinel = document.createElement('div');
+    sentinel.id = 'feed-scroll-sentinel';
+    sentinel.style.height = '1px';
+    container.appendChild(sentinel);
+    ensureFeedScrollObserver();
+}
+
+function ensureFeedScrollObserver() {
+    const sentinel = document.getElementById('feed-scroll-sentinel');
+    if (!sentinel || feedPagination.done) return;
+    if (feedScrollObserver) {
+        feedScrollObserver.disconnect();
+    }
+    feedScrollObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+                loadMoreFeedPosts();
+            }
+        });
+    }, { rootMargin: '200px' });
+    feedScrollObserver.observe(sentinel);
+}
+
+async function loadMoreFeedPosts() {
+    if (feedPagination.loading || feedPagination.done) return;
+    try {
+        const batch = await fetchFeedBatch();
+        if (!batch.length) return;
+        const existing = new Set(allPosts.map(function (post) { return post.id; }));
+        batch.forEach(function (post) {
+            if (!existing.has(post.id)) {
+                allPosts.push(post);
+                existing.add(post.id);
+            }
+        });
+        allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
+        fetchMissingProfiles(batch);
+        renderFeed();
+    } catch (error) {
+        console.warn('Feed pagination failed', error);
+    }
 }
 
 
@@ -11594,15 +11669,37 @@ function refreshVideoFeedWithFilters(options = {}) {
     renderVideoFeed(filtered);
 }
 
+async function fetchVideosBatch({ reset = false } = {}) {
+    // Lazy-load videos in batches to avoid blocking the UI on first render.
+    if (videosPagination.loading || videosPagination.done) return [];
+    videosPagination.loading = true;
+    try {
+        const constraints = [orderBy('createdAt', 'desc'), limit(VIDEOS_BATCH_SIZE)];
+        if (!reset && videosPagination.lastDoc) {
+            constraints.splice(1, 0, startAfter(videosPagination.lastDoc));
+        }
+        const snap = await getDocs(query(collection(db, 'videos'), ...constraints));
+        videosPagination.lastDoc = snap.docs[snap.docs.length - 1] || videosPagination.lastDoc;
+        if (snap.docs.length < VIDEOS_BATCH_SIZE) {
+            videosPagination.done = true;
+        }
+        return snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+    } finally {
+        videosPagination.loading = false;
+    }
+}
+
 function initVideoFeed() {
     if (videosFeedLoaded) return;
     videosFeedLoaded = true;
     videosFeedLoading = true;
     renderVideosTopBar();
     renderVideoFeed([]);
-    const refVideos = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    getDocs(refVideos).then(function (snap) {
-        videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+    videosPagination.lastDoc = null;
+    videosPagination.done = false;
+    fetchVideosBatch({ reset: true }).then(function (batch) {
+        videosCache = batch;
+        videosCache.forEach(ensureVideoStats);
         videosFeedLoading = false;
         refreshVideoFeedWithFilters();
         const modal = document.getElementById('video-detail-modal');
@@ -11862,6 +11959,47 @@ function renderVideoFeed(videos = []) {
     videos.forEach(function (video) {
         feed.appendChild(buildVideoCard(video));
     });
+
+    const sentinel = document.createElement('div');
+    sentinel.id = 'video-feed-sentinel';
+    sentinel.style.height = '1px';
+    feed.appendChild(sentinel);
+    ensureVideoScrollObserver();
+}
+
+function ensureVideoScrollObserver() {
+    const sentinel = document.getElementById('video-feed-sentinel');
+    if (!sentinel || videosPagination.done) return;
+    if (videosScrollObserver) {
+        videosScrollObserver.disconnect();
+    }
+    videosScrollObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+                loadMoreVideos();
+            }
+        });
+    }, { rootMargin: '200px' });
+    videosScrollObserver.observe(sentinel);
+}
+
+async function loadMoreVideos() {
+    if (videosPagination.loading || videosPagination.done) return;
+    try {
+        const batch = await fetchVideosBatch();
+        if (!batch.length) return;
+        const existing = new Set(videosCache.map(function (video) { return video.id; }));
+        batch.forEach(function (video) {
+            if (!existing.has(video.id)) {
+                videosCache.push(video);
+                existing.add(video.id);
+            }
+        });
+        videosCache.forEach(ensureVideoStats);
+        refreshVideoFeedWithFilters({ skipTopBar: true });
+    } catch (error) {
+        console.warn('Videos pagination failed', error);
+    }
 }
 
 function renderVideoSkeletons(count = 6) {
@@ -14198,6 +14336,7 @@ function syncSidebarHomeState() {
     document.body.classList.toggle('sidebar-wide', isHome);
     if (isHome) {
         mountFeedTypeToggleBar();
+        renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
     }
     uiDebugLog('sidebar home sync', { path, isHome });
 }
