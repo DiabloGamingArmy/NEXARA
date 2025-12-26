@@ -449,6 +449,7 @@ body.has-desktop-app-bar {
     top: 0;
     height: 100vh;
     overflow-y: scroll;
+    overflow-x: hidden;
     scrollbar-width: none;
     -ms-overflow-style: none;
 
@@ -1531,7 +1532,7 @@ body.sidebar-overlay-open .sidebar-backdrop {
     overflow-x: auto;
     flex-wrap: nowrap;
     position: sticky;
-    top: 0;
+    top: var(--desktop-app-bar-height, 0px);
     z-index: 10;
     scrollbar-width: none;
     backdrop-filter: blur(12px);
@@ -1833,7 +1834,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     gap: 12px;
     overflow-x: auto;
-    padding-bottom: 6px;
+    padding: 0 1rem 6px;
+    margin: 0 -1rem;
     scrollbar-width: none;
     -ms-overflow-style: none;
 }
@@ -1868,6 +1870,26 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .saved-carousel .social-card {
     min-width: 280px;
     flex: 0 0 auto;
+}
+
+.saved-posts-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.saved-posts-stack .social-card {
+    width: 100%;
+}
+
+.discover-vertical-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.discover-vertical-list .social-card {
+    width: 100%;
 }
 
 .discover-hub {
@@ -1923,6 +1945,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .profile-filters-bar {
     padding: 1rem;
     border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: var(--desktop-app-bar-height, 0px);
+    z-index: 8;
+    background: linear-gradient(180deg, rgba(6, 15, 26, 0.92) 0%, rgba(6, 12, 20, 0.8) 100%);
+    backdrop-filter: blur(12px);
 }
 
 .profile-filter-row {
@@ -4298,7 +4325,12 @@ body.light-mode .category-pill.active .topic-verified-icon {
     max-height: none;
 }
 
-.video-viewer-open #videos-topbar {
+.video-viewer-open #videos-topbar .topbar-controls {
+    display: none;
+}
+
+body.video-manager-open #videos-topbar,
+body.video-create-open #videos-topbar {
     display: none;
 }
 
@@ -4619,6 +4651,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .video-control-scrub {
     display: flex;
     pointer-events: auto;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .video-control-scrub input[type="range"] {
@@ -4639,6 +4674,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
+}
+
+.video-viewer-player.controls-active .video-control-scrub {
+    opacity: 1;
+    transform: translateY(0);
 }
 
 .video-volume-group {

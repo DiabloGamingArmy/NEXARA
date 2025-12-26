@@ -6,13 +6,20 @@ const DEFAULT_STORIES = [
     { id: 'me', label: 'Your Story', isMe: true },
     { id: 'user1', label: 'Guitarboyyee07' },
     { id: 'user2', label: 'MidnightNova245' },
-    { id: 'user3', label: 'NeonSkies' }
+    { id: 'user3', label: 'NeonSkies' },
+    { id: 'user7', label: 'PixelWave' },
+    { id: 'user8', label: 'SolarEcho' },
+    { id: 'user9', label: 'UrbanPulse' },
+    { id: 'user10', label: 'LunaVerse' }
 ];
 
 const DEFAULT_LIVE_USERS = [
     { id: 'user4', label: 'SpaceX_Fan' },
     { id: 'user5', label: 'SpeedSouls' },
-    { id: 'user6', label: 'NovaPulse' }
+    { id: 'user6', label: 'NovaPulse' },
+    { id: 'user11', label: 'GammaGlow' },
+    { id: 'user12', label: 'RetroStream' },
+    { id: 'user13', label: 'DeepField' }
 ];
 
 function getInitials(label = '') {

@@ -6093,7 +6093,7 @@ async function renderDiscoverResults() {
         </select></div>`;
     };
 
-    const renderVideosSection = async function (onlyVideos = false) {
+    const renderVideosSection = async function (onlyVideos = false, useCarousels = false) {
         if (!videosCache.length) {
             const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
             videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
@@ -6110,24 +6110,34 @@ async function renderDiscoverResults() {
             return;
         }
 
-        container.innerHTML += `<div class="discover-section-header">Videos</div>`;
+        const header = document.createElement('div');
+        header.className = 'discover-section-header';
+        header.textContent = 'Videos';
+        container.appendChild(header);
+        const row = document.createElement('div');
+        row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
         filteredVideos.forEach(function (video) {
             const tags = (video.hashtags || []).map(function (t) { return '#' + t; }).join(' ');
-            container.innerHTML += `
-                <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;" onclick="window.navigateTo('videos');">
-                    <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
-                        <i class="ph-fill ph-play-circle" style="font-size:2rem;"></i>
-                    </div>
-                    <div style="flex:1;">
-                        <div style="font-weight:800; margin-bottom:4px;">${escapeHtml(video.caption || 'Untitled video')}</div>
-                        <div style="color:var(--text-muted); font-size:0.9rem;">${tags}</div>
-                        <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">Views: ${video.stats?.views || 0}</div>
-                    </div>
-                </div>`;
+            const card = document.createElement('div');
+            card.className = 'social-card';
+            card.style.cssText = 'padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;';
+            card.onclick = function () { window.navigateTo('videos'); };
+            card.innerHTML = `
+                <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
+                    <i class="ph-fill ph-play-circle" style="font-size:2rem;"></i>
+                </div>
+                <div style="flex:1;">
+                    <div style="font-weight:800; margin-bottom:4px;">${escapeHtml(video.caption || 'Untitled video')}</div>
+                    <div style="color:var(--text-muted); font-size:0.9rem;">${tags}</div>
+                    <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">Views: ${video.stats?.views || 0}</div>
+                </div>
+            `;
+            row.appendChild(card);
         });
+        container.appendChild(row);
     };
 
-    const renderUsers = function () {
+    const renderUsers = function (useCarousels = false) {
         let matches = [];
         if (discoverSearchTerm) {
             matches = Object.values(userCache).filter(function (u) {
@@ -6144,7 +6154,7 @@ async function renderDiscoverResults() {
             header.textContent = 'Users';
             container.appendChild(header);
             const row = document.createElement('div');
-            row.className = 'discover-carousel no-scrollbar';
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             matches.forEach(function (user) {
                 const uid = Object.keys(userCache).find(function (key) { return userCache[key] === user; });
                 if (!uid) return;
@@ -6170,27 +6180,36 @@ async function renderDiscoverResults() {
         }
     };
 
-    const renderLiveSection = function () {
+    const renderLiveSection = function (useCarousels = false) {
         if (MOCK_LIVESTREAMS.length > 0) {
-            container.innerHTML += `<div class="discover-section-header">Livestreams</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Livestreams';
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             MOCK_LIVESTREAMS.forEach(function (stream) {
-                container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; display:flex; gap:10px; border-left: 4px solid ${stream.color};">
-                        <div style="width:80px; height:50px; background:${stream.color}; border-radius:6px; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
-                        <div style="padding:1rem;">
-                            <h3 style="font-weight:700; font-size:1.1rem; margin-bottom:5px; color:var(--text-main);">${stream.title}</h3>
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <div style="font-size:0.9rem; color:var(--text-muted);">@${stream.author}</div>
-                                <div style="color:#ff3d3d; font-weight:bold; font-size:0.8rem; display:flex; align-items:center; gap:4px;"><i class="ph-fill ph-circle"></i> ${stream.viewerCount}</div>
-                            </div>
-                            <div class="category-badge" style="margin-top:10px;">${stream.category}</div>
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = `padding:1rem; display:flex; gap:10px; border-left: 4px solid ${stream.color};`;
+                card.innerHTML = `
+                    <div style="width:80px; height:50px; background:${stream.color}; border-radius:6px; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
+                    <div style="padding:1rem;">
+                        <h3 style="font-weight:700; font-size:1.1rem; margin-bottom:5px; color:var(--text-main);">${stream.title}</h3>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-size:0.9rem; color:var(--text-muted);">@${stream.author}</div>
+                            <div style="color:#ff3d3d; font-weight:bold; font-size:0.8rem; display:flex; align-items:center; gap:4px;"><i class="ph-fill ph-circle"></i> ${stream.viewerCount}</div>
                         </div>
-                    </div>`;
+                        <div class="category-badge" style="margin-top:10px;">${stream.category}</div>
+                    </div>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         }
     };
 
-    const renderPostsSection = function () {
+    const renderPostsSection = function (useCarousels = false) {
         let filteredPosts = allPosts;
         filteredPosts = filteredPosts.filter(function (post) {
             if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
@@ -6210,7 +6229,12 @@ async function renderDiscoverResults() {
         }
 
         if (filteredPosts.length > 0) {
-            container.innerHTML += `<div class="discover-section-header">Posts</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Posts';
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             filteredPosts.forEach(function (post) {
                 const author = userCache[post.userId] || { name: post.author };
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
@@ -6223,30 +6247,35 @@ async function renderDiscoverResults() {
                 const pollBlock = renderPollBlock(post);
                 const accentColor = THEMES[post.category] || THEMES['For You'];
                 const mobileView = isMobileViewport();
-                container.innerHTML += `
-                    <div class="social-card" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor}; cursor:pointer;" onclick="window.openThread('${post.id}')">
-                        <div class="card-content" style="padding:1rem;">
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                                <div class="category-badge">${post.category}</div>
-                                <div style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:var(--text-muted);">
-                                    <span>by ${escapeHtml(author.name)}</span>
-                                    ${getPostOptionsButton(post, 'discover', '1rem')}
-                                </div>
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = `border-left: 2px solid var(--card-accent); --card-accent: ${accentColor}; cursor:pointer;`;
+                card.onclick = function () { window.openThread(post.id); };
+                card.innerHTML = `
+                    <div class="card-content" style="padding:1rem;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                            <div class="category-badge">${post.category}</div>
+                            <div style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:var(--text-muted);">
+                                <span>by ${escapeHtml(author.name)}</span>
+                                ${getPostOptionsButton(post, 'discover', '1rem')}
                             </div>
-                            <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                            <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
-                            ${locationBadge}
-                            ${pollBlock}
-                            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem', showCounts: !mobileView, showLabels: !mobileView })}
                         </div>
-                    </div>`;
+                        <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
+                        <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
+                        ${locationBadge}
+                        ${pollBlock}
+                        ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem', showCounts: !mobileView, showLabels: !mobileView })}
+                    </div>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         } else if (discoverFilter === 'Posts' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No posts found.</p></div>`;
         }
     };
 
-    const renderCategoriesSection = function (onlyCategories = false) {
+    const renderCategoriesSection = function (onlyCategories = false, useCarousels = false) {
         let filteredCategories = categories.slice();
         if (discoverSearchTerm) {
             const term = discoverSearchTerm.toLowerCase();
@@ -6283,7 +6312,7 @@ async function renderDiscoverResults() {
             header.innerHTML = `<span>Categories</span>${categoriesDropdown('section')}`;
             container.appendChild(header);
             const row = document.createElement('div');
-            row.className = 'discover-carousel no-scrollbar';
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             visible.forEach(function (cat) {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
@@ -6318,23 +6347,25 @@ async function renderDiscoverResults() {
         }
     };
 
+    const useCarousels = !discoverSearchTerm;
+
     if (discoverFilter === 'All Results') {
-        renderLiveSection();
-        renderUsers();
-        renderPostsSection();
-        renderCategoriesSection();
-        await renderVideosSection();
+        renderLiveSection(useCarousels);
+        renderUsers(useCarousels);
+        renderPostsSection(useCarousels);
+        renderCategoriesSection(false, useCarousels);
+        await renderVideosSection(false, useCarousels);
         if (container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
     } else if (discoverFilter === 'Users') {
-        renderUsers();
+        renderUsers(false);
     } else if (discoverFilter === 'Livestreams') {
-        renderLiveSection();
+        renderLiveSection(false);
     } else if (discoverFilter === 'Videos') {
-        await renderVideosSection(true);
+        await renderVideosSection(true, false);
     } else if (discoverFilter === 'Categories') {
-        renderCategoriesSection(true);
+        renderCategoriesSection(true, false);
     } else {
-        renderPostsSection();
+        renderPostsSection(false);
     }
 
     applyMyReviewStylesToDOM();
@@ -7134,16 +7165,16 @@ function renderSaved() {
             const header = document.createElement('div');
             header.className = 'discover-section-header';
             header.textContent = 'Saved Posts';
-            const row = document.createElement('div');
-            row.className = 'saved-carousel no-scrollbar';
+            const stack = document.createElement('div');
+            stack.className = 'saved-posts-stack';
             displayPosts.forEach(function (post) {
                 const wrapper = document.createElement('div');
                 wrapper.innerHTML = getPostHTML(post);
                 const card = wrapper.firstElementChild;
-                if (card) row.appendChild(card);
+                if (card) stack.appendChild(card);
             });
             container.appendChild(header);
-            container.appendChild(row);
+            container.appendChild(stack);
             displayPosts.forEach(function (post) {
                 const reviewBtn = container.querySelector(`#post-card-${post.id} .review-action`);
                 const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
@@ -10554,9 +10585,11 @@ window.toggleVideoUploadModal = function (show = true) {
         if (show) {
             const mounted = mountVideoModalInFeed('video-upload-modal');
             if (!mounted) modal.style.display = 'flex';
+            document.body.classList.add('video-create-open');
         } else {
             const restored = restoreVideoFeedFromModal('video-upload-modal');
             if (!restored) modal.style.display = 'none';
+            document.body.classList.remove('video-create-open');
         }
     }
     document.body.classList.toggle('modal-open', show);
@@ -10676,6 +10709,7 @@ function buildVideoManagerEntries() {
 function renderVideoManagerList() {
     const list = document.getElementById('video-task-list');
     if (!list) return;
+    ensureVideoTaskViewerBindings();
     const entries = buildVideoManagerEntries();
     if (!entries.length) {
         list.innerHTML = '<div class="video-task-empty">No videos yet.</div>';
@@ -11466,6 +11500,7 @@ function openVideoTaskViewer() {
     if (!mounted) {
         modal.style.display = 'block';
     }
+    document.body.classList.add('video-manager-open');
     renderUploadTasks();
 }
 
@@ -11479,6 +11514,7 @@ function closeVideoTaskViewer() {
         modal.style.display = 'none';
     }
     document.body.classList.remove('modal-open');
+    document.body.classList.remove('video-manager-open');
     closeVideoManagerMenu();
     if (window.location.pathname === '/videos/video-manager') {
         window.NexeraRouter?.replaceStateSilently?.('/videos');
