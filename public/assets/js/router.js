@@ -53,7 +53,7 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
 
   function buildUrlForSection(view) {
     const map = {
-      feed: '/home',
+      feed: '/',
       live: '/live',
       videos: '/videos',
       messages: '/inbox',
@@ -324,7 +324,10 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     hideNotFound();
 
     if (route.type === 'not-found') {
-      showNotFound();
+      replaceStateSilently('/home');
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'feed' });
+      }
       return;
     }
 
