@@ -453,7 +453,7 @@ body.has-desktop-app-bar {
     scrollbar-width: none;
     -ms-overflow-style: none;
 
-    z-index: 20;
+    z-index: 12;
     /* Appear in front of category-header */
 }
 
@@ -653,35 +653,34 @@ body.sidebar-overlay-open .sidebar-backdrop {
 }
 
 @media(min-width: 1024px) {
-    body.sidebar-home .sidebar-right,
-    body.sidebar-wide .sidebar-right {
+    body.sidebar-home .sidebar-right {
         display: block;
     }
 
-    body:not(.sidebar-wide) .sidebar-right {
+    body:not(.sidebar-home) .sidebar-right {
         display: none !important;
     }
 
-    body.sidebar-wide .main-feed {
+    body.sidebar-home .main-feed {
         flex: 0 0 calc(100vw - 570px);
         width: calc(100vw - 570px);
         max-width: calc(100vw - 570px);
     }
 
     /* Constrain category header width to fit between sidebars */
-    body.sidebar-wide .category-header {
+    body.sidebar-home .category-header {
         width: calc(100vw - 570px);
         /* Screen width - (left 250px + right 320px) */
         max-width: calc(100vw - 570px);
     }
 
-    body.sidebar-wide.sidebar-collapsed .main-feed {
+    body.sidebar-home.sidebar-collapsed .main-feed {
         flex: 0 0 calc(100vw - 392px);
         width: calc(100vw - 392px);
         max-width: calc(100vw - 392px);
     }
 
-    body.sidebar-wide.sidebar-collapsed .category-header {
+    body.sidebar-home.sidebar-collapsed .category-header {
         width: calc(100vw - 392px);
         max-width: calc(100vw - 392px);
     }
@@ -1537,7 +1536,7 @@ body.sidebar-overlay-open .sidebar-backdrop {
     flex-wrap: nowrap;
     position: sticky;
     top: 0;
-    z-index: 20;
+    z-index: 6;
     scrollbar-width: none;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
@@ -4399,11 +4398,6 @@ body.video-create-open #videos-topbar {
     padding: 12px;
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.035);
-}
-
-.video-card.animate-in {
-    opacity: 0;
-    animation: fadeIn 0.4s forwards;
 }
 
 .video-card.animate-in {
