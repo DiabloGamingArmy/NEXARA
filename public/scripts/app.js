@@ -42,8 +42,9 @@ let userFetchPromises = {};
 const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
-const USE_CUSTOM_VIDEO_VIEWER = false;
-const USE_INLINE_VIDEO_WATCH = true;
+const USE_CUSTOM_VIDEO_VIEWER = true;
+const USE_INLINE_VIDEO_WATCH = false;
+const VIDEO_DEBUG = window.__NEXERA_DEBUG_VIDEO === true;
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
@@ -53,6 +54,11 @@ let discoverPostsSort = 'recent';
 // UI scaffolding stubs (no backend calls yet).
 window.handleUiStubAction = function (action) {
     console.log('UI placeholder action:', action);
+};
+const debugVideo = function (...args) {
+    if (VIDEO_DEBUG) {
+        console.log('[VideoViewer]', ...args);
+    }
 };
 let discoverCategoriesMode = 'verified_first';
 let savedSearchTerm = '';
@@ -85,6 +91,7 @@ let videoDetailReturnPath = '/videos';
 let videoModalResumeTime = null;
 let pendingVideoOpenId = null;
 let profileReturnContext = null;
+let lastVideoTrigger = null;
 let messageTypingTimer = null;
 let conversationListFilter = 'all';
 let conversationListSearchTerm = '';
@@ -3185,7 +3192,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
         const routedVideoId = getVideoRouteVideoId();
         const requestedVideoId = routedVideoId || pendingVideoOpenId;
         clearVideoDetailState({ updateRoute: !requestedVideoId });
-        initVideoFeed();
+        initVideoFeed({ force: true });
         if (requestedVideoId) {
             pendingVideoOpenId = null;
             requestAnimationFrame(function () {
@@ -11744,10 +11751,21 @@ async function fetchVideosBatch({ reset = false } = {}) {
     }
 }
 
-function initVideoFeed() {
-    if (videosFeedLoaded) return;
+function initVideoFeed(options = {}) {
+    const force = options.force === true;
+    if (videosFeedLoaded && !force) return;
+    if (force) {
+        videosFeedLoaded = false;
+        videosFeedLoading = false;
+        videosPagination.lastDoc = null;
+        videosPagination.done = false;
+        if (videosScrollObserver) {
+            videosScrollObserver.disconnect();
+        }
+    }
     videosFeedLoaded = true;
     videosFeedLoading = true;
+    debugVideo('feed-init', { force });
     renderVideosTopBar();
     renderVideoFeed([]);
     videosPagination.lastDoc = null;
@@ -12457,9 +12475,19 @@ function updateVideoScrubVisuals(player, scrub) {
     container.style.setProperty('--video-buffer', `${buffered}%`);
 }
 
+function togglePlayerFullscreen(container) {
+    if (!container) return;
+    if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(function () {});
+        return;
+    }
+    container.requestFullscreen?.().catch(function () {});
+}
+
 function bindVideoViewerControls() {
     const player = getVideoModalPlayer();
     const viewer = document.querySelector('.video-viewer-player');
+    const playerFrame = document.getElementById('video-player-frame');
     const playBtn = document.getElementById('video-control-play');
     const scrub = document.getElementById('video-control-scrub');
     const volumeBtn = document.getElementById('video-control-volume');
@@ -12473,6 +12501,7 @@ function bindVideoViewerControls() {
     playBtn.dataset.bound = 'true';
     player.controls = false;
     player.removeAttribute('controls');
+    debugVideo('bind-controls');
     if (volumeRange) {
         volumeRange.value = Math.round((player.volume || 1) * 100).toString();
     }
@@ -12574,8 +12603,11 @@ function bindVideoViewerControls() {
         theaterBtn.addEventListener('click', function () { window.toggleVideoTheaterMode?.(); });
     }
     if (fullscreenBtn) {
-        fullscreenBtn.addEventListener('click', function () { window.toggleVideoTheaterMode?.(); });
+        fullscreenBtn.addEventListener('click', function () {
+            togglePlayerFullscreen(playerFrame || player);
+        });
     }
+    showControls(true);
 }
 
 window.toggleVideoTheaterMode = function () {
@@ -12712,6 +12744,8 @@ function closeVideoDetailModalHandler(options = {}) {
     const { keepPlayback = false } = options;
     const modal = document.getElementById('video-detail-modal');
     if (!modal) return;
+    // Viewer lifecycle: stop playback + restore grid state on close.
+    debugVideo('close', { keepPlayback });
     const player = getVideoModalPlayer();
     if (player && !keepPlayback) {
         player.pause();
@@ -12726,6 +12760,9 @@ function closeVideoDetailModalHandler(options = {}) {
     const spinner = document.getElementById('video-player-spinner');
     if (spinner) spinner.classList.remove('is-active');
     restoreVideoFeedFromModal('video-detail-modal');
+    if (lastVideoTrigger && typeof lastVideoTrigger.focus === 'function') {
+        lastVideoTrigger.focus();
+    }
 }
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
@@ -12940,6 +12977,9 @@ window.openVideoDetail = async function (videoId) {
         return;
     }
 
+    // Viewer lifecycle: store focus + bind controls on open for custom viewer.
+    lastVideoTrigger = document.activeElement;
+    debugVideo('open', { videoId });
     captureVideoDetailReturnPath();
     initVideoViewerLayout();
     if (USE_CUSTOM_VIDEO_VIEWER) {
@@ -13064,7 +13104,12 @@ window.openVideoDetail = async function (videoId) {
             event.stopPropagation();
             if (video.ownerId) window.toggleFollowUser(video.ownerId, event);
         };
-        followBtn.textContent = (video.ownerId && followedUsers.has(video.ownerId)) ? 'Following' : 'Follow';
+        if (video.ownerId) {
+            followBtn.classList.add(`js-follow-user-${video.ownerId}`);
+            updateFollowButtonsForUser(video.ownerId, followedUsers.has(video.ownerId));
+        } else {
+            followBtn.textContent = 'Follow';
+        }
     }
 
     if (video.ownerId) {
@@ -13462,6 +13507,7 @@ window.saveVideo = async function (videoId) {
             writes.push(setDoc(saveRef, { createdAt: serverTimestamp() }));
         }
         await Promise.all(writes);
+        toast(wasSaved ? 'Removed from saved videos.' : 'Saved to your videos.', 'info');
     } catch (err) {
         console.error('Video save failed', err);
         await hydrateVideoEngagement(videoId);
