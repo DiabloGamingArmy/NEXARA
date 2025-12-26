@@ -141,6 +141,9 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     }
 
     const head = segments[0];
+    if (head === '404' || head === 'not-found') {
+      return { type: 'not-found', canonicalPath: '/404', route };
+    }
     if (head === 'videos' && segments[1] === 'video-manager') {
       return {
         type: 'video-manager',
@@ -187,12 +190,22 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
       }
       if (head === 'inbox') {
         const mode = segments[1] || 'messages';
-        const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
+        const allowed = ['messages', 'content', 'posts', 'videos', 'livestreams', 'account'];
         if (!allowed.includes(mode)) {
           return { type: 'section', view: SECTION_ROUTES[head], route };
         }
+        if (mode === 'posts' || mode === 'videos' || mode === 'livestreams') {
+          return {
+            type: 'inbox',
+            mode: 'content',
+            contentMode: mode,
+            canonicalPath: '/inbox/content',
+            route
+          };
+        }
         const conversationId = mode === 'messages' ? (segments[2] || null) : null;
-        return { type: 'inbox', mode, conversationId, route };
+        const contentMode = mode === 'content' ? (segments[2] || params.get('type') || null) : null;
+        return { type: 'inbox', mode, contentMode, conversationId, route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
     }
@@ -223,7 +236,7 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
       return { type: 'entity', entityType: head, id: segments[1], route };
     }
 
-    return { type: 'not-found', route };
+    return { type: 'not-found', canonicalPath: '/404', route };
   }
 
   async function fetchEntity(entityType, id) {
@@ -309,6 +322,15 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     ensureNotFoundShell();
   }
 
+  function routeToNotFound(route) {
+    showNotFound();
+    if (route?.canonicalPath && route.route?.path !== route.canonicalPath) {
+      replaceStateSilently(route.canonicalPath);
+    } else if (route?.route?.path && route.route.path !== '/404') {
+      replaceStateSilently('/404');
+    }
+  }
+
   function hideNotFound() {
     const container = document.getElementById('nexera-not-found');
     if (container) container.remove();
@@ -324,10 +346,7 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     hideNotFound();
 
     if (route.type === 'not-found') {
-      replaceStateSilently('/home');
-      if (window.Nexera?.navigateTo) {
-        window.Nexera.navigateTo({ view: 'feed' });
-      }
+      routeToNotFound(route);
       return;
     }
 
@@ -372,11 +391,18 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     }
 
     if (route.type === 'inbox') {
+      if (route.canonicalPath && route.route?.path !== route.canonicalPath) {
+        replaceStateSilently(route.canonicalPath);
+      }
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: 'messages' });
       }
       if (typeof window.setInboxMode === 'function') {
-        window.setInboxMode(route.mode || 'messages', { skipRouteUpdate: true });
+        if (route.mode === 'content' && route.contentMode) {
+          window.setInboxMode(route.contentMode, { skipRouteUpdate: true });
+        } else {
+          window.setInboxMode(route.mode || 'messages', { skipRouteUpdate: true });
+        }
       }
       if (route.conversationId && typeof window.openConversation === 'function') {
         window.openConversation(route.conversationId);
@@ -423,12 +449,12 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
 
     if (route.type === 'thread') {
       if (!route.threadId) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
       const thread = await fetchThread(route.threadId);
       if (thread.exists === false) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
       if (thread.exists === null) {
@@ -461,13 +487,13 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
       }
 
       if (!route.id) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
 
       const entity = await fetchEntity(route.entityType, route.id);
       if (entity.exists === false) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
 
@@ -515,6 +541,9 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     }
 
     await applyRoute(parsed);
+    if (typeof window.syncSidebarHomeState === 'function') {
+      window.syncSidebarHomeState();
+    }
 
     const done = Math.round(performance.now() - start);
     debugLog('route applied', parsed.type, `${done}ms`);
