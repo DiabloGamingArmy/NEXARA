@@ -4456,6 +4456,29 @@ body.light-mode .category-pill.active .topic-verified-icon {
     }
 }
 
+.video-feed.video-watch-open {
+    display: block;
+    padding: 0;
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-feed {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
+}
+
 .video-feed.video-feed-modal-open {
     display: block;
     padding: 1rem 0 2rem;
