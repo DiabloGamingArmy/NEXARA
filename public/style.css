@@ -950,6 +950,10 @@ body.sidebar-overlay-open .sidebar-backdrop {
     margin-bottom: 1.5rem;
     overflow: hidden;
     transition: 0.2s;
+    opacity: 1;
+}
+
+.social-card.animate-in {
     opacity: 0;
     animation: fadeIn 0.4s forwards;
 }
@@ -1532,8 +1536,8 @@ body.sidebar-overlay-open .sidebar-backdrop {
     overflow-x: auto;
     flex-wrap: nowrap;
     position: sticky;
-    top: var(--desktop-app-bar-height, 0px);
-    z-index: 10;
+    top: 0;
+    z-index: 20;
     scrollbar-width: none;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
@@ -4364,6 +4368,11 @@ body.video-create-open #videos-topbar {
     gap: 12px;
     cursor: pointer;
     margin-bottom: 1rem;
+}
+
+.video-card.animate-in {
+    opacity: 0;
+    animation: fadeIn 0.4s forwards;
 }
 
 .video-feed .video-card {

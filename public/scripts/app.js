@@ -106,6 +106,9 @@ let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
 const FEED_BATCH_SIZE = 5;
+const FEED_PREFETCH_OFFSET = 2;
+const FEED_PREFETCH_ROOT_MARGIN = '0px 0px 400px 0px';
+const animatedItemKeys = new Set();
 const feedPagination = {
     lastDoc: null,
     loading: false,
@@ -242,6 +245,13 @@ function isUiDebugEnabled() {
 function uiDebugLog(...args) {
     if (!isUiDebugEnabled()) return;
     console.debug('[NexeraUI]', ...args);
+}
+
+function shouldAnimateItem(key) {
+    if (!key) return true;
+    if (animatedItemKeys.has(key)) return false;
+    animatedItemKeys.add(key);
+    return true;
 }
 
 function showSplash() {
@@ -951,7 +961,7 @@ function isMobileViewport() {
 }
 
 function shouldShowRightSidebar(viewId) {
-    return viewId === 'feed';
+    return ['feed', 'videos', 'discover', 'saved', 'messages', 'profile', 'live'].includes(viewId);
 }
 
 window.shouldShowRightSidebar = shouldShowRightSidebar;
@@ -2360,9 +2370,14 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         loadTrendingTopics(trendingTopicsState.range);
         feedLoading = false;
         renderFeed();
+        if (isInitialLoad) {
+            isInitialLoad = false;
+            if (window.Nexera?.releaseSplash) {
+                window.Nexera.releaseSplash('feed-initial-ready');
+            }
+        }
         await waitForFeedMedia();
         postSnapshotCache = nextCache;
-        isInitialLoad = false;
     })().catch(function (error) {
         console.error('Feed load failed', error);
     }).finally(function () {
@@ -3655,8 +3670,9 @@ async function hydrateFollowingState(uid, profileData = {}) {
 }
 
 // --- Render Logic (The Core) ---
-function getPostHTML(post) {
+function getPostHTML(post, options = {}) {
     try {
+        const animateIn = options.animate !== false;
         const date = formatDateTime(post.timestamp) || 'Just now';
         const viewerUid = getViewerUid();
 
@@ -3726,8 +3742,9 @@ function getPostHTML(post) {
         const accentColor = THEMES[post.category] || THEMES[currentCategory] || THEMES['For You'];
         const mobileView = isMobileViewport();
 
+        const animationClass = animateIn ? ' animate-in' : '';
         return `
-            <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
+            <div id="post-card-${post.id}" class="social-card${animationClass}" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
                         ${avatarHtml}
@@ -3763,6 +3780,23 @@ function getPostHTML(post) {
         console.error("Error generating post HTML", e);
         return "";
     }
+}
+
+function insertScrollSentinel(container, sentinelId, offsetFromEnd = FEED_PREFETCH_OFFSET) {
+    if (!container) return null;
+    const sentinel = document.createElement('div');
+    sentinel.id = sentinelId;
+    sentinel.style.height = '1px';
+    const children = Array.from(container.children);
+    if (children.length > offsetFromEnd) {
+        const insertBeforeNode = children[children.length - offsetFromEnd];
+        if (insertBeforeNode) {
+            container.insertBefore(sentinel, insertBeforeNode);
+            return sentinel;
+        }
+    }
+    container.appendChild(sentinel);
+    return sentinel;
 }
 
 function renderFeed(targetId = 'feed-content') {
@@ -3858,16 +3892,27 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     items.forEach(function (item) {
+        let itemKey = `${item.type}:${item.id}`;
+        if (item.type === 'videos') {
+            itemKey = `video:${item.id}`;
+        } else if (item.type === 'livestreams') {
+            itemKey = `livestream:${item.id}`;
+        }
+        const animateIn = shouldAnimateItem(itemKey);
         if (item.type === 'threads') {
-            container.insertAdjacentHTML('beforeend', getPostHTML(item.data));
+            container.insertAdjacentHTML('beforeend', getPostHTML(item.data, { animate: animateIn }));
             return;
         }
         if (item.type === 'videos') {
-            container.appendChild(buildVideoCard(item.data));
+            const card = buildVideoCard(item.data);
+            if (animateIn) card.classList.add('animate-in');
+            container.appendChild(card);
             return;
         }
         if (item.type === 'livestreams') {
-            container.appendChild(buildHomeLiveCard(item.data));
+            const card = buildHomeLiveCard(item.data);
+            if (animateIn) card.classList.add('animate-in');
+            container.appendChild(card);
         }
     });
 
@@ -3879,10 +3924,7 @@ function renderFeed(targetId = 'feed-content') {
 
     applyMyReviewStylesToDOM();
 
-    const sentinel = document.createElement('div');
-    sentinel.id = 'feed-scroll-sentinel';
-    sentinel.style.height = '1px';
-    container.appendChild(sentinel);
+    insertScrollSentinel(container, 'feed-scroll-sentinel');
     ensureFeedScrollObserver();
 }
 
@@ -3898,7 +3940,7 @@ function ensureFeedScrollObserver() {
                 loadMoreFeedPosts();
             }
         });
-    }, { rootMargin: '200px' });
+    }, { rootMargin: FEED_PREFETCH_ROOT_MARGIN });
     feedScrollObserver.observe(sentinel);
 }
 
@@ -7230,7 +7272,10 @@ function renderSaved() {
             const grid = document.createElement('div');
             grid.className = useCarousels ? 'saved-carousel no-scrollbar' : 'discover-vertical-list';
             savedVideos.forEach(function (video) {
-                grid.appendChild(buildVideoCard(video));
+                const card = buildVideoCard(video);
+                const animateIn = shouldAnimateItem(`video:${video.id}`);
+                if (animateIn) card.classList.add('animate-in');
+                grid.appendChild(card);
             });
             container.appendChild(header);
             container.appendChild(grid);
@@ -7247,7 +7292,8 @@ function renderSaved() {
             stack.className = useCarousels ? 'saved-carousel no-scrollbar' : 'saved-posts-stack';
             displayPosts.forEach(function (post) {
                 const wrapper = document.createElement('div');
-                wrapper.innerHTML = getPostHTML(post);
+                const animateIn = shouldAnimateItem(`threads:${post.id}`);
+                wrapper.innerHTML = getPostHTML(post, { animate: animateIn });
                 const card = wrapper.firstElementChild;
                 if (card) stack.appendChild(card);
             });
@@ -11957,13 +12003,13 @@ function renderVideoFeed(videos = []) {
     }
 
     videos.forEach(function (video) {
-        feed.appendChild(buildVideoCard(video));
+        const card = buildVideoCard(video);
+        const animateIn = shouldAnimateItem(`video:${video.id}`);
+        if (animateIn) card.classList.add('animate-in');
+        feed.appendChild(card);
     });
 
-    const sentinel = document.createElement('div');
-    sentinel.id = 'video-feed-sentinel';
-    sentinel.style.height = '1px';
-    feed.appendChild(sentinel);
+    insertScrollSentinel(feed, 'video-feed-sentinel');
     ensureVideoScrollObserver();
 }
 
@@ -11979,7 +12025,7 @@ function ensureVideoScrollObserver() {
                 loadMoreVideos();
             }
         });
-    }, { rootMargin: '200px' });
+    }, { rootMargin: FEED_PREFETCH_ROOT_MARGIN });
     videosScrollObserver.observe(sentinel);
 }
 
@@ -14333,7 +14379,7 @@ function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
-    document.body.classList.toggle('sidebar-wide', isHome);
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(currentViewId || 'feed'));
     if (isHome) {
         mountFeedTypeToggleBar();
         renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
@@ -14363,15 +14409,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
-    startSplashFailsafeTimer();
     syncSidebarHomeState();
     updateTimeCapsule();
     initializeNexeraApp();
-    setTimeout(function () {
-        if (window.Nexera?.releaseSplash) {
-            window.Nexera.releaseSplash('domcontentloaded');
-        }
-    }, 1200);
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
 });
