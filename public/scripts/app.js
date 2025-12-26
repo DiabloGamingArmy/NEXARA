@@ -44,7 +44,7 @@ window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
 const USE_CUSTOM_VIDEO_VIEWER = true;
 const USE_INLINE_VIDEO_WATCH = false;
-const VIDEO_DEBUG = window.__NEXERA_DEBUG_VIDEO === true;
+const VIDEO_DEBUG = window.__NEXERA_DEBUG_VIDEO === true || window.__NEXERA_DEBUG_VIDEOS === true;
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
@@ -3189,6 +3189,7 @@ window.navigateTo = function (viewId, pushToStack = true) {
         document.body.classList.remove('mobile-thread-open');
     }
     if (viewId === 'videos') {
+        debugVideo('route-enter', { viewId });
         const routedVideoId = getVideoRouteVideoId();
         const requestedVideoId = routedVideoId || pendingVideoOpenId;
         clearVideoDetailState({ updateRoute: !requestedVideoId });
@@ -11770,11 +11771,13 @@ function initVideoFeed(options = {}) {
     renderVideoFeed([]);
     videosPagination.lastDoc = null;
     videosPagination.done = false;
+    debugVideo('feed-fetch-start');
     fetchVideosBatch({ reset: true }).then(function (batch) {
         videosCache = batch;
         videosCache.forEach(ensureVideoStats);
         videosFeedLoading = false;
         refreshVideoFeedWithFilters();
+        debugVideo('feed-fetch-end', { count: batch.length });
         const modal = document.getElementById('video-detail-modal');
         const activeVideoId = modal?.dataset?.videoId;
         if (activeVideoId) updateVideoModalButtons(activeVideoId);
@@ -11782,6 +11785,14 @@ function initVideoFeed(options = {}) {
         console.error('Unable to load videos', error);
         videosFeedLoaded = false;
         videosFeedLoading = false;
+        const feed = document.getElementById('video-feed');
+        if (feed) {
+            feed.innerHTML = `
+                <div class="empty-state">
+                    <div style="font-weight:700; margin-bottom:6px;">Unable to load videos.</div>
+                    <div style="color:var(--text-muted);">Please try refreshing the page.</div>
+                </div>`;
+        }
     });
 }
 
@@ -12023,6 +12034,7 @@ function renderVideoFeed(videos = []) {
         feed.appendChild(renderVideoSkeletons());
         return;
     }
+    debugVideo('feed-render', { count: videos.length });
     if (videos.length === 0) {
         feed.innerHTML = `
             <div class="empty-state">
@@ -12193,6 +12205,10 @@ function initVideoViewerLayout() {
     modal.dataset.viewerScaffold = 'true';
     modal.innerHTML = '';
 
+    const backdrop = document.createElement('div');
+    backdrop.className = 'video-modal-backdrop';
+    backdrop.onclick = function () { window.closeVideoDetail(); };
+
     const shell = document.createElement('div');
     shell.className = 'video-modal-shell';
 
@@ -12205,7 +12221,251 @@ function initVideoViewerLayout() {
 
     shell.appendChild(closeBtn);
     shell.appendChild(buildVideoViewerLayout());
-    modal.appendChild(shell);
+
+    const dialog = document.createElement('div');
+    dialog.className = 'video-modal-dialog';
+    dialog.appendChild(shell);
+
+    modal.appendChild(backdrop);
+    modal.appendChild(dialog);
+}
+
+function getInlineWatchSuggestions(videoId, limit = 8) {
+    return videosCache.filter(function (video) { return video.id !== videoId; }).slice(0, limit);
+}
+
+function buildInlineWatchPage(video, author, suggestions) {
+    const videoTitle = escapeHtml(video.title || video.caption || 'Untitled video');
+    const videoDescription = escapeHtml(video.description || '');
+    const channelName = escapeHtml(author?.displayName || author?.name || author?.username || 'Nexera Creator');
+    const channelHandle = escapeHtml(author?.username ? `@${author.username}` : 'Nexera');
+    const views = formatCompactNumber(getVideoViewCount(video));
+    const updated = formatVideoTimestamp(video.createdAt) || 'Today';
+    const likeCount = formatCompactNumber(video.stats?.likes || 0);
+    const suggestedHtml = suggestions.map(function (entry) {
+        const thumb = escapeHtml(resolveVideoThumbnail(entry));
+        const title = escapeHtml(entry.title || entry.caption || 'Untitled video');
+        const channel = escapeHtml((getCachedUser(entry.ownerId)?.displayName || getCachedUser(entry.ownerId)?.name || getCachedUser(entry.ownerId)?.username || 'Nexera Creator'));
+        const stats = `${formatCompactNumber(getVideoViewCount(entry))} views • ${formatVideoTimestamp(entry.createdAt)}`;
+        return `
+            <div class="watch-suggestion">
+                <div class="watch-suggestion-thumb" style="background-image:url('${thumb}')">
+                    <span class="watch-suggestion-duration">${formatVideoDuration(entry)}</span>
+                </div>
+                <div class="watch-suggestion-meta">
+                    <div class="watch-suggestion-title">${title}</div>
+                    <div class="watch-suggestion-channel">${channel}</div>
+                    <div class="watch-suggestion-stats">${stats}</div>
+                </div>
+                <button class="watch-suggestion-menu" aria-label="More options"><i class="ph ph-dots-three-vertical"></i></button>
+            </div>
+        `;
+    }).join('');
+
+    return `
+        <div class="watch-page">
+            <div class="watch-grid">
+                <section class="watch-primary">
+                    <div class="watch-player">
+                        <video id="watch-player" playsinline preload="metadata" src="${escapeHtml(video.videoURL || '')}"></video>
+                        <div class="watch-player-overlay">
+                            <div class="watch-timeline"></div>
+                            <div class="watch-controls">
+                                <button class="watch-control-btn" data-action="toggle-play"><i class="ph ph-play"></i></button>
+                                <button class="watch-control-btn"><i class="ph ph-speaker-high"></i></button>
+                                <div class="watch-control-spacer"></div>
+                                <button class="watch-control-btn"><i class="ph ph-gear"></i></button>
+                                <button class="watch-control-btn"><i class="ph ph-arrows-out"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="watch-title">${videoTitle}</div>
+                    <div class="watch-channel-row">
+                        <div class="watch-channel-info">
+                            <div class="watch-channel-avatar"></div>
+                            <div>
+                                <div class="watch-channel-name">${channelName}</div>
+                                <div class="watch-channel-handle">${channelHandle}</div>
+                            </div>
+                            <button class="watch-join-btn">Follow</button>
+                        </div>
+                        <div class="watch-actions">
+                            <button class="watch-pill watch-like-btn" data-count="${video.stats?.likes || 0}" data-liked="false"><i class="ph ph-thumbs-up"></i><span>Like</span><span class="watch-like-count">${likeCount}</span></button>
+                            <button class="watch-pill"><i class="ph ph-thumbs-down"></i></button>
+                            <button class="watch-pill" data-watch-action="share"><i class="ph ph-share-network"></i> Share</button>
+                            <button class="watch-pill" data-watch-action="save"><i class="ph ph-bookmark-simple"></i> Save</button>
+                            <button class="watch-pill" data-watch-action="thanks"><i class="ph ph-currency-dollar"></i> Thanks</button>
+                        </div>
+                    </div>
+                    <div class="watch-description">
+                        <div class="watch-description-meta">${views} views • ${updated}</div>
+                        <div class="watch-description-text">${videoDescription || 'No description yet.'}</div>
+                        <span class="watch-description-more">...more</span>
+                    </div>
+                    <div class="watch-comments">
+                        <div class="watch-comments-header">
+                            <span>5,090 Comments</span>
+                            <button class="watch-pill small"><i class="ph ph-sort-ascending"></i> Sort by</button>
+                        </div>
+                        <div class="watch-comment-compose">
+                            <div class="watch-comment-avatar"></div>
+                            <input type="text" placeholder="Add a comment..." />
+                        </div>
+                        <div class="watch-comment">
+                            <div class="watch-comment-avatar"></div>
+                            <div>
+                                <div class="watch-comment-meta">Nexera Viewer • 1 day ago</div>
+                                <div class="watch-comment-text">Great breakdown—thanks for sharing!</div>
+                                <div class="watch-comment-actions"><span><i class="ph ph-thumbs-up"></i> 24</span><span>Reply</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <aside class="watch-rail">
+                    <div class="watch-rail-header">Up next</div>
+                    ${suggestedHtml}
+                </aside>
+            </div>
+        </div>
+    `;
+}
+
+async function openInlineVideoWatch(video) {
+    const feed = document.getElementById('video-feed');
+    if (!feed) return;
+    if (!videoWatchRestoreState) {
+        videoWatchRestoreState = {
+            nodes: Array.from(feed.childNodes),
+            scrollTop: feed.scrollTop,
+            sidebarCollapsed
+        };
+    }
+    applyDesktopSidebarState(true, false);
+    if (videosScrollObserver) {
+        videosScrollObserver.disconnect();
+    }
+    const sentinel = document.getElementById('video-feed-sentinel');
+    if (sentinel) sentinel.remove();
+    feed.innerHTML = '';
+    feed.classList.add('video-watch-open');
+    document.body.classList.add('video-watch-open');
+
+    ensureVideoStats(video);
+    const author = await resolveUserProfile(video.ownerId || '');
+    const suggestions = getInlineWatchSuggestions(video.id);
+    feed.innerHTML = buildInlineWatchPage(video, author, suggestions);
+    bindInlineWatchInteractions(video, author);
+}
+
+function restoreInlineVideoWatch() {
+    const feed = document.getElementById('video-feed');
+    if (!feed || !videoWatchRestoreState) return;
+    feed.innerHTML = '';
+    videoWatchRestoreState.nodes.forEach(function (node) {
+        feed.appendChild(node);
+    });
+    feed.scrollTop = videoWatchRestoreState.scrollTop || 0;
+    applyDesktopSidebarState(videoWatchRestoreState.sidebarCollapsed, false);
+    feed.classList.remove('video-watch-open');
+    document.body.classList.remove('video-watch-open');
+    videoWatchRestoreState = null;
+    if (!document.getElementById('video-feed-sentinel')) {
+        insertScrollSentinel(feed, 'video-feed-sentinel', 0, { placeAfter: true });
+    }
+    ensureVideoScrollObserver();
+}
+
+function openInlineWatchActionModal(action) {
+    const titles = {
+        share: 'Share',
+        save: 'Save',
+        thanks: 'Thanks'
+    };
+    const messages = {
+        share: 'Sharing options are coming soon.',
+        save: 'Save this video to your library.',
+        thanks: 'Thanks for supporting the creator.'
+    };
+    if (typeof openConfirmModal === 'function') {
+        openConfirmModal({
+            title: titles[action] || 'Action',
+            message: messages[action] || 'This action is coming soon.',
+            confirmText: 'Close',
+            cancelText: 'Dismiss'
+        });
+        return;
+    }
+    toast(messages[action] || 'Action coming soon.', 'info');
+}
+
+function updateInlineWatchPlayState(player, button) {
+    if (!player || !button) return;
+    const icon = player.paused ? 'ph ph-play' : 'ph ph-pause';
+    button.innerHTML = `<i class="${icon}"></i>`;
+}
+
+function updateInlineWatchLikeButton(button) {
+    if (!button) return;
+    const liked = button.dataset.liked === 'true';
+    const count = Number(button.dataset.count) || 0;
+    const iconClass = liked ? 'ph-fill ph-thumbs-up' : 'ph ph-thumbs-up';
+    const label = liked ? 'Liked' : 'Like';
+    const countEl = button.querySelector('.watch-like-count');
+    const textNode = button.querySelector('span');
+    const iconEl = button.querySelector('i');
+    if (iconEl) iconEl.className = iconClass;
+    if (textNode) textNode.textContent = label;
+    if (countEl) countEl.textContent = formatCompactNumber(count);
+}
+
+function bindInlineWatchInteractions(video, author) {
+    const root = document.querySelector('#video-feed .watch-page');
+    if (!root) return;
+    const player = root.querySelector('#watch-player');
+    const playBtn = root.querySelector('.watch-control-btn[data-action="toggle-play"]');
+    const likeBtn = root.querySelector('.watch-like-btn');
+    const channelAvatar = root.querySelector('.watch-channel-avatar');
+    const composeAvatar = root.querySelector('.watch-comment-compose .watch-comment-avatar');
+
+    if (channelAvatar) applyAvatarToElement(channelAvatar, author || {}, { size: 40 });
+    if (composeAvatar) applyAvatarToElement(composeAvatar, currentUser || author || {}, { size: 40 });
+    root.querySelectorAll('.watch-comment-avatar').forEach(function (avatar) {
+        if (avatar === composeAvatar) return;
+        applyAvatarToElement(avatar, author || {}, { size: 40 });
+    });
+
+    if (player && playBtn) {
+        updateInlineWatchPlayState(player, playBtn);
+        playBtn.addEventListener('click', function () {
+            if (player.paused) {
+                player.play().catch(function () {});
+            } else {
+                player.pause();
+            }
+            updateInlineWatchPlayState(player, playBtn);
+        });
+        player.addEventListener('play', function () { updateInlineWatchPlayState(player, playBtn); });
+        player.addEventListener('pause', function () { updateInlineWatchPlayState(player, playBtn); });
+    }
+
+    if (likeBtn) {
+        updateInlineWatchLikeButton(likeBtn);
+        likeBtn.addEventListener('click', function () {
+            const liked = likeBtn.dataset.liked === 'true';
+            const current = Number(likeBtn.dataset.count) || 0;
+            const nextLiked = !liked;
+            const nextCount = Math.max(0, current + (nextLiked ? 1 : -1));
+            likeBtn.dataset.liked = nextLiked ? 'true' : 'false';
+            likeBtn.dataset.count = String(nextCount);
+            updateInlineWatchLikeButton(likeBtn);
+        });
+    }
+
+    root.querySelectorAll('[data-watch-action]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            openInlineWatchActionModal(button.dataset.watchAction);
+        });
+    });
 }
 
 function getInlineWatchSuggestions(videoId, limit = 8) {
@@ -13109,6 +13369,13 @@ window.openVideoDetail = async function (videoId) {
             updateFollowButtonsForUser(video.ownerId, followedUsers.has(video.ownerId));
         } else {
             followBtn.textContent = 'Follow';
+        }
+        if (!currentUser?.uid) {
+            followBtn.disabled = true;
+            followBtn.title = 'Log in to follow';
+        } else {
+            followBtn.disabled = false;
+            followBtn.title = '';
         }
     }
 

@@ -4433,6 +4433,29 @@ body.light-mode .category-pill.active .topic-verified-icon {
     }
 }
 
+.video-feed.video-watch-open {
+    display: block;
+    padding: 0;
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-feed {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
+}
+
 .video-feed.video-feed-modal-open {
     display: block;
     padding: 1rem 0 2rem;
@@ -4640,6 +4663,11 @@ body.video-create-open #videos-topbar {
     padding: 1rem;
 }
 
+#view-videos {
+    position: relative;
+    min-height: 100%;
+}
+
 @media (max-width: 1200px) {
     .video-skeleton-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4677,13 +4705,13 @@ body.video-create-open #videos-topbar {
 }
 
 .video-modal {
-    position: fixed;
+    position: absolute;
     inset: 0;
     display: none;
     align-items: center;
     justify-content: center;
     padding: 1.5rem;
-    background: rgba(6, 12, 20, 0.75);
+    background: transparent;
     z-index: 1200;
     overflow-y: auto;
 }
@@ -4977,6 +5005,8 @@ body.video-create-open #videos-topbar {
 .video-modal-backdrop {
     position: absolute;
     inset: 0;
+    background: rgba(6, 12, 20, 0.6);
+    pointer-events: auto;
 }
 
 .video-modal-dialog {
