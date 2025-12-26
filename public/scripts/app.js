@@ -1077,9 +1077,12 @@ function buildFeedTypeToggleButtons(container) {
     FEED_TYPE_TOGGLES.forEach(function (toggle) {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'discover-pill feed-type-pill';
-        btn.textContent = toggle.label;
+        btn.className = 'feed-type-toggle';
         btn.dataset.type = toggle.key;
+        btn.innerHTML = `
+            <span class="feed-type-toggle-text">${toggle.label}</span>
+            <span class="feed-type-toggle-switch" aria-hidden="true"></span>
+        `;
         btn.addEventListener('click', function (event) {
             event.preventDefault();
             toggleFeedType(toggle.key);
@@ -6136,22 +6139,32 @@ async function renderDiscoverResults() {
         }
 
         if (matches.length > 0) {
-            container.innerHTML += `<div class="discover-section-header">Users</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Users';
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = 'discover-carousel no-scrollbar';
             matches.forEach(function (user) {
                 const uid = Object.keys(userCache).find(function (key) { return userCache[key] === user; });
                 if (!uid) return;
                 const avatarHtml = renderAvatar({ ...user, uid }, { size: 40 });
 
-                container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);" onclick="window.openUserProfile('${uid}')">
-                        ${avatarHtml}
-                        <div>
-                            <div style="font-weight:700;">${escapeHtml(user.name)}</div>
-                            <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
-                        </div>
-                        <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
-                    </div>`;
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = 'padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);';
+                card.onclick = function () { window.openUserProfile(uid); };
+                card.innerHTML = `
+                    ${avatarHtml}
+                    <div>
+                        <div style="font-weight:700;">${escapeHtml(user.name)}</div>
+                        <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
+                    </div>
+                    <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         } else if (discoverFilter === 'Users' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No users matching "${discoverSearchTerm}"</p></div>`;
         }
@@ -6265,7 +6278,12 @@ async function renderDiscoverResults() {
 
         const visible = onlyCategories ? sorted : sorted.slice(0, 6);
         if (visible.length > 0) {
-            container.innerHTML += `<div class="discover-section-header discover-section-row"><span>Categories</span>${categoriesDropdown('section')}</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header discover-section-row';
+            header.innerHTML = `<span>Categories</span>${categoriesDropdown('section')}`;
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = 'discover-carousel no-scrollbar';
             visible.forEach(function (cat) {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
@@ -6278,19 +6296,23 @@ async function renderDiscoverResults() {
                 const followClass = isFollowingTopic ? 'following' : '';
                 const followButton = `<button class="follow-btn js-follow-topic-${topicClass} ${followClass}" data-topic="${escapeHtml(topicLabel)}" onclick="event.stopPropagation(); window.toggleFollow('${topicArg}', event)" style="padding:8px 12px;">${followLabel}</button>`;
                 const accentColor = cat.verified ? '#00f2ea' : 'var(--border)';
-                container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
-                        <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
-                        <div style="flex:1;">
-                            <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
-                            <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
-                        </div>
-                        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
-                            <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
-                            ${followButton}
-                        </div>
-                    </div>`;
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = `padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};`;
+                card.innerHTML = `
+                    <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
+                    <div style="flex:1;">
+                        <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
+                        <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
+                        <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
+                        ${followButton}
+                    </div>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         } else if (discoverFilter === 'Categories' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No categories found.</p></div>`;
         }
@@ -7097,7 +7119,7 @@ function renderSaved() {
             header.className = 'discover-section-header';
             header.textContent = 'Saved Videos';
             const grid = document.createElement('div');
-            grid.className = 'video-feed';
+            grid.className = 'saved-carousel no-scrollbar';
             savedVideos.forEach(function (video) {
                 grid.appendChild(buildVideoCard(video));
             });
@@ -7109,16 +7131,24 @@ function renderSaved() {
 
     if (showPosts) {
         if (displayPosts.length) {
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Saved Posts';
+            const row = document.createElement('div');
+            row.className = 'saved-carousel no-scrollbar';
             displayPosts.forEach(function (post) {
-                container.innerHTML += getPostHTML(post);
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = getPostHTML(post);
+                const card = wrapper.firstElementChild;
+                if (card) row.appendChild(card);
             });
-
+            container.appendChild(header);
+            container.appendChild(row);
             displayPosts.forEach(function (post) {
-                const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+                const reviewBtn = container.querySelector(`#post-card-${post.id} .review-action`);
                 const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
                 applyReviewButtonState(reviewBtn, reviewValue);
             });
-
             applyMyReviewStylesToDOM();
             hasRendered = true;
         }
