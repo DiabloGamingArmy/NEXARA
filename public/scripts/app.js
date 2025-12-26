@@ -7866,7 +7866,8 @@ function setInboxMode(mode = 'messages', options = {}) {
     if (!skipRouteUpdate && routeView === 'messages') {
         let nextPath = '/inbox';
         if (inboxMode === 'content') {
-            nextPath = `/inbox/${inboxContentPreferred || 'posts'}`;
+            const preferred = inboxContentPreferred || 'posts';
+            nextPath = preferred === 'posts' ? '/inbox/content' : `/inbox/content?type=${encodeURIComponent(preferred)}`;
         } else if (inboxMode && inboxMode !== 'messages') {
             nextPath = `/inbox/${inboxMode}`;
         } else if (activeConversationId) {
@@ -14200,6 +14201,8 @@ function syncSidebarHomeState() {
     }
     uiDebugLog('sidebar home sync', { path, isHome });
 }
+
+window.syncSidebarHomeState = syncSidebarHomeState;
 
 document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
