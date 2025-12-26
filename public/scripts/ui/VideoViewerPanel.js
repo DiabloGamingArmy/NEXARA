@@ -52,14 +52,32 @@ export function buildVideoViewerLayout() {
                                     </button>
                                     <div class="video-control-popover video-control-settings-popover" role="dialog" aria-label="Settings">
                                         <div class="video-control-popover-title">Playback speed</div>
-                                        <div class="video-control-popover-list">
-                                            <button class="video-control-popover-item" type="button" data-speed="0.25">0.25×</button>
-                                            <button class="video-control-popover-item" type="button" data-speed="0.5">0.5×</button>
-                                            <button class="video-control-popover-item" type="button" data-speed="0.75">0.75×</button>
-                                            <button class="video-control-popover-item" type="button" data-speed="1">1×</button>
-                                            <button class="video-control-popover-item" type="button" data-speed="1.25">1.25×</button>
-                                            <button class="video-control-popover-item" type="button" data-speed="1.5">1.5×</button>
-                                            <button class="video-control-popover-item" type="button" data-speed="2">2×</button>
+                                        <div class="video-settings-speed-row">
+                                            <span>Speed</span>
+                                            <span id="video-settings-speed-value">1×</span>
+                                        </div>
+                                        <input id="video-settings-speed" class="video-settings-speed" type="range" min="0.25" max="3" step="0.05" value="1" list="video-speed-ticks" aria-label="Playback speed">
+                                        <datalist id="video-speed-ticks">
+                                            <option value="0.25" label="0.25×"></option>
+                                            <option value="0.5" label="0.50×"></option>
+                                            <option value="0.75" label="0.75×"></option>
+                                            <option value="1" label="1.00×"></option>
+                                            <option value="1.25" label="1.25×"></option>
+                                            <option value="1.5" label="1.50×"></option>
+                                            <option value="2" label="2.00×"></option>
+                                            <option value="2.5" label="2.50×"></option>
+                                            <option value="3" label="3.00×"></option>
+                                        </datalist>
+                                        <div class="video-settings-speed-ticks" aria-hidden="true">
+                                            <span title="0.25×"></span>
+                                            <span title="0.50×"></span>
+                                            <span title="0.75×"></span>
+                                            <span title="1.00×"></span>
+                                            <span title="1.25×"></span>
+                                            <span title="1.50×"></span>
+                                            <span title="2.00×"></span>
+                                            <span title="2.50×"></span>
+                                            <span title="3.00×"></span>
                                         </div>
                                         <div class="video-control-popover-title">Quality</div>
                                         <div class="video-control-popover-list">
@@ -68,6 +86,11 @@ export function buildVideoViewerLayout() {
                                             <button class="video-control-popover-item" type="button" data-quality="720">720p</button>
                                             <button class="video-control-popover-item" type="button" data-quality="1080">1080p</button>
                                         </div>
+                                        <div class="video-control-popover-title">Captions</div>
+                                        <label class="video-settings-toggle">
+                                            <input id="video-settings-autocaptions" type="checkbox">
+                                            <span>Auto captions</span>
+                                        </label>
                                     </div>
                                 </div>
                                 <button id="video-control-theater" class="icon-pill" aria-label="Toggle theater mode">

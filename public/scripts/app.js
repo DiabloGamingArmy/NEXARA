@@ -12589,6 +12589,10 @@ function getStoredQuality() {
     return localStorage.getItem(VIDEO_QUALITY_KEY) || resolveDefaultQuality();
 }
 
+function getStoredAutoCaptions() {
+    return localStorage.getItem(AUTO_CAPTIONS_KEY) === 'true';
+}
+
 function applyVideoSettings(player) {
     if (!player) return;
     player.playbackRate = getStoredPlaybackSpeed();
@@ -12596,14 +12600,21 @@ function applyVideoSettings(player) {
 
 function updateSettingsPopoverSelection(root) {
     if (!root) return;
-    const speed = String(getStoredPlaybackSpeed());
     const quality = String(getStoredQuality());
-    root.querySelectorAll('[data-speed]').forEach(function (btn) {
-        btn.classList.toggle('is-selected', btn.dataset.speed === speed);
-    });
     root.querySelectorAll('[data-quality]').forEach(function (btn) {
         btn.classList.toggle('is-selected', btn.dataset.quality === quality);
     });
+    const speedInput = root.querySelector('#video-settings-speed');
+    const speedValue = root.querySelector('#video-settings-speed-value');
+    if (speedInput && speedValue) {
+        const speed = getStoredPlaybackSpeed();
+        speedInput.value = String(speed);
+        speedValue.textContent = `${speed.toFixed(2)}×`;
+    }
+    const autoToggle = root.querySelector('#video-settings-autocaptions');
+    if (autoToggle) {
+        autoToggle.checked = getStoredAutoCaptions();
+    }
 }
 
 function setupAutoCaptions(player) {
@@ -12615,6 +12626,17 @@ function setupAutoCaptions(player) {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+    let audioContext = null;
+    let sourceNode = null;
+    try {
+        audioContext = new AudioContext();
+        sourceNode = audioContext.createMediaElementSource(player);
+        const analyser = audioContext.createAnalyser();
+        sourceNode.connect(analyser);
+        analyser.connect(audioContext.destination);
+    } catch (err) {
+        console.warn('Unable to attach audio context for captions', err);
+    }
     let textTrack = player.textTracks?.[0];
     if (!textTrack) {
         textTrack = player.addTextTrack('captions', 'Auto', 'en');
@@ -12635,13 +12657,19 @@ function setupAutoCaptions(player) {
         }
     };
     recognition.addEventListener('result', handleResult);
-    autoCaptionState = { player, recognition, textTrack, handleResult };
+    recognition.addEventListener('error', function (event) {
+        console.warn('Auto captions error', event);
+    });
+    autoCaptionState = { player, recognition, textTrack, handleResult, audioContext, sourceNode };
 }
 
-function toggleAutoCaptions(player, enable) {
+function toggleAutoCaptions(player, enable, options = {}) {
     if (!player) return;
+    const silent = options.silent === true;
     if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-        toast('Auto captions are not supported in this browser.', 'info');
+        if (!silent) {
+            toast('Auto captions are not supported in this browser.', 'info');
+        }
         return;
     }
     setupAutoCaptions(player);
@@ -12674,6 +12702,7 @@ let videoViewerShortcutsBound = false;
 let autoplayNextEnabled = true;
 const PLAYBACK_SPEED_KEY = 'nexara_playback_speed';
 const VIDEO_QUALITY_KEY = 'nexara_video_quality';
+const AUTO_CAPTIONS_KEY = 'nexara_auto_captions';
 let autoCaptionState = null;
 function handleVideoFullscreenChange() {
     videoFullscreenPending = false;
@@ -12765,6 +12794,20 @@ function bindVideoViewerShortcuts() {
         if (event.key === 'ArrowLeft') {
             player.currentTime = Math.max(0, (player.currentTime || 0) - 5);
         }
+        if (event.shiftKey && event.key === ',') {
+            const next = Math.max(0.25, (player.playbackRate || 1) - 0.05);
+            player.playbackRate = Number(next.toFixed(2));
+            localStorage.setItem(PLAYBACK_SPEED_KEY, String(player.playbackRate));
+            toast(`Speed: ${player.playbackRate.toFixed(2)}×`, 'info');
+            updateSettingsPopoverSelection(document.querySelector('[data-popover="settings"]'));
+        }
+        if (event.shiftKey && event.key === '.') {
+            const next = Math.min(3, (player.playbackRate || 1) + 0.05);
+            player.playbackRate = Number(next.toFixed(2));
+            localStorage.setItem(PLAYBACK_SPEED_KEY, String(player.playbackRate));
+            toast(`Speed: ${player.playbackRate.toFixed(2)}×`, 'info');
+            updateSettingsPopoverSelection(document.querySelector('[data-popover="settings"]'));
+        }
     });
 }
 
@@ -12790,6 +12833,7 @@ function bindVideoViewerControls() {
     player.removeAttribute('controls');
     applyVideoSettings(player);
     debugVideo('bind-controls');
+    let lastVolumeLevel = player.volume || 1;
     if (volumeRange) {
         volumeRange.value = Math.round((player.volume || 1) * 100).toString();
     }
@@ -12880,15 +12924,34 @@ function bindVideoViewerControls() {
         updateVideoScrubVisuals(player, scrub);
     });
     volumeBtn.addEventListener('click', function () {
-        player.muted = !player.muted;
+        if (player.muted) {
+            player.muted = false;
+            const restored = lastVolumeLevel > 0 ? lastVolumeLevel : 0.6;
+            player.volume = restored;
+            volumeRange.value = Math.round(restored * 100).toString();
+        } else {
+            if (player.volume > 0) {
+                lastVolumeLevel = player.volume;
+            }
+            player.muted = true;
+            volumeRange.value = '0';
+        }
         updateVolumeIcon();
     });
     volumeRange.addEventListener('input', function () {
         player.volume = Math.min(1, Math.max(0, Number(volumeRange.value) / 100));
-        if (player.volume > 0 && player.muted) player.muted = false;
+        if (player.volume > 0) {
+            lastVolumeLevel = player.volume;
+            if (player.muted) player.muted = false;
+        } else {
+            player.muted = true;
+        }
         updateVolumeIcon();
     });
     player.addEventListener('volumechange', function () {
+        if (!player.muted && player.volume > 0) {
+            lastVolumeLevel = player.volume;
+        }
         updateVolumeIcon();
     });
     if (volumeGroup) {
@@ -12948,14 +13011,47 @@ function bindVideoViewerControls() {
             });
         }
     }
+    const setCaptionsMessage = function (message) {
+        const captionsGroup = captionsBtn?.closest('.video-control-popover-group');
+        const noneOption = captionsGroup?.querySelector('[data-caption=\"none\"]');
+        if (noneOption) {
+            noneOption.textContent = message;
+        }
+    };
+    const setAutoCaptionsEnabled = function (enabled, source) {
+        if (enabled && !window.SpeechRecognition && !window.webkitSpeechRecognition) {
+            toast('Auto captions are not supported in this browser.', 'info');
+            localStorage.setItem(AUTO_CAPTIONS_KEY, 'false');
+            const settingsToggle = document.getElementById('video-settings-autocaptions');
+            if (settingsToggle) settingsToggle.checked = false;
+            return;
+        }
+        localStorage.setItem(AUTO_CAPTIONS_KEY, enabled ? 'true' : 'false');
+        if (enabled) {
+            toggleAutoCaptions(player, true);
+            toast('Captions: Auto', 'info');
+        } else {
+            toggleAutoCaptions(player, false);
+            toast('Captions off', 'info');
+        }
+        const settingsToggle = document.getElementById('video-settings-autocaptions');
+        if (settingsToggle && source !== 'settings') {
+            settingsToggle.checked = enabled;
+        }
+        if (!enabled) {
+            setCaptionsMessage('No subtitles');
+        } else {
+            setCaptionsMessage('No subtitles available');
+        }
+    };
     if (captionsBtn) {
         const captionOptions = captionsBtn.closest('.video-control-popover-group')?.querySelectorAll('[data-caption]');
         captionOptions?.forEach(function (option) {
             option.addEventListener('click', function () {
                 if (option.dataset.caption === 'auto') {
-                    toggleAutoCaptions(player, true);
+                    setAutoCaptionsEnabled(true, 'captions');
                 } else {
-                    toggleAutoCaptions(player, false);
+                    setAutoCaptionsEnabled(false, 'captions');
                 }
             });
         });
@@ -12970,16 +13066,22 @@ function bindVideoViewerControls() {
     }
     if (settingsBtn) {
         const settingsGroup = settingsBtn.closest('.video-control-popover-group');
-        const speedButtons = settingsGroup?.querySelectorAll('[data-speed]') || [];
+        const speedInput = settingsGroup?.querySelector('#video-settings-speed');
+        const speedValue = settingsGroup?.querySelector('#video-settings-speed-value');
         const qualityButtons = settingsGroup?.querySelectorAll('[data-quality]') || [];
-        speedButtons.forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                const speed = Number(btn.dataset.speed) || 1;
+        const autoToggle = settingsGroup?.querySelector('#video-settings-autocaptions');
+        if (speedInput && speedValue) {
+            const storedSpeed = getStoredPlaybackSpeed();
+            speedInput.value = String(storedSpeed);
+            speedValue.textContent = `${storedSpeed.toFixed(2)}×`;
+            speedInput.addEventListener('input', function () {
+                const speed = Number(speedInput.value) || 1;
                 localStorage.setItem(PLAYBACK_SPEED_KEY, String(speed));
                 player.playbackRate = speed;
-                updateSettingsPopoverSelection(settingsGroup);
+                speedValue.textContent = `${speed.toFixed(2)}×`;
+                toast(`Speed: ${speed.toFixed(2)}×`, 'info');
             });
-        });
+        }
         qualityButtons.forEach(function (btn) {
             btn.addEventListener('click', function () {
                 const quality = btn.dataset.quality || 'auto';
@@ -12990,7 +13092,14 @@ function bindVideoViewerControls() {
         if (!localStorage.getItem(VIDEO_QUALITY_KEY)) {
             localStorage.setItem(VIDEO_QUALITY_KEY, resolveDefaultQuality());
         }
+        if (autoToggle) {
+            autoToggle.checked = getStoredAutoCaptions();
+            autoToggle.addEventListener('change', function () {
+                setAutoCaptionsEnabled(autoToggle.checked, 'settings');
+            });
+        }
         updateSettingsPopoverSelection(settingsGroup);
+        setCaptionsMessage(getStoredAutoCaptions() ? 'No subtitles available' : 'No subtitles');
     }
     const autoplayToggle = document.getElementById('video-up-next-autoplay');
     if (autoplayToggle) {
@@ -13515,6 +13624,7 @@ window.openVideoDetail = async function (videoId) {
         const shouldReset = videoSrc && currentSrc !== videoSrc;
         applyVideoCaptions(player, video);
         applyVideoSettings(player);
+        toggleAutoCaptions(player, getStoredAutoCaptions(), { silent: true });
         if (shouldReset) {
             player.src = videoSrc;
             player.onloadedmetadata = function () {

@@ -4584,7 +4584,7 @@ body.video-viewer-inline-open .nexera-alert-banner {
     height: 100%;
     padding: 1rem;
     background: var(--bg-body);
-    border-radius: 18px;
+    border-radius: 0;
     border: 1px solid var(--border);
     overflow-y: auto;
 }
@@ -4678,6 +4678,7 @@ body.video-viewer-inline-open .nexera-alert-banner {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-width: 0;
 }
 
 .watch-player {
@@ -5286,6 +5287,42 @@ body.video-viewer-inline-open .nexera-alert-banner {
 .video-control-popover-group.is-open .video-control-popover {
     display: block;
 }
+
+.video-settings-speed-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.video-settings-speed {
+    width: 100%;
+    accent-color: var(--primary);
+}
+
+.video-settings-speed-ticks {
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 4px;
+    margin: 6px 0 12px;
+}
+
+.video-settings-speed-ticks span {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--border);
+    cursor: help;
+}
+
+.video-settings-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
 .video-viewer-player.controls-active .video-control-actions {
     opacity: 1;
     transform: translateY(0);
@@ -5627,9 +5664,14 @@ body.video-viewer-inline-open .nexera-alert-banner {
     display: flex;
     flex-direction: column;
     gap: 24px;
+    width: 100%;
 }
 
 .video-theater .video-viewer-aside {
+    width: 100%;
+}
+
+.video-theater .video-viewer-main {
     width: 100%;
 }
 
