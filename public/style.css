@@ -1868,7 +1868,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .saved-carousel .social-card {
-    min-width: 280px;
+    min-width: 320px;
+    max-width: 420px;
+    width: 100%;
     flex: 0 0 auto;
 }
 
@@ -1890,6 +1892,16 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .discover-vertical-list .social-card {
     width: 100%;
+}
+
+.profile-media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.profile-media-grid .profile-collage-card {
+    min-width: 0;
 }
 
 .discover-hub {

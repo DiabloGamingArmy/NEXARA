@@ -6550,11 +6550,12 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     `;
 }
 
-function renderProfileVideoCard(video) {
+function renderProfileVideoCard(video, { compact = true } = {}) {
     const poster = video.thumbURL || video.videoURL || '';
     const caption = escapeHtml(video.caption || 'Untitled video');
     const views = getVideoViewCount(video);
-    return `<div class="social-card profile-collage-card" style="min-width:240px;">
+    const minWidth = compact ? 'min-width:240px;' : '';
+    return `<div class="social-card profile-collage-card" style="${minWidth}">
         <div class="profile-video-thumb" style="background-image:url('${poster}')" onclick="window.openVideoDetail('${video.id}')">
             <div class="profile-video-meta">${formatCompactNumber(views)} views</div>
         </div>
@@ -6565,11 +6566,12 @@ function renderProfileVideoCard(video) {
     </div>`;
 }
 
-function renderProfileLiveCard(session) {
+function renderProfileLiveCard(session, { compact = true } = {}) {
     const title = escapeHtml(session.title || 'Live session');
     const status = (session.status || 'live').toUpperCase();
     const viewers = session.viewerCount || session.stats?.viewerCount || 0;
-    return `<div class="social-card profile-collage-card" style="min-width:220px;">
+    const minWidth = compact ? 'min-width:220px;' : '';
+    return `<div class="social-card profile-collage-card" style="${minWidth}">
         <div class="card-content" style="gap:6px;">
             <div style="display:flex; align-items:center; gap:8px;">${status === 'LIVE' ? '<span class="live-dot"></span>' : ''}<span style="font-weight:700;">${title}</span></div>
             <div style="color:var(--text-muted); font-size:0.85rem;">${viewers} watching</div>
@@ -6608,8 +6610,8 @@ function renderProfileAllResults(container, sources, uid, isSelfView) {
     const postContext = isSelfView ? 'profile' : 'public-profile';
     const postPrefix = isSelfView ? 'my-profile-collage' : 'profile-collage';
     sections.push(renderProfileCollageRow('Posts', sources.posts.slice(0, 10), function (post) { return renderProfilePostCard(post, postContext, { compact: true, idPrefix: postPrefix }); }, `window.setProfileFilter('Posts', '${uid}')`));
-    sections.push(renderProfileCollageRow('Videos', sources.videos.slice(0, 10), renderProfileVideoCard, `window.setProfileFilter('Videos', '${uid}')`));
-    sections.push(renderProfileCollageRow('Livestreams', sources.liveSessions.slice(0, 10), renderProfileLiveCard, `window.setProfileFilter('Livestreams', '${uid}')`));
+    sections.push(renderProfileCollageRow('Videos', sources.videos.slice(0, 10), function (video) { return renderProfileVideoCard(video, { compact: true }); }, `window.setProfileFilter('Videos', '${uid}')`));
+    sections.push(renderProfileCollageRow('Livestreams', sources.liveSessions.slice(0, 10), function (session) { return renderProfileLiveCard(session, { compact: true }); }, `window.setProfileFilter('Livestreams', '${uid}')`));
     sections.push(renderProfileCollageRow('Categories', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
 
     container.innerHTML = sections.filter(Boolean).join('');
@@ -6631,12 +6633,12 @@ function renderProfileContent(uid, profile, isSelfView, containerId) {
     if (currentProfileFilter === 'Posts') return renderProfilePostsList(container, sources.posts, isSelfView ? 'profile' : 'public-profile');
     if (currentProfileFilter === 'Videos') {
         if (!sources.videos.length) return container.innerHTML = `<div class="empty-state"><p>No videos yet.</p></div>`;
-        container.innerHTML = `<div class="profile-h-scroll">${sources.videos.map(renderProfileVideoCard).join('')}</div>`;
+        container.innerHTML = `<div class="profile-media-grid">${sources.videos.map(function (video) { return renderProfileVideoCard(video, { compact: false }); }).join('')}</div>`;
         return;
     }
     if (currentProfileFilter === 'Livestreams') {
         if (!sources.liveSessions.length) return container.innerHTML = `<div class="empty-state"><p>No livestreams yet.</p></div>`;
-        container.innerHTML = `<div class="profile-h-scroll">${sources.liveSessions.map(renderProfileLiveCard).join('')}</div>`;
+        container.innerHTML = `<div class="profile-media-grid">${sources.liveSessions.map(function (session) { return renderProfileLiveCard(session, { compact: false }); }).join('')}</div>`;
         return;
     }
     if (currentProfileFilter === 'Categories') {
@@ -7098,6 +7100,7 @@ function renderSaved() {
 
     renderCategoryPills();
     container.innerHTML = '';
+    const useCarousels = !savedSearchTerm;
 
     const savedPostIds = Array.isArray(userProfile.savedPosts) ? userProfile.savedPosts : [];
     let displayPosts = allPosts.filter(function (post) {
@@ -7150,7 +7153,7 @@ function renderSaved() {
             header.className = 'discover-section-header';
             header.textContent = 'Saved Videos';
             const grid = document.createElement('div');
-            grid.className = 'saved-carousel no-scrollbar';
+            grid.className = useCarousels ? 'saved-carousel no-scrollbar' : 'discover-vertical-list';
             savedVideos.forEach(function (video) {
                 grid.appendChild(buildVideoCard(video));
             });
@@ -7166,7 +7169,7 @@ function renderSaved() {
             header.className = 'discover-section-header';
             header.textContent = 'Saved Posts';
             const stack = document.createElement('div');
-            stack.className = 'saved-posts-stack';
+            stack.className = useCarousels ? 'saved-carousel no-scrollbar' : 'saved-posts-stack';
             displayPosts.forEach(function (post) {
                 const wrapper = document.createElement('div');
                 wrapper.innerHTML = getPostHTML(post);
@@ -7745,6 +7748,9 @@ function syncInboxContentFilters() {
 
 function toggleInboxContentFilter(mode) {
     if (!mode || !inboxContentFilters.hasOwnProperty(mode)) return;
+    if (inboxMode !== 'content') {
+        setInboxMode('content', { skipRouteUpdate: true });
+    }
     inboxContentFilters[mode] = !inboxContentFilters[mode];
     if (!Object.values(inboxContentFilters).some(Boolean)) {
         inboxContentFilters = { posts: true, videos: true, livestreams: true };
