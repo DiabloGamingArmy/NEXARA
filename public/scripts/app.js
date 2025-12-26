@@ -42,6 +42,7 @@ let userFetchPromises = {};
 const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
+const USE_CUSTOM_VIDEO_VIEWER = false;
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
@@ -106,6 +107,9 @@ let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
 const FEED_BATCH_SIZE = 5;
+const FEED_PREFETCH_OFFSET = 2;
+const FEED_PREFETCH_ROOT_MARGIN = '0px 0px 400px 0px';
+const animatedItemKeys = new Set();
 const feedPagination = {
     lastDoc: null,
     loading: false,
@@ -242,6 +246,13 @@ function isUiDebugEnabled() {
 function uiDebugLog(...args) {
     if (!isUiDebugEnabled()) return;
     console.debug('[NexeraUI]', ...args);
+}
+
+function shouldAnimateItem(key) {
+    if (!key) return true;
+    if (animatedItemKeys.has(key)) return false;
+    animatedItemKeys.add(key);
+    return true;
 }
 
 function showSplash() {
@@ -1345,7 +1356,7 @@ const TRENDING_RANGE_WINDOWS = {
 
 const TRENDING_RANGE_STORAGE_KEY = 'nexera_trending_timeframe';
 const TRENDING_DEFAULT_RANGE = 'six_months';
-const TRENDING_PAGE_SIZE = 3;
+const TRENDING_PAGE_SIZE = 6;
 
 const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
@@ -2360,9 +2371,14 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         loadTrendingTopics(trendingTopicsState.range);
         feedLoading = false;
         renderFeed();
+        if (isInitialLoad) {
+            isInitialLoad = false;
+            if (window.Nexera?.releaseSplash) {
+                window.Nexera.releaseSplash('feed-initial-ready');
+            }
+        }
         await waitForFeedMedia();
         postSnapshotCache = nextCache;
-        isInitialLoad = false;
     })().catch(function (error) {
         console.error('Feed load failed', error);
     }).finally(function () {
@@ -3171,7 +3187,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
         initVideoFeed();
         if (requestedVideoId) {
             pendingVideoOpenId = null;
-            window.openVideoDetail(requestedVideoId);
+            requestAnimationFrame(function () {
+                window.openVideoDetail(requestedVideoId);
+            });
         }
         pendingVideoOpenId = null;
     }
@@ -3655,8 +3673,9 @@ async function hydrateFollowingState(uid, profileData = {}) {
 }
 
 // --- Render Logic (The Core) ---
-function getPostHTML(post) {
+function getPostHTML(post, options = {}) {
     try {
+        const animateIn = options.animate !== false;
         const date = formatDateTime(post.timestamp) || 'Just now';
         const viewerUid = getViewerUid();
 
@@ -3726,8 +3745,9 @@ function getPostHTML(post) {
         const accentColor = THEMES[post.category] || THEMES[currentCategory] || THEMES['For You'];
         const mobileView = isMobileViewport();
 
+        const animationClass = animateIn ? ' animate-in' : '';
         return `
-            <div id="post-card-${post.id}" class="social-card fade-in" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
+            <div id="post-card-${post.id}" class="social-card${animationClass}" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
                 <div class="card-header">
                     <div class="author-wrapper" onclick="window.openUserProfile('${post.userId}', event)">
                         ${avatarHtml}
@@ -3763,6 +3783,27 @@ function getPostHTML(post) {
         console.error("Error generating post HTML", e);
         return "";
     }
+}
+
+function insertScrollSentinel(container, sentinelId, offsetFromEnd = FEED_PREFETCH_OFFSET, options = {}) {
+    if (!container) return null;
+    const sentinel = document.createElement('div');
+    sentinel.id = sentinelId;
+    sentinel.className = 'scroll-sentinel';
+    if (options.placeAfter && container.parentNode) {
+        container.parentNode.insertBefore(sentinel, container.nextSibling);
+        return sentinel;
+    }
+    const children = Array.from(container.children);
+    if (children.length > offsetFromEnd) {
+        const insertBeforeNode = children[children.length - offsetFromEnd];
+        if (insertBeforeNode) {
+            container.insertBefore(sentinel, insertBeforeNode);
+            return sentinel;
+        }
+    }
+    container.appendChild(sentinel);
+    return sentinel;
 }
 
 function renderFeed(targetId = 'feed-content') {
@@ -3858,16 +3899,27 @@ function renderFeed(targetId = 'feed-content') {
     }
 
     items.forEach(function (item) {
+        let itemKey = `${item.type}:${item.id}`;
+        if (item.type === 'videos') {
+            itemKey = `video:${item.id}`;
+        } else if (item.type === 'livestreams') {
+            itemKey = `livestream:${item.id}`;
+        }
+        const animateIn = shouldAnimateItem(itemKey);
         if (item.type === 'threads') {
-            container.insertAdjacentHTML('beforeend', getPostHTML(item.data));
+            container.insertAdjacentHTML('beforeend', getPostHTML(item.data, { animate: animateIn }));
             return;
         }
         if (item.type === 'videos') {
-            container.appendChild(buildVideoCard(item.data));
+            const card = buildVideoCard(item.data);
+            if (animateIn) card.classList.add('animate-in');
+            container.appendChild(card);
             return;
         }
         if (item.type === 'livestreams') {
-            container.appendChild(buildHomeLiveCard(item.data));
+            const card = buildHomeLiveCard(item.data);
+            if (animateIn) card.classList.add('animate-in');
+            container.appendChild(card);
         }
     });
 
@@ -3879,10 +3931,7 @@ function renderFeed(targetId = 'feed-content') {
 
     applyMyReviewStylesToDOM();
 
-    const sentinel = document.createElement('div');
-    sentinel.id = 'feed-scroll-sentinel';
-    sentinel.style.height = '1px';
-    container.appendChild(sentinel);
+    insertScrollSentinel(container, 'feed-scroll-sentinel');
     ensureFeedScrollObserver();
 }
 
@@ -3898,7 +3947,7 @@ function ensureFeedScrollObserver() {
                 loadMoreFeedPosts();
             }
         });
-    }, { rootMargin: '200px' });
+    }, { rootMargin: FEED_PREFETCH_ROOT_MARGIN });
     feedScrollObserver.observe(sentinel);
 }
 
@@ -6094,7 +6143,7 @@ function renderDiscoverTopBar() {
         filters: [
             { label: 'All Results', dataset: { filter: 'All Results' }, active: discoverFilter === 'All Results', onClick: function () { window.setDiscoverFilter('All Results'); } },
             { label: 'Posts', dataset: { filter: 'Posts' }, active: discoverFilter === 'Posts', onClick: function () { window.setDiscoverFilter('Posts'); } },
-            { label: 'Categories', dataset: { filter: 'Categories' }, active: discoverFilter === 'Categories', onClick: function () { window.setDiscoverFilter('Categories'); } },
+        { label: 'Topics', dataset: { filter: 'Categories' }, active: discoverFilter === 'Categories', onClick: function () { window.setDiscoverFilter('Categories'); } },
             { label: 'Users', dataset: { filter: 'Users' }, active: discoverFilter === 'Users', onClick: function () { window.setDiscoverFilter('Users'); } },
             { label: 'Videos', dataset: { filter: 'Videos' }, active: discoverFilter === 'Videos', onClick: function () { window.setDiscoverFilter('Videos'); } },
             { label: 'Livestreams', dataset: { filter: 'Livestreams' }, active: discoverFilter === 'Livestreams', onClick: function () { window.setDiscoverFilter('Livestreams'); } }
@@ -6117,7 +6166,7 @@ function renderDiscoverTopBar() {
                 id: 'discover-category-sort',
                 className: 'discover-dropdown',
                 forId: 'categories-sort-select',
-                label: 'Categories:',
+                label: 'Topics:',
                 options: [
                     { value: 'verified_first', label: 'Verified first' },
                     { value: 'verified_only', label: 'Verified only' },
@@ -6160,7 +6209,7 @@ async function renderDiscoverResults() {
     if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
 
     const categoriesDropdown = function (id = 'section') {
-        return `<div class="discover-dropdown"><label for="categories-${id}-select">Categories:</label><select id="categories-${id}-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
+        return `<div class="discover-dropdown"><label for="categories-${id}-select">Topics:</label><select id="categories-${id}-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
             <option value="verified_first" ${discoverCategoriesMode === 'verified_first' ? 'selected' : ''}>Verified first</option>
             <option value="verified_only" ${discoverCategoriesMode === 'verified_only' ? 'selected' : ''}>Verified only</option>
             <option value="community_first" ${discoverCategoriesMode === 'community_first' ? 'selected' : ''}>Community first</option>
@@ -6384,7 +6433,7 @@ async function renderDiscoverResults() {
         if (visible.length > 0) {
             const header = document.createElement('div');
             header.className = 'discover-section-header discover-section-row';
-            header.innerHTML = `<span>Categories</span>${categoriesDropdown('section')}`;
+            header.innerHTML = `<span>Topics</span>${categoriesDropdown('section')}`;
             container.appendChild(header);
             const row = document.createElement('div');
             row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
@@ -6392,7 +6441,7 @@ async function renderDiscoverResults() {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
                 const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
-                const topicLabel = cat.name || cat.slug || cat.id || 'Category';
+                const topicLabel = cat.name || cat.slug || cat.id || 'Topic';
                 const topicClass = topicLabel.replace(/[^a-zA-Z0-9]/g, '');
                 const isFollowingTopic = followedCategories.has(topicLabel);
                 const topicArg = topicLabel.replace(/'/g, "\\'");
@@ -6406,7 +6455,7 @@ async function renderDiscoverResults() {
                 card.innerHTML = `
                     <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
                     <div style="flex:1;">
-                        <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
+                        <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Topic')}${verifiedMark}</div>
                         <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
                     </div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
@@ -6492,7 +6541,8 @@ function renderProfileFilterRow(uid, ariaLabel = 'Profile filters') {
     const buttons = PROFILE_FILTER_OPTIONS.map(function (label) {
         const active = currentProfileFilter === label;
         const safeLabel = label.replace(/'/g, "\\'");
-        return `<button class="discover-pill ${active ? 'active' : ''}" role="tab" aria-selected="${active}" onclick="window.setProfileFilter('${safeLabel}', '${uid}')">${label}</button>`;
+        const displayLabel = label === 'Categories' ? 'Topics' : label;
+        return `<button class="discover-pill ${active ? 'active' : ''}" role="tab" aria-selected="${active}" onclick="window.setProfileFilter('${safeLabel}', '${uid}')">${displayLabel}</button>`;
     }).join('');
     return `<div class="discover-pill-row profile-filter-row" role="tablist" aria-label="${ariaLabel}">${buttons}</div>`;
 }
@@ -6655,7 +6705,7 @@ function renderProfileLiveCard(session, { compact = true } = {}) {
 }
 
 function renderProfileCategoryChip(category) {
-    return `<div class="category-badge" style="min-width:max-content;">${escapeHtml(category.name || 'Category')}</div>`;
+    return `<div class="category-badge" style="min-width:max-content;">${escapeHtml(category.name || 'Topic')}</div>`;
 }
 
 function renderProfileCollageRow(label, items, renderer, seeAllAction) {
@@ -6687,7 +6737,7 @@ function renderProfileAllResults(container, sources, uid, isSelfView) {
     sections.push(renderProfileCollageRow('Posts', sources.posts.slice(0, 10), function (post) { return renderProfilePostCard(post, postContext, { compact: true, idPrefix: postPrefix }); }, `window.setProfileFilter('Posts', '${uid}')`));
     sections.push(renderProfileCollageRow('Videos', sources.videos.slice(0, 10), function (video) { return renderProfileVideoCard(video, { compact: true }); }, `window.setProfileFilter('Videos', '${uid}')`));
     sections.push(renderProfileCollageRow('Livestreams', sources.liveSessions.slice(0, 10), function (session) { return renderProfileLiveCard(session, { compact: true }); }, `window.setProfileFilter('Livestreams', '${uid}')`));
-    sections.push(renderProfileCollageRow('Categories', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
+    sections.push(renderProfileCollageRow('Topics', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
 
     container.innerHTML = sections.filter(Boolean).join('');
     if (!container.innerHTML) {
@@ -7230,7 +7280,10 @@ function renderSaved() {
             const grid = document.createElement('div');
             grid.className = useCarousels ? 'saved-carousel no-scrollbar' : 'discover-vertical-list';
             savedVideos.forEach(function (video) {
-                grid.appendChild(buildVideoCard(video));
+                const card = buildVideoCard(video);
+                const animateIn = shouldAnimateItem(`video:${video.id}`);
+                if (animateIn) card.classList.add('animate-in');
+                grid.appendChild(card);
             });
             container.appendChild(header);
             container.appendChild(grid);
@@ -7247,7 +7300,8 @@ function renderSaved() {
             stack.className = useCarousels ? 'saved-carousel no-scrollbar' : 'saved-posts-stack';
             displayPosts.forEach(function (post) {
                 const wrapper = document.createElement('div');
-                wrapper.innerHTML = getPostHTML(post);
+                const animateIn = shouldAnimateItem(`threads:${post.id}`);
+                wrapper.innerHTML = getPostHTML(post, { animate: animateIn });
                 const card = wrapper.firstElementChild;
                 if (card) stack.appendChild(card);
             });
@@ -10665,12 +10719,10 @@ window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) {
         if (show) {
-            const mounted = mountVideoModalInFeed('video-upload-modal');
-            if (!mounted) modal.style.display = 'flex';
+            modal.style.display = 'flex';
             document.body.classList.add('video-create-open');
         } else {
-            const restored = restoreVideoFeedFromModal('video-upload-modal');
-            if (!restored) modal.style.display = 'none';
+            modal.style.display = 'none';
             document.body.classList.remove('video-create-open');
         }
     }
@@ -11512,6 +11564,12 @@ function openVideoManagerMenu(event, videoId) {
     const dropdown = ensureVideoManagerMenu();
     const trigger = event?.target?.closest('[data-video-menu]');
     if (!dropdown || !trigger) return;
+    const video = getVideoById(videoId);
+    const isOwner = !!(currentUser?.uid && video?.ownerId === currentUser.uid);
+    const editBtn = dropdown.querySelector('#video-manager-edit-btn');
+    const deleteBtn = dropdown.querySelector('#video-manager-delete-btn');
+    if (editBtn) editBtn.style.display = isOwner ? 'flex' : 'none';
+    if (deleteBtn) deleteBtn.style.display = isOwner ? 'flex' : 'none';
     videoManagerMenuState.videoId = videoId;
     dropdown.style.display = 'block';
     const rect = trigger.getBoundingClientRect();
@@ -11578,10 +11636,8 @@ async function confirmDeleteVideo(videoId) {
 function openVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    const mounted = mountVideoModalInFeed('video-task-viewer');
-    if (!mounted) {
-        modal.style.display = 'block';
-    }
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
     document.body.classList.add('video-manager-open');
     renderUploadTasks();
 }
@@ -11591,10 +11647,7 @@ window.openVideoTaskViewer = openVideoTaskViewer;
 function closeVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    const restored = restoreVideoFeedFromModal('video-task-viewer');
-    if (!restored) {
-        modal.style.display = 'none';
-    }
+    modal.style.display = 'none';
     document.body.classList.remove('modal-open');
     document.body.classList.remove('video-manager-open');
     closeVideoManagerMenu();
@@ -11882,8 +11935,11 @@ async function hydrateVideoEngagement(videoId) {
     return getVideoEngagementStatus(videoId);
 }
 
-function openVideoFromFeed(videoId) {
+function openVideoFromFeed(videoId, videoData) {
     if (!videoId) return;
+    if (videoData && window.Nexera?.ensureVideoInCache) {
+        window.Nexera.ensureVideoInCache(videoData);
+    }
     pendingVideoOpenId = videoId;
     window.navigateTo('videos');
 }
@@ -11906,7 +11962,7 @@ function buildVideoCard(video) {
         },
         onOpen: function () {
             if (currentViewId === 'feed') {
-                openVideoFromFeed(video.id);
+                openVideoFromFeed(video.id, video);
                 return;
             }
             window.openVideoDetail(video.id);
@@ -11957,13 +12013,13 @@ function renderVideoFeed(videos = []) {
     }
 
     videos.forEach(function (video) {
-        feed.appendChild(buildVideoCard(video));
+        const card = buildVideoCard(video);
+        const animateIn = shouldAnimateItem(`video:${video.id}`);
+        if (animateIn) card.classList.add('animate-in');
+        feed.appendChild(card);
     });
 
-    const sentinel = document.createElement('div');
-    sentinel.id = 'video-feed-sentinel';
-    sentinel.style.height = '1px';
-    feed.appendChild(sentinel);
+    insertScrollSentinel(feed, 'video-feed-sentinel', 0, { placeAfter: true });
     ensureVideoScrollObserver();
 }
 
@@ -11979,7 +12035,7 @@ function ensureVideoScrollObserver() {
                 loadMoreVideos();
             }
         });
-    }, { rootMargin: '200px' });
+    }, { rootMargin: FEED_PREFETCH_ROOT_MARGIN });
     videosScrollObserver.observe(sentinel);
 }
 
@@ -12106,7 +12162,7 @@ function restoreVideoFeedFromModal(modalId) {
 // UI scaffolding: rebuild video viewer layout to enable three-column layout and controls.
 function initVideoViewerLayout() {
     const modal = document.getElementById('video-detail-modal');
-    if (!modal || modal.dataset.viewerScaffold) return;
+    if (!modal || modal.dataset.viewerScaffold || !USE_CUSTOM_VIDEO_VIEWER) return;
     modal.dataset.viewerScaffold = 'true';
     modal.innerHTML = '';
 
@@ -12129,6 +12185,29 @@ function updateVideoControlPlayState(player, button) {
     if (!player || !button) return;
     const icon = player.paused ? 'ph ph-play' : 'ph ph-pause';
     button.innerHTML = `<i class="${icon}"></i>`;
+}
+
+function updateVideoScrubVisuals(player, scrub) {
+    if (!player || !scrub) return;
+    const container = scrub.closest('.video-control-scrub');
+    if (!container) return;
+    const duration = Number(player.duration) || 0;
+    const current = Math.max(0, Number(player.currentTime) || 0);
+    let progress = 0;
+    let buffered = 0;
+    if (duration > 0) {
+        progress = Math.min(100, (current / duration) * 100);
+        if (player.buffered && player.buffered.length) {
+            try {
+                const end = player.buffered.end(player.buffered.length - 1);
+                buffered = Math.min(100, (end / duration) * 100);
+            } catch (error) {
+                buffered = 0;
+            }
+        }
+    }
+    container.style.setProperty('--video-progress', `${progress}%`);
+    container.style.setProperty('--video-buffer', `${buffered}%`);
 }
 
 function bindVideoViewerControls() {
@@ -12194,6 +12273,7 @@ function bindVideoViewerControls() {
     player.addEventListener('loadedmetadata', function () {
         scrub.max = Math.floor(player.duration || 0).toString() || '0';
         scrub.value = '0';
+        updateVideoScrubVisuals(player, scrub);
         showControls(true);
     });
     player.addEventListener('play', function () {
@@ -12209,10 +12289,21 @@ function bindVideoViewerControls() {
             scrub.max = Math.floor(player.duration || 0).toString() || '0';
         }
         scrub.value = Math.floor(player.currentTime || 0).toString();
+        updateVideoScrubVisuals(player, scrub);
+    });
+    player.addEventListener('progress', function () {
+        updateVideoScrubVisuals(player, scrub);
+    });
+    player.addEventListener('durationchange', function () {
+        if (player.duration) {
+            scrub.max = Math.floor(player.duration || 0).toString() || '0';
+        }
+        updateVideoScrubVisuals(player, scrub);
     });
     scrub.addEventListener('input', function () {
         if (!player.duration) return;
         player.currentTime = Number(scrub.value) || 0;
+        updateVideoScrubVisuals(player, scrub);
     });
     volumeBtn.addEventListener('click', function () {
         if (volumeGroup) {
@@ -12595,7 +12686,9 @@ window.openVideoDetail = async function (videoId) {
 
     captureVideoDetailReturnPath();
     initVideoViewerLayout();
-    bindVideoViewerControls();
+    if (USE_CUSTOM_VIDEO_VIEWER) {
+        bindVideoViewerControls();
+    }
     document.body.classList.add('video-viewer-open');
 
     const spinner = document.getElementById('video-player-spinner');
@@ -12635,6 +12728,8 @@ window.openVideoDetail = async function (videoId) {
     }
 
     if (player) {
+        player.preload = 'metadata';
+        player.setAttribute('preload', 'metadata');
         const videoSrc = video.videoURL || '';
         const currentSrc = player.currentSrc || player.src || '';
         const shouldReset = videoSrc && currentSrc !== videoSrc;
@@ -12775,10 +12870,7 @@ window.openVideoDetail = async function (videoId) {
     await hydrateVideoEngagement(video.id);
     updateVideoModalButtons(video.id);
 
-    const mounted = mountVideoModalInFeed('video-detail-modal');
-    if (!mounted) {
-        modal.style.display = 'flex';
-    }
+    modal.style.display = 'flex';
     document.body.classList.add('modal-open');
 };
 
@@ -13263,9 +13355,9 @@ function renderLiveFilterRow() {
                 id: 'live-category-dropdown',
                 className: 'discover-dropdown',
                 forId: 'live-category-dropdown-select',
-                label: 'Category:',
+                label: 'Topic:',
                 options: [
-                    { value: 'All', label: 'All Categories' },
+                    { value: 'All', label: 'All Topics' },
                     { value: 'STEM', label: 'STEM' },
                     { value: 'Gaming', label: 'Gaming' },
                     { value: 'Music', label: 'Music' },
@@ -14333,7 +14425,7 @@ function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/home' || path === '/' || path === '';
     document.body.classList.toggle('sidebar-home', isHome);
-    document.body.classList.toggle('sidebar-wide', isHome);
+    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(currentViewId || 'feed'));
     if (isHome) {
         mountFeedTypeToggleBar();
         renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
@@ -14363,15 +14455,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
-    startSplashFailsafeTimer();
     syncSidebarHomeState();
     updateTimeCapsule();
     initializeNexeraApp();
-    setTimeout(function () {
-        if (window.Nexera?.releaseSplash) {
-            window.Nexera.releaseSplash('domcontentloaded');
-        }
-    }, 1200);
     const initialHash = (window.location.hash || '').replace('#', '');
     if (initialHash === 'live-setup') { window.navigateTo('live-setup', false); }
 });
