@@ -1,6 +1,6 @@
 /**
  * UI Component: StoriesAndLiveBar
- * Placeholder stories/live list for the home sidebar until backend data is wired in.
+ * Ensures Stories/Live rows render above Trending on desktop with placeholders when empty.
  */
 const DEFAULT_STORIES = [
     { id: 'me', label: 'Your Story', isMe: true },
@@ -24,7 +24,8 @@ function getInitials(label = '') {
 
 function buildAvatarItem(user, { showLive = false } = {}) {
     const item = document.createElement('div');
-    item.className = 'stories-live-item';
+    const isPlaceholder = !!user?.isPlaceholder;
+    item.className = `stories-live-item${isPlaceholder ? ' is-placeholder' : ''}`;
 
     const avatar = document.createElement('div');
     avatar.className = `stories-live-avatar${user.isMe ? ' is-me' : ''}`;
@@ -76,8 +77,18 @@ function buildRow(title, items, options = {}) {
 
 export function renderStoriesAndLiveBar(container, options = {}) {
     if (!container) return;
-    const stories = Array.isArray(options.stories) ? options.stories : DEFAULT_STORIES;
-    const liveUsers = Array.isArray(options.liveUsers) ? options.liveUsers : DEFAULT_LIVE_USERS;
+    const incomingStories = Array.isArray(options.stories) ? options.stories : DEFAULT_STORIES;
+    const incomingLive = Array.isArray(options.liveUsers) ? options.liveUsers : DEFAULT_LIVE_USERS;
+    const meItem = { id: 'me', label: 'Your Story', isMe: true };
+    const stories = [meItem].concat(
+        incomingStories.filter(function (item) { return item && item.id !== 'me'; })
+    );
+    if (stories.length <= 1) {
+        stories.push({ id: 'stories-placeholder', label: 'No stories yet', isPlaceholder: true });
+    }
+    const liveUsers = incomingLive.length
+        ? incomingLive
+        : [{ id: 'live-placeholder', label: 'No live streams', isPlaceholder: true }];
 
     container.innerHTML = '';
     const wrapper = document.createElement('section');
