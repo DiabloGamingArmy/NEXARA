@@ -4479,6 +4479,29 @@ body.light-mode .category-pill.active .topic-verified-icon {
     }
 }
 
+.video-feed.video-watch-open {
+    display: block;
+    padding: 0;
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-feed {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
+}
+
 .video-feed.video-feed-modal-open {
     display: block;
     padding: 1rem 0 2rem;
@@ -4689,6 +4712,41 @@ body.video-create-open #videos-topbar {
 #view-videos {
     position: relative;
     min-height: 100%;
+}
+
+body.video-viewer-inline-open .main-feed {
+    overflow: hidden;
+}
+
+body.video-viewer-inline-open .nexera-alert-banner {
+    display: none;
+}
+
+.video-viewer-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    height: 100%;
+    padding: 1rem;
+    background: var(--bg-body);
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    overflow-y: auto;
+}
+
+.video-viewer-inline .video-modal-close {
+    position: sticky;
+    top: 0;
+    align-self: flex-end;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 12px;
+}
+
+.video-modal-inline {
+    width: 100%;
+    height: 100%;
 }
 
 @media (max-width: 1200px) {
@@ -5525,6 +5583,9 @@ body.video-create-open #videos-topbar {
     display: flex;
     flex-direction: column;
     gap: 10px;
+    max-height: calc(100vh - 240px);
+    overflow-y: auto;
+    padding-right: 4px;
 }
 
 .video-up-next-item {

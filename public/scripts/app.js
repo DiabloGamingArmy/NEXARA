@@ -44,6 +44,7 @@ window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
 const USE_CUSTOM_VIDEO_VIEWER = true;
 const USE_INLINE_VIDEO_WATCH = false;
+const USE_INLINE_VIDEO_VIEWER = true;
 const VIDEO_DEBUG = window.__NEXERA_DEBUG_VIDEO === true || window.__NEXERA_DEBUG_VIDEOS === true;
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
@@ -92,6 +93,7 @@ let videoModalResumeTime = null;
 let pendingVideoOpenId = null;
 let profileReturnContext = null;
 let lastVideoTrigger = null;
+let videoViewerInlineState = null;
 let messageTypingTimer = null;
 let conversationListFilter = 'all';
 let conversationListSearchTerm = '';
@@ -12138,6 +12140,49 @@ let videoFeedRestoreState = null;
 let videoWatchRestoreState = null;
 const videoFeedModalHomes = new Map();
 
+function mountInlineVideoViewer() {
+    const viewVideos = document.getElementById('view-videos');
+    if (!viewVideos) return false;
+    if (!videoViewerInlineState) {
+        videoViewerInlineState = {
+            nodes: Array.from(viewVideos.childNodes),
+            scrollTop: viewVideos.scrollTop || 0
+        };
+    }
+    viewVideos.innerHTML = '';
+    const container = document.createElement('div');
+    container.id = 'video-detail-modal';
+    container.className = 'video-modal-inline';
+    const viewerShell = document.createElement('div');
+    viewerShell.className = 'video-viewer-inline';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'video-modal-close';
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close video details');
+    closeBtn.innerHTML = '&times;';
+    closeBtn.onclick = function () { window.closeVideoDetail(); };
+    viewerShell.appendChild(closeBtn);
+    viewerShell.appendChild(buildVideoViewerLayout());
+    container.appendChild(viewerShell);
+    viewVideos.appendChild(container);
+    document.body.classList.add('video-viewer-inline-open');
+    return true;
+}
+
+function restoreInlineVideoViewer() {
+    const viewVideos = document.getElementById('view-videos');
+    if (!viewVideos || !videoViewerInlineState) return false;
+    viewVideos.innerHTML = '';
+    videoViewerInlineState.nodes.forEach(function (node) {
+        viewVideos.appendChild(node);
+    });
+    viewVideos.scrollTop = videoViewerInlineState.scrollTop || 0;
+    document.body.classList.remove('video-viewer-inline-open');
+    videoViewerInlineState = null;
+    initVideoFeed({ force: true });
+    return true;
+}
+
 function mountVideoModalInFeed(modalId) {
     const feed = document.getElementById('video-feed');
     const modal = document.getElementById(modalId);
@@ -12644,9 +12689,21 @@ window.toggleVideoTheaterMode = function () {
 function renderVideoUpNextList(currentVideoId) {
     const list = document.getElementById('video-up-next-list');
     if (!list) return;
-    list.innerHTML = '';
-    const suggestions = videosCache.filter(function (video) { return video.id !== currentVideoId; }).slice(0, 6);
-    if (!suggestions.length) {
+    const options = arguments.length > 1 && typeof arguments[1] === 'object' ? arguments[1] : {};
+    const limit = Number(options.limit) || 10;
+    const append = options.append === true;
+    if (!append) {
+        list.innerHTML = '';
+        list.dataset.videoId = currentVideoId || '';
+        list.dataset.ids = '[]';
+        list.dataset.offset = '0';
+        list.setAttribute('aria-label', 'Up next recommendations');
+    }
+    const storedIds = new Set(JSON.parse(list.dataset.ids || '[]'));
+    const suggestions = videosCache
+        .filter(function (video) { return video.id !== currentVideoId && !storedIds.has(video.id); })
+        .slice(0, limit);
+    if (!suggestions.length && !append) {
         list.innerHTML = '<div class="empty-state">No recommendations yet.</div>';
         return;
     }
@@ -12664,6 +12721,21 @@ function renderVideoUpNextList(currentVideoId) {
             </div>
         `;
         list.appendChild(item);
+        storedIds.add(video.id);
+    });
+    list.dataset.ids = JSON.stringify(Array.from(storedIds));
+}
+
+function bindUpNextLazyLoad(currentVideoId) {
+    const list = document.getElementById('video-up-next-list');
+    if (!list || list.dataset.scrollBound === 'true') return;
+    list.dataset.scrollBound = 'true';
+    list.addEventListener('scroll', function () {
+        if (list.dataset.loading === 'true') return;
+        if (list.scrollTop + list.clientHeight < list.scrollHeight - 12) return;
+        list.dataset.loading = 'true';
+        renderVideoUpNextList(currentVideoId, { limit: 6, append: true });
+        list.dataset.loading = 'false';
     });
 }
 
@@ -12794,6 +12866,11 @@ const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = function () {
     if (USE_INLINE_VIDEO_WATCH) {
         restoreInlineVideoWatch();
+        return;
+    }
+    if (USE_INLINE_VIDEO_VIEWER && restoreInlineVideoViewer()) {
+        clearVideoDetailRoute();
+        clearVideoDetailState({ updateRoute: false });
         return;
     }
     clearVideoDetailState({ updateRoute: true });
@@ -12992,8 +13069,7 @@ function renderProfileLinks(links = []) {
 }
 
 window.openVideoDetail = async function (videoId) {
-    const modal = document.getElementById('video-detail-modal');
-    if (!modal) return;
+    let modal = document.getElementById('video-detail-modal');
     const video = getVideoById(videoId);
     if (!video) return;
 
@@ -13001,12 +13077,19 @@ window.openVideoDetail = async function (videoId) {
         await openInlineVideoWatch(video);
         return;
     }
+    if (USE_INLINE_VIDEO_VIEWER) {
+        mountInlineVideoViewer();
+    }
+    modal = document.getElementById('video-detail-modal');
+    if (!modal) return;
 
     // Viewer lifecycle: store focus + bind controls on open for custom viewer.
     lastVideoTrigger = document.activeElement;
     debugVideo('open', { videoId });
     captureVideoDetailReturnPath();
-    initVideoViewerLayout();
+    if (!USE_INLINE_VIDEO_VIEWER) {
+        initVideoViewerLayout();
+    }
     if (USE_CUSTOM_VIDEO_VIEWER) {
         bindVideoViewerControls();
     }
@@ -13032,7 +13115,8 @@ window.openVideoDetail = async function (videoId) {
 
     modal.dataset.videoId = video.id;
     ensureVideoStats(video);
-    renderVideoUpNextList(video.id);
+    renderVideoUpNextList(video.id, { limit: 10 });
+    bindUpNextLazyLoad(video.id);
     renderVideoCommentsPlaceholder(video.id);
 
     if (miniPlayerState && miniPlayerState.videoId !== video.id) {
@@ -13203,8 +13287,10 @@ window.openVideoDetail = async function (videoId) {
     await hydrateVideoEngagement(video.id);
     updateVideoModalButtons(video.id);
 
-    modal.style.display = 'flex';
-    document.body.classList.add('modal-open');
+    if (modal && !USE_INLINE_VIDEO_VIEWER) {
+        modal.style.display = 'flex';
+        document.body.classList.add('modal-open');
+    }
 };
 
 document.addEventListener('keydown', function (event) {
