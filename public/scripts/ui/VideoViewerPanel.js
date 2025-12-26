@@ -8,28 +8,41 @@ export function buildVideoViewerLayout() {
     wrapper.innerHTML = `
         <div class="video-viewer-main">
             <div class="video-viewer-player video-modal-player">
-                <video id="video-modal-player" playsinline></video>
-                <div class="video-control-bar" role="group" aria-label="Video controls">
-                    <button id="video-control-play" class="icon-pill" aria-label="Play or pause">
-                        <i class="ph ph-play"></i>
-                    </button>
-                    <input id="video-control-scrub" type="range" min="0" max="100" value="0" aria-label="Seek bar">
-                    <button id="video-control-volume" class="icon-pill" aria-label="Mute or unmute">
-                        <i class="ph ph-speaker-high"></i>
-                    </button>
-                    <input id="video-control-volume-range" type="range" min="0" max="100" value="100" aria-label="Volume">
-                    <button id="video-control-captions" class="icon-pill" aria-label="Captions (coming soon)" disabled>
-                        <i class="ph ph-closed-captioning"></i>
-                    </button>
-                    <button id="video-control-settings" class="icon-pill" aria-label="Settings (coming soon)" disabled>
-                        <i class="ph ph-gear"></i>
-                    </button>
-                    <button id="video-control-theater" class="icon-pill" aria-label="Toggle theater mode">
-                        <i class="ph ph-rectangle"></i>
-                    </button>
-                    <button id="video-control-fullscreen" class="icon-pill" aria-label="Fullscreen (theater)">
-                        <i class="ph ph-arrows-out"></i>
-                    </button>
+                <div class="video-player-frame" id="video-player-frame">
+                    <video id="video-modal-player" playsinline></video>
+                    <div class="video-player-spinner" id="video-player-spinner" aria-live="polite">
+                        <span class="splash-spinner" aria-hidden="true"></span>
+                    </div>
+                    <div class="video-control-overlay" id="video-control-overlay" role="group" aria-label="Video controls">
+                        <div class="video-control-scrub">
+                            <input id="video-control-scrub" type="range" min="0" max="100" value="0" aria-label="Seek bar">
+                        </div>
+                        <div class="video-control-actions">
+                            <button id="video-control-play" class="icon-pill" aria-label="Play or pause">
+                                <i class="ph ph-play"></i>
+                            </button>
+                            <div class="video-volume-group" id="video-control-volume-group">
+                                <button id="video-control-volume" class="icon-pill" aria-label="Mute or unmute">
+                                    <i class="ph ph-speaker-high"></i>
+                                </button>
+                                <div class="video-volume-popover" role="group" aria-label="Volume">
+                                    <input id="video-control-volume-range" type="range" min="0" max="100" value="100" aria-label="Volume">
+                                </div>
+                            </div>
+                            <button id="video-control-captions" class="icon-pill" aria-label="Captions (coming soon)" disabled>
+                                <i class="ph ph-closed-captioning"></i>
+                            </button>
+                            <button id="video-control-settings" class="icon-pill" aria-label="Settings (coming soon)" disabled>
+                                <i class="ph ph-gear"></i>
+                            </button>
+                            <button id="video-control-theater" class="icon-pill" aria-label="Toggle theater mode">
+                                <i class="ph ph-rectangle"></i>
+                            </button>
+                            <button id="video-control-fullscreen" class="icon-pill" aria-label="Fullscreen (theater)">
+                                <i class="ph ph-arrows-out"></i>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="video-viewer-meta">
