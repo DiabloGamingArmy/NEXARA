@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- UI-only: sidebar scrollbars, inbox content filters, video modal mounting, profile cover UI. -->
 <html lang="en">
 
 <head>
@@ -638,7 +639,7 @@
         </nav>
 
 
-        <main class="main-feed">
+        <main class="main-feed no-scrollbar">
             <div id="view-feed" class="view-section">
                 <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
                     style="display: none;" onclick="window.scrollCategoryHeader(-1)">
@@ -1558,7 +1559,7 @@
 
     </main>
 
-    <aside class="sidebar-right glass-panel">
+    <aside class="sidebar-right glass-panel no-scrollbar">
         <div class="right-sidebar-header">
             <div class="feed-type-toggle-bar" id="feed-type-toggle-bar"></div>
         </div>

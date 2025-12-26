@@ -1,3 +1,4 @@
+/* UI-only: scrollbar hiding, inbox content toggles, video modal mounting, profile cover support. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
 
 :root {
@@ -457,6 +458,15 @@ body.has-desktop-app-bar {
 
 .sidebar-right::-webkit-scrollbar {
     display: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
 }
 
 .right-sidebar-header {
@@ -2030,7 +2040,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .trend-box.trending-topics {
-    height: 260px;
+    height: 300px;
     display: flex;
     flex-direction: column;
 }
@@ -2056,6 +2066,12 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .trend-list.is-scrollable {
     overflow-y: auto;
     padding-right: 6px;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.trend-list.is-scrollable::-webkit-scrollbar {
+    display: none;
 }
 
 .trend-load-more {
@@ -3104,6 +3120,37 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-bottom: 1px solid var(--border);
     margin: 12px;
     flex-wrap: wrap;
+}
+
+.inbox-content-toggles {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 0 0 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+}
+
+.inbox-content-toggle {
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.inbox-content-toggle.active {
+    border-color: var(--primary);
+    color: #000;
+    background: var(--primary);
+}
+
+.inbox-content-section {
+    padding: 0.25rem 0 1rem;
 }
 
 .inbox-content-toggles {

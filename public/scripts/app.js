@@ -1,3 +1,4 @@
+// UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
@@ -6615,7 +6616,18 @@ function applyProfileCover(headerEl, profile = {}, isSelfView = false) {
 
 window.handleProfileCoverAction = function () {
     // TODO: Hook cover uploads into profile settings once backend is wired.
+    const input = document.getElementById('profile-cover-input');
+    if (input) {
+        input.click();
+        return;
+    }
     toast('Cover updates coming soon.', 'info');
+};
+
+window.handleProfileCoverInput = function (event) {
+    if (!event?.target?.files?.length) return;
+    // UI-only: file selection placeholder until backend wiring.
+    toast('Cover selected (save coming soon).', 'info');
 };
 
 function renderPublicProfile(uid, profileData = userCache[uid]) {
@@ -6653,6 +6665,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             <button class="profile-cover-action" type="button" onclick="window.handleProfileCoverAction()" style="display:none;">
                 <i class="ph ph-image"></i> Add cover
             </button>
+            <input id="profile-cover-input" type="file" accept="image/*" style="display:none;" onchange="window.handleProfileCoverInput(event)" />
             <div class="profile-header-content">
                 ${avatarHtml}
                 <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
@@ -6709,6 +6722,7 @@ function renderProfile() {
             <button class="profile-cover-action" type="button" onclick="window.handleProfileCoverAction()" style="display:none;">
                 <i class="ph ph-image"></i> Add cover
             </button>
+            <input id="profile-cover-input" type="file" accept="image/*" style="display:none;" onchange="window.handleProfileCoverInput(event)" />
             <div class="profile-header-content">
                 ${avatarHtml}
                 <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
