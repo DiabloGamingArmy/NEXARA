@@ -43,6 +43,7 @@ const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
 const USE_CUSTOM_VIDEO_VIEWER = false;
+const USE_INLINE_VIDEO_WATCH = true;
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
@@ -12097,6 +12098,7 @@ function getVideoModalPlayerContainer() {
 }
 
 let videoFeedRestoreState = null;
+let videoWatchRestoreState = null;
 const videoFeedModalHomes = new Map();
 
 function mountVideoModalInFeed(modalId) {
@@ -12179,6 +12181,139 @@ function initVideoViewerLayout() {
     shell.appendChild(closeBtn);
     shell.appendChild(buildVideoViewerLayout());
     modal.appendChild(shell);
+}
+
+function getInlineWatchSuggestions(videoId, limit = 8) {
+    return videosCache.filter(function (video) { return video.id !== videoId; }).slice(0, limit);
+}
+
+function buildInlineWatchPage(video, author, suggestions) {
+    const videoTitle = escapeHtml(video.title || video.caption || 'Untitled video');
+    const videoDescription = escapeHtml(video.description || '');
+    const channelName = escapeHtml(author?.displayName || author?.name || author?.username || 'Nexera Creator');
+    const channelHandle = escapeHtml(author?.username ? `@${author.username}` : 'Nexera');
+    const views = formatCompactNumber(getVideoViewCount(video));
+    const updated = formatVideoTimestamp(video.createdAt) || 'Today';
+    const suggestedHtml = suggestions.map(function (entry) {
+        const thumb = escapeHtml(resolveVideoThumbnail(entry));
+        const title = escapeHtml(entry.title || entry.caption || 'Untitled video');
+        const channel = escapeHtml((getCachedUser(entry.ownerId)?.displayName || getCachedUser(entry.ownerId)?.name || getCachedUser(entry.ownerId)?.username || 'Nexera Creator'));
+        const stats = `${formatCompactNumber(getVideoViewCount(entry))} views • ${formatVideoTimestamp(entry.createdAt)}`;
+        return `
+            <div class="watch-suggestion">
+                <div class="watch-suggestion-thumb" style="background-image:url('${thumb}')">
+                    <span class="watch-suggestion-duration">${formatVideoDuration(entry)}</span>
+                </div>
+                <div class="watch-suggestion-meta">
+                    <div class="watch-suggestion-title">${title}</div>
+                    <div class="watch-suggestion-channel">${channel}</div>
+                    <div class="watch-suggestion-stats">${stats}</div>
+                </div>
+                <button class="watch-suggestion-menu" aria-label="More options"><i class="ph ph-dots-three-vertical"></i></button>
+            </div>
+        `;
+    }).join('');
+
+    return `
+        <div class="watch-page">
+            <div class="watch-grid">
+                <section class="watch-primary">
+                    <div class="watch-player">
+                        <video id="watch-player" playsinline preload="metadata" src="${escapeHtml(video.videoURL || '')}"></video>
+                        <div class="watch-player-overlay">
+                            <div class="watch-timeline"></div>
+                            <div class="watch-controls">
+                                <button class="watch-control-btn"><i class="ph ph-play"></i></button>
+                                <button class="watch-control-btn"><i class="ph ph-speaker-high"></i></button>
+                                <div class="watch-control-spacer"></div>
+                                <button class="watch-control-btn"><i class="ph ph-gear"></i></button>
+                                <button class="watch-control-btn"><i class="ph ph-arrows-out"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="watch-title">${videoTitle}</div>
+                    <div class="watch-channel-row">
+                        <div class="watch-channel-info">
+                            <div class="watch-channel-avatar"></div>
+                            <div>
+                                <div class="watch-channel-name">${channelName}</div>
+                                <div class="watch-channel-handle">${channelHandle}</div>
+                            </div>
+                            <button class="watch-join-btn">Join</button>
+                        </div>
+                        <div class="watch-actions">
+                            <button class="watch-pill"><i class="ph ph-thumbs-up"></i> Like</button>
+                            <button class="watch-pill"><i class="ph ph-thumbs-down"></i></button>
+                            <button class="watch-pill"><i class="ph ph-share-network"></i> Share</button>
+                            <button class="watch-pill"><i class="ph ph-bookmark-simple"></i> Save</button>
+                            <button class="watch-pill"><i class="ph ph-currency-dollar"></i> Thanks</button>
+                        </div>
+                    </div>
+                    <div class="watch-description">
+                        <div class="watch-description-meta">${views} views • ${updated}</div>
+                        <div class="watch-description-text">${videoDescription || 'No description yet.'}</div>
+                        <span class="watch-description-more">...more</span>
+                    </div>
+                    <div class="watch-comments">
+                        <div class="watch-comments-header">
+                            <span>5,090 Comments</span>
+                            <button class="watch-pill small"><i class="ph ph-sort-ascending"></i> Sort by</button>
+                        </div>
+                        <div class="watch-comment-compose">
+                            <div class="watch-comment-avatar"></div>
+                            <input type="text" placeholder="Add a comment..." />
+                        </div>
+                        <div class="watch-comment">
+                            <div class="watch-comment-avatar"></div>
+                            <div>
+                                <div class="watch-comment-meta">Nexera Viewer • 1 day ago</div>
+                                <div class="watch-comment-text">Great breakdown—thanks for sharing!</div>
+                                <div class="watch-comment-actions"><span><i class="ph ph-thumbs-up"></i> 24</span><span>Reply</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <aside class="watch-rail">
+                    <div class="watch-rail-header">Up next</div>
+                    ${suggestedHtml}
+                </aside>
+            </div>
+        </div>
+    `;
+}
+
+async function openInlineVideoWatch(video) {
+    const feed = document.getElementById('video-feed');
+    if (!feed) return;
+    if (!videoWatchRestoreState) {
+        videoWatchRestoreState = {
+            nodes: Array.from(feed.childNodes),
+            scrollTop: feed.scrollTop,
+            sidebarCollapsed
+        };
+    }
+    applyDesktopSidebarState(true, false);
+    feed.innerHTML = '';
+    feed.classList.add('video-watch-open');
+    document.body.classList.add('video-watch-open');
+
+    const author = await resolveUserProfile(video.ownerId || '');
+    const suggestions = getInlineWatchSuggestions(video.id);
+    feed.innerHTML = buildInlineWatchPage(video, author, suggestions);
+}
+
+function restoreInlineVideoWatch() {
+    const feed = document.getElementById('video-feed');
+    if (!feed || !videoWatchRestoreState) return;
+    feed.innerHTML = '';
+    videoWatchRestoreState.nodes.forEach(function (node) {
+        feed.appendChild(node);
+    });
+    feed.scrollTop = videoWatchRestoreState.scrollTop || 0;
+    applyDesktopSidebarState(videoWatchRestoreState.sidebarCollapsed, false);
+    feed.classList.remove('video-watch-open');
+    document.body.classList.remove('video-watch-open');
+    videoWatchRestoreState = null;
 }
 
 function updateVideoControlPlayState(player, button) {
@@ -12483,6 +12618,10 @@ function closeVideoDetailModalHandler(options = {}) {
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
 window.closeVideoDetail = function () {
+    if (USE_INLINE_VIDEO_WATCH) {
+        restoreInlineVideoWatch();
+        return;
+    }
     clearVideoDetailState({ updateRoute: true });
 };
 
@@ -12683,6 +12822,11 @@ window.openVideoDetail = async function (videoId) {
     if (!modal) return;
     const video = getVideoById(videoId);
     if (!video) return;
+
+    if (USE_INLINE_VIDEO_WATCH) {
+        await openInlineVideoWatch(video);
+        return;
+    }
 
     captureVideoDetailReturnPath();
     initVideoViewerLayout();
