@@ -9,38 +9,69 @@ export function buildVideoViewerLayout() {
         <div class="video-viewer-main">
             <div class="video-viewer-player video-modal-player">
                 <div class="video-player-frame" id="video-player-frame">
-                    <video id="video-modal-player" playsinline></video>
+                    <video id="video-modal-player" playsinline preload="metadata"></video>
                     <div class="video-player-spinner" id="video-player-spinner" aria-live="polite">
                         <span class="splash-spinner" aria-hidden="true"></span>
                     </div>
                     <div class="video-control-overlay" id="video-control-overlay" role="group" aria-label="Video controls">
                         <div class="video-control-scrub">
+                            <div class="video-control-scrub-track" aria-hidden="true">
+                                <div class="video-control-scrub-buffer"></div>
+                                <div class="video-control-scrub-progress"></div>
+                            </div>
                             <input id="video-control-scrub" type="range" min="0" max="100" value="0" aria-label="Seek bar">
                         </div>
                         <div class="video-control-actions">
-                            <button id="video-control-play" class="icon-pill" aria-label="Play or pause">
-                                <i class="ph ph-play"></i>
-                            </button>
-                            <div class="video-volume-group" id="video-control-volume-group">
-                                <button id="video-control-volume" class="icon-pill" aria-label="Mute or unmute">
-                                    <i class="ph ph-speaker-high"></i>
+                            <div class="video-control-actions-left">
+                                <button id="video-control-play" class="icon-pill" aria-label="Play or pause">
+                                    <i class="ph ph-play"></i>
                                 </button>
-                                <div class="video-volume-popover" role="group" aria-label="Volume">
-                                    <input id="video-control-volume-range" type="range" min="0" max="100" value="100" aria-label="Volume">
+                                <div class="video-volume-group" id="video-control-volume-group">
+                                    <button id="video-control-volume" class="icon-pill" aria-label="Mute or unmute">
+                                        <i class="ph ph-speaker-high"></i>
+                                    </button>
+                                    <div class="video-volume-popover" role="group" aria-label="Volume">
+                                        <input id="video-control-volume-range" type="range" min="0" max="100" value="100" aria-label="Volume">
+                                    </div>
                                 </div>
                             </div>
-                            <button id="video-control-captions" class="icon-pill" aria-label="Captions (coming soon)" disabled>
-                                <i class="ph ph-closed-captioning"></i>
-                            </button>
-                            <button id="video-control-settings" class="icon-pill" aria-label="Settings (coming soon)" disabled>
-                                <i class="ph ph-gear"></i>
-                            </button>
-                            <button id="video-control-theater" class="icon-pill" aria-label="Toggle theater mode">
-                                <i class="ph ph-rectangle"></i>
-                            </button>
-                            <button id="video-control-fullscreen" class="icon-pill" aria-label="Fullscreen (theater)">
-                                <i class="ph ph-arrows-out"></i>
-                            </button>
+                            <div class="video-control-actions-right">
+                                <div class="video-control-popover-group" data-popover="captions">
+                                    <button id="video-control-captions" class="icon-pill" aria-label="Captions">
+                                        <i class="ph ph-closed-captioning"></i>
+                                    </button>
+                                    <div class="video-control-popover video-control-captions-popover" role="dialog" aria-label="Captions">
+                                        <div class="video-control-popover-title">Subtitles</div>
+                                        <button class="video-control-popover-item" type="button">No subtitles available</button>
+                                    </div>
+                                </div>
+                                <div class="video-control-popover-group" data-popover="settings">
+                                    <button id="video-control-settings" class="icon-pill" aria-label="Settings">
+                                        <i class="ph ph-gear"></i>
+                                    </button>
+                                    <div class="video-control-popover video-control-settings-popover" role="dialog" aria-label="Settings">
+                                        <div class="video-control-popover-title">Playback speed</div>
+                                        <div class="video-control-popover-list">
+                                            <button class="video-control-popover-item" type="button">0.5×</button>
+                                            <button class="video-control-popover-item" type="button">1×</button>
+                                            <button class="video-control-popover-item" type="button">1.5×</button>
+                                            <button class="video-control-popover-item" type="button">2×</button>
+                                        </div>
+                                        <div class="video-control-popover-title">Quality</div>
+                                        <div class="video-control-popover-list">
+                                            <button class="video-control-popover-item" type="button">480p</button>
+                                            <button class="video-control-popover-item" type="button">720p</button>
+                                            <button class="video-control-popover-item" type="button">1080p</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button id="video-control-theater" class="icon-pill" aria-label="Toggle theater mode">
+                                    <i class="ph ph-rectangle"></i>
+                                </button>
+                                <button id="video-control-fullscreen" class="icon-pill" aria-label="Fullscreen (theater)">
+                                    <i class="ph ph-arrows-out"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -94,6 +125,13 @@ export function buildVideoViewerLayout() {
             <div class="video-up-next-header">
                 <h3>Up Next</h3>
                 <button class="icon-pill" aria-label="Refresh up next" onclick="window.handleUiStubAction?.('video-upnext-refresh')"><i class="ph ph-arrow-clockwise"></i></button>
+            </div>
+            <div class="video-up-next-toggle">
+                <span>Autoplay next</span>
+                <label class="toggle-switch" aria-label="Autoplay next">
+                    <input id="video-up-next-autoplay" type="checkbox" checked>
+                    <span class="toggle-slider"></span>
+                </label>
             </div>
             <div id="video-up-next-list" class="video-up-next-list"></div>
         </aside>
