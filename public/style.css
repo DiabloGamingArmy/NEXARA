@@ -4372,6 +4372,28 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: none;
 }
 
+.video-viewer-open #videos-topbar .topbar-shell {
+    padding: 0 1rem;
+}
+
+.video-viewer-open #videos-topbar .topbar-heading {
+    display: none;
+}
+
+.video-viewer-open #videos-topbar .topbar-search-row {
+    justify-content: center;
+    margin-bottom: 0;
+}
+
+.video-viewer-open #videos-topbar .topbar-search-row input {
+    max-width: 560px;
+    width: 100%;
+}
+
+.video-viewer-open .video-modal {
+    padding-top: 0;
+}
+
 body.video-manager-open #videos-topbar,
 body.video-create-open #videos-topbar {
     display: none;
