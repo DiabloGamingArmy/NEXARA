@@ -4406,6 +4406,11 @@ body.video-create-open #videos-topbar {
     animation: fadeIn 0.4s forwards;
 }
 
+.video-card.animate-in {
+    opacity: 0;
+    animation: fadeIn 0.4s forwards;
+}
+
 .video-feed .video-card {
     margin-bottom: 0;
 }
