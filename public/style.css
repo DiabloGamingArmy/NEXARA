@@ -4323,9 +4323,68 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .video-feed {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 22px;
-    padding: 1rem 1rem 2rem;
+    grid-template-columns: repeat(auto-fill, minmax(var(--video-card-min, 240px), 1fr));
+    gap: clamp(14px, 2vw, 22px);
+    padding: clamp(0.75rem, 2vw, 1.25rem) clamp(0.75rem, 2vw, 1.25rem) 2rem;
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        --video-card-min: 220px;
+    }
+}
+
+@media (max-width: 980px) {
+    .video-feed {
+        --video-card-min: 200px;
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        --video-card-min: 170px;
+    }
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-feed {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
+}
+
+.video-feed.video-watch-open {
+    display: block;
+    padding: 0;
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-feed {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
 }
 
 .video-feed.video-watch-open {
@@ -4375,6 +4434,28 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .video-viewer-open #videos-topbar .topbar-controls {
     display: none;
+}
+
+.video-viewer-open #videos-topbar .topbar-shell {
+    padding: 0 1rem;
+}
+
+.video-viewer-open #videos-topbar .topbar-heading {
+    display: none;
+}
+
+.video-viewer-open #videos-topbar .topbar-search-row {
+    justify-content: center;
+    margin-bottom: 0;
+}
+
+.video-viewer-open #videos-topbar .topbar-search-row input {
+    max-width: 560px;
+    width: 100%;
+}
+
+.video-viewer-open .video-modal {
+    padding-top: 0;
 }
 
 body.video-manager-open #videos-topbar,
