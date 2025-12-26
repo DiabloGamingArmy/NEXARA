@@ -410,6 +410,58 @@
                         <div id="video-mention-suggestions" class="suggestion-row"></div>
                     </div>
                     <div id="video-mentions-list" class="mention-row"></div>
+                    <div class="video-advanced-settings">
+                        <div class="video-advanced-header">Advanced settings</div>
+                        <div class="video-advanced-toggle">
+                            <span>Monetizable</span>
+                            <label class="switch" aria-label="Toggle monetizable">
+                                <input type="checkbox" id="video-monetizable">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Downloadable</span>
+                            <label class="switch" aria-label="Toggle downloadable">
+                                <input type="checkbox" id="video-allow-download">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Embeddable</span>
+                            <label class="switch" aria-label="Toggle embeddable">
+                                <input type="checkbox" id="video-allow-embed">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Allow comments</span>
+                            <label class="switch" aria-label="Toggle comments">
+                                <input type="checkbox" id="video-allow-comments" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Notify followers</span>
+                            <label class="switch" aria-label="Toggle notify followers">
+                                <input type="checkbox" id="video-notify-followers" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Age restricted</span>
+                            <label class="switch" aria-label="Toggle age restricted">
+                                <input type="checkbox" id="video-age-restricted">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Sensitive content</span>
+                            <label class="switch" aria-label="Toggle sensitive content">
+                                <input type="checkbox" id="video-sensitive-content">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
                     <label class="settings-label" for="video-visibility">Visibility</label>
                     <select id="video-visibility" class="form-input">
                         <option value="public">Public</option>
@@ -1561,9 +1613,11 @@
 
     <aside class="sidebar-right glass-panel no-scrollbar">
         <div class="right-sidebar-header">
+            <div class="feed-type-toggle-header">Feed Filters</div>
             <div class="feed-type-toggle-bar" id="feed-type-toggle-bar"></div>
         </div>
         <div class="right-sidebar-content">
+        <div id="stories-live-bar-slot" class="stories-live-bar-slot"></div>
         <div class="trend-box trending-topics">
             <div class="trend-title trend-header">
                 <span><i class="ph-fill ph-trend-up"></i> Trending</span>

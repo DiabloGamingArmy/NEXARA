@@ -141,6 +141,9 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     }
 
     const head = segments[0];
+    if (head === '404' || head === 'not-found') {
+      return { type: 'not-found', canonicalPath: '/404', route };
+    }
     if (head === 'videos' && segments[1] === 'video-manager') {
       return {
         type: 'video-manager',
@@ -223,7 +226,7 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
       return { type: 'entity', entityType: head, id: segments[1], route };
     }
 
-    return { type: 'not-found', route };
+    return { type: 'not-found', canonicalPath: '/404', route };
   }
 
   async function fetchEntity(entityType, id) {
@@ -309,6 +312,15 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     ensureNotFoundShell();
   }
 
+  function routeToNotFound(route) {
+    showNotFound();
+    if (route?.canonicalPath && route.route?.path !== route.canonicalPath) {
+      replaceStateSilently(route.canonicalPath);
+    } else if (route?.route?.path && route.route.path !== '/404') {
+      replaceStateSilently('/404');
+    }
+  }
+
   function hideNotFound() {
     const container = document.getElementById('nexera-not-found');
     if (container) container.remove();
@@ -324,10 +336,7 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
     hideNotFound();
 
     if (route.type === 'not-found') {
-      replaceStateSilently('/home');
-      if (window.Nexera?.navigateTo) {
-        window.Nexera.navigateTo({ view: 'feed' });
-      }
+      routeToNotFound(route);
       return;
     }
 
@@ -423,12 +432,12 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
 
     if (route.type === 'thread') {
       if (!route.threadId) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
       const thread = await fetchThread(route.threadId);
       if (thread.exists === false) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
       if (thread.exists === null) {
@@ -461,13 +470,13 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
       }
 
       if (!route.id) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
 
       const entity = await fetchEntity(route.entityType, route.id);
       if (entity.exists === false) {
-        showNotFound();
+        routeToNotFound(route);
         return;
       }
 

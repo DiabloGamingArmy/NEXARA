@@ -64,7 +64,7 @@ function buildRow(title, items, options = {}) {
     heading.textContent = title;
 
     const row = document.createElement('div');
-    row.className = 'stories-live-row';
+    row.className = 'stories-live-row no-scrollbar';
     items.forEach(function (item) {
         row.appendChild(buildAvatarItem(item, options));
     });
