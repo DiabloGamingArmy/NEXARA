@@ -19,6 +19,18 @@ service firebase.storage {
         && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
     }
 
+    match /chats/{cid}/messages/{mid}/{fileName} {
+      allow read, write: if request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    }
+
+    match /dm_media/{cid}/{fileName} {
+      allow read, write: if request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

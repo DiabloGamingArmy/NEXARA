@@ -1,3 +1,5 @@
+import { buildMessagesUrl, buildProfileUrl } from './routes.js';
+
 (() => {
   if (window.NexeraRouter?.initialized) return;
 
@@ -70,7 +72,7 @@
   }
 
   function buildUrlForVideo(videoId) {
-    return videoId ? `/video/${encodeURIComponent(videoId)}` : '/videos';
+    return videoId ? `/videos/${encodeURIComponent(videoId)}` : '/videos';
   }
 
   function buildUrlForVideoManager() {
@@ -90,24 +92,12 @@
   }
 
   function buildUrlForProfile(uidOrHandle, params = {}) {
-    const search = new URLSearchParams(params);
-    const suffix = search.toString();
-    if (params.handle && !uidOrHandle) {
-      return `/profile${suffix ? `?${suffix}` : ''}`;
-    }
-    if (uidOrHandle) {
-      return `/profile/${encodeURIComponent(uidOrHandle)}${suffix ? `?${suffix}` : ''}`;
-    }
-    return `/profile${suffix ? `?${suffix}` : ''}`;
+    const { handle, ...rest } = params || {};
+    return buildProfileUrl({ uid: uidOrHandle || null, handle: handle || null, params: rest });
   }
 
   function buildUrlForMessages(conversationId, params = {}) {
-    const search = new URLSearchParams(params);
-    const suffix = search.toString();
-    if (conversationId) {
-      return `/inbox/${encodeURIComponent(conversationId)}${suffix ? `?${suffix}` : ''}`;
-    }
-    return `/inbox${suffix ? `?${suffix}` : ''}`;
+    return buildMessagesUrl({ conversationId: conversationId || null, params });
   }
 
   function updateUrl(path, replace = false) {
@@ -165,6 +155,9 @@
         route
       };
     }
+    if (head === 'videos' && segments[1]) {
+      return { type: 'entity', entityType: 'video', id: segments[1], route };
+    }
     if (head === 'video' && segments[1] === 'video-manager') {
       return {
         type: 'video-manager',
@@ -192,14 +185,24 @@
       if (head === 'messages' && segments[1]) {
         return { type: 'messages', conversationId: segments[1], route };
       }
-      if (head === 'inbox' && segments[1]) {
-        return { type: 'messages', conversationId: segments[1], route };
+      if (head === 'inbox') {
+        const mode = segments[1] || 'messages';
+        const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
+        if (!allowed.includes(mode)) {
+          return { type: 'section', view: SECTION_ROUTES[head], route };
+        }
+        const conversationId = mode === 'messages' ? (segments[2] || null) : null;
+        return { type: 'inbox', mode, conversationId, route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
     }
 
     if (head === 'view-thread' && segments[1]) {
       return { type: 'thread', threadId: segments[1], route };
+    }
+
+    if (head === 'discover' && segments[1] === 'search' && segments[2]) {
+      return { type: 'discover-search', query: segments.slice(2).join('/'), route };
     }
 
     if (ENTITY_ROUTES[head]) {
@@ -336,6 +339,12 @@
           return;
         }
       }
+      if (route.view === 'feed' && (route.route?.path === '/' || route.route?.path === '')) {
+        replaceStateSilently('/home');
+      }
+      if (route.view === 'messages' && route.route?.path?.startsWith('/messages')) {
+        replaceStateSilently(buildUrlForMessages());
+      }
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: route.view });
       }
@@ -349,6 +358,22 @@
     if (route.type === 'messages') {
       if (window.Nexera?.navigateTo) {
         window.Nexera.navigateTo({ view: 'messages' });
+      }
+      if (typeof window.setInboxMode === 'function') {
+        window.setInboxMode('messages', { skipRouteUpdate: true });
+      }
+      if (route.conversationId && typeof window.openConversation === 'function') {
+        window.openConversation(route.conversationId);
+      }
+      return;
+    }
+
+    if (route.type === 'inbox') {
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'messages' });
+      }
+      if (typeof window.setInboxMode === 'function') {
+        window.setInboxMode(route.mode || 'messages', { skipRouteUpdate: true });
       }
       if (route.conversationId && typeof window.openConversation === 'function') {
         window.openConversation(route.conversationId);
@@ -365,6 +390,17 @@
       }
       if (typeof window.openVideoTaskViewer === 'function') {
         window.openVideoTaskViewer();
+      }
+      return;
+    }
+
+    if (route.type === 'discover-search') {
+      if (route.query) {
+        const next = `/discover?q=${encodeURIComponent(route.query)}`;
+        replaceStateSilently(next);
+      }
+      if (window.Nexera?.navigateTo) {
+        window.Nexera.navigateTo({ view: 'discover' });
       }
       return;
     }
@@ -447,6 +483,14 @@
     if (state.applying) return;
     state.applying = true;
     state.restoring = true;
+
+    if (window.Nexera?.authReady) {
+      await window.Nexera.authReady;
+    }
+
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+      replaceStateSilently('/home');
+    }
 
     const start = performance.now();
     const initialUrl = source === 'init' && window.__NEXERA_INITIAL_URL ? window.__NEXERA_INITIAL_URL : null;
