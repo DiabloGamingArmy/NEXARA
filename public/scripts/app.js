@@ -8,6 +8,7 @@ import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
 import { createUploadManager } from "/scripts/uploadManager.js";
 import { buildMessagesUrl } from "/assets/js/routes.js";
+import { buildChatMediaPath, CHAT_ALLOWED_MIME_PREFIXES, CHAT_IMAGE_MAX_BYTES, CHAT_VIDEO_MAX_BYTES, sanitizeFileName, validateChatAttachment } from "/assets/js/upload-utils.js";
 import { buildVideosHeader } from "/scripts/ui/VideosHeader.js";
 import { buildVideoViewerLayout } from "/scripts/ui/VideoViewerPanel.js";
 import { renderDiscoverHub } from "/scripts/ui/DiscoverHub.js";
@@ -731,6 +732,15 @@ let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
 let messageThreadCache = {};
 let pendingMessageAttachments = [];
+let messageUploadState = {
+    status: 'idle',
+    progress: 0,
+    error: null,
+    retries: 0,
+    conversationId: null,
+    messageId: null,
+    files: []
+};
 let conversationDetailsUnsubscribe = null;
 let lastDeliveredAtLocal = {};
 let lastReadAtLocal = {};
@@ -7223,20 +7233,13 @@ function getDirectConversationId(a, b) {
     return [a, b].sort().join('_');
 }
 
-const DM_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
-const DM_MEDIA_ALLOWED_PREFIXES = ['image/', 'video/'];
+const DM_MEDIA_ALLOWED_PREFIXES = CHAT_ALLOWED_MIME_PREFIXES;
 
 function validateDmAttachment(file) {
     if (!file) return { ok: false, message: 'Attachment missing.' };
     const type = file.type || '';
-    const isAllowed = DM_MEDIA_ALLOWED_PREFIXES.some(function (prefix) { return type.startsWith(prefix); });
-    if (!isAllowed) {
-        return { ok: false, message: 'Only image and video attachments are allowed.' };
-    }
-    if (file.size > DM_MEDIA_MAX_BYTES) {
-        return { ok: false, message: `Attachments must be under ${formatUploadFileSize(DM_MEDIA_MAX_BYTES)}.` };
-    }
-    return { ok: true };
+    const maxBytes = type.startsWith('video/') ? CHAT_VIDEO_MAX_BYTES : CHAT_IMAGE_MAX_BYTES;
+    return validateChatAttachment(file, { maxBytes, allowedPrefixes: DM_MEDIA_ALLOWED_PREFIXES });
 }
 
 function filterDmAttachments(files = []) {
@@ -8354,10 +8357,44 @@ function clearReplyContext() {
     if (compose) compose.classList.remove('editing');
 }
 
+function setMessageSendBusy(isBusy, label = '') {
+    const sendButton = document.querySelector('.message-compose .create-btn-sidebar');
+    if (!sendButton) return;
+    if (!sendButton.dataset.originalLabel) {
+        sendButton.dataset.originalLabel = sendButton.textContent || 'Send';
+    }
+    sendButton.disabled = isBusy;
+    sendButton.textContent = isBusy ? (label || 'Uploading…') : sendButton.dataset.originalLabel;
+}
+
+function setMessageUploadState(nextState = {}) {
+    messageUploadState = {
+        ...messageUploadState,
+        ...nextState
+    };
+    const isUploading = messageUploadState.status === 'uploading';
+    setMessageSendBusy(isUploading, isUploading ? `Uploading… ${messageUploadState.progress}%` : '');
+    renderAttachmentPreview();
+}
+
+function resetMessageUploadState() {
+    messageUploadState = {
+        status: 'idle',
+        progress: 0,
+        error: null,
+        retries: 0,
+        conversationId: null,
+        messageId: null,
+        files: []
+    };
+    setMessageSendBusy(false);
+}
+
 function clearAttachmentPreview() {
     const preview = document.getElementById('message-attachment-preview');
     pendingMessageAttachments = [];
     if (preview) { preview.innerHTML = ''; preview.style.display = 'none'; }
+    resetMessageUploadState();
 }
 
 function renderAttachmentPreview() {
@@ -8392,6 +8429,30 @@ function renderAttachmentPreview() {
         tile.appendChild(removeBtn);
         preview.appendChild(tile);
     });
+
+    if (messageUploadState.status === 'uploading') {
+        const statusRow = document.createElement('div');
+        statusRow.className = 'attachment-upload-status';
+        statusRow.style.display = 'flex';
+        statusRow.style.alignItems = 'center';
+        statusRow.style.gap = '0.5rem';
+        statusRow.innerHTML = `
+            <span class="inline-spinner" aria-hidden="true"></span>
+            <span style="font-size:0.85rem; color:var(--text-muted);">Uploading… ${messageUploadState.progress}%</span>
+        `;
+        preview.appendChild(statusRow);
+    } else if (messageUploadState.status === 'error') {
+        const statusRow = document.createElement('div');
+        statusRow.className = 'attachment-upload-status';
+        statusRow.style.display = 'flex';
+        statusRow.style.alignItems = 'center';
+        statusRow.style.gap = '0.5rem';
+        statusRow.innerHTML = `
+            <span style="font-size:0.85rem; color:var(--text-muted);">${escapeHtml(messageUploadState.error || 'Upload failed')}</span>
+            <button class="icon-pill" type="button" onclick="window.retryMessageAttachmentUpload()">Retry</button>
+        `;
+        preview.appendChild(statusRow);
+    }
 }
 
 function removePendingAttachment(index) {
@@ -8404,12 +8465,22 @@ function handleMessageFileChange(event) {
     const files = filterDmAttachments(Array.from(event?.target?.files || []));
     if (!files.length) return;
     pendingMessageAttachments = pendingMessageAttachments.concat(files);
+    if (messageUploadState.status === 'error') {
+        resetMessageUploadState();
+    }
     renderAttachmentPreview();
     if (event?.target) event.target.value = '';
 }
 
 window.handleMessageFileChange = handleMessageFileChange;
 window.removePendingAttachment = removePendingAttachment;
+
+window.retryMessageAttachmentUpload = async function () {
+    if (messageUploadState.status !== 'error') return;
+    const { conversationId, files } = messageUploadState;
+    if (!conversationId || !files.length) return;
+    await window.sendMessage(conversationId);
+};
 
 function renderReplyPreviewBar() {
     const bar = document.getElementById('message-reply-preview');
@@ -9625,6 +9696,7 @@ window.reportConversation = async function () {
 
 async function sendChatPayload(conversationId, payload = {}) {
     if (!conversationId || !requireAuth()) return;
+    const messageId = payload.messageId || null;
     const convo = await fetchConversation(conversationId) || conversationDetailsCache[conversationId];
     const participants = (convo && convo.participants) || [];
     const blocked = new Set(userProfile.blockedUserIds || []);
@@ -9663,25 +9735,54 @@ async function sendChatPayload(conversationId, payload = {}) {
         readBy: [currentUser.uid],
         reported: false,
         reportCount: 0,
-        systemPayload: payload.systemPayload || null
+        systemPayload: payload.systemPayload || null,
+        status: payload.status || 'sent'
     };
-
-    await addDoc(collection(db, 'conversations', conversationId, 'messages'), message);
+    if (messageId) {
+        await setDoc(doc(collection(db, 'conversations', conversationId, 'messages'), messageId), message, { merge: false });
+    } else {
+        await addDoc(collection(db, 'conversations', conversationId, 'messages'), message);
+    }
     await updateConversationUnread(conversationId, participants, payload);
 }
 
-async function uploadAttachments(conversationId, files = []) {
-    const uploads = [];
-    const filteredFiles = filterDmAttachments(files);
-    let idx = 0;
-    for (const file of filteredFiles) {
-        if (!file) continue;
-        const stamp = Date.now();
-        const storageRef = ref(storage, `dm_media/${conversationId}/${stamp}_${idx}_${file.name}`);
+function isRetryableUploadError(error) {
+    if (!error) return false;
+    if (isPermissionDeniedError(error)) return false;
+    if (error?.code === 'storage/unauthorized' || error?.code === 'storage/unauthenticated') return false;
+    if (error?.code === 'storage/invalid-argument') return false;
+    return true;
+}
+
+function waitFor(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function uploadAttachmentWithRetry(conversationId, messageId, file, index, onProgress) {
+    const maxRetries = 2;
+    let attempt = 0;
+    while (attempt <= maxRetries) {
         try {
-            const uploadTask = uploadBytesResumable(storageRef, file);
-            await uploadTask;
-            const storagePath = uploadTask.snapshot.ref.fullPath;
+            const stamp = Date.now();
+            const safeName = sanitizeFileName(file.name || `attachment_${index}`);
+            const storagePath = buildChatMediaPath({
+                conversationId,
+                messageId,
+                timestamp: stamp,
+                filename: safeName
+            });
+            const storageRef = ref(storage, storagePath);
+            const uploadTask = uploadBytesResumable(storageRef, file, {
+                contentType: file.type || 'application/octet-stream'
+            });
+            await new Promise(function (resolve, reject) {
+                uploadTask.on('state_changed', function (snapshot) {
+                    const progress = snapshot.totalBytes
+                        ? Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100)
+                        : 0;
+                    if (typeof onProgress === 'function') onProgress(progress);
+                }, reject, resolve);
+            });
             const urlResult = await guardFirebaseCall('storage:dm_upload_url', function () {
                 return getDownloadURL(uploadTask.snapshot.ref);
             }, {
@@ -9689,15 +9790,60 @@ async function uploadAttachments(conversationId, files = []) {
                     toast(getDmMediaFallbackText('denied'), 'error');
                 }
             });
-            uploads.push({
-                url: urlResult.ok ? urlResult.data : null,
-                storagePath,
+            if (!urlResult.ok || !urlResult.data) {
+                throw urlResult.error || new Error('Unable to fetch attachment URL.');
+            }
+            return {
+                url: urlResult.data,
+                storagePath: uploadTask.snapshot.ref.fullPath,
                 type: file.type || '',
-                name: file.name || 'Attachment'
+                name: file.name || 'Attachment',
+                size: file.size || 0
+            };
+        } catch (err) {
+            if (!isRetryableUploadError(err) || attempt === maxRetries) {
+                throw err;
+            }
+            const backoff = 500 * Math.pow(2, attempt);
+            await waitFor(backoff);
+            attempt += 1;
+        }
+    }
+    throw new Error('Upload retries exhausted.');
+}
+
+async function uploadAttachments(conversationId, files = [], options = {}) {
+    const uploads = [];
+    const filteredFiles = filterDmAttachments(files);
+    const messageId = options.messageId;
+    if (!filteredFiles.length) return uploads;
+    if (!messageId) throw new Error('Missing message ID for attachment upload.');
+    const progressByIndex = new Map();
+    const reportProgress = function () {
+        if (typeof options.onProgress !== 'function') return;
+        const values = Array.from(progressByIndex.values());
+        const total = values.length ? Math.round(values.reduce(function (sum, value) { return sum + value; }, 0) / values.length) : 0;
+        options.onProgress(total);
+    };
+    let idx = 0;
+    for (const file of filteredFiles) {
+        if (!file) continue;
+        try {
+            const uploadResult = await uploadAttachmentWithRetry(conversationId, messageId, file, idx, function (progress) {
+                progressByIndex.set(idx, progress);
+                reportProgress();
+            });
+            uploads.push({
+                url: uploadResult.url,
+                storagePath: uploadResult.storagePath,
+                type: uploadResult.type,
+                name: uploadResult.name,
+                size: uploadResult.size
             });
         } catch (err) {
-            console.warn('Attachment upload failed', err?.message || err);
-            toast('Attachment upload failed', 'error');
+            console.warn('Attachment upload failed', err?.code || err?.message || err);
+            toast('Attachment upload failed. Please try again.', 'error');
+            throw err;
         }
         idx += 1;
     }
@@ -9706,6 +9852,7 @@ async function uploadAttachments(conversationId, files = []) {
 
 window.sendMessage = async function (conversationId = activeConversationId) {
     if (!conversationId || !requireAuth()) return;
+    if (messageUploadState.status === 'uploading') return;
     const input = document.getElementById('message-input');
     const text = (input?.value || '').trim();
     const fileInput = document.getElementById('message-media');
@@ -9720,19 +9867,55 @@ window.sendMessage = async function (conversationId = activeConversationId) {
         editingMessageId = null;
     } else {
         let attachments = [];
+        const messageId = doc(collection(db, 'conversations', conversationId, 'messages')).id;
         if (combinedFiles.length) {
-            attachments = await uploadAttachments(conversationId, combinedFiles);
+            setMessageUploadState({
+                status: 'uploading',
+                progress: 0,
+                error: null,
+                conversationId,
+                messageId,
+                files: combinedFiles.slice()
+            });
+            try {
+                attachments = await uploadAttachments(conversationId, combinedFiles, {
+                    messageId,
+                    onProgress: function (progress) {
+                        setMessageUploadState({ progress });
+                    }
+                });
+            } catch (err) {
+                setMessageUploadState({
+                    status: 'error',
+                    error: 'Upload failed. Please retry.'
+                });
+                return;
+            }
         }
-        await sendChatPayload(conversationId, {
-            text,
-            attachments,
-            mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image')
-                ? (attachments[0].storagePath || attachments[0].url)
-                : null,
-            mediaPath: attachments.length === 1 ? (attachments[0].storagePath || null) : null,
-            mediaType: attachments.length === 1 ? attachments[0].type : null,
-            type: attachments.length ? (attachments.some(function (att) { return (att.type || '').includes('video'); }) ? 'video' : 'image') : 'text'
-        });
+        try {
+            await sendChatPayload(conversationId, {
+                text,
+                attachments,
+                mediaURL: attachments.length === 1 && (attachments[0].type || '').includes('image')
+                    ? (attachments[0].url || null)
+                    : null,
+                mediaPath: attachments.length === 1 ? (attachments[0].storagePath || null) : null,
+                mediaType: attachments.length === 1 ? attachments[0].type : null,
+                type: attachments.length ? (attachments.some(function (att) { return (att.type || '').includes('video'); }) ? 'video' : 'image') : 'text',
+                messageId
+            });
+        } catch (err) {
+            console.warn('Message send failed', err?.code || err?.message || err);
+            toast('Message send failed. Please retry.', 'error');
+            setMessageUploadState({
+                status: 'error',
+                error: 'Message send failed. Please retry.',
+                conversationId,
+                messageId,
+                files: combinedFiles.slice()
+            });
+            return;
+        }
     }
     if (input) input.value = '';
     clearAttachmentPreview();
@@ -9745,18 +9928,57 @@ window.sendMediaMessage = async function (conversationId = activeConversationId,
     if (!conversationId || !requireAuth()) return;
     const fileInput = document.getElementById(fileInputElementId);
     if (!fileInput || !fileInput.files || !fileInput.files.length) return;
-    const uploads = await uploadAttachments(conversationId, filterDmAttachments(Array.from(fileInput.files)));
-    const hasVideo = uploads.some(function (att) { return (att.type || '').includes('video'); });
-    await sendChatPayload(conversationId, {
-        text: caption,
-        attachments: uploads,
-        mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image')
-            ? (uploads[0].storagePath || uploads[0].url)
-            : null,
-        mediaPath: uploads.length === 1 ? (uploads[0].storagePath || null) : null,
-        mediaType: uploads.length === 1 ? uploads[0].type : null,
-        type: uploads.length ? (hasVideo ? 'video' : 'image') : 'text'
+    const files = filterDmAttachments(Array.from(fileInput.files));
+    if (!files.length) return;
+    const messageId = doc(collection(db, 'conversations', conversationId, 'messages')).id;
+    setMessageUploadState({
+        status: 'uploading',
+        progress: 0,
+        error: null,
+        conversationId,
+        messageId,
+        files: files.slice()
     });
+    let uploads = [];
+    try {
+        uploads = await uploadAttachments(conversationId, files, {
+            messageId,
+            onProgress: function (progress) {
+                setMessageUploadState({ progress });
+            }
+        });
+    } catch (err) {
+        setMessageUploadState({
+            status: 'error',
+            error: 'Upload failed. Please retry.'
+        });
+        return;
+    }
+    const hasVideo = uploads.some(function (att) { return (att.type || '').includes('video'); });
+    try {
+        await sendChatPayload(conversationId, {
+            text: caption,
+            attachments: uploads,
+            mediaURL: uploads.length === 1 && (uploads[0].type || '').includes('image')
+                ? (uploads[0].url || null)
+                : null,
+            mediaPath: uploads.length === 1 ? (uploads[0].storagePath || null) : null,
+            mediaType: uploads.length === 1 ? uploads[0].type : null,
+            type: uploads.length ? (hasVideo ? 'video' : 'image') : 'text',
+            messageId
+        });
+    } catch (err) {
+        console.warn('Message send failed', err?.code || err?.message || err);
+        toast('Message send failed. Please retry.', 'error');
+        setMessageUploadState({
+            status: 'error',
+            error: 'Message send failed. Please retry.',
+            conversationId,
+            messageId,
+            files: files.slice()
+        });
+        return;
+    }
     fileInput.value = '';
     clearAttachmentPreview();
     const input = document.getElementById('message-input');
