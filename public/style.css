@@ -950,6 +950,10 @@ body.sidebar-overlay-open .sidebar-backdrop {
     margin-bottom: 1.5rem;
     overflow: hidden;
     transition: 0.2s;
+    opacity: 1;
+}
+
+.social-card.animate-in {
     opacity: 0;
     animation: fadeIn 0.4s forwards;
 }
@@ -1532,8 +1536,8 @@ body.sidebar-overlay-open .sidebar-backdrop {
     overflow-x: auto;
     flex-wrap: nowrap;
     position: sticky;
-    top: var(--desktop-app-bar-height, 0px);
-    z-index: 10;
+    top: 0;
+    z-index: 20;
     scrollbar-width: none;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
@@ -4316,9 +4320,27 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .video-feed {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 22px;
-    padding: 1rem 1rem 2rem;
+    grid-template-columns: repeat(auto-fill, minmax(var(--video-card-min, 240px), 1fr));
+    gap: clamp(14px, 2vw, 22px);
+    padding: clamp(0.75rem, 2vw, 1.25rem) clamp(0.75rem, 2vw, 1.25rem) 2rem;
+}
+
+@media (max-width: 1200px) {
+    .video-feed {
+        --video-card-min: 220px;
+    }
+}
+
+@media (max-width: 980px) {
+    .video-feed {
+        --video-card-min: 200px;
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        --video-card-min: 170px;
+    }
 }
 
 .video-feed.video-feed-modal-open {
@@ -4354,8 +4376,18 @@ body.video-create-open #videos-topbar {
 
 @media (max-width: 768px) {
     .video-feed {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     }
+}
+
+.scroll-sentinel {
+    height: 1px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .video-card {
@@ -4364,6 +4396,14 @@ body.video-create-open #videos-topbar {
     gap: 12px;
     cursor: pointer;
     margin-bottom: 1rem;
+    padding: 12px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.035);
+}
+
+.video-card.animate-in {
+    opacity: 0;
+    animation: fadeIn 0.4s forwards;
 }
 
 .video-feed .video-card {
@@ -4426,17 +4466,18 @@ body.video-create-open #videos-topbar {
 .video-title {
     font-weight: 700;
     line-height: 1.35;
+    font-size: clamp(0.95rem, 1.1vw, 1.15rem);
 }
 
 .video-channel {
     color: var(--text-muted);
-    font-size: 0.9rem;
+    font-size: clamp(0.82rem, 1vw, 0.95rem);
     cursor: pointer;
 }
 
 .video-stats {
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: clamp(0.78rem, 0.9vw, 0.9rem);
 }
 
 .video-overflow {
@@ -4669,15 +4710,83 @@ body.video-create-open #videos-topbar {
 .video-control-scrub {
     display: flex;
     pointer-events: auto;
+    position: relative;
+    min-height: 18px;
     opacity: 0;
     transform: translateY(6px);
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-.video-control-scrub input[type="range"] {
-    width: 100%;
+.video-control-scrub-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 6px;
+    transform: translateY(-50%);
+    border-radius: 999px;
+    background: rgba(5, 5, 5, 0.7);
+    overflow: hidden;
+    z-index: 1;
 }
 
+.video-control-scrub-buffer {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--video-buffer, 0%);
+    background: rgba(170, 170, 170, 0.55);
+    border-radius: inherit;
+    z-index: 1;
+}
+
+.video-control-scrub-progress {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--video-progress, 0%);
+    background: var(--primary);
+    border-radius: inherit;
+    z-index: 2;
+}
+
+.video-control-scrub input[type="range"] {
+    width: 100%;
+    position: relative;
+    z-index: 3;
+    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.video-control-scrub input[type="range"]::-webkit-slider-runnable-track {
+    background: transparent;
+    height: 6px;
+}
+
+.video-control-scrub input[type="range"]::-moz-range-track {
+    background: transparent;
+    height: 6px;
+}
+
+.video-control-scrub input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--primary);
+    border: none;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+    margin-top: -4px;
+}
+
+.video-control-scrub input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--primary);
+    border: none;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+}
 .video-control-actions {
     display: flex;
     align-items: center;
