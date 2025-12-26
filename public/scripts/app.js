@@ -1077,9 +1077,12 @@ function buildFeedTypeToggleButtons(container) {
     FEED_TYPE_TOGGLES.forEach(function (toggle) {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'discover-pill feed-type-pill';
-        btn.textContent = toggle.label;
+        btn.className = 'feed-type-toggle';
         btn.dataset.type = toggle.key;
+        btn.innerHTML = `
+            <span class="feed-type-toggle-text">${toggle.label}</span>
+            <span class="feed-type-toggle-switch" aria-hidden="true"></span>
+        `;
         btn.addEventListener('click', function (event) {
             event.preventDefault();
             toggleFeedType(toggle.key);
@@ -6090,7 +6093,7 @@ async function renderDiscoverResults() {
         </select></div>`;
     };
 
-    const renderVideosSection = async function (onlyVideos = false) {
+    const renderVideosSection = async function (onlyVideos = false, useCarousels = false) {
         if (!videosCache.length) {
             const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
             videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
@@ -6107,24 +6110,34 @@ async function renderDiscoverResults() {
             return;
         }
 
-        container.innerHTML += `<div class="discover-section-header">Videos</div>`;
+        const header = document.createElement('div');
+        header.className = 'discover-section-header';
+        header.textContent = 'Videos';
+        container.appendChild(header);
+        const row = document.createElement('div');
+        row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
         filteredVideos.forEach(function (video) {
             const tags = (video.hashtags || []).map(function (t) { return '#' + t; }).join(' ');
-            container.innerHTML += `
-                <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;" onclick="window.navigateTo('videos');">
-                    <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
-                        <i class="ph-fill ph-play-circle" style="font-size:2rem;"></i>
-                    </div>
-                    <div style="flex:1;">
-                        <div style="font-weight:800; margin-bottom:4px;">${escapeHtml(video.caption || 'Untitled video')}</div>
-                        <div style="color:var(--text-muted); font-size:0.9rem;">${tags}</div>
-                        <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">Views: ${video.stats?.views || 0}</div>
-                    </div>
-                </div>`;
+            const card = document.createElement('div');
+            card.className = 'social-card';
+            card.style.cssText = 'padding:1rem; cursor:pointer; display:flex; gap:12px; align-items:flex-start;';
+            card.onclick = function () { window.navigateTo('videos'); };
+            card.innerHTML = `
+                <div style="width:120px; height:70px; background:linear-gradient(135deg, #0f1f3a, #0adfe4); border-radius:10px; display:flex; align-items:center; justify-content:center; color:#aaf; font-weight:700;">
+                    <i class="ph-fill ph-play-circle" style="font-size:2rem;"></i>
+                </div>
+                <div style="flex:1;">
+                    <div style="font-weight:800; margin-bottom:4px;">${escapeHtml(video.caption || 'Untitled video')}</div>
+                    <div style="color:var(--text-muted); font-size:0.9rem;">${tags}</div>
+                    <div style="color:var(--text-muted); font-size:0.8rem; margin-top:4px;">Views: ${video.stats?.views || 0}</div>
+                </div>
+            `;
+            row.appendChild(card);
         });
+        container.appendChild(row);
     };
 
-    const renderUsers = function () {
+    const renderUsers = function (useCarousels = false) {
         let matches = [];
         if (discoverSearchTerm) {
             matches = Object.values(userCache).filter(function (u) {
@@ -6136,48 +6149,67 @@ async function renderDiscoverResults() {
         }
 
         if (matches.length > 0) {
-            container.innerHTML += `<div class="discover-section-header">Users</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Users';
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             matches.forEach(function (user) {
                 const uid = Object.keys(userCache).find(function (key) { return userCache[key] === user; });
                 if (!uid) return;
                 const avatarHtml = renderAvatar({ ...user, uid }, { size: 40 });
 
-                container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);" onclick="window.openUserProfile('${uid}')">
-                        ${avatarHtml}
-                        <div>
-                            <div style="font-weight:700;">${escapeHtml(user.name)}</div>
-                            <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
-                        </div>
-                        <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
-                    </div>`;
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = 'padding:1rem; cursor:pointer; display:flex; align-items:center; gap:10px; border-left: 4px solid var(--border);';
+                card.onclick = function () { window.openUserProfile(uid); };
+                card.innerHTML = `
+                    ${avatarHtml}
+                    <div>
+                        <div style="font-weight:700;">${escapeHtml(user.name)}</div>
+                        <div style="color:var(--text-muted); font-size:0.9rem;">@${escapeHtml(user.username)}</div>
+                    </div>
+                    <button class="follow-btn" style="margin-left:auto; padding:10px;">View</button>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         } else if (discoverFilter === 'Users' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No users matching "${discoverSearchTerm}"</p></div>`;
         }
     };
 
-    const renderLiveSection = function () {
+    const renderLiveSection = function (useCarousels = false) {
         if (MOCK_LIVESTREAMS.length > 0) {
-            container.innerHTML += `<div class="discover-section-header">Livestreams</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Livestreams';
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             MOCK_LIVESTREAMS.forEach(function (stream) {
-                container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; display:flex; gap:10px; border-left: 4px solid ${stream.color};">
-                        <div style="width:80px; height:50px; background:${stream.color}; border-radius:6px; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
-                        <div style="padding:1rem;">
-                            <h3 style="font-weight:700; font-size:1.1rem; margin-bottom:5px; color:var(--text-main);">${stream.title}</h3>
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <div style="font-size:0.9rem; color:var(--text-muted);">@${stream.author}</div>
-                                <div style="color:#ff3d3d; font-weight:bold; font-size:0.8rem; display:flex; align-items:center; gap:4px;"><i class="ph-fill ph-circle"></i> ${stream.viewerCount}</div>
-                            </div>
-                            <div class="category-badge" style="margin-top:10px;">${stream.category}</div>
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = `padding:1rem; display:flex; gap:10px; border-left: 4px solid ${stream.color};`;
+                card.innerHTML = `
+                    <div style="width:80px; height:50px; background:${stream.color}; border-radius:6px; display:flex; align-items:center; justify-content:center; color:black; font-weight:900; font-size:1.5rem;"><i class="ph-fill ph-broadcast" style="margin-right:8px;"></i> LIVE</div>
+                    <div style="padding:1rem;">
+                        <h3 style="font-weight:700; font-size:1.1rem; margin-bottom:5px; color:var(--text-main);">${stream.title}</h3>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="font-size:0.9rem; color:var(--text-muted);">@${stream.author}</div>
+                            <div style="color:#ff3d3d; font-weight:bold; font-size:0.8rem; display:flex; align-items:center; gap:4px;"><i class="ph-fill ph-circle"></i> ${stream.viewerCount}</div>
                         </div>
-                    </div>`;
+                        <div class="category-badge" style="margin-top:10px;">${stream.category}</div>
+                    </div>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         }
     };
 
-    const renderPostsSection = function () {
+    const renderPostsSection = function (useCarousels = false) {
         let filteredPosts = allPosts;
         filteredPosts = filteredPosts.filter(function (post) {
             if (isPostScheduledInFuture(post) && (!currentUser || post.userId !== currentUser.uid)) return false;
@@ -6197,7 +6229,12 @@ async function renderDiscoverResults() {
         }
 
         if (filteredPosts.length > 0) {
-            container.innerHTML += `<div class="discover-section-header">Posts</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Posts';
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             filteredPosts.forEach(function (post) {
                 const author = userCache[post.userId] || { name: post.author };
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
@@ -6210,30 +6247,35 @@ async function renderDiscoverResults() {
                 const pollBlock = renderPollBlock(post);
                 const accentColor = THEMES[post.category] || THEMES['For You'];
                 const mobileView = isMobileViewport();
-                container.innerHTML += `
-                    <div class="social-card" style="border-left: 2px solid var(--card-accent); --card-accent: ${accentColor}; cursor:pointer;" onclick="window.openThread('${post.id}')">
-                        <div class="card-content" style="padding:1rem;">
-                            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                                <div class="category-badge">${post.category}</div>
-                                <div style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:var(--text-muted);">
-                                    <span>by ${escapeHtml(author.name)}</span>
-                                    ${getPostOptionsButton(post, 'discover', '1rem')}
-                                </div>
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = `border-left: 2px solid var(--card-accent); --card-accent: ${accentColor}; cursor:pointer;`;
+                card.onclick = function () { window.openThread(post.id); };
+                card.innerHTML = `
+                    <div class="card-content" style="padding:1rem;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                            <div class="category-badge">${post.category}</div>
+                            <div style="display:flex; align-items:center; gap:8px; font-size:0.8rem; color:var(--text-muted);">
+                                <span>by ${escapeHtml(author.name)}</span>
+                                ${getPostOptionsButton(post, 'discover', '1rem')}
                             </div>
-                            <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                            <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
-                            ${locationBadge}
-                            ${pollBlock}
-                            ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem', showCounts: !mobileView, showLabels: !mobileView })}
                         </div>
-                    </div>`;
+                        <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
+                        <p style="font-size:0.9rem; color:var(--text-muted);">${escapeHtml(cleanText(body).substring(0, 100))}...</p>
+                        ${locationBadge}
+                        ${pollBlock}
+                        ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: '1rem', showCounts: !mobileView, showLabels: !mobileView })}
+                    </div>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         } else if (discoverFilter === 'Posts' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No posts found.</p></div>`;
         }
     };
 
-    const renderCategoriesSection = function (onlyCategories = false) {
+    const renderCategoriesSection = function (onlyCategories = false, useCarousels = false) {
         let filteredCategories = categories.slice();
         if (discoverSearchTerm) {
             const term = discoverSearchTerm.toLowerCase();
@@ -6265,7 +6307,12 @@ async function renderDiscoverResults() {
 
         const visible = onlyCategories ? sorted : sorted.slice(0, 6);
         if (visible.length > 0) {
-            container.innerHTML += `<div class="discover-section-header discover-section-row"><span>Categories</span>${categoriesDropdown('section')}</div>`;
+            const header = document.createElement('div');
+            header.className = 'discover-section-header discover-section-row';
+            header.innerHTML = `<span>Categories</span>${categoriesDropdown('section')}`;
+            container.appendChild(header);
+            const row = document.createElement('div');
+            row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
             visible.forEach(function (cat) {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
@@ -6278,41 +6325,47 @@ async function renderDiscoverResults() {
                 const followClass = isFollowingTopic ? 'following' : '';
                 const followButton = `<button class="follow-btn js-follow-topic-${topicClass} ${followClass}" data-topic="${escapeHtml(topicLabel)}" onclick="event.stopPropagation(); window.toggleFollow('${topicArg}', event)" style="padding:8px 12px;">${followLabel}</button>`;
                 const accentColor = cat.verified ? '#00f2ea' : 'var(--border)';
-                container.innerHTML += `
-                    <div class="social-card" style="padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};">
-                        <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
-                        <div style="flex:1;">
-                            <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
-                            <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
-                        </div>
-                        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
-                            <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
-                            ${followButton}
-                        </div>
-                    </div>`;
+                const card = document.createElement('div');
+                card.className = 'social-card';
+                card.style.cssText = `padding:1rem; display:flex; gap:12px; align-items:center; border-left: 2px solid var(--card-accent); --card-accent: ${accentColor};`;
+                card.innerHTML = `
+                    <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
+                    <div style="flex:1;">
+                        <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
+                        <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
+                        <div class="category-badge">${escapeHtml(cat.slug || cat.id || '')}</div>
+                        ${followButton}
+                    </div>
+                `;
+                row.appendChild(card);
             });
+            container.appendChild(row);
         } else if (discoverFilter === 'Categories' && discoverSearchTerm) {
             container.innerHTML = `<div class="empty-state"><p>No categories found.</p></div>`;
         }
     };
 
+    const useCarousels = !discoverSearchTerm;
+
     if (discoverFilter === 'All Results') {
-        renderLiveSection();
-        renderUsers();
-        renderPostsSection();
-        renderCategoriesSection();
-        await renderVideosSection();
+        renderLiveSection(useCarousels);
+        renderUsers(useCarousels);
+        renderPostsSection(useCarousels);
+        renderCategoriesSection(false, useCarousels);
+        await renderVideosSection(false, useCarousels);
         if (container.innerHTML === "") container.innerHTML = `<div class="empty-state"><p>Start typing to search everything.</p></div>`;
     } else if (discoverFilter === 'Users') {
-        renderUsers();
+        renderUsers(false);
     } else if (discoverFilter === 'Livestreams') {
-        renderLiveSection();
+        renderLiveSection(false);
     } else if (discoverFilter === 'Videos') {
-        await renderVideosSection(true);
+        await renderVideosSection(true, false);
     } else if (discoverFilter === 'Categories') {
-        renderCategoriesSection(true);
+        renderCategoriesSection(true, false);
     } else {
-        renderPostsSection();
+        renderPostsSection(false);
     }
 
     applyMyReviewStylesToDOM();
@@ -7097,7 +7150,7 @@ function renderSaved() {
             header.className = 'discover-section-header';
             header.textContent = 'Saved Videos';
             const grid = document.createElement('div');
-            grid.className = 'video-feed';
+            grid.className = 'saved-carousel no-scrollbar';
             savedVideos.forEach(function (video) {
                 grid.appendChild(buildVideoCard(video));
             });
@@ -7109,16 +7162,24 @@ function renderSaved() {
 
     if (showPosts) {
         if (displayPosts.length) {
+            const header = document.createElement('div');
+            header.className = 'discover-section-header';
+            header.textContent = 'Saved Posts';
+            const stack = document.createElement('div');
+            stack.className = 'saved-posts-stack';
             displayPosts.forEach(function (post) {
-                container.innerHTML += getPostHTML(post);
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = getPostHTML(post);
+                const card = wrapper.firstElementChild;
+                if (card) stack.appendChild(card);
             });
-
+            container.appendChild(header);
+            container.appendChild(stack);
             displayPosts.forEach(function (post) {
-                const reviewBtn = document.querySelector(`#post-card-${post.id} .review-action`);
+                const reviewBtn = container.querySelector(`#post-card-${post.id} .review-action`);
                 const reviewValue = window.myReviewCache ? window.myReviewCache[post.id] : null;
                 applyReviewButtonState(reviewBtn, reviewValue);
             });
-
             applyMyReviewStylesToDOM();
             hasRendered = true;
         }
@@ -10524,9 +10585,11 @@ window.toggleVideoUploadModal = function (show = true) {
         if (show) {
             const mounted = mountVideoModalInFeed('video-upload-modal');
             if (!mounted) modal.style.display = 'flex';
+            document.body.classList.add('video-create-open');
         } else {
             const restored = restoreVideoFeedFromModal('video-upload-modal');
             if (!restored) modal.style.display = 'none';
+            document.body.classList.remove('video-create-open');
         }
     }
     document.body.classList.toggle('modal-open', show);
@@ -10646,6 +10709,7 @@ function buildVideoManagerEntries() {
 function renderVideoManagerList() {
     const list = document.getElementById('video-task-list');
     if (!list) return;
+    ensureVideoTaskViewerBindings();
     const entries = buildVideoManagerEntries();
     if (!entries.length) {
         list.innerHTML = '<div class="video-task-empty">No videos yet.</div>';
@@ -11436,6 +11500,7 @@ function openVideoTaskViewer() {
     if (!mounted) {
         modal.style.display = 'block';
     }
+    document.body.classList.add('video-manager-open');
     renderUploadTasks();
 }
 
@@ -11449,6 +11514,7 @@ function closeVideoTaskViewer() {
         modal.style.display = 'none';
     }
     document.body.classList.remove('modal-open');
+    document.body.classList.remove('video-manager-open');
     closeVideoManagerMenu();
     if (window.location.pathname === '/videos/video-manager') {
         window.NexeraRouter?.replaceStateSilently?.('/videos');
@@ -11720,9 +11786,11 @@ function openVideoFromFeed(videoId) {
 
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
+    const canEdit = !!(currentUser?.uid && video.ownerId === currentUser.uid);
     const result = buildVideoCardElement({
         video,
         author,
+        canEdit,
         utils: {
             formatCompactNumber,
             formatVideoTimestamp,
@@ -11742,8 +11810,13 @@ function buildVideoCard(video) {
         onOpenProfile: function (uid, event) {
             window.openUserProfile(uid, event);
         },
-        onOverflow: function () {
-            window.handleUiStubAction?.('video-card-overflow');
+        onEdit: function (entry, event) {
+            if (!canEdit) return;
+            event?.stopPropagation?.();
+            window.openVideoEditModal(entry.id);
+        },
+        onOverflow: function (entry, event) {
+            openVideoManagerMenu(event, entry.id);
         }
     });
 
@@ -11819,7 +11892,7 @@ function getVideoModalPlayer() {
 }
 
 function getVideoModalPlayerContainer() {
-    return document.querySelector('.video-modal-player');
+    return document.querySelector('.video-player-frame') || document.querySelector('.video-modal-player');
 }
 
 let videoFeedRestoreState = null;
@@ -11847,6 +11920,9 @@ function mountVideoModalInFeed(modalId) {
     feed.innerHTML = '';
     feed.appendChild(modal);
     feed.classList.add('video-feed-modal-open');
+    if (modal.classList.contains('modal-overlay')) {
+        modal.classList.add('video-feed-modal');
+    }
     modal.style.display = 'flex';
     return true;
 }
@@ -11855,7 +11931,10 @@ function restoreVideoFeedFromModal(modalId) {
     const feed = document.getElementById('video-feed');
     if (!feed) return false;
     const modal = modalId ? document.getElementById(modalId) : null;
-    if (modal) modal.style.display = 'none';
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('video-feed-modal');
+    }
     if (!videoFeedRestoreState) return false;
     feed.innerHTML = '';
     videoFeedRestoreState.nodes.forEach(function (node) {
@@ -11909,15 +11988,60 @@ function updateVideoControlPlayState(player, button) {
 
 function bindVideoViewerControls() {
     const player = getVideoModalPlayer();
+    const viewer = document.querySelector('.video-viewer-player');
     const playBtn = document.getElementById('video-control-play');
     const scrub = document.getElementById('video-control-scrub');
     const volumeBtn = document.getElementById('video-control-volume');
     const volumeRange = document.getElementById('video-control-volume-range');
+    const volumeGroup = document.getElementById('video-control-volume-group');
+    const spinner = document.getElementById('video-player-spinner');
     const theaterBtn = document.getElementById('video-control-theater');
     const fullscreenBtn = document.getElementById('video-control-fullscreen');
     if (!player || !playBtn || !scrub || !volumeBtn || !volumeRange || playBtn.dataset.bound) return;
 
     playBtn.dataset.bound = 'true';
+    player.controls = false;
+    player.removeAttribute('controls');
+    if (volumeRange) {
+        volumeRange.value = Math.round((player.volume || 1) * 100).toString();
+    }
+
+    let controlsTimeout;
+    const showControls = function (force = false) {
+        if (viewer) viewer.classList.add('controls-active');
+        if (controlsTimeout) {
+            window.clearTimeout(controlsTimeout);
+        }
+        if (!force && player && !player.paused) {
+            controlsTimeout = window.setTimeout(function () {
+                viewer?.classList.remove('controls-active');
+            }, 2200);
+        }
+    };
+    const hideControls = function () {
+        if (player && !player.paused) {
+            viewer?.classList.remove('controls-active');
+        }
+    };
+
+    if (viewer) {
+        viewer.addEventListener('mousemove', function () { showControls(); });
+        viewer.addEventListener('mouseenter', function () { showControls(); });
+        viewer.addEventListener('mouseleave', function () { hideControls(); });
+    }
+
+    const showSpinner = function () { spinner?.classList.add('is-active'); };
+    const hideSpinner = function () { spinner?.classList.remove('is-active'); };
+    player.addEventListener('loadstart', showSpinner);
+    player.addEventListener('waiting', showSpinner);
+    player.addEventListener('seeking', showSpinner);
+    player.addEventListener('playing', function () {
+        hideSpinner();
+        showControls();
+    });
+    player.addEventListener('canplay', hideSpinner);
+    player.addEventListener('canplaythrough', hideSpinner);
+    player.addEventListener('loadeddata', hideSpinner);
     playBtn.addEventListener('click', function () {
         if (player.paused) player.play();
         else player.pause();
@@ -11925,9 +12049,16 @@ function bindVideoViewerControls() {
     player.addEventListener('loadedmetadata', function () {
         scrub.max = Math.floor(player.duration || 0).toString() || '0';
         scrub.value = '0';
+        showControls(true);
     });
-    player.addEventListener('play', function () { updateVideoControlPlayState(player, playBtn); });
-    player.addEventListener('pause', function () { updateVideoControlPlayState(player, playBtn); });
+    player.addEventListener('play', function () {
+        updateVideoControlPlayState(player, playBtn);
+        showControls();
+    });
+    player.addEventListener('pause', function () {
+        updateVideoControlPlayState(player, playBtn);
+        showControls(true);
+    });
     player.addEventListener('timeupdate', function () {
         if (!scrub.max || Number(scrub.max) === 100) {
             scrub.max = Math.floor(player.duration || 0).toString() || '0';
@@ -11939,6 +12070,9 @@ function bindVideoViewerControls() {
         player.currentTime = Number(scrub.value) || 0;
     });
     volumeBtn.addEventListener('click', function () {
+        if (volumeGroup) {
+            volumeGroup.classList.toggle('is-open');
+        }
         player.muted = !player.muted;
         volumeBtn.innerHTML = player.muted ? '<i class="ph ph-speaker-slash"></i>' : '<i class="ph ph-speaker-high"></i>';
     });
@@ -11946,6 +12080,13 @@ function bindVideoViewerControls() {
         player.volume = Math.min(1, Math.max(0, Number(volumeRange.value) / 100));
         if (player.volume > 0 && player.muted) player.muted = false;
     });
+    if (volumeGroup) {
+        document.addEventListener('click', function (event) {
+            if (!volumeGroup.contains(event.target)) {
+                volumeGroup.classList.remove('is-open');
+            }
+        });
+    }
     if (theaterBtn) {
         theaterBtn.addEventListener('click', function () { window.toggleVideoTheaterMode?.(); });
     }
@@ -12098,6 +12239,9 @@ function closeVideoDetailModalHandler(options = {}) {
     modal.style.display = 'none';
     modal.classList.remove('video-theater');
     document.body.classList.remove('modal-open');
+    document.body.classList.remove('video-viewer-open');
+    const spinner = document.getElementById('video-player-spinner');
+    if (spinner) spinner.classList.remove('is-active');
     restoreVideoFeedFromModal('video-detail-modal');
 }
 
@@ -12143,7 +12287,11 @@ function moveVideoPlayerTo(container) {
     const player = getVideoModalPlayer();
     if (!player || !container) return;
     if (player.parentElement !== container) {
-        container.appendChild(player);
+        if (container.firstChild) {
+            container.insertBefore(player, container.firstChild);
+        } else {
+            container.appendChild(player);
+        }
     }
 }
 
@@ -12303,6 +12451,10 @@ window.openVideoDetail = async function (videoId) {
     captureVideoDetailReturnPath();
     initVideoViewerLayout();
     bindVideoViewerControls();
+    document.body.classList.add('video-viewer-open');
+
+    const spinner = document.getElementById('video-player-spinner');
+    if (spinner) spinner.classList.add('is-active');
 
     const player = getVideoModalPlayer();
     const title = document.getElementById('video-modal-title');
@@ -12355,6 +12507,10 @@ window.openVideoDetail = async function (videoId) {
                 }
             };
             player.load();
+            player.autoplay = true;
+            player.controls = false;
+            player.removeAttribute('controls');
+            player.play().catch(function () {});
         } else if (typeof videoModalResumeTime === 'number') {
             try {
                 player.currentTime = videoModalResumeTime;
@@ -12363,6 +12519,11 @@ window.openVideoDetail = async function (videoId) {
             } finally {
                 videoModalResumeTime = null;
             }
+        } else {
+            player.autoplay = true;
+            player.controls = false;
+            player.removeAttribute('controls');
+            player.play().catch(function () {});
         }
     }
 

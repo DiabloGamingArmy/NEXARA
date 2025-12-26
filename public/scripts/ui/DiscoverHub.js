@@ -14,7 +14,7 @@ function buildWidget(title, items = [], actionLabel = 'Refresh', actionKey = '')
         </div>
     `;
     const list = document.createElement('div');
-    list.className = 'discover-widget-list';
+    list.className = 'discover-widget-list no-scrollbar';
     items.forEach(function (item) {
         const card = document.createElement('button');
         card.type = 'button';

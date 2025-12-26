@@ -410,6 +410,58 @@
                         <div id="video-mention-suggestions" class="suggestion-row"></div>
                     </div>
                     <div id="video-mentions-list" class="mention-row"></div>
+                    <div class="video-advanced-settings">
+                        <div class="video-advanced-header">Advanced settings</div>
+                        <div class="video-advanced-toggle">
+                            <span>Monetizable</span>
+                            <label class="switch" aria-label="Toggle monetizable">
+                                <input type="checkbox" id="video-monetizable">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Downloadable</span>
+                            <label class="switch" aria-label="Toggle downloadable">
+                                <input type="checkbox" id="video-allow-download">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Embeddable</span>
+                            <label class="switch" aria-label="Toggle embeddable">
+                                <input type="checkbox" id="video-allow-embed">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Allow comments</span>
+                            <label class="switch" aria-label="Toggle comments">
+                                <input type="checkbox" id="video-allow-comments" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Notify followers</span>
+                            <label class="switch" aria-label="Toggle notify followers">
+                                <input type="checkbox" id="video-notify-followers" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Age restricted</span>
+                            <label class="switch" aria-label="Toggle age restricted">
+                                <input type="checkbox" id="video-age-restricted">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="video-advanced-toggle">
+                            <span>Sensitive content</span>
+                            <label class="switch" aria-label="Toggle sensitive content">
+                                <input type="checkbox" id="video-sensitive-content">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
                     <label class="settings-label" for="video-visibility">Visibility</label>
                     <select id="video-visibility" class="form-input">
                         <option value="public">Public</option>
@@ -795,17 +847,9 @@
 
             <div id="view-messages" class="view-section" style="display:none;">
                 <div class="inbox-tabs">
-                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">
-                        <span class="inbox-tab-label">Posts</span>
-                        <span class="inbox-tab-badge" data-mode="posts"></span>
-                    </button>
-                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">
-                        <span class="inbox-tab-label">Videos</span>
-                        <span class="inbox-tab-badge" data-mode="videos"></span>
-                    </button>
-                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">
-                        <span class="inbox-tab-label">Livestreams</span>
-                        <span class="inbox-tab-badge" data-mode="livestreams"></span>
+                    <button class="inbox-tab" data-mode="content" onclick="window.setInboxMode('content')">
+                        <span class="inbox-tab-label">Content</span>
+                        <span class="inbox-tab-badge" data-mode="content"></span>
                     </button>
                     <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">
                         <span class="inbox-tab-label">Messages</span>
@@ -883,17 +927,24 @@
                     </div>
                     </div>
                 </div>
-                <div id="inbox-panel-posts" class="inbox-panel">
-                    <div id="inbox-list-posts" class="inbox-notification-list"></div>
-                    <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
-                </div>
-                <div id="inbox-panel-videos" class="inbox-panel">
-                    <div id="inbox-list-videos" class="inbox-notification-list"></div>
-                    <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
-                </div>
-                <div id="inbox-panel-livestreams" class="inbox-panel">
-                    <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
-                    <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
+                <div id="inbox-panel-content" class="inbox-panel">
+                    <div class="inbox-content-toggles">
+                        <button class="inbox-content-toggle active" data-content="posts" onclick="window.toggleInboxContentFilter('posts')">Posts</button>
+                        <button class="inbox-content-toggle active" data-content="videos" onclick="window.toggleInboxContentFilter('videos')">Videos</button>
+                        <button class="inbox-content-toggle active" data-content="livestreams" onclick="window.toggleInboxContentFilter('livestreams')">Live streams</button>
+                    </div>
+                    <div class="inbox-content-section" data-content="posts">
+                        <div id="inbox-list-posts" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
+                    </div>
+                    <div class="inbox-content-section" data-content="videos">
+                        <div id="inbox-list-videos" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
+                    </div>
+                    <div class="inbox-content-section" data-content="livestreams">
+                        <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
+                    </div>
                 </div>
                 <div id="inbox-panel-account" class="inbox-panel">
                     <div id="inbox-list-account" class="inbox-notification-list"></div>
@@ -1561,9 +1612,11 @@
 
     <aside class="sidebar-right glass-panel no-scrollbar">
         <div class="right-sidebar-header">
+            <div class="feed-type-toggle-header">Feed Filters</div>
             <div class="feed-type-toggle-bar" id="feed-type-toggle-bar"></div>
         </div>
         <div class="right-sidebar-content">
+        <div id="stories-live-bar-slot" class="stories-live-bar-slot"></div>
         <div class="trend-box trending-topics">
             <div class="trend-title trend-header">
                 <span><i class="ph-fill ph-trend-up"></i> Trending</span>
