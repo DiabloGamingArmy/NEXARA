@@ -447,10 +447,16 @@ body.has-desktop-app-bar {
     right: 0;
     top: 0;
     height: 100vh;
-    overflow-y: auto;
+    overflow-y: scroll;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
 
     z-index: 20;
     /* Appear in front of category-header */
+}
+
+.sidebar-right::-webkit-scrollbar {
+    display: none;
 }
 
 .right-sidebar-header {
@@ -480,6 +486,24 @@ body.has-desktop-app-bar {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+}
+
+.right-sidebar-content .right-sidebar-scroll-row,
+.right-sidebar-content .chip-row,
+.right-sidebar-content .profile-h-scroll,
+.right-sidebar-content .status-chip-row {
+    display: flex;
+    gap: 0.75rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.right-sidebar-content .right-sidebar-scroll-row::-webkit-scrollbar,
+.right-sidebar-content .chip-row::-webkit-scrollbar,
+.right-sidebar-content .profile-h-scroll::-webkit-scrollbar,
+.right-sidebar-content .status-chip-row::-webkit-scrollbar {
+    display: none;
 }
 
 body.sidebar-collapsed .sidebar-left {
@@ -545,10 +569,17 @@ body.sidebar-overlay-open .sidebar-backdrop {
     min-height: 100vh;
     border-right: 1px solid var(--border);
     min-width: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     /* Subtle stream gradient - fixed to prevent scroll changes */
     background: linear-gradient(180deg, #161b22 0%, rgba(0, 242, 234, 0.02) 100%);
     background-attachment: fixed;
     background-size: 100% 100vh;
+}
+
+.main-feed::-webkit-scrollbar {
+    display: none;
 }
 
 @media(min-width: 1024px) {
@@ -2051,7 +2082,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     justify-content: space-between;
     margin-bottom: 1rem;
     cursor: pointer;
-    padding: 8px;
+    padding: 4px 8px;
     border-radius: 8px;
 }
 
@@ -2562,6 +2593,59 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     align-items: center;
     /* this centers flex rows like "name + badge" */
+    position: relative;
+    overflow: hidden;
+}
+
+.profile-header.has-cover {
+    background-size: cover;
+    background-position: center;
+}
+
+.profile-header.has-cover::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(4, 10, 18, 0.65) 0%, rgba(4, 10, 18, 0.85) 100%);
+    z-index: 0;
+}
+
+.profile-header.profile-cover-banner {
+    padding-top: 3.5rem;
+}
+
+.profile-header.profile-cover-full::before {
+    background: linear-gradient(180deg, rgba(4, 10, 18, 0.4) 0%, rgba(4, 10, 18, 0.88) 100%);
+}
+
+.profile-header-content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.profile-cover-action {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 0.75rem;
+    background: rgba(6, 12, 20, 0.6);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    z-index: 2;
+}
+
+.profile-cover-action:hover {
+    border-color: var(--primary);
+    color: var(--primary);
 }
 
 .profile-pic {
@@ -3020,6 +3104,37 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-bottom: 1px solid var(--border);
     margin: 12px;
     flex-wrap: wrap;
+}
+
+.inbox-content-toggles {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 0 0 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+}
+
+.inbox-content-toggle {
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.inbox-content-toggle.active {
+    border-color: var(--primary);
+    color: #000;
+    background: var(--primary);
+}
+
+.inbox-content-section {
+    padding: 0.25rem 0 1rem;
 }
 
 .inbox-tab {
@@ -3938,6 +4053,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 22px;
     padding: 1rem 1rem 2rem;
+}
+
+.video-feed.video-feed-modal-open {
+    display: block;
+    padding: 1rem 0 2rem;
 }
 
 @media (max-width: 768px) {

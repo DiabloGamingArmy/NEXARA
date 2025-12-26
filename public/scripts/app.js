@@ -90,6 +90,8 @@ let inboxMode = 'messages';
 let inboxNotificationsUnsubscribe = null;
 let inboxNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
+let inboxContentFilters = { posts: true, videos: true, livestreams: true };
+let inboxContentPreferred = 'posts';
 const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
 var activeUploadId = window.activeUploadId || null;
@@ -6593,6 +6595,29 @@ function renderProfileContent(uid, profile, isSelfView, containerId) {
     }
 }
 
+function applyProfileCover(headerEl, profile = {}, isSelfView = false) {
+    if (!headerEl) return;
+    const coverUrl = profile.coverUrl || profile.coverURL || profile.bannerUrl || profile.headerImage || profile.coverImage || '';
+    const coverStyleRaw = (profile.coverStyle || profile.coverDisplay || 'banner').toString().toLowerCase();
+    const coverStyle = coverStyleRaw === 'full' ? 'full' : 'banner';
+    headerEl.classList.remove('has-cover', 'profile-cover-banner', 'profile-cover-full');
+    headerEl.style.backgroundImage = '';
+    if (coverUrl) {
+        headerEl.classList.add('has-cover', coverStyle === 'full' ? 'profile-cover-full' : 'profile-cover-banner');
+        headerEl.style.backgroundImage = `url('${coverUrl}')`;
+    }
+    const actionBtn = headerEl.querySelector('.profile-cover-action');
+    if (actionBtn) {
+        actionBtn.style.display = isSelfView ? 'inline-flex' : 'none';
+        actionBtn.textContent = coverUrl ? 'Change cover' : 'Add cover';
+    }
+}
+
+window.handleProfileCoverAction = function () {
+    // TODO: Hook cover uploads into profile settings once backend is wired.
+    toast('Cover updates coming soon.', 'info');
+};
+
 function renderPublicProfile(uid, profileData = userCache[uid]) {
     if (!profileData) return;
     if (!PROFILE_FILTER_OPTIONS.includes(currentProfileFilter)) currentProfileFilter = 'All Results';
@@ -6624,26 +6649,32 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
             <button onclick="window.goBack()" class="back-btn-outline" style="background: none; color: var(--text-main); cursor: pointer; display: flex; align-items: center; gap: 5px;"><span>←</span> Back</button>
             <h2 style="font-weight: 800; font-size: 1.2rem;">${escapeHtml(normalizedProfile.username)}</h2>
         </div>
-        <div class="profile-header" style="padding-top:1rem;">
-            ${avatarHtml}
-            <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
-            <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
-            <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
-            ${linkHtml}
-            <div class="stats-row">
-                <div class="stat-item"><div id="profile-follower-count-${uid}">${followersCount}</div><div>Followers</div></div>
-                <div class="stat-item"><div>${likesTotal}</div><div>Likes</div></div>
-                <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
-            </div>
-            <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
-                ${followCta}
-                ${isSelfView ? '' : `<button class=\"create-btn-sidebar\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);\" onclick=\"window.openOrStartDirectConversationWithUser('${uid}')\">Message</button>`}
+        <div class="profile-header">
+            <button class="profile-cover-action" type="button" onclick="window.handleProfileCoverAction()" style="display:none;">
+                <i class="ph ph-image"></i> Add cover
+            </button>
+            <div class="profile-header-content">
+                ${avatarHtml}
+                <h2 style="font-weight: 800; margin-bottom: 5px; display:flex; align-items:center; gap:6px;">${escapeHtml(normalizedProfile.name)}${verifiedBadge}</h2>
+                <p style="color: var(--text-muted);">@${escapeHtml(normalizedProfile.username)}</p>
+                <p style="margin-top: 10px; max-width: 400px; margin-left: auto; margin-right: auto;">${escapeHtml(normalizedProfile.bio || "No bio yet.")}</p>
+                ${linkHtml}
+                <div class="stats-row">
+                    <div class="stat-item"><div id="profile-follower-count-${uid}">${followersCount}</div><div>Followers</div></div>
+                    <div class="stat-item"><div>${likesTotal}</div><div>Likes</div></div>
+                    <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
+                </div>
+                <div style="display:flex; gap:10px; justify-content:center; margin-top:1rem;">
+                    ${followCta}
+                    ${isSelfView ? '' : `<button class=\"create-btn-sidebar\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: var(--bg-hover); color: var(--text-main); border: 1px solid var(--border);\" onclick=\"window.openOrStartDirectConversationWithUser('${uid}')\">Message</button>`}
+                </div>
             </div>
         </div>
         <div class="profile-filters-bar">${renderProfileFilterRow(uid, 'Public profile filters')}</div>
         <div id="public-profile-content" class="profile-content-region"></div>`;
 
     renderProfileContent(uid, normalizedProfile, isSelfView, 'public-profile-content');
+    applyProfileCover(container.querySelector('.profile-header'), normalizedProfile, isSelfView);
 }
 
 function renderProfile() {
@@ -6675,26 +6706,32 @@ function renderProfile() {
         </div>
         ` : ''}
         <div class="profile-header">
-            ${avatarHtml}
-            <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
-            ${realNameHtml}
-            <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
-            <p style="margin-top:10px;">${escapeHtml(userProfile.bio)}</p>
-            ${regionHtml}
-            ${linkHtml}
-            <div class="stats-row">
-                <div class="stat-item"><div>${followersCount}</div><div>Followers</div></div>
-                <div class="stat-item"><div>${likesTotal}</div><div>Likes</div></div>
-                <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
+            <button class="profile-cover-action" type="button" onclick="window.handleProfileCoverAction()" style="display:none;">
+                <i class="ph ph-image"></i> Add cover
+            </button>
+            <div class="profile-header-content">
+                ${avatarHtml}
+                <h2 style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(displayName)}${verifiedBadge}</h2>
+                ${realNameHtml}
+                <p style="color:var(--text-muted);">@${escapeHtml(userProfile.username)}</p>
+                <p style="margin-top:10px;">${escapeHtml(userProfile.bio)}</p>
+                ${regionHtml}
+                ${linkHtml}
+                <div class="stats-row">
+                    <div class="stat-item"><div>${followersCount}</div><div>Followers</div></div>
+                    <div class="stat-item"><div>${likesTotal}</div><div>Likes</div></div>
+                    <div class="stat-item"><div>${userPosts.length}</div><div>Posts</div></div>
+                </div>
+                <button onclick="window.toggleSettingsModal(true)" class="create-btn-sidebar" style="width:auto; margin-top:1rem; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-gear"></i> Edit Profile & Settings</button>
+                <button onclick="window.handleLogout()" class="create-btn-sidebar" style="width:auto; margin-top:10px; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-sign-out"></i> Log Out</button>
             </div>
-            <button onclick="window.toggleSettingsModal(true)" class="create-btn-sidebar" style="width:auto; margin-top:1rem; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-gear"></i> Edit Profile & Settings</button>
-            <button onclick="window.handleLogout()" class="create-btn-sidebar" style="width:auto; margin-top:10px; background:transparent; border:1px solid var(--border); color:var(--text-muted);"><i class="ph ph-sign-out"></i> Log Out</button>
         </div>
         <div class="profile-filters-bar">${renderProfileFilterRow('me', 'Profile filters')}</div>
         <div id="my-profile-content" class="profile-content-region"></div>
     `;
 
     renderProfileContent(currentUser.uid, userProfile, true, 'my-profile-content');
+    applyProfileCover(document.querySelector('#view-profile .profile-header'), userProfile, true);
 }
 
 // --- Utils & Helpers ---
@@ -7577,6 +7614,7 @@ function updateInboxTabBadges() {
         livestreams: inboxNotificationCounts.livestreams || 0,
         account: inboxNotificationCounts.account || 0
     };
+    counts.content = (counts.posts || 0) + (counts.videos || 0) + (counts.livestreams || 0);
     document.querySelectorAll('.inbox-tab-badge').forEach(function (badge) {
         const mode = badge.dataset.mode;
         const total = counts[mode] || 0;
@@ -7616,6 +7654,30 @@ function updateInboxNotificationCounts() {
     inboxNotificationCounts = counts;
     updateInboxNavBadge();
 }
+
+function syncInboxContentFilters() {
+    const toggles = document.querySelectorAll('.inbox-content-toggle');
+    toggles.forEach(function (btn) {
+        const key = btn.dataset.content;
+        btn.classList.toggle('active', !!inboxContentFilters[key]);
+    });
+    document.querySelectorAll('.inbox-content-section').forEach(function (section) {
+        const key = section.dataset.content;
+        const enabled = !!inboxContentFilters[key];
+        section.style.display = enabled ? 'block' : 'none';
+    });
+}
+
+function toggleInboxContentFilter(mode) {
+    if (!mode || !inboxContentFilters.hasOwnProperty(mode)) return;
+    inboxContentFilters[mode] = !inboxContentFilters[mode];
+    if (!Object.values(inboxContentFilters).some(Boolean)) {
+        inboxContentFilters = { posts: true, videos: true, livestreams: true };
+    }
+    syncInboxContentFilters();
+}
+
+window.toggleInboxContentFilter = toggleInboxContentFilter;
 
 function markNotificationRead(notif) {
     if (!currentUser || !notif || notif.read || !notif.id) return;
@@ -7684,16 +7746,26 @@ function renderInboxNotifications(mode = 'posts') {
 
 function setInboxMode(mode = 'messages', options = {}) {
     const { skipRouteUpdate = false, routeView = currentViewId } = options;
-    const allowed = ['messages', 'posts', 'videos', 'livestreams', 'account'];
-    inboxMode = allowed.includes(mode) ? mode : 'messages';
+    const contentModes = ['posts', 'videos', 'livestreams'];
+    const allowed = ['content', 'messages', 'account'].concat(contentModes);
+    if (!allowed.includes(mode)) mode = 'messages';
+    if (contentModes.includes(mode)) {
+        inboxMode = 'content';
+        inboxContentPreferred = mode;
+        inboxContentFilters[mode] = true;
+    } else {
+        inboxMode = mode;
+        if (inboxMode === 'content' && !contentModes.includes(inboxContentPreferred)) {
+            inboxContentPreferred = 'posts';
+        }
+    }
     document.querySelectorAll('.inbox-tab').forEach(function (btn) {
-        btn.classList.toggle('active', btn.dataset.mode === inboxMode);
+        const isContentTab = btn.dataset.mode === 'content';
+        btn.classList.toggle('active', isContentTab ? inboxMode === 'content' : btn.dataset.mode === inboxMode);
     });
     const panels = {
+        content: document.getElementById('inbox-panel-content'),
         messages: document.getElementById('inbox-panel-messages'),
-        posts: document.getElementById('inbox-panel-posts'),
-        videos: document.getElementById('inbox-panel-videos'),
-        livestreams: document.getElementById('inbox-panel-livestreams'),
         account: document.getElementById('inbox-panel-account')
     };
     Object.keys(panels).forEach(function (key) {
@@ -7701,13 +7773,20 @@ function setInboxMode(mode = 'messages', options = {}) {
         if (!panel) return;
         panel.classList.toggle('active', key === inboxMode);
     });
-    if (inboxMode !== 'messages') {
+    if (inboxMode === 'content') {
+        ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
+            renderInboxNotifications(contentMode);
+        });
+        syncInboxContentFilters();
+    } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
     refreshInboxLayout();
     if (!skipRouteUpdate && routeView === 'messages') {
         let nextPath = '/inbox';
-        if (inboxMode && inboxMode !== 'messages') {
+        if (inboxMode === 'content') {
+            nextPath = `/inbox/${inboxContentPreferred || 'posts'}`;
+        } else if (inboxMode && inboxMode !== 'messages') {
             nextPath = `/inbox/${inboxMode}`;
         } else if (activeConversationId) {
             nextPath = buildMessagesUrl({ conversationId: activeConversationId });
@@ -8319,7 +8398,12 @@ function initInboxNotifications(userId) {
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
-        if (inboxMode && inboxMode !== 'messages') {
+        if (inboxMode === 'content') {
+            ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
+                renderInboxNotifications(contentMode);
+            });
+            syncInboxContentFilters();
+        } else if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
     }, function (err) {
@@ -10422,7 +10506,15 @@ window.openVideoUploadModal = function () {
 };
 window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
-    if (modal) modal.style.display = show ? 'flex' : 'none';
+    if (modal) {
+        if (show) {
+            const mounted = mountVideoModalInFeed('video-upload-modal');
+            if (!mounted) modal.style.display = 'flex';
+        } else {
+            const restored = restoreVideoFeedFromModal('video-upload-modal');
+            if (!restored) modal.style.display = 'none';
+        }
+    }
     document.body.classList.toggle('modal-open', show);
     if (show && videoUploadMode === 'create') {
         applyVideoUploadDefaults();
@@ -11226,11 +11318,23 @@ function ensureVideoManagerMenu() {
     dropdown.className = 'post-options-dropdown menu-surface';
     dropdown.style.display = 'none';
     dropdown.innerHTML = `
+        <button type="button" id="video-manager-edit-btn">
+            <i class="ph ph-pencil-simple"></i> Edit details
+        </button>
         <button type="button" id="video-manager-delete-btn">
             <i class="ph ph-trash"></i> Delete
         </button>
     `;
     document.body.appendChild(dropdown);
+    const editBtn = dropdown.querySelector('#video-manager-edit-btn');
+    if (editBtn) {
+        editBtn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            const targetId = videoManagerMenuState.videoId;
+            closeVideoManagerMenu();
+            if (targetId) window.openVideoEditModal(targetId);
+        });
+    }
     const deleteBtn = dropdown.querySelector('#video-manager-delete-btn');
     if (deleteBtn) {
         deleteBtn.addEventListener('click', function (event) {
@@ -11314,7 +11418,10 @@ async function confirmDeleteVideo(videoId) {
 function openVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    modal.style.display = 'block';
+    const mounted = mountVideoModalInFeed('video-task-viewer');
+    if (!mounted) {
+        modal.style.display = 'block';
+    }
     renderUploadTasks();
 }
 
@@ -11323,7 +11430,10 @@ window.openVideoTaskViewer = openVideoTaskViewer;
 function closeVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    modal.style.display = 'none';
+    const restored = restoreVideoFeedFromModal('video-task-viewer');
+    if (!restored) {
+        modal.style.display = 'none';
+    }
     document.body.classList.remove('modal-open');
     closeVideoManagerMenu();
     if (window.location.pathname === '/videos/video-manager') {
@@ -11698,6 +11808,63 @@ function getVideoModalPlayerContainer() {
     return document.querySelector('.video-modal-player');
 }
 
+let videoFeedRestoreState = null;
+const videoFeedModalHomes = new Map();
+
+function mountVideoModalInFeed(modalId) {
+    const feed = document.getElementById('video-feed');
+    const modal = document.getElementById(modalId);
+    if (!feed || !modal) return false;
+    if (!videoFeedModalHomes.has(modalId)) {
+        videoFeedModalHomes.set(modalId, {
+            parent: modal.parentElement,
+            nextSibling: modal.nextElementSibling
+        });
+    }
+    if (!videoFeedRestoreState) {
+        videoFeedRestoreState = {
+            nodes: Array.from(feed.childNodes),
+            scrollTop: feed.scrollTop,
+            activeModalId: modalId
+        };
+    } else {
+        videoFeedRestoreState.activeModalId = modalId;
+    }
+    feed.innerHTML = '';
+    feed.appendChild(modal);
+    feed.classList.add('video-feed-modal-open');
+    modal.style.display = 'flex';
+    return true;
+}
+
+function restoreVideoFeedFromModal(modalId) {
+    const feed = document.getElementById('video-feed');
+    if (!feed) return false;
+    const modal = modalId ? document.getElementById(modalId) : null;
+    if (modal) modal.style.display = 'none';
+    if (!videoFeedRestoreState) return false;
+    feed.innerHTML = '';
+    videoFeedRestoreState.nodes.forEach(function (node) {
+        feed.appendChild(node);
+    });
+    if (typeof videoFeedRestoreState.scrollTop === 'number') {
+        feed.scrollTop = videoFeedRestoreState.scrollTop;
+    }
+    feed.classList.remove('video-feed-modal-open');
+    if (modalId && modal) {
+        const home = videoFeedModalHomes.get(modalId);
+        if (home?.parent) {
+            if (home.nextSibling && home.nextSibling.parentElement === home.parent) {
+                home.parent.insertBefore(modal, home.nextSibling);
+            } else {
+                home.parent.appendChild(modal);
+            }
+        }
+    }
+    videoFeedRestoreState = null;
+    return true;
+}
+
 // UI scaffolding: rebuild video viewer layout to enable three-column layout and controls.
 function initVideoViewerLayout() {
     const modal = document.getElementById('video-detail-modal');
@@ -11917,6 +12084,7 @@ function closeVideoDetailModalHandler(options = {}) {
     modal.style.display = 'none';
     modal.classList.remove('video-theater');
     document.body.classList.remove('modal-open');
+    restoreVideoFeedFromModal('video-detail-modal');
 }
 
 const closeVideoDetailModal = closeVideoDetailModalHandler;
@@ -12287,7 +12455,10 @@ window.openVideoDetail = async function (videoId) {
     await hydrateVideoEngagement(video.id);
     updateVideoModalButtons(video.id);
 
-    modal.style.display = 'flex';
+    const mounted = mountVideoModalInFeed('video-detail-modal');
+    if (!mounted) {
+        modal.style.display = 'flex';
+    }
     document.body.classList.add('modal-open');
 };
 
@@ -13863,6 +14034,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initTrendingTopicsUI();
     initVideoViewerLayout();
     enhanceInboxLayout();
+    syncInboxContentFilters();
     renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');

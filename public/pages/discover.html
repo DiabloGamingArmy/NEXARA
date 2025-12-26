@@ -907,17 +907,9 @@
 
             <div id="view-messages" class="view-section" style="display:none;">
                 <div class="inbox-tabs">
-                    <button class="inbox-tab" data-mode="posts" onclick="window.setInboxMode('posts')">
-                        <span class="inbox-tab-label">Posts</span>
-                        <span class="inbox-tab-badge" data-mode="posts"></span>
-                    </button>
-                    <button class="inbox-tab" data-mode="videos" onclick="window.setInboxMode('videos')">
-                        <span class="inbox-tab-label">Videos</span>
-                        <span class="inbox-tab-badge" data-mode="videos"></span>
-                    </button>
-                    <button class="inbox-tab" data-mode="livestreams" onclick="window.setInboxMode('livestreams')">
-                        <span class="inbox-tab-label">Livestreams</span>
-                        <span class="inbox-tab-badge" data-mode="livestreams"></span>
+                    <button class="inbox-tab" data-mode="content" onclick="window.setInboxMode('content')">
+                        <span class="inbox-tab-label">Content</span>
+                        <span class="inbox-tab-badge" data-mode="content"></span>
                     </button>
                     <button class="inbox-tab active" data-mode="messages" onclick="window.setInboxMode('messages')">
                         <span class="inbox-tab-label">Messages</span>
@@ -928,7 +920,7 @@
                         <span class="inbox-tab-badge" data-mode="account"></span>
                     </button>
                 </div>
-                <div id="inbox-panel-messages" class="inbox-panel active">
+<div id="inbox-panel-messages" class="inbox-panel active">
                     <div class="inbox-layout">
                         <div class="inbox-sidebar">
                         <div class="inbox-header">
@@ -995,18 +987,29 @@
                     </div>
                     </div>
                 </div>
-                <div id="inbox-panel-posts" class="inbox-panel">
-                    <div id="inbox-list-posts" class="inbox-notification-list"></div>
-                    <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
+                <div id="inbox-panel-content" class="inbox-panel">
+                    <div class="inbox-content-toggles">
+                        <button class="inbox-content-toggle active" data-content="posts" onclick="window.toggleInboxContentFilter('posts')">Posts</button>
+                        <button class="inbox-content-toggle active" data-content="videos" onclick="window.toggleInboxContentFilter('videos')">Videos</button>
+                        <button class="inbox-content-toggle active" data-content="livestreams" onclick="window.toggleInboxContentFilter('livestreams')">Livestreams</button>
+                    </div>
+                    <div class="inbox-content-section" data-content="posts">
+                        <div class="inbox-section-label">Posts</div>
+                        <div id="inbox-list-posts" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
+                    </div>
+                    <div class="inbox-content-section" data-content="videos">
+                        <div class="inbox-section-label">Videos</div>
+                        <div id="inbox-list-videos" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
+                    </div>
+                    <div class="inbox-content-section" data-content="livestreams">
+                        <div class="inbox-section-label">Livestreams</div>
+                        <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
+                    </div>
                 </div>
-                <div id="inbox-panel-videos" class="inbox-panel">
-                    <div id="inbox-list-videos" class="inbox-notification-list"></div>
-                    <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
-                </div>
-                <div id="inbox-panel-livestreams" class="inbox-panel">
-                    <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
-                    <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
-                </div>
+
                 <div id="inbox-panel-account" class="inbox-panel">
                     <div id="inbox-list-account" class="inbox-notification-list"></div>
                     <div id="inbox-empty-account" class="empty-state">No account notifications yet.</div>
