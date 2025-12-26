@@ -487,29 +487,40 @@ body.sidebar-collapsed .sidebar-left {
     padding: 1.5rem 0.75rem;
 }
 
+body.sidebar-collapsed .sidebar-left .brand-nav,
 body.sidebar-collapsed .sidebar-left .brand-wordmark,
-body.sidebar-collapsed .sidebar-left .btn-label {
+body.sidebar-collapsed .sidebar-left .btn-label,
+.sidebar-left.collapsed .brand-nav,
+.sidebar-left.collapsed .brand-wordmark,
+.sidebar-left.collapsed .btn-label {
     display: none;
 }
 
-body.sidebar-collapsed .sidebar-left .nav-item {
+body.sidebar-collapsed .sidebar-left .nav-item,
+.sidebar-left.collapsed .nav-item {
     justify-content: center;
     gap: 0;
     font-size: 0;
     padding: 0.8rem 0;
+    padding-left: 0;
+    padding-right: 0;
 }
 
-body.sidebar-collapsed .sidebar-left .nav-item i {
+body.sidebar-collapsed .sidebar-left .nav-item i,
+.sidebar-left.collapsed .nav-item i {
     font-size: 1.2rem;
+    margin-right: 0;
 }
 
-body.sidebar-collapsed .sidebar-left .create-btn-sidebar {
+body.sidebar-collapsed .sidebar-left .create-btn-sidebar,
+.sidebar-left.collapsed .create-btn-sidebar {
     justify-content: center;
     padding: 0.8rem 0;
     font-size: 0;
 }
 
-body.sidebar-collapsed .sidebar-left .create-btn-sidebar i {
+body.sidebar-collapsed .sidebar-left .create-btn-sidebar i,
+.sidebar-left.collapsed .create-btn-sidebar i {
     font-size: 1.2rem;
 }
 
@@ -1717,6 +1728,47 @@ body.light-mode .category-pill.active .topic-verified-icon {
     padding-bottom: 5px;
 }
 
+.discover-hub {
+    display: grid;
+    gap: 16px;
+    margin: 1rem 0 2rem;
+}
+
+.discover-widget {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 14px;
+}
+
+.discover-widget-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.discover-widget-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.discover-widget-chip {
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.discover-widget-chip:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
 /* Profile collage and filters */
 .profile-filters-bar {
     padding: 1rem;
@@ -1810,6 +1862,121 @@ body.light-mode .category-pill.active .topic-verified-icon {
     margin-top: 0rem;
 }
 
+.stories-live-bar-slot {
+    margin: 1.5rem 1.5rem 0;
+}
+
+.stories-live-bar {
+    display: none;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+@media (min-width: 768px) {
+    .stories-live-bar {
+        display: flex;
+    }
+}
+
+.stories-live-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.stories-live-heading {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin: 0;
+}
+
+.stories-live-row {
+    display: flex;
+    gap: 0.75rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+    scroll-snap-type: x mandatory;
+}
+
+.stories-live-row::-webkit-scrollbar {
+    display: none;
+}
+
+.stories-live-row {
+    scrollbar-width: none;
+}
+
+.stories-live-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 64px;
+    scroll-snap-align: start;
+    color: var(--text-main);
+}
+
+.stories-live-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.75rem;
+    color: var(--text-main);
+    position: relative;
+}
+
+.stories-live-avatar.is-me {
+    border-color: var(--primary);
+}
+
+.stories-live-label {
+    font-size: 0.7rem;
+    text-align: center;
+    color: var(--text-muted);
+    max-width: 72px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.stories-live-add-badge {
+    position: absolute;
+    bottom: -2px;
+    right: -2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: 2px solid var(--card-bg);
+}
+
+.stories-live-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: #ff4d4d;
+    border: 2px solid var(--card-bg);
+    box-shadow: 0 0 0 2px rgba(255, 77, 77, 0.3);
+}
+
 .trend-title {
     font-weight: 800;
     margin-bottom: 1rem;
@@ -1871,6 +2038,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .trend-load-more:hover {
     border-color: var(--primary);
     color: var(--primary);
+}
+
+.trend-load-more-wrapper {
+    padding-top: 0.75rem;
 }
 
 .trend-item {
@@ -2729,6 +2900,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    position: relative;
 }
 
 .inbox-header {
@@ -2751,6 +2923,58 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+}
+
+.inbox-header-actions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.conversation-list-compact .conversation-item {
+    padding: 8px 10px;
+    border-radius: 10px;
+    gap: 8px;
+}
+
+.conversation-list-compact .conversation-item .conversation-title {
+    font-size: 0.9rem;
+}
+
+.message-compose {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.message-compose-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.message-info-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 260px;
+    height: 100%;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transform: translateX(105%);
+    transition: transform 0.2s ease;
+    z-index: 4;
+}
+
+.message-info-panel.is-open {
+    transform: translateX(0);
+}
+
+.message-info-header {
+    font-weight: 700;
 }
 
 .inbox-filter {
@@ -3633,6 +3857,19 @@ body.light-mode .category-pill.active .topic-verified-icon {
     color: var(--text-main);
 }
 
+.message-attachment-tile.denied {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.message-attachment-tile .attachment-denied {
+    font-size: 0.75rem;
+    text-align: center;
+    color: var(--text-muted);
+    padding: 8px;
+    line-height: 1.2;
+}
+
 .attachment-remove-btn {
     background: transparent;
     border: none;
@@ -3712,6 +3949,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     gap: 12px;
     cursor: pointer;
+    margin-bottom: 1rem;
+}
+
+.video-feed .video-card {
+    margin-bottom: 0;
 }
 
 .video-thumb {
@@ -3738,9 +3980,21 @@ body.light-mode .category-pill.active .topic-verified-icon {
     font-weight: 600;
 }
 
+.video-views {
+    position: absolute;
+    left: 10px;
+    bottom: 10px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
 .video-meta {
     display: grid;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto 1fr auto;
     gap: 12px;
     align-items: start;
 }
@@ -3771,41 +4025,73 @@ body.light-mode .category-pill.active .topic-verified-icon {
     font-size: 0.85rem;
 }
 
-.video-modal {
-    position: fixed;
-    inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    z-index: 120;
-}
-
-.video-modal-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(5, 10, 20, 0.7);
-    backdrop-filter: blur(6px);
-}
-
-.video-modal-dialog {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    overflow: hidden;
-    border-radius: 0;
+.video-overflow {
     border: none;
-    background: var(--bg-card);
-    display: flex;
-    flex-direction: column;
-    box-shadow: none;
-    z-index: 1;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 8px;
+}
+
+.video-overflow:hover,
+.video-overflow:focus {
+    color: var(--text-main);
+    background: var(--bg-hover);
+}
+
+.video-card.skeleton {
+    pointer-events: none;
+    opacity: 0.7;
+}
+
+.video-skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 22px;
+    padding: 1rem;
+}
+
+.skeleton-block {
+    background: var(--bg-hover);
+    border-radius: 16px;
+    height: 160px;
+}
+
+.skeleton-circle {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: var(--bg-hover);
+}
+
+.skeleton-line {
+    height: 10px;
+    background: var(--bg-hover);
+    border-radius: 999px;
+    margin-bottom: 6px;
+}
+
+.skeleton-line.short {
+    width: 60%;
+}
+
+.video-modal {
+    position: relative;
+    display: none;
+    padding: 1rem 0 2rem;
+}
+
+.video-modal-shell {
+    position: relative;
+    padding: 0 1rem;
 }
 
 .video-modal-close {
-    position: absolute;
+    position: sticky;
     top: 12px;
-    right: 16px;
+    margin-left: auto;
+    margin-bottom: 12px;
     border: none;
     background: transparent;
     color: var(--text-main);
@@ -3818,19 +4104,23 @@ body.light-mode .category-pill.active .topic-verified-icon {
     pointer-events: auto;
 }
 
-.video-modal-body {
-    display: flex;
-    flex-direction: column;
+.video-viewer-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
     gap: 24px;
-    padding: 24px;
-    height: 100%;
-    overflow: hidden;
+    align-items: start;
 }
 
-.video-modal-side {
+.video-viewer-main {
     display: flex;
     flex-direction: column;
     gap: 16px;
+}
+
+.video-viewer-player {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
 
 .video-modal-channel-card {
@@ -3889,28 +4179,31 @@ body.light-mode .category-pill.active .topic-verified-icon {
     padding-right: 8px;
 }
 
-.video-modal-player {
-    width: 100%;
-    display: flex;
-    justify-content: flex-start;
-}
-
 .video-modal-player video {
-    width: min(960px, 100%);
-    max-height: 70vh;
+    width: 100%;
+    max-height: 65vh;
     border-radius: 12px;
     background: #000;
 }
 
-.video-modal-actions-bar {
-    width: min(960px, 100%);
+.video-control-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    padding: 8px;
+    border-radius: 12px;
 }
 
-.video-modal-main > * {
-    width: min(960px, 100%);
+.video-control-bar input[type="range"] {
+    flex: 1;
+}
+
+.video-viewer-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .video-modal-title {
@@ -3959,6 +4252,18 @@ body.light-mode .category-pill.active .topic-verified-icon {
     white-space: nowrap;
 }
 
+.video-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.video-action-row .icon-pill[disabled] {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .video-modal-description {
     background: var(--bg-hover);
     border: 1px solid var(--border);
@@ -3985,6 +4290,145 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .video-modal-comments-empty {
     color: var(--text-muted);
+}
+
+.video-viewer-comments {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px;
+}
+
+.video-comments-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 700;
+}
+
+.video-comment-pinned {
+    background: rgba(0, 242, 234, 0.08);
+    border: 1px dashed var(--border);
+    padding: 10px;
+    border-radius: 12px;
+    color: var(--text-muted);
+}
+
+.video-comment-input {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.video-comments-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.video-comment {
+    display: flex;
+    gap: 10px;
+}
+
+.video-comment-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+}
+
+.video-comment-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.video-comment-author {
+    font-weight: 700;
+}
+
+.video-comment-text {
+    color: var(--text-muted);
+}
+
+.video-comment-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.video-viewer-aside {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.video-up-next-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.video-up-next-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.video-up-next-item {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 10px;
+    padding: 8px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-main);
+    cursor: pointer;
+}
+
+.video-up-next-thumb {
+    width: 96px;
+    height: 56px;
+    border-radius: 10px;
+    background-size: cover;
+    background-position: center;
+}
+
+.video-up-next-title {
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.video-up-next-channel {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.video-up-next-stats {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.video-theater .video-viewer-shell {
+    grid-template-columns: minmax(0, 1fr) 260px;
+}
+
+@media (max-width: 1024px) {
+    .video-viewer-shell {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .video-skeleton-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .video-mini-player {
@@ -7097,5 +7541,14 @@ body.go-live-open {
         position: fixed;
         inset: 0;
         z-index: 80;
+    }
+
+    .message-info-panel {
+        position: static;
+        width: 100%;
+        transform: none;
+        border-left: none;
+        border-top: 1px solid var(--border);
+        height: auto;
     }
 }
