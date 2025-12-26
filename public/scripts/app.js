@@ -12865,10 +12865,7 @@ window.openVideoDetail = async function (videoId) {
     await hydrateVideoEngagement(video.id);
     updateVideoModalButtons(video.id);
 
-    const mounted = mountVideoModalInFeed('video-detail-modal');
-    if (!mounted) {
-        modal.style.display = 'flex';
-    }
+    modal.style.display = 'flex';
     document.body.classList.add('modal-open');
 };
 

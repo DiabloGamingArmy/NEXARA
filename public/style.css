@@ -4578,16 +4578,23 @@ body.video-create-open #videos-topbar {
 }
 
 .video-modal {
-    position: relative;
+    position: fixed;
+    inset: 0;
     display: none;
-    padding: 1rem 0 2rem;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    background: rgba(6, 12, 20, 0.75);
+    z-index: 1200;
+    overflow-y: auto;
 }
 
 .video-modal-shell {
     position: relative;
-    padding: 0 1rem;
+    padding: 0 1rem 2rem;
     width: 100%;
-    max-width: none;
+    max-width: 1200px;
+    margin: 0 auto;
 }
 
 .video-modal-close {
