@@ -42,7 +42,8 @@ export function buildVideoViewerLayout() {
                                     </button>
                                     <div class="video-control-popover video-control-captions-popover" role="dialog" aria-label="Captions">
                                         <div class="video-control-popover-title">Subtitles</div>
-                                        <button class="video-control-popover-item" type="button">No subtitles available</button>
+                                        <button class="video-control-popover-item" type="button" data-caption="auto">Auto-generated captions</button>
+                                        <button class="video-control-popover-item" type="button" data-caption="none">No subtitles available</button>
                                     </div>
                                 </div>
                                 <div class="video-control-popover-group" data-popover="settings">
@@ -52,16 +53,20 @@ export function buildVideoViewerLayout() {
                                     <div class="video-control-popover video-control-settings-popover" role="dialog" aria-label="Settings">
                                         <div class="video-control-popover-title">Playback speed</div>
                                         <div class="video-control-popover-list">
-                                            <button class="video-control-popover-item" type="button">0.5×</button>
-                                            <button class="video-control-popover-item" type="button">1×</button>
-                                            <button class="video-control-popover-item" type="button">1.5×</button>
-                                            <button class="video-control-popover-item" type="button">2×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="0.25">0.25×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="0.5">0.5×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="0.75">0.75×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="1">1×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="1.25">1.25×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="1.5">1.5×</button>
+                                            <button class="video-control-popover-item" type="button" data-speed="2">2×</button>
                                         </div>
                                         <div class="video-control-popover-title">Quality</div>
                                         <div class="video-control-popover-list">
-                                            <button class="video-control-popover-item" type="button">480p</button>
-                                            <button class="video-control-popover-item" type="button">720p</button>
-                                            <button class="video-control-popover-item" type="button">1080p</button>
+                                            <button class="video-control-popover-item" type="button" data-quality="auto">Auto</button>
+                                            <button class="video-control-popover-item" type="button" data-quality="480">480p</button>
+                                            <button class="video-control-popover-item" type="button" data-quality="720">720p</button>
+                                            <button class="video-control-popover-item" type="button" data-quality="1080">1080p</button>
                                         </div>
                                     </div>
                                 </div>

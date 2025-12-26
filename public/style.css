@@ -5278,6 +5278,11 @@ body.video-viewer-inline-open .nexera-alert-banner {
     background: var(--bg-hover);
 }
 
+.video-control-popover-item.is-selected {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
 .video-control-popover-group.is-open .video-control-popover {
     display: block;
 }
@@ -5318,15 +5323,21 @@ body.video-viewer-inline-open .nexera-alert-banner {
 
 .video-volume-popover input[type="range"] {
     width: 100%;
-}
-
-.video-volume-group.is-open .video-volume-popover {
-    display: block;
+    accent-color: var(--primary);
 }
 
 .video-volume-group.show-volume-slider .video-volume-popover,
 .video-volume-group:hover .video-volume-popover {
     display: block;
+}
+
+.video-volume-popover::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 16px;
+    top: -16px;
 }
 
 .video-viewer-meta {
@@ -5603,6 +5614,7 @@ body.video-viewer-inline-open .nexera-alert-banner {
 .video-up-next-stats {
     color: var(--text-muted);
     font-size: 0.75rem;
+    text-align: left;
 }
 
 .video-up-next-meta {
@@ -5612,7 +5624,13 @@ body.video-viewer-inline-open .nexera-alert-banner {
 }
 
 .video-theater .video-viewer-shell {
-    grid-template-columns: minmax(0, 1fr) 260px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.video-theater .video-viewer-aside {
+    width: 100%;
 }
 
 @media (max-width: 1024px) {

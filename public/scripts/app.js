@@ -12571,6 +12571,99 @@ function applyVideoCaptions(player, video) {
     });
 }
 
+function resolveDefaultQuality() {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const downlink = connection?.downlink || 0;
+    if (!downlink) return 'auto';
+    if (downlink < 3) return '480';
+    if (downlink < 6) return '720';
+    return '1080';
+}
+
+function getStoredPlaybackSpeed() {
+    const stored = Number(localStorage.getItem(PLAYBACK_SPEED_KEY));
+    return Number.isFinite(stored) && stored > 0 ? stored : 1;
+}
+
+function getStoredQuality() {
+    return localStorage.getItem(VIDEO_QUALITY_KEY) || resolveDefaultQuality();
+}
+
+function applyVideoSettings(player) {
+    if (!player) return;
+    player.playbackRate = getStoredPlaybackSpeed();
+}
+
+function updateSettingsPopoverSelection(root) {
+    if (!root) return;
+    const speed = String(getStoredPlaybackSpeed());
+    const quality = String(getStoredQuality());
+    root.querySelectorAll('[data-speed]').forEach(function (btn) {
+        btn.classList.toggle('is-selected', btn.dataset.speed === speed);
+    });
+    root.querySelectorAll('[data-quality]').forEach(function (btn) {
+        btn.classList.toggle('is-selected', btn.dataset.quality === quality);
+    });
+}
+
+function setupAutoCaptions(player) {
+    if (!player) return;
+    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) return;
+    if (autoCaptionState && autoCaptionState.player === player) return;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    let textTrack = player.textTracks?.[0];
+    if (!textTrack) {
+        textTrack = player.addTextTrack('captions', 'Auto', 'en');
+    }
+    textTrack.mode = 'showing';
+    const handleResult = function (event) {
+        const result = event.results[event.results.length - 1];
+        if (!result) return;
+        const transcript = result[0]?.transcript?.trim();
+        if (!transcript) return;
+        const start = Math.max(0, player.currentTime - 1);
+        const end = player.currentTime + 2;
+        try {
+            const cue = new VTTCue(start, end, transcript);
+            textTrack.addCue(cue);
+        } catch (err) {
+            console.warn('Unable to add caption cue', err);
+        }
+    };
+    recognition.addEventListener('result', handleResult);
+    autoCaptionState = { player, recognition, textTrack, handleResult };
+}
+
+function toggleAutoCaptions(player, enable) {
+    if (!player) return;
+    if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+        toast('Auto captions are not supported in this browser.', 'info');
+        return;
+    }
+    setupAutoCaptions(player);
+    if (!autoCaptionState) return;
+    const { recognition, textTrack } = autoCaptionState;
+    if (enable) {
+        textTrack.mode = 'showing';
+        try {
+            recognition.start();
+        } catch (err) {
+            console.warn('Unable to start auto captions', err);
+        }
+    } else {
+        try {
+            recognition.stop();
+        } catch (err) {
+            console.warn('Unable to stop auto captions', err);
+        }
+        textTrack.mode = 'hidden';
+    }
+}
+
 let videoFullscreenTarget = null;
 let videoFullscreenPending = false;
 let isFullscreenChanging = false;
@@ -12579,6 +12672,9 @@ let videoFullscreenHandlerBound = false;
 let videoViewerDocumentHandlersBound = false;
 let videoViewerShortcutsBound = false;
 let autoplayNextEnabled = true;
+const PLAYBACK_SPEED_KEY = 'nexara_playback_speed';
+const VIDEO_QUALITY_KEY = 'nexara_video_quality';
+let autoCaptionState = null;
 function handleVideoFullscreenChange() {
     videoFullscreenPending = false;
     isFullscreenChanging = false;
@@ -12653,6 +12749,10 @@ function bindVideoViewerShortcuts() {
             if (player.paused) player.play().catch(function () {});
             else player.pause();
         }
+        if (event.key === 'k' || event.key === 'K') {
+            if (player.paused) player.play().catch(function () {});
+            else player.pause();
+        }
         if (event.key === 'm' || event.key === 'M') {
             player.muted = !player.muted;
         }
@@ -12677,6 +12777,7 @@ function bindVideoViewerControls() {
     const volumeBtn = document.getElementById('video-control-volume');
     const volumeRange = document.getElementById('video-control-volume-range');
     const volumeGroup = document.getElementById('video-control-volume-group');
+    const volumePopover = volumeGroup?.querySelector('.video-volume-popover');
     const captionsBtn = document.getElementById('video-control-captions');
     const settingsBtn = document.getElementById('video-control-settings');
     const spinner = document.getElementById('video-player-spinner');
@@ -12687,6 +12788,7 @@ function bindVideoViewerControls() {
     playBtn.dataset.bound = 'true';
     player.controls = false;
     player.removeAttribute('controls');
+    applyVideoSettings(player);
     debugVideo('bind-controls');
     if (volumeRange) {
         volumeRange.value = Math.round((player.volume || 1) * 100).toString();
@@ -12790,18 +12892,25 @@ function bindVideoViewerControls() {
         updateVolumeIcon();
     });
     if (volumeGroup) {
-        volumeGroup.addEventListener('mouseenter', function () {
+        let hideTimeout;
+        const showVolume = function () {
+            if (hideTimeout) clearTimeout(hideTimeout);
             volumeGroup.classList.add('show-volume-slider');
-        });
-        volumeGroup.addEventListener('mouseleave', function () {
-            volumeGroup.classList.remove('show-volume-slider');
-        });
-        volumeGroup.addEventListener('focusin', function () {
-            volumeGroup.classList.add('show-volume-slider');
-        });
-        volumeGroup.addEventListener('focusout', function () {
-            volumeGroup.classList.remove('show-volume-slider');
-        });
+        };
+        const scheduleHide = function () {
+            if (hideTimeout) clearTimeout(hideTimeout);
+            hideTimeout = setTimeout(function () {
+                volumeGroup.classList.remove('show-volume-slider');
+            }, 300);
+        };
+        volumeGroup.addEventListener('mouseenter', showVolume);
+        volumeGroup.addEventListener('mouseleave', scheduleHide);
+        volumeGroup.addEventListener('focusin', showVolume);
+        volumeGroup.addEventListener('focusout', scheduleHide);
+        if (volumePopover) {
+            volumePopover.addEventListener('mouseenter', showVolume);
+            volumePopover.addEventListener('mouseleave', scheduleHide);
+        }
     }
     if (theaterBtn) {
         theaterBtn.addEventListener('click', function () { window.toggleVideoTheaterMode?.(); });
@@ -12827,6 +12936,7 @@ function bindVideoViewerControls() {
                 const shouldOpen = !group.classList.contains('is-open');
                 popoverGroups.forEach(function (entry) { setPopoverOpen(entry, false); });
                 setPopoverOpen(group, shouldOpen);
+                updateSettingsPopoverSelection(group);
             });
         });
         if (!videoViewerDocumentHandlersBound) {
@@ -12837,6 +12947,50 @@ function bindVideoViewerControls() {
                 groups.forEach(function (group) { group.classList.remove('is-open'); });
             });
         }
+    }
+    if (captionsBtn) {
+        const captionOptions = captionsBtn.closest('.video-control-popover-group')?.querySelectorAll('[data-caption]');
+        captionOptions?.forEach(function (option) {
+            option.addEventListener('click', function () {
+                if (option.dataset.caption === 'auto') {
+                    toggleAutoCaptions(player, true);
+                } else {
+                    toggleAutoCaptions(player, false);
+                }
+            });
+        });
+        if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+            captionOptions?.forEach(function (option) {
+                if (option.dataset.caption === 'auto') {
+                    option.disabled = true;
+                    option.textContent = 'Auto captions not supported';
+                }
+            });
+        }
+    }
+    if (settingsBtn) {
+        const settingsGroup = settingsBtn.closest('.video-control-popover-group');
+        const speedButtons = settingsGroup?.querySelectorAll('[data-speed]') || [];
+        const qualityButtons = settingsGroup?.querySelectorAll('[data-quality]') || [];
+        speedButtons.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                const speed = Number(btn.dataset.speed) || 1;
+                localStorage.setItem(PLAYBACK_SPEED_KEY, String(speed));
+                player.playbackRate = speed;
+                updateSettingsPopoverSelection(settingsGroup);
+            });
+        });
+        qualityButtons.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                const quality = btn.dataset.quality || 'auto';
+                localStorage.setItem(VIDEO_QUALITY_KEY, quality);
+                updateSettingsPopoverSelection(settingsGroup);
+            });
+        });
+        if (!localStorage.getItem(VIDEO_QUALITY_KEY)) {
+            localStorage.setItem(VIDEO_QUALITY_KEY, resolveDefaultQuality());
+        }
+        updateSettingsPopoverSelection(settingsGroup);
     }
     const autoplayToggle = document.getElementById('video-up-next-autoplay');
     if (autoplayToggle) {
@@ -13360,6 +13514,7 @@ window.openVideoDetail = async function (videoId) {
         const currentSrc = player.currentSrc || player.src || '';
         const shouldReset = videoSrc && currentSrc !== videoSrc;
         applyVideoCaptions(player, video);
+        applyVideoSettings(player);
         if (shouldReset) {
             player.src = videoSrc;
             player.onloadedmetadata = function () {
