@@ -2091,6 +2091,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     overflow-x: auto;
     padding-bottom: 0.25rem;
     margin: 0 -1.5rem;
+    margin-left: 1rem;
+    margin-right: 1rem;
     scroll-snap-type: x mandatory;
     -ms-overflow-style: none;
     scrollbar-width: none;
@@ -3154,8 +3156,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 1rem;
+    padding: 0rem;
     border-bottom: 1px solid var(--border);
+    margin-bottom: -1rem;
+    margin-top: -0.75rem;
 }
 
 .inbox-layout {
@@ -3176,6 +3180,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-right: 1px solid var(--border);
     padding: 1rem;
     min-height: 0;
+    padding-top: 0.0rem;
 }
 
 .inbox-thread {
@@ -3308,9 +3313,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    padding: 0 0 12px;
+    padding: 1rem;
     border-bottom: 1px solid var(--border);
     margin-bottom: 12px;
+    margin-left: 1rem;
 }
 
 .inbox-content-toggle {
