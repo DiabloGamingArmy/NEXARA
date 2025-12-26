@@ -11696,6 +11696,7 @@ function refreshVideoFeedWithFilters(options = {}) {
     if (!options.skipTopBar) {
         renderVideosTopBar();
     }
+    if (isInlineWatchOpen()) return;
     let filtered = videosCache.slice();
 
     if (videoSearchTerm) {
@@ -11813,6 +11814,10 @@ function ensureVideoStats(video = {}) {
     if (typeof video.stats.comments !== 'number') video.stats.comments = 0;
     if (typeof video.stats.views !== 'number') video.stats.views = 0;
     return video;
+}
+
+function isInlineWatchOpen() {
+    return USE_INLINE_VIDEO_WATCH && document.body.classList.contains('video-watch-open');
 }
 
 function getVideoById(videoId) {
@@ -12025,6 +12030,7 @@ function renderVideoFeed(videos = []) {
 }
 
 function ensureVideoScrollObserver() {
+    if (isInlineWatchOpen()) return;
     const sentinel = document.getElementById('video-feed-sentinel');
     if (!sentinel || videosPagination.done) return;
     if (videosScrollObserver) {
@@ -12041,6 +12047,7 @@ function ensureVideoScrollObserver() {
 }
 
 async function loadMoreVideos() {
+    if (isInlineWatchOpen()) return;
     if (videosPagination.loading || videosPagination.done) return;
     try {
         const batch = await fetchVideosBatch();
@@ -12194,6 +12201,7 @@ function buildInlineWatchPage(video, author, suggestions) {
     const channelHandle = escapeHtml(author?.username ? `@${author.username}` : 'Nexera');
     const views = formatCompactNumber(getVideoViewCount(video));
     const updated = formatVideoTimestamp(video.createdAt) || 'Today';
+    const likeCount = formatCompactNumber(video.stats?.likes || 0);
     const suggestedHtml = suggestions.map(function (entry) {
         const thumb = escapeHtml(resolveVideoThumbnail(entry));
         const title = escapeHtml(entry.title || entry.caption || 'Untitled video');
@@ -12223,7 +12231,7 @@ function buildInlineWatchPage(video, author, suggestions) {
                         <div class="watch-player-overlay">
                             <div class="watch-timeline"></div>
                             <div class="watch-controls">
-                                <button class="watch-control-btn"><i class="ph ph-play"></i></button>
+                                <button class="watch-control-btn" data-action="toggle-play"><i class="ph ph-play"></i></button>
                                 <button class="watch-control-btn"><i class="ph ph-speaker-high"></i></button>
                                 <div class="watch-control-spacer"></div>
                                 <button class="watch-control-btn"><i class="ph ph-gear"></i></button>
@@ -12239,14 +12247,14 @@ function buildInlineWatchPage(video, author, suggestions) {
                                 <div class="watch-channel-name">${channelName}</div>
                                 <div class="watch-channel-handle">${channelHandle}</div>
                             </div>
-                            <button class="watch-join-btn">Join</button>
+                            <button class="watch-join-btn">Follow</button>
                         </div>
                         <div class="watch-actions">
-                            <button class="watch-pill"><i class="ph ph-thumbs-up"></i> Like</button>
+                            <button class="watch-pill watch-like-btn" data-count="${video.stats?.likes || 0}" data-liked="false"><i class="ph ph-thumbs-up"></i><span>Like</span><span class="watch-like-count">${likeCount}</span></button>
                             <button class="watch-pill"><i class="ph ph-thumbs-down"></i></button>
-                            <button class="watch-pill"><i class="ph ph-share-network"></i> Share</button>
-                            <button class="watch-pill"><i class="ph ph-bookmark-simple"></i> Save</button>
-                            <button class="watch-pill"><i class="ph ph-currency-dollar"></i> Thanks</button>
+                            <button class="watch-pill" data-watch-action="share"><i class="ph ph-share-network"></i> Share</button>
+                            <button class="watch-pill" data-watch-action="save"><i class="ph ph-bookmark-simple"></i> Save</button>
+                            <button class="watch-pill" data-watch-action="thanks"><i class="ph ph-currency-dollar"></i> Thanks</button>
                         </div>
                     </div>
                     <div class="watch-description">
@@ -12293,13 +12301,20 @@ async function openInlineVideoWatch(video) {
         };
     }
     applyDesktopSidebarState(true, false);
+    if (videosScrollObserver) {
+        videosScrollObserver.disconnect();
+    }
+    const sentinel = document.getElementById('video-feed-sentinel');
+    if (sentinel) sentinel.remove();
     feed.innerHTML = '';
     feed.classList.add('video-watch-open');
     document.body.classList.add('video-watch-open');
 
+    ensureVideoStats(video);
     const author = await resolveUserProfile(video.ownerId || '');
     const suggestions = getInlineWatchSuggestions(video.id);
     feed.innerHTML = buildInlineWatchPage(video, author, suggestions);
+    bindInlineWatchInteractions(video, author);
 }
 
 function restoreInlineVideoWatch() {
@@ -12314,6 +12329,103 @@ function restoreInlineVideoWatch() {
     feed.classList.remove('video-watch-open');
     document.body.classList.remove('video-watch-open');
     videoWatchRestoreState = null;
+    if (!document.getElementById('video-feed-sentinel')) {
+        insertScrollSentinel(feed, 'video-feed-sentinel', 0, { placeAfter: true });
+    }
+    ensureVideoScrollObserver();
+}
+
+function openInlineWatchActionModal(action) {
+    const titles = {
+        share: 'Share',
+        save: 'Save',
+        thanks: 'Thanks'
+    };
+    const messages = {
+        share: 'Sharing options are coming soon.',
+        save: 'Save this video to your library.',
+        thanks: 'Thanks for supporting the creator.'
+    };
+    if (typeof openConfirmModal === 'function') {
+        openConfirmModal({
+            title: titles[action] || 'Action',
+            message: messages[action] || 'This action is coming soon.',
+            confirmText: 'Close',
+            cancelText: 'Dismiss'
+        });
+        return;
+    }
+    toast(messages[action] || 'Action coming soon.', 'info');
+}
+
+function updateInlineWatchPlayState(player, button) {
+    if (!player || !button) return;
+    const icon = player.paused ? 'ph ph-play' : 'ph ph-pause';
+    button.innerHTML = `<i class="${icon}"></i>`;
+}
+
+function updateInlineWatchLikeButton(button) {
+    if (!button) return;
+    const liked = button.dataset.liked === 'true';
+    const count = Number(button.dataset.count) || 0;
+    const iconClass = liked ? 'ph-fill ph-thumbs-up' : 'ph ph-thumbs-up';
+    const label = liked ? 'Liked' : 'Like';
+    const countEl = button.querySelector('.watch-like-count');
+    const textNode = button.querySelector('span');
+    const iconEl = button.querySelector('i');
+    if (iconEl) iconEl.className = iconClass;
+    if (textNode) textNode.textContent = label;
+    if (countEl) countEl.textContent = formatCompactNumber(count);
+}
+
+function bindInlineWatchInteractions(video, author) {
+    const root = document.querySelector('#video-feed .watch-page');
+    if (!root) return;
+    const player = root.querySelector('#watch-player');
+    const playBtn = root.querySelector('.watch-control-btn[data-action="toggle-play"]');
+    const likeBtn = root.querySelector('.watch-like-btn');
+    const channelAvatar = root.querySelector('.watch-channel-avatar');
+    const composeAvatar = root.querySelector('.watch-comment-compose .watch-comment-avatar');
+
+    if (channelAvatar) applyAvatarToElement(channelAvatar, author || {}, { size: 40 });
+    if (composeAvatar) applyAvatarToElement(composeAvatar, currentUser || author || {}, { size: 40 });
+    root.querySelectorAll('.watch-comment-avatar').forEach(function (avatar) {
+        if (avatar === composeAvatar) return;
+        applyAvatarToElement(avatar, author || {}, { size: 40 });
+    });
+
+    if (player && playBtn) {
+        updateInlineWatchPlayState(player, playBtn);
+        playBtn.addEventListener('click', function () {
+            if (player.paused) {
+                player.play().catch(function () {});
+            } else {
+                player.pause();
+            }
+            updateInlineWatchPlayState(player, playBtn);
+        });
+        player.addEventListener('play', function () { updateInlineWatchPlayState(player, playBtn); });
+        player.addEventListener('pause', function () { updateInlineWatchPlayState(player, playBtn); });
+    }
+
+    if (likeBtn) {
+        updateInlineWatchLikeButton(likeBtn);
+        likeBtn.addEventListener('click', function () {
+            const liked = likeBtn.dataset.liked === 'true';
+            const current = Number(likeBtn.dataset.count) || 0;
+            const nextLiked = !liked;
+            const nextCount = Math.max(0, current + (nextLiked ? 1 : -1));
+            likeBtn.dataset.liked = nextLiked ? 'true' : 'false';
+            likeBtn.dataset.count = String(nextCount);
+            updateInlineWatchLikeButton(likeBtn);
+        });
+    }
+
+    root.querySelectorAll('[data-watch-action]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            openInlineWatchActionModal(button.dataset.watchAction);
+        });
+    });
 }
 
 function updateVideoControlPlayState(player, button) {
