@@ -8,7 +8,9 @@ export function buildVideoCardElement({
     utils,
     onOpen,
     onOpenProfile,
-    onOverflow
+    onOverflow,
+    onEdit,
+    canEdit = false
 } = {}) {
     const {
         formatCompactNumber,
@@ -63,15 +65,35 @@ export function buildVideoCardElement({
     stats.className = 'video-stats';
     stats.textContent = `${formatCompactNumber?.(getVideoViewCount?.(video))} views • ${formatVideoTimestamp?.(video.createdAt)}`;
 
+    const actions = document.createElement('div');
+    actions.className = 'video-card-actions';
+
+    if (canEdit) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'video-edit';
+        editBtn.type = 'button';
+        editBtn.setAttribute('aria-label', 'Edit video');
+        editBtn.innerHTML = '<i class="ph ph-pencil-simple"></i>';
+        editBtn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            onEdit?.(video, event);
+        });
+        actions.appendChild(editBtn);
+    }
+
     const overflow = document.createElement('button');
     overflow.className = 'video-overflow';
     overflow.type = 'button';
     overflow.setAttribute('aria-label', 'More options');
+    if (video?.id) {
+        overflow.setAttribute('data-video-menu', video.id);
+    }
     overflow.innerHTML = '<i class="ph ph-dots-three-vertical"></i>';
     overflow.addEventListener('click', function (event) {
         event.stopPropagation();
-        onOverflow?.(video);
+        onOverflow?.(video, event);
     });
+    actions.appendChild(overflow);
 
     info.appendChild(title);
     info.appendChild(channel);
@@ -79,7 +101,7 @@ export function buildVideoCardElement({
 
     meta.appendChild(avatar);
     meta.appendChild(info);
-    meta.appendChild(overflow);
+    meta.appendChild(actions);
 
     card.appendChild(thumb);
     card.appendChild(meta);
