@@ -4346,6 +4346,24 @@ body.light-mode .category-pill.active .topic-verified-icon {
     }
 }
 
+@media (max-width: 1200px) {
+    .video-feed {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-feed {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 640px) {
+    .video-feed {
+        grid-template-columns: 1fr;
+    }
+}
+
 .video-feed.video-feed-modal-open {
     display: block;
     padding: 1rem 0 2rem;
@@ -4553,6 +4571,18 @@ body.video-create-open #videos-topbar {
     padding: 1rem;
 }
 
+@media (max-width: 1200px) {
+    .video-skeleton-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 960px) {
+    .video-skeleton-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 .skeleton-block {
     background: var(--bg-hover);
     border-radius: 16px;
@@ -4589,6 +4619,23 @@ body.video-create-open #videos-topbar {
     overflow-y: auto;
 }
 
+.video-modal-backdrop {
+    position: absolute;
+    inset: 0;
+}
+
+.video-modal-dialog {
+    position: relative;
+    width: min(1200px, 96vw);
+    max-height: 90vh;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 1rem;
+    z-index: 1;
+}
+
 .video-modal-shell {
     position: relative;
     padding: 0 1rem 2rem;
@@ -4612,6 +4659,22 @@ body.video-create-open #videos-topbar {
     align-items: center;
     justify-content: center;
     pointer-events: auto;
+}
+
+.video-modal-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 20px;
+    align-items: start;
+}
+
+.video-modal-side {
+    order: 2;
+}
+
+.video-modal-main {
+    order: 1;
+    min-width: 0;
 }
 
 .video-viewer-shell {
@@ -5192,10 +5255,14 @@ body.video-create-open #videos-topbar {
         grid-template-columns: 1fr;
     }
     .video-modal-body {
+        grid-template-columns: 1fr;
         overflow: auto;
     }
     .video-modal-main {
         padding-right: 0;
+    }
+    .video-modal-side {
+        order: 0;
     }
 }
 

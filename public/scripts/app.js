@@ -42,6 +42,7 @@ let userFetchPromises = {};
 const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
+const USE_CUSTOM_VIDEO_VIEWER = false;
 let currentProfileFilter = 'All Results';
 let discoverFilter = 'All Results';
 let discoverSearchTerm = '';
@@ -1355,7 +1356,7 @@ const TRENDING_RANGE_WINDOWS = {
 
 const TRENDING_RANGE_STORAGE_KEY = 'nexera_trending_timeframe';
 const TRENDING_DEFAULT_RANGE = 'six_months';
-const TRENDING_PAGE_SIZE = 3;
+const TRENDING_PAGE_SIZE = 6;
 
 const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
@@ -3186,7 +3187,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
         initVideoFeed();
         if (requestedVideoId) {
             pendingVideoOpenId = null;
-            window.openVideoDetail(requestedVideoId);
+            requestAnimationFrame(function () {
+                window.openVideoDetail(requestedVideoId);
+            });
         }
         pendingVideoOpenId = null;
     }
@@ -6140,7 +6143,7 @@ function renderDiscoverTopBar() {
         filters: [
             { label: 'All Results', dataset: { filter: 'All Results' }, active: discoverFilter === 'All Results', onClick: function () { window.setDiscoverFilter('All Results'); } },
             { label: 'Posts', dataset: { filter: 'Posts' }, active: discoverFilter === 'Posts', onClick: function () { window.setDiscoverFilter('Posts'); } },
-            { label: 'Categories', dataset: { filter: 'Categories' }, active: discoverFilter === 'Categories', onClick: function () { window.setDiscoverFilter('Categories'); } },
+        { label: 'Topics', dataset: { filter: 'Categories' }, active: discoverFilter === 'Categories', onClick: function () { window.setDiscoverFilter('Categories'); } },
             { label: 'Users', dataset: { filter: 'Users' }, active: discoverFilter === 'Users', onClick: function () { window.setDiscoverFilter('Users'); } },
             { label: 'Videos', dataset: { filter: 'Videos' }, active: discoverFilter === 'Videos', onClick: function () { window.setDiscoverFilter('Videos'); } },
             { label: 'Livestreams', dataset: { filter: 'Livestreams' }, active: discoverFilter === 'Livestreams', onClick: function () { window.setDiscoverFilter('Livestreams'); } }
@@ -6163,7 +6166,7 @@ function renderDiscoverTopBar() {
                 id: 'discover-category-sort',
                 className: 'discover-dropdown',
                 forId: 'categories-sort-select',
-                label: 'Categories:',
+                label: 'Topics:',
                 options: [
                     { value: 'verified_first', label: 'Verified first' },
                     { value: 'verified_only', label: 'Verified only' },
@@ -6206,7 +6209,7 @@ async function renderDiscoverResults() {
     if (categoriesSelect) categoriesSelect.value = discoverCategoriesMode;
 
     const categoriesDropdown = function (id = 'section') {
-        return `<div class="discover-dropdown"><label for="categories-${id}-select">Categories:</label><select id="categories-${id}-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
+        return `<div class="discover-dropdown"><label for="categories-${id}-select">Topics:</label><select id="categories-${id}-select" class="discover-select" onchange="window.handleCategoriesModeChange(event)">
             <option value="verified_first" ${discoverCategoriesMode === 'verified_first' ? 'selected' : ''}>Verified first</option>
             <option value="verified_only" ${discoverCategoriesMode === 'verified_only' ? 'selected' : ''}>Verified only</option>
             <option value="community_first" ${discoverCategoriesMode === 'community_first' ? 'selected' : ''}>Community first</option>
@@ -6430,7 +6433,7 @@ async function renderDiscoverResults() {
         if (visible.length > 0) {
             const header = document.createElement('div');
             header.className = 'discover-section-header discover-section-row';
-            header.innerHTML = `<span>Categories</span>${categoriesDropdown('section')}`;
+            header.innerHTML = `<span>Topics</span>${categoriesDropdown('section')}`;
             container.appendChild(header);
             const row = document.createElement('div');
             row.className = useCarousels ? 'discover-carousel no-scrollbar' : 'discover-vertical-list';
@@ -6438,7 +6441,7 @@ async function renderDiscoverResults() {
                 const verifiedMark = renderVerifiedBadge({ verified: cat.verified });
                 const typeLabel = (cat.type || 'community') === 'community' ? 'Community' : 'Official';
                 const memberLabel = typeof cat.memberCount === 'number' ? `${cat.memberCount} members` : '';
-                const topicLabel = cat.name || cat.slug || cat.id || 'Category';
+                const topicLabel = cat.name || cat.slug || cat.id || 'Topic';
                 const topicClass = topicLabel.replace(/[^a-zA-Z0-9]/g, '');
                 const isFollowingTopic = followedCategories.has(topicLabel);
                 const topicArg = topicLabel.replace(/'/g, "\\'");
@@ -6452,7 +6455,7 @@ async function renderDiscoverResults() {
                 card.innerHTML = `
                     <div class="user-avatar" style="width:46px; height:46px; background:${getColorForUser(cat.name || 'C')};">${(cat.name || 'C')[0]}</div>
                     <div style="flex:1;">
-                        <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Category')}${verifiedMark}</div>
+                        <div style="font-weight:800; display:flex; align-items:center; gap:6px;">${escapeHtml(cat.name || 'Topic')}${verifiedMark}</div>
                         <div style="color:var(--text-muted); font-size:0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${escapeHtml(typeLabel)}${memberLabel ? ' · ' + memberLabel : ''}</div>
                     </div>
                     <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px;">
@@ -6538,7 +6541,8 @@ function renderProfileFilterRow(uid, ariaLabel = 'Profile filters') {
     const buttons = PROFILE_FILTER_OPTIONS.map(function (label) {
         const active = currentProfileFilter === label;
         const safeLabel = label.replace(/'/g, "\\'");
-        return `<button class="discover-pill ${active ? 'active' : ''}" role="tab" aria-selected="${active}" onclick="window.setProfileFilter('${safeLabel}', '${uid}')">${label}</button>`;
+        const displayLabel = label === 'Categories' ? 'Topics' : label;
+        return `<button class="discover-pill ${active ? 'active' : ''}" role="tab" aria-selected="${active}" onclick="window.setProfileFilter('${safeLabel}', '${uid}')">${displayLabel}</button>`;
     }).join('');
     return `<div class="discover-pill-row profile-filter-row" role="tablist" aria-label="${ariaLabel}">${buttons}</div>`;
 }
@@ -6701,7 +6705,7 @@ function renderProfileLiveCard(session, { compact = true } = {}) {
 }
 
 function renderProfileCategoryChip(category) {
-    return `<div class="category-badge" style="min-width:max-content;">${escapeHtml(category.name || 'Category')}</div>`;
+    return `<div class="category-badge" style="min-width:max-content;">${escapeHtml(category.name || 'Topic')}</div>`;
 }
 
 function renderProfileCollageRow(label, items, renderer, seeAllAction) {
@@ -6733,7 +6737,7 @@ function renderProfileAllResults(container, sources, uid, isSelfView) {
     sections.push(renderProfileCollageRow('Posts', sources.posts.slice(0, 10), function (post) { return renderProfilePostCard(post, postContext, { compact: true, idPrefix: postPrefix }); }, `window.setProfileFilter('Posts', '${uid}')`));
     sections.push(renderProfileCollageRow('Videos', sources.videos.slice(0, 10), function (video) { return renderProfileVideoCard(video, { compact: true }); }, `window.setProfileFilter('Videos', '${uid}')`));
     sections.push(renderProfileCollageRow('Livestreams', sources.liveSessions.slice(0, 10), function (session) { return renderProfileLiveCard(session, { compact: true }); }, `window.setProfileFilter('Livestreams', '${uid}')`));
-    sections.push(renderProfileCollageRow('Categories', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
+    sections.push(renderProfileCollageRow('Topics', sources.categories.slice(0, 12), renderProfileCategoryChip, `window.setProfileFilter('Categories', '${uid}')`));
 
     container.innerHTML = sections.filter(Boolean).join('');
     if (!container.innerHTML) {
@@ -10715,12 +10719,10 @@ window.toggleVideoUploadModal = function (show = true) {
     const modal = document.getElementById('video-upload-modal');
     if (modal) {
         if (show) {
-            const mounted = mountVideoModalInFeed('video-upload-modal');
-            if (!mounted) modal.style.display = 'flex';
+            modal.style.display = 'flex';
             document.body.classList.add('video-create-open');
         } else {
-            const restored = restoreVideoFeedFromModal('video-upload-modal');
-            if (!restored) modal.style.display = 'none';
+            modal.style.display = 'none';
             document.body.classList.remove('video-create-open');
         }
     }
@@ -11562,6 +11564,12 @@ function openVideoManagerMenu(event, videoId) {
     const dropdown = ensureVideoManagerMenu();
     const trigger = event?.target?.closest('[data-video-menu]');
     if (!dropdown || !trigger) return;
+    const video = getVideoById(videoId);
+    const isOwner = !!(currentUser?.uid && video?.ownerId === currentUser.uid);
+    const editBtn = dropdown.querySelector('#video-manager-edit-btn');
+    const deleteBtn = dropdown.querySelector('#video-manager-delete-btn');
+    if (editBtn) editBtn.style.display = isOwner ? 'flex' : 'none';
+    if (deleteBtn) deleteBtn.style.display = isOwner ? 'flex' : 'none';
     videoManagerMenuState.videoId = videoId;
     dropdown.style.display = 'block';
     const rect = trigger.getBoundingClientRect();
@@ -11628,10 +11636,8 @@ async function confirmDeleteVideo(videoId) {
 function openVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    const mounted = mountVideoModalInFeed('video-task-viewer');
-    if (!mounted) {
-        modal.style.display = 'block';
-    }
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
     document.body.classList.add('video-manager-open');
     renderUploadTasks();
 }
@@ -11641,10 +11647,7 @@ window.openVideoTaskViewer = openVideoTaskViewer;
 function closeVideoTaskViewer() {
     const modal = document.getElementById('video-task-viewer');
     if (!modal) return;
-    const restored = restoreVideoFeedFromModal('video-task-viewer');
-    if (!restored) {
-        modal.style.display = 'none';
-    }
+    modal.style.display = 'none';
     document.body.classList.remove('modal-open');
     document.body.classList.remove('video-manager-open');
     closeVideoManagerMenu();
@@ -12159,7 +12162,7 @@ function restoreVideoFeedFromModal(modalId) {
 // UI scaffolding: rebuild video viewer layout to enable three-column layout and controls.
 function initVideoViewerLayout() {
     const modal = document.getElementById('video-detail-modal');
-    if (!modal || modal.dataset.viewerScaffold) return;
+    if (!modal || modal.dataset.viewerScaffold || !USE_CUSTOM_VIDEO_VIEWER) return;
     modal.dataset.viewerScaffold = 'true';
     modal.innerHTML = '';
 
@@ -12683,7 +12686,9 @@ window.openVideoDetail = async function (videoId) {
 
     captureVideoDetailReturnPath();
     initVideoViewerLayout();
-    bindVideoViewerControls();
+    if (USE_CUSTOM_VIDEO_VIEWER) {
+        bindVideoViewerControls();
+    }
     document.body.classList.add('video-viewer-open');
 
     const spinner = document.getElementById('video-player-spinner');
@@ -13350,9 +13355,9 @@ function renderLiveFilterRow() {
                 id: 'live-category-dropdown',
                 className: 'discover-dropdown',
                 forId: 'live-category-dropdown-select',
-                label: 'Category:',
+                label: 'Topic:',
                 options: [
-                    { value: 'All', label: 'All Categories' },
+                    { value: 'All', label: 'All Topics' },
                     { value: 'STEM', label: 'STEM' },
                     { value: 'Gaming', label: 'Gaming' },
                     { value: 'Music', label: 'Music' },
