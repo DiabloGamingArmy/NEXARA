@@ -962,7 +962,7 @@ function isMobileViewport() {
 }
 
 function shouldShowRightSidebar(viewId) {
-    return viewId === 'feed';
+    return ['feed', 'videos', 'discover', 'saved', 'messages', 'profile', 'live'].includes(viewId);
 }
 
 window.shouldShowRightSidebar = shouldShowRightSidebar;
