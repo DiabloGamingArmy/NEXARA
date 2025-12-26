@@ -9,12 +9,16 @@ export function buildVideoViewerLayout() {
         <div class="video-viewer-main">
             <div class="video-viewer-player video-modal-player">
                 <div class="video-player-frame" id="video-player-frame">
-                    <video id="video-modal-player" playsinline></video>
+                    <video id="video-modal-player" playsinline preload="metadata"></video>
                     <div class="video-player-spinner" id="video-player-spinner" aria-live="polite">
                         <span class="splash-spinner" aria-hidden="true"></span>
                     </div>
                     <div class="video-control-overlay" id="video-control-overlay" role="group" aria-label="Video controls">
                         <div class="video-control-scrub">
+                            <div class="video-control-scrub-track" aria-hidden="true">
+                                <div class="video-control-scrub-buffer"></div>
+                                <div class="video-control-scrub-progress"></div>
+                            </div>
                             <input id="video-control-scrub" type="range" min="0" max="100" value="0" aria-label="Seek bar">
                         </div>
                         <div class="video-control-actions">
