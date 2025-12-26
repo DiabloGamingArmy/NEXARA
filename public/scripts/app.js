@@ -14,6 +14,7 @@ import { buildVideoViewerLayout } from "/scripts/ui/VideoViewerPanel.js";
 import { renderDiscoverHub } from "/scripts/ui/DiscoverHub.js";
 import { enhanceInboxLayout } from "/scripts/ui/InboxEnhancements.js";
 import { buildVideoCardElement } from "/scripts/ui/VideoCard.js";
+import { renderStoriesAndLiveBar } from "/scripts/ui/StoriesAndLiveBar.js";
 
 // --- Firebase Configuration --- 
 const firebaseConfig = {
@@ -13862,6 +13863,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initTrendingTopicsUI();
     initVideoViewerLayout();
     enhanceInboxLayout();
+    renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
