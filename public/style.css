@@ -636,7 +636,8 @@ body.sidebar-overlay-open .sidebar-backdrop {
     flex: 1;
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
+    min-height: 0;
+    height: 100vh;
     border-right: 1px solid var(--border);
     min-width: 0;
     overflow-y: auto;
@@ -1533,11 +1534,14 @@ body.sidebar-overlay-open .sidebar-backdrop {
     gap: 10px;
     padding: 1rem;
     overflow-x: auto;
+    overflow-y: hidden;
     flex-wrap: nowrap;
     position: sticky;
-    top: 0;
+    top: var(--desktop-app-bar-height, 0px);
     z-index: 6;
     scrollbar-width: none;
+    touch-action: pan-x;
+    overscroll-behavior-y: contain;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     background: linear-gradient(180deg, rgba(6, 15, 26, 0.8) 0%, rgba(6, 12, 20, 0.55) 60%, rgba(6, 12, 20, 0) 100%);
@@ -4368,6 +4372,28 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: none;
 }
 
+.video-viewer-open #videos-topbar .topbar-shell {
+    padding: 0 1rem;
+}
+
+.video-viewer-open #videos-topbar .topbar-heading {
+    display: none;
+}
+
+.video-viewer-open #videos-topbar .topbar-search-row {
+    justify-content: center;
+    margin-bottom: 0;
+}
+
+.video-viewer-open #videos-topbar .topbar-search-row input {
+    max-width: 560px;
+    width: 100%;
+}
+
+.video-viewer-open .video-modal {
+    padding-top: 0;
+}
+
 body.video-manager-open #videos-topbar,
 body.video-create-open #videos-topbar {
     display: none;
@@ -4560,6 +4586,8 @@ body.video-create-open #videos-topbar {
 .video-modal-shell {
     position: relative;
     padding: 0 1rem;
+    width: 100%;
+    max-width: none;
 }
 
 .video-modal-close {
@@ -4584,12 +4612,14 @@ body.video-create-open #videos-topbar {
     grid-template-columns: minmax(0, 1fr) 320px;
     gap: 24px;
     align-items: start;
+    width: 100%;
 }
 
 .video-viewer-main {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-width: 0;
 }
 
 .video-viewer-player {

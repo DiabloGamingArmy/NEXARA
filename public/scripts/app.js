@@ -11932,8 +11932,11 @@ async function hydrateVideoEngagement(videoId) {
     return getVideoEngagementStatus(videoId);
 }
 
-function openVideoFromFeed(videoId) {
+function openVideoFromFeed(videoId, videoData) {
     if (!videoId) return;
+    if (videoData && window.Nexera?.ensureVideoInCache) {
+        window.Nexera.ensureVideoInCache(videoData);
+    }
     pendingVideoOpenId = videoId;
     window.navigateTo('videos');
 }
@@ -11956,7 +11959,7 @@ function buildVideoCard(video) {
         },
         onOpen: function () {
             if (currentViewId === 'feed') {
-                openVideoFromFeed(video.id);
+                openVideoFromFeed(video.id, video);
                 return;
             }
             window.openVideoDetail(video.id);
