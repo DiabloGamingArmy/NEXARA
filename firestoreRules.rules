@@ -164,7 +164,14 @@ service cloud.firestore {
     // -------------------------
     match /trendingCategories/{topicId} {
       allow read: if true;
-      allow write: if (isSignedIn() && hasAccountRole('staff')) || request.auth == null;
+      allow create, delete: if isSignedIn() && isStaffAccount();
+      allow update: if (isSignedIn() && isStaffAccount()) || (
+        isSignedIn()
+        && request.resource.data.keys().hasOnly(['slug','popularity','updatedAt'])
+        && request.resource.data.slug == resource.data.slug
+        && (request.resource.data.popularity is number)
+        && (request.resource.data.popularity >= resource.data.popularity)
+      );
     }
 
     // -------------------------

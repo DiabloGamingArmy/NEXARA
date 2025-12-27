@@ -1845,6 +1845,19 @@ function resolveCategoryNameBySlug(slug) {
     return match?.name || formatSlugLabel(slug);
 }
 
+async function incrementTrendingPopularity(slug, amount = 1) {
+    if (!slug) return;
+    try {
+        const ref = doc(db, 'trendingCategories', slug);
+        await updateDoc(ref, {
+            popularity: increment(amount),
+            updatedAt: new Date()
+        });
+    } catch (error) {
+        console.error('Failed to update trending popularity:', error);
+    }
+}
+
 // Trending topics now come from the staff-populated "trendingCategories" collection.
 async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
     const items = [];
@@ -1909,7 +1922,10 @@ function renderTrendingTopics(topics) {
         item.className = 'trend-item';
         item.innerHTML = `<span>${escapeHtml(topic.name)}</span><span style=\"color:var(--text-muted);\">${formatCompactNumber(topic.count || 0)}</span>`;
         item.addEventListener('click', function () {
-            window.location.href = `/category/${encodeURIComponent(topic.categorySlug || topic.topicId || '')}`;
+            const slug = topic.categorySlug || topic.topicId || '';
+            const name = resolveCategoryNameBySlug(slug);
+            if (typeof window.setCategory === 'function') window.setCategory(name);
+            moveTopicPillAfterAnchors(name);
         });
         list.appendChild(item);
     });
@@ -5139,6 +5155,9 @@ window.createPost = async function () {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
             await incrementTagUses(normalizedTags);
+            if (resolvedCategoryId) {
+                incrementTrendingPopularity(resolvedCategoryId, 5);
+            }
         }
 
         if (locationValue) {
@@ -6024,6 +6043,17 @@ window.sendComment = async function () {
             }
         });
         const post = allPosts.find(function (p) { return p.id === activePostId; });
+        let categorySlug = post?.categoryId || post?.categorySlug || '';
+        if (!categorySlug) {
+            try {
+                const postSnap = await getDoc(postRef);
+                const postData = postSnap.exists() ? postSnap.data() : null;
+                categorySlug = postData?.categoryId || postData?.categorySlug || '';
+            } catch (error) {
+                console.warn('Unable to resolve post category', error);
+            }
+        }
+        if (categorySlug) incrementTrendingPopularity(categorySlug, 1);
         if (post?.userId && post.userId !== currentUser.uid) {
             createNotificationOnce({
                 targetUid: post.userId,
