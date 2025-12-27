@@ -410,6 +410,15 @@
                         <div id="video-mention-suggestions" class="suggestion-row"></div>
                     </div>
                     <div id="video-mentions-list" class="mention-row"></div>
+                    <button class="destination-field" type="button" onclick="window.openVideoDestinationPicker()"
+                        aria-label="Select posting destination for video">
+                        <div class="destination-field-label">Posting to</div>
+                        <div class="destination-field-value">
+                            <span id="video-destination-current-label">Select...</span>
+                            <span id="video-destination-current-verified" class="verified-badge" style="display:none;"></span>
+                        </div>
+                        <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
+                    </button>
                     <label class="settings-label" for="video-visibility">Visibility</label>
                     <select id="video-visibility" class="form-input">
                         <option value="public">Public</option>
@@ -417,7 +426,7 @@
                     </select>
                     <div class="video-upload-grid">
                         <div class="video-upload-field">
-                            <label class="settings-label" for="video-category">Category</label>
+                            <label class="settings-label" for="video-category">Topic</label>
                             <select id="video-category" class="form-input">
                                 <option value="General">General</option>
                                 <option value="Education">Education</option>
@@ -559,7 +568,7 @@
                 <button class="x-close-btn" onclick="window.toggleGoLiveModal(false)">&times;</button>
             </div>
             <input id="live-title" class="form-input" placeholder="Session title">
-            <input id="live-category" class="form-input" placeholder="Category">
+            <input id="live-category" class="form-input" placeholder="Topic">
             <input id="live-tags" class="form-input" placeholder="Tags (comma separated)">
             <input id="live-url" class="form-input" placeholder="Stream embed URL">
             <button class="create-btn-sidebar" onclick="window.createLiveSession()">Start Live</button>
@@ -572,7 +581,7 @@
                 <h3 style="margin:0; font-weight:800;">Apply for Verification</h3>
                 <button class="x-close-btn" onclick="window.toggleVerificationModal(false)">&times;</button>
             </div>
-            <label class="settings-label">Category</label>
+            <label class="settings-label">Topic</label>
             <input id="verify-category" class="form-input" placeholder="creator / journalist / org">
             <label class="settings-label">Evidence Links (one per line)</label>
             <textarea id="verify-links" class="form-input" rows="3"></textarea>
@@ -658,7 +667,7 @@
                 <h3 style="margin:0; font-weight:800;">Report Post</h3>
                 <button class="x-close-btn" onclick="window.closeReportModal()">&times;</button>
             </div>
-            <label class="settings-label">Category</label>
+            <label class="settings-label">Topic</label>
             <select id="report-category" class="form-select">
                 <option value="">Select category</option>
                 <option>Spam</option>
@@ -1187,7 +1196,7 @@
                                                     placeholder="Name your stream">
                                             </div>
                                             <div class="gl-field">
-                                                <label class="gl-label" for="stream-category">Category</label>
+                                                <label class="gl-label" for="stream-category">Topic</label>
                                                 <input id="stream-category" class="form-input"
                                                     placeholder="Gaming, IRL, Podcast...">
                                             </div>
@@ -1555,7 +1564,7 @@
                                         <input id="adv-stream-title" class="form-input" placeholder="Name your stream">
                                     </div>
                                     <div class="gl-field">
-                                        <label class="gl-label" for="adv-stream-category">Category</label>
+                                        <label class="gl-label" for="adv-stream-category">Topic</label>
                                         <input id="adv-stream-category" class="form-input"
                                             placeholder="Gaming, IRL, Podcast...">
                                     </div>
