@@ -410,6 +410,15 @@
                         <div id="video-mention-suggestions" class="suggestion-row"></div>
                     </div>
                     <div id="video-mentions-list" class="mention-row"></div>
+                    <button class="destination-field" type="button" onclick="window.openVideoDestinationPicker()"
+                        aria-label="Select posting destination for video">
+                        <div class="destination-field-label">Posting to</div>
+                        <div class="destination-field-value">
+                            <span id="video-destination-current-label">Select...</span>
+                            <span id="video-destination-current-verified" class="verified-badge" style="display:none;"></span>
+                        </div>
+                        <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
+                    </button>
                     <label class="settings-label" for="video-visibility">Visibility</label>
                     <select id="video-visibility" class="form-input">
                         <option value="public">Public</option>

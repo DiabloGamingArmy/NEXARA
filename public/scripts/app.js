@@ -189,6 +189,10 @@ let destinationPickerLoading = true;
 let destinationPickerError = '';
 let destinationSearchTimeout = null;
 let destinationCreateExpanded = false;
+let destinationPickerTarget = 'post';
+let destinationPickerSelectionId = null;
+let videoPostingDestinationId = null;
+let videoPostingDestinationName = '';
 let categoryUnsubscribe = null;
 let membershipUnsubscribe = null;
 let authClaims = {};
@@ -1814,12 +1818,35 @@ function normalizeTrendingTopic(entry) {
     const name = (entry.name || entry.topic || entry.topicName || entry.label || '').toString().trim();
     if (!name) return null;
     if (name.toLowerCase() === 'general') return null;
-    const count = Number(entry.count || entry.total || entry.posts || entry.value || 0);
+    const interactionsValue = entry.interactions;
+    const interactionsCount = typeof interactionsValue === 'number'
+        ? interactionsValue
+        : Number(interactionsValue?.total || interactionsValue?.count || 0);
+    const count = Number(entry.count || entry.total || entry.posts || entry.value || interactionsCount || 0);
     return { topicId: entry.topicId || entry.id || slugifyCategory(name), name, count };
 }
 
 async function fetchTopicStats(range) {
     if (!range) return [];
+    try {
+        const interactionsField = `interactions.${range}`;
+        const topicsRef = collection(db, 'topics');
+        const snapshot = await getDocs(query(
+            topicsRef,
+            where(interactionsField, '>', 0),
+            orderBy(interactionsField, 'desc'),
+            limit(50)
+        ));
+        if (!snapshot.empty) {
+            return snapshot.docs.map(function (docSnap) {
+                const data = docSnap.data() || {};
+                const count = data?.interactions?.[range] || 0;
+                return normalizeTrendingTopic({ ...data, topicId: docSnap.id, count });
+            }).filter(function (topic) { return (topic.count || 0) > 0; });
+        }
+    } catch (error) {
+        console.debug('Trending topics collection query failed', error?.message || error);
+    }
     try {
         const rangeDoc = await getDoc(doc(db, 'topicStats', range));
         if (rangeDoc.exists()) {
@@ -1888,7 +1915,10 @@ function aggregateTrendingTopics(range) {
 
 async function getTrendingTopics(range = trendingTopicsState.range) {
     const stats = await fetchTopicStats(range);
-    if (stats.length) return stats;
+    if (stats.length) {
+        return stats.slice().filter(function (topic) { return (topic.count || 0) > 0; })
+            .sort(function (a, b) { return (b.count || 0) - (a.count || 0); });
+    }
     return aggregateTrendingTopics(range);
 }
 
@@ -1918,7 +1948,7 @@ function renderTrendingTopics(topics) {
         return;
     }
     const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, filteredTopics.length);
-    list.classList.toggle('is-scrollable', visibleCount > TRENDING_PAGE_SIZE && topics.length > TRENDING_PAGE_SIZE);
+    list.classList.toggle('is-scrollable', visibleCount > TRENDING_PAGE_SIZE && filteredTopics.length > TRENDING_PAGE_SIZE);
     filteredTopics.slice(0, visibleCount).forEach(function (topic) {
         const item = document.createElement('div');
         item.className = 'trend-item';
@@ -2613,6 +2643,24 @@ function renderDestinationField() {
     }
 }
 
+function renderVideoDestinationField() {
+    const labelEl = document.getElementById('video-destination-current-label');
+    const verifiedEl = document.getElementById('video-destination-current-verified');
+    const currentCategoryDoc = videoPostingDestinationId ? getCategorySnapshot(videoPostingDestinationId) : null;
+    if (labelEl) labelEl.textContent = currentCategoryDoc ? currentCategoryDoc.name : (videoPostingDestinationName || 'Select...');
+    if (verifiedEl) {
+        const isVerified = currentCategoryDoc && currentCategoryDoc.verified;
+        verifiedEl.style.display = isVerified ? 'inline-flex' : 'none';
+        verifiedEl.innerHTML = isVerified ? getVerifiedIconSvg() : '';
+    }
+}
+
+function setVideoPostingDestination(destination) {
+    videoPostingDestinationId = destination?.id || null;
+    videoPostingDestinationName = destination?.name || '';
+    renderVideoDestinationField();
+}
+
 function setComposerError(message = '') {
     composerError = message || '';
     syncPostButtonState();
@@ -2658,6 +2706,13 @@ function setDestinationTab(tab) {
 }
 
 function handleDestinationSelected(destination) {
+    destinationPickerSelectionId = destination ? destination.id : null;
+    if (destinationPickerTarget === 'video') {
+        setVideoPostingDestination(destination);
+        renderDestinationPicker();
+        closeDestinationPicker();
+        return;
+    }
     selectedCategoryId = destination ? destination.id : null;
     renderDestinationField();
     renderDestinationPicker();
@@ -2743,7 +2798,7 @@ function renderDestinationResults() {
     resultsEl.innerHTML = '';
     filtered.forEach(function (cat) {
         const destination = getDestinationFromCategory(cat);
-        const isSelected = destination.id === selectedCategoryId;
+        const isSelected = destination.id === destinationPickerSelectionId;
         const selectable = destination.type === 'official'
             ? activeDestinationConfig.officialSelectable !== false
             : true;
@@ -2855,9 +2910,13 @@ function renderDestinationPicker() {
 
 function openDestinationPicker(config = {}) {
     activeDestinationConfig = { ...DEFAULT_DESTINATION_CONFIG, ...config };
+    destinationPickerTarget = config.target || 'post';
+    destinationPickerSelectionId = destinationPickerTarget === 'video'
+        ? (videoPostingDestinationId || selectedCategoryId)
+        : selectedCategoryId;
     destinationPickerOpen = true;
 
-    const currentCategoryDoc = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+    const currentCategoryDoc = destinationPickerSelectionId ? getCategorySnapshot(destinationPickerSelectionId) : null;
     const tabs = computeDestinationTabs();
 
     if (currentCategoryDoc && tabs.some(function (t) { return t.type === currentCategoryDoc.type; })) {
@@ -2879,11 +2938,15 @@ function openDestinationPicker(config = {}) {
 
 function closeDestinationPicker() {
     destinationPickerOpen = false;
+    destinationPickerTarget = 'post';
     renderDestinationPicker();
 }
 
 window.openDestinationPicker = openDestinationPicker;
 window.closeDestinationPicker = closeDestinationPicker;
+window.openVideoDestinationPicker = function () {
+    openDestinationPicker({ target: 'video' });
+};
 
 
 async function createCategory(payload) {
@@ -3235,6 +3298,9 @@ window.navigateTo = function (viewId, pushToStack = true) {
     const goLiveLock = viewId === 'live-setup';
     document.body.classList.toggle('messages-scroll-lock', lockScroll);
     document.body.classList.toggle('go-live-open', goLiveLock);
+    if (!lockScroll && !goLiveLock) {
+        document.body.style.overflow = '';
+    }
     if (!lockScroll && !goLiveLock) window.scrollTo(0, 0);
 
     if (pushToStack && currentViewId === viewId && viewId !== 'messages') {
@@ -6622,7 +6688,7 @@ function getProfileContentSources(uid) {
             if (snapshot && !seenCategories.has(catId)) {
                 categoriesForProfile.push({
                     id: catId,
-                    name: snapshot.name || snapshot.title || snapshot.slug || 'Category',
+                    name: snapshot.name || snapshot.title || snapshot.slug || 'Topic',
                     color: THEMES[snapshot.name] || THEMES[snapshot.slug] || ''
                 });
                 seenCategories.add(catId);
@@ -7011,7 +7077,9 @@ function moveTopicPillAfterAnchors(topicName) {
 function getAvailableTopicSet() {
     const pills = getTopicHeaderButtons();
     const labels = pills.map(function (pill) { return pill.getAttribute('data-topic'); });
-    return new Set(labels.map(function (label) { return label.toLowerCase(); }));
+    return new Set(labels
+        .filter(function (label) { return label && !['for you', 'following'].includes(label.toLowerCase()); })
+        .map(function (label) { return label.toLowerCase(); }));
 }
 
 function renderCategoryPills() {
@@ -10695,6 +10763,31 @@ function setVideoSelectValue(id, value, fallback = '') {
     if (finalValue) input.value = finalValue;
 }
 
+function findCategoryByName(name) {
+    if (!name) return null;
+    const target = name.toLowerCase();
+    return categories.find(function (cat) { return (cat.name || '').toLowerCase() === target; }) || null;
+}
+
+function ensureVideoPostingDestination() {
+    if (videoPostingDestinationId) return;
+    const fallback = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
+    if (fallback) {
+        setVideoPostingDestination({ id: fallback.id || selectedCategoryId, name: fallback.name });
+        return;
+    }
+    if (categories.length) {
+        const first = categories[0];
+        setVideoPostingDestination({ id: first.id, name: first.name });
+    }
+}
+
+function getVideoPostingTopicName() {
+    if (videoPostingDestinationName) return videoPostingDestinationName;
+    const snapshot = videoPostingDestinationId ? getCategorySnapshot(videoPostingDestinationId) : null;
+    return snapshot?.name || '';
+}
+
 function applyVideoUploadDefaults() {
     setVideoToggleValue('video-monetizable', VIDEO_UPLOAD_DEFAULTS.monetizable);
     setVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
@@ -10706,6 +10799,10 @@ function applyVideoUploadDefaults() {
     setVideoSelectValue('video-category', VIDEO_UPLOAD_DEFAULTS.category);
     setVideoSelectValue('video-language', VIDEO_UPLOAD_DEFAULTS.language);
     setVideoSelectValue('video-license', VIDEO_UPLOAD_DEFAULTS.license);
+    videoPostingDestinationId = null;
+    videoPostingDestinationName = '';
+    ensureVideoPostingDestination();
+    renderVideoDestinationField();
     const scheduledInput = document.getElementById('video-scheduled-at');
     if (scheduledInput) scheduledInput.value = '';
 }
@@ -10747,6 +10844,15 @@ function populateVideoUploadForm(video = {}) {
     setVideoSelectValue('video-category', video.category, VIDEO_UPLOAD_DEFAULTS.category);
     setVideoSelectValue('video-language', video.language, VIDEO_UPLOAD_DEFAULTS.language);
     setVideoSelectValue('video-license', video.license, VIDEO_UPLOAD_DEFAULTS.license);
+    videoPostingDestinationId = null;
+    videoPostingDestinationName = video.topic || '';
+    const matchedCategory = findCategoryByName(videoPostingDestinationName);
+    if (matchedCategory) {
+        videoPostingDestinationId = matchedCategory.id;
+        videoPostingDestinationName = matchedCategory.name;
+    }
+    ensureVideoPostingDestination();
+    renderVideoDestinationField();
     const scheduledInput = document.getElementById('video-scheduled-at');
     if (scheduledInput) {
         if (video.scheduledAt && typeof video.scheduledAt.toDate === 'function') {
@@ -11390,6 +11496,7 @@ window.updateVideoDetails = async function () {
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
+    const topic = getVideoPostingTopicName() || category;
     const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
     const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
     const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
@@ -11438,6 +11545,7 @@ window.updateVideoDetails = async function () {
             scheduledVisibility,
             scheduledAt,
             category,
+            topic,
             language,
             license,
             monetizable,
@@ -11463,6 +11571,7 @@ window.updateVideoDetails = async function () {
             cached.scheduledVisibility = scheduledVisibility;
             cached.scheduledAt = scheduledAt;
             cached.category = category;
+            cached.topic = topic;
             cached.language = language;
             cached.license = license;
             cached.monetizable = monetizable;
@@ -12696,6 +12805,7 @@ function startAutoCaptions(player) {
     const speechStream = new MediaStream([audioTracks[0]]);
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
+    recognition.stream = speechStream;
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
@@ -13845,6 +13955,7 @@ window.uploadVideo = async function () {
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
+    const topic = getVideoPostingTopicName() || category;
     const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
     const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
     const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
@@ -13977,6 +14088,7 @@ window.uploadVideo = async function () {
             ageRestricted,
             containsSensitiveContent,
             category,
+            topic,
             language,
             license,
             stats: { likes: 0, comments: 0, saves: 0, views: 0 }

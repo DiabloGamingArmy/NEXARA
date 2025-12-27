@@ -40,7 +40,8 @@ export function buildVideoCardElement({
 
     const views = document.createElement('div');
     views.className = 'video-views';
-    views.textContent = `${formatCompactNumber?.(getVideoViewCount?.(video))} views`;
+    const topicLabel = video.topic || video.category || video.categoryLabel || video.genre;
+    views.textContent = topicLabel ? topicLabel : 'No topic';
     thumb.appendChild(views);
 
     const meta = document.createElement('div');
