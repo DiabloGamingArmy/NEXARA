@@ -5271,6 +5271,10 @@ body.video-viewer-inline-open .nexera-alert-banner {
     border-radius: 8px;
     padding: 6px 10px;
     text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     cursor: pointer;
 }
 
@@ -5282,6 +5286,22 @@ body.video-viewer-inline-open .nexera-alert-banner {
 .video-control-popover-item.is-selected {
     border-color: var(--primary);
     color: var(--primary);
+}
+
+.video-control-popover-item .caption-check {
+    opacity: 0;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.video-control-popover-item.is-selected .caption-check {
+    opacity: 1;
+}
+
+.video-captions-empty {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 4px 2px 0;
 }
 
 .video-control-popover-group.is-open .video-control-popover {
