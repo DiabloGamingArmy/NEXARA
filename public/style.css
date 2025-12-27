@@ -3539,11 +3539,43 @@ body.light-mode .category-pill.active .topic-verified-icon {
     background: var(--bg-card);
 }
 
+.inbox-notification-item--content {
+    justify-content: space-between;
+}
+
 .inbox-notification-text {
+    flex: 1;
     display: flex;
     flex-direction: column;
     gap: 4px;
     font-size: 0.92rem;
+}
+
+.inbox-notification-media {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: auto;
+}
+
+.inbox-notification-media img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.inbox-notification-title {
+    padding: 6px;
+    font-size: 0.72rem;
+    text-align: center;
+    color: var(--text-muted);
+    line-height: 1.2;
 }
 
 .inbox-notification-meta {
