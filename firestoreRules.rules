@@ -160,6 +160,14 @@ service cloud.firestore {
     }
 
     // -------------------------
+    // Trending categories (server-written)
+    // -------------------------
+    match /trendingCategories/{topicId} {
+      allow read: if true;
+      allow write: if (isSignedIn() && hasAccountRole('staff')) || request.auth == null;
+    }
+
+    // -------------------------
     // Posts
     // -------------------------
     match /posts/{postId} {
