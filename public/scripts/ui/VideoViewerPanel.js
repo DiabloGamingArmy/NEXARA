@@ -40,14 +40,12 @@ export function buildVideoViewerLayout() {
                                     <button id="video-control-captions" class="icon-pill" aria-label="Captions">
                                         <i class="ph ph-closed-captioning"></i>
                                     </button>
-                                    <div class="video-control-popover video-control-captions-popover" role="menu" aria-label="Captions">
+                                    <div class="video-control-popover video-control-captions-popover" role="dialog" aria-label="Captions">
                                         <div class="video-control-popover-title">Subtitles</div>
-                                        <button class="video-control-popover-item" type="button" data-caption="off" role="menuitemradio" aria-checked="true">
-                                            <span>Off</span><span class="caption-check">✓</span>
-                                        </button>
-                                        <button class="video-control-popover-item" type="button" data-caption="auto" role="menuitemradio" aria-checked="false">
-                                            <span>Auto-generated captions</span><span class="caption-check">✓</span>
-                                        </button>
+                                        <select id="video-captions-select" class="video-captions-select" aria-label="Captions">
+                                            <option value="off">Off</option>
+                                            <option value="auto">Auto-generated</option>
+                                        </select>
                                         <div class="video-captions-empty" id="video-captions-empty" aria-live="polite"></div>
                                     </div>
                                 </div>

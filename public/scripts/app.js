@@ -1908,14 +1908,24 @@ function renderTrendingTopics(topics) {
         if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
-    const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, topics.length);
+    const availableTopics = getAvailableTopicSet();
+    const filteredTopics = topics.filter(function (topic) {
+        return availableTopics.has((topic.name || '').toLowerCase());
+    });
+    if (!filteredTopics.length) {
+        list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
+        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
+        return;
+    }
+    const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, filteredTopics.length);
     list.classList.toggle('is-scrollable', visibleCount > TRENDING_PAGE_SIZE && topics.length > TRENDING_PAGE_SIZE);
-    topics.slice(0, visibleCount).forEach(function (topic) {
+    filteredTopics.slice(0, visibleCount).forEach(function (topic) {
         const item = document.createElement('div');
         item.className = 'trend-item';
         item.innerHTML = `<span>${escapeHtml(topic.name)}</span><span style=\"color:var(--text-muted);\">${formatCompactNumber(topic.count || 0)}</span>`;
         item.addEventListener('click', function () {
             if (typeof window.setCategory === 'function') window.setCategory(topic.name);
+            moveTopicPillAfterAnchors(topic.name);
         });
         list.appendChild(item);
     });
@@ -1924,14 +1934,14 @@ function renderTrendingTopics(topics) {
         loadMoreWrap.innerHTML = '';
     }
 
-    if (visibleCount < topics.length && loadMoreWrap) {
+    if (visibleCount < filteredTopics.length && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
         loadMore.textContent = 'Load More';
         loadMore.addEventListener('click', function () {
-            trendingTopicsState.visibleCount = Math.min(topics.length, visibleCount + TRENDING_PAGE_SIZE);
-            renderTrendingTopics(topics);
+            trendingTopicsState.visibleCount = Math.min(filteredTopics.length, visibleCount + TRENDING_PAGE_SIZE);
+            renderTrendingTopics(filteredTopics);
         });
         loadMoreWrap.appendChild(loadMore);
     }
@@ -2909,7 +2919,7 @@ async function createCategory(payload) {
     renderDestinationPicker();
     syncPostButtonState();
     closeDestinationPicker();
-    toast('Category created', 'info');
+    toast('Topic created', 'info');
     return slug;
 }
 
@@ -2919,7 +2929,7 @@ async function joinCategory(categoryId, role = 'member') {
     const membershipRef = doc(db, `categories/${categoryId}/members/${currentUser.uid}`);
     const userMembershipRef = doc(db, `users/${currentUser.uid}/categoryMemberships/${categoryId}`);
     const catSnap = await getDoc(catRef);
-    if (!catSnap.exists()) return toast('Category missing', 'error');
+    if (!catSnap.exists()) return toast('Topic missing', 'error');
     const cat = catSnap.data();
 
     const membershipPayload = {
@@ -6971,6 +6981,39 @@ function computeTrendingCategories(limit = 8) {
     return Object.entries(counts).sort(function (a, b) { return b[1] - a[1]; }).slice(0, limit).map(function (entry) { return entry[0]; });
 }
 
+function getTopicHeaderButtons() {
+    const header = document.getElementById('category-header');
+    if (!header) return [];
+    return Array.from(header.querySelectorAll('.category-pill')).filter(function (pill) {
+        const label = pill.getAttribute('data-topic');
+        return !!label;
+    });
+}
+
+function moveTopicPillAfterAnchors(topicName) {
+    const header = document.getElementById('category-header');
+    if (!header) return;
+    const pills = getTopicHeaderButtons();
+    const anchorLabels = ['For You', 'Following'];
+    const anchorPills = pills.filter(function (pill) { return anchorLabels.includes(pill.getAttribute('data-topic')); });
+    const target = pills.find(function (pill) { return pill.getAttribute('data-topic') === topicName; });
+    if (!target || anchorPills.includes(target)) return;
+    const insertAfter = anchorPills[1] || anchorPills[0];
+    if (insertAfter && insertAfter.nextSibling) {
+        header.insertBefore(target, insertAfter.nextSibling);
+    } else {
+        header.appendChild(target);
+    }
+    target.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    window.updateCategoryScrollButtons?.();
+}
+
+function getAvailableTopicSet() {
+    const pills = getTopicHeaderButtons();
+    const labels = pills.map(function (pill) { return pill.getAttribute('data-topic'); });
+    return new Set(labels.map(function (label) { return label.toLowerCase(); }));
+}
+
 function renderCategoryPills() {
     const header = document.getElementById('category-header');
     if (!header) return;
@@ -7015,6 +7058,7 @@ function renderCategoryPills() {
         const pill = document.createElement('div');
         pill.className = 'category-pill' + (currentCategory === label ? ' active' : '');
         pill.textContent = label;
+        pill.dataset.topic = label;
         pill.onclick = function () { window.setCategory(label); };
         header.appendChild(pill);
     });
@@ -7060,6 +7104,7 @@ function renderCategoryPills() {
         const pill = document.createElement('div');
         pill.className = 'category-pill' + (currentCategory === topic.name ? ' active' : '') + (topic.verified ? ' verified-topic' : '');
         pill.innerHTML = `${escapeHtml(topic.name)}${topic.verified ? `<span class="topic-verified-icon">${getVerifiedIconSvg()}</span>` : ''}`;
+        pill.dataset.topic = topic.name;
         pill.onclick = function () { window.setCategory(topic.name); };
         header.appendChild(pill);
     });
@@ -12622,8 +12667,63 @@ function ensureAutoCaptionsTrack(player) {
     const tracks = Array.from(player.textTracks || []);
     const existing = tracks.find(function (track) { return track.label === 'Auto'; });
     if (existing) return existing;
-    const track = player.addTextTrack('captions', 'Auto', 'en');
-    return track;
+    return player.addTextTrack('captions', 'Auto', 'en');
+}
+
+let autoCaptionState = null;
+function stopAutoCaptions() {
+    if (!autoCaptionState) return;
+    try {
+        autoCaptionState.recognition?.stop();
+    } catch (err) {
+        console.warn('Unable to stop auto captions', err);
+    }
+    autoCaptionState = null;
+}
+
+function startAutoCaptions(player) {
+    if (!player) return false;
+    if (!player.captureStream || !(window.SpeechRecognition || window.webkitSpeechRecognition)) {
+        toast('Auto-generated captions not supported in this browser.', 'info');
+        return false;
+    }
+    const stream = player.captureStream();
+    const audioTracks = stream.getAudioTracks();
+    if (!audioTracks.length) {
+        toast('Auto-generated captions not supported for this video.', 'info');
+        return false;
+    }
+    const speechStream = new MediaStream([audioTracks[0]]);
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    const autoTrack = ensureAutoCaptionsTrack(player);
+    autoTrack.mode = 'showing';
+    recognition.onresult = function (event) {
+        const result = event.results[event.results.length - 1];
+        const transcript = result && result[0] ? result[0].transcript.trim() : '';
+        if (!transcript) return;
+        const start = Math.max(0, player.currentTime - 1);
+        const end = player.currentTime + 2;
+        try {
+            autoTrack.addCue(new VTTCue(start, end, transcript));
+        } catch (err) {
+            console.warn('Unable to add caption cue', err);
+        }
+    };
+    recognition.onerror = function (event) {
+        console.warn('Auto captions error', event);
+    };
+    try {
+        recognition.start();
+    } catch (err) {
+        console.warn('Unable to start auto captions', err);
+        return false;
+    }
+    autoCaptionState = { recognition, speechStream };
+    return true;
 }
 
 function applyCaptionsMode(player, mode) {
@@ -12633,10 +12733,11 @@ function applyCaptionsMode(player, mode) {
         track.mode = 'disabled';
     });
     if (mode === 'auto') {
-        const autoTrack = ensureAutoCaptionsTrack(player);
-        if (autoTrack) autoTrack.mode = 'showing';
+        stopAutoCaptions();
+        startAutoCaptions(player);
         return;
     }
+    stopAutoCaptions();
     if (mode.startsWith('track:')) {
         const label = mode.replace('track:', '');
         const match = tracks.find(function (track) { return track.label === label; });
@@ -12972,48 +13073,48 @@ function bindVideoViewerControls() {
             const popover = captionsGroup.querySelector('.video-control-captions-popover');
             if (!popover) return;
             const emptyNote = popover.querySelector('#video-captions-empty');
-            popover.querySelectorAll('[data-caption^=\"track:\"]').forEach(function (node) { node.remove(); });
-            const baseOptions = popover.querySelectorAll('[data-caption]');
-            baseOptions.forEach(function (option) {
-                const mode = option.dataset.caption;
-                const active = mode === currentMode;
-                option.classList.toggle('is-selected', active);
-                option.setAttribute('aria-checked', active ? 'true' : 'false');
-            });
+            const select = popover.querySelector('#video-captions-select');
+            if (!select) return;
+            const baseOptions = Array.from(select.querySelectorAll('option[data-caption="track"]'));
+            baseOptions.forEach(function (option) { option.remove(); });
             const tracks = Array.from(player.textTracks || []);
             tracks.forEach(function (track) {
                 if (!track.label || track.label === 'Auto') return;
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'video-control-popover-item';
-                button.dataset.caption = `track:${track.label}`;
-                button.setAttribute('role', 'menuitemradio');
-                const active = currentMode === `track:${track.label}`;
-                button.classList.toggle('is-selected', active);
-                button.setAttribute('aria-checked', active ? 'true' : 'false');
-                button.innerHTML = `<span>${escapeHtml(track.label)}</span><span class="caption-check">✓</span>`;
-                button.addEventListener('click', function () {
-                    setStoredCaptionsMode(`track:${track.label}`);
-                    applyCaptionsMode(player, `track:${track.label}`);
-                    buildCaptionsMenu();
-                });
-                popover.appendChild(button);
+                const option = document.createElement('option');
+                option.value = `track:${track.label}`;
+                option.textContent = track.label;
+                option.dataset.caption = 'track';
+                select.appendChild(option);
             });
             if (emptyNote) {
                 const hasTracks = tracks.some(function (track) { return track.label && track.label !== 'Auto'; });
                 emptyNote.textContent = (!hasTracks && currentMode === 'off') ? 'No subtitles' : '';
             }
+            select.value = currentMode;
+            const autoOption = select.querySelector('option[value="auto"]');
+            const autoSupported = !!(player.captureStream && (window.SpeechRecognition || window.webkitSpeechRecognition));
+            if (autoOption) {
+                autoOption.disabled = !autoSupported;
+                if (!autoSupported) autoOption.textContent = 'Auto-generated (unsupported)';
+                else autoOption.textContent = 'Auto-generated';
+            }
+            if (select.value === 'auto' && !autoSupported) {
+                select.value = 'off';
+                setStoredCaptionsMode('off');
+            }
         };
-        const captionOptions = captionsGroup?.querySelectorAll('[data-caption]');
-        captionOptions?.forEach(function (option) {
-            option.addEventListener('click', function () {
-                const mode = option.dataset.caption === 'off' ? 'off' : 'auto';
+        const select = captionsGroup?.querySelector('#video-captions-select');
+        if (select && !select.dataset.bound) {
+            select.dataset.bound = 'true';
+            select.addEventListener('change', function () {
+                const mode = select.value;
                 setStoredCaptionsMode(mode);
                 applyCaptionsMode(player, mode);
-                toast(mode === 'off' ? 'Captions off' : 'Captions: Auto', 'info');
+                const message = mode === 'off' ? 'Captions off' : mode === 'auto' ? 'Captions: Auto' : `Captions: ${mode.replace('track:', '')}`;
+                toast(message, 'info');
                 buildCaptionsMenu();
             });
-        });
+        }
         captionsBtn.addEventListener('click', function () {
             buildCaptionsMenu();
         });

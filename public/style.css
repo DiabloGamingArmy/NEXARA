@@ -5304,6 +5304,15 @@ body.video-viewer-inline-open .nexera-alert-banner {
     padding: 4px 2px 0;
 }
 
+.video-captions-select {
+    width: 100%;
+    background: var(--bg-body);
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+
 .video-control-popover-group.is-open .video-control-popover {
     display: block;
 }
