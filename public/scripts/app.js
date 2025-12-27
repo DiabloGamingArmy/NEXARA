@@ -976,7 +976,7 @@ function isMobileViewport() {
 }
 
 function shouldShowRightSidebar(viewId) {
-    return viewId === 'feed';
+    return ['feed', 'videos', 'discover', 'saved', 'messages', 'profile', 'live'].includes(viewId);
 }
 
 window.shouldShowRightSidebar = shouldShowRightSidebar;
@@ -1370,7 +1370,7 @@ const TRENDING_RANGE_WINDOWS = {
 
 const TRENDING_RANGE_STORAGE_KEY = 'nexera_trending_timeframe';
 const TRENDING_DEFAULT_RANGE = 'six_months';
-const TRENDING_PAGE_SIZE = 3;
+const TRENDING_PAGE_SIZE = 6;
 
 const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
