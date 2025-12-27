@@ -9,7 +9,9 @@
 
 const {setGlobalOptions} = require("firebase-functions");
 const {onCall, onRequest} = require("firebase-functions/https");
+const {onDocumentCreated, onDocumentDeleted} = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
+const admin = require("firebase-admin");
 
 // For cost control, you can set the maximum number of containers that can be
 // running at the same time. This helps mitigate the impact of unexpected
@@ -37,6 +39,68 @@ const uploads = require("./uploads.js");
 exports.initializeUserChannel = ivs.initializeUserChannel;
 exports.createEphemeralChannel = ivs.createEphemeralChannel;
 exports.generatePlaybackToken = ivs.generatePlaybackToken;
+
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+const db = admin.firestore();
+const {FieldValue} = admin.firestore;
+
+async function updateTrendingPopularity(slug, delta) {
+  if (!slug) return;
+  const ref = db.collection("trendingCategories").doc(slug);
+  await ref.set(
+    {
+      slug,
+      popularity: FieldValue.increment(delta),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    {merge: true},
+  );
+}
+
+exports.onCategoryCreate = onDocumentCreated("categories/{categoryId}", async (event) => {
+  const data = event.data?.data() || {};
+  const slug = data.slug || event.params.categoryId;
+  if (!slug) return;
+  await db.collection("trendingCategories").doc(slug).set(
+    {
+      slug,
+      popularity: 0,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    {merge: true},
+  );
+});
+
+exports.onPostCreate = onDocumentCreated("posts/{postId}", async (event) => {
+  const data = event.data?.data() || {};
+  const slug = data.categoryId || data.categorySlug || data.category;
+  await updateTrendingPopularity(slug, 5);
+});
+
+exports.onCommentCreate = onDocumentCreated("posts/{postId}/comments/{commentId}", async (event) => {
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : {};
+  const slug = postData?.categoryId || postData?.categorySlug || postData?.category;
+  await updateTrendingPopularity(slug, 1);
+});
+
+exports.onPostDelete = onDocumentDeleted("posts/{postId}", async (event) => {
+  const data = event.data?.data() || {};
+  const slug = data.categoryId || data.categorySlug || data.category;
+  await updateTrendingPopularity(slug, -5);
+});
+
+exports.onCommentDelete = onDocumentDeleted("posts/{postId}/comments/{commentId}", async (event) => {
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : {};
+  const slug = postData?.categoryId || postData?.categorySlug || postData?.category;
+  await updateTrendingPopularity(slug, -1);
+});
 
 exports.createUploadSession = onCall((data, context) => {
   if (!context.auth) {
