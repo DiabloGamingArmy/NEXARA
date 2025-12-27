@@ -1853,19 +1853,6 @@ function resolveCategoryNameBySlug(slug) {
     return match?.name || formatSlugLabel(slug);
 }
 
-async function incrementTrendingPopularity(slug, amount = 1) {
-    if (!slug) return;
-    try {
-        const ref = doc(db, 'trendingCategories', slug);
-        await updateDoc(ref, {
-            popularity: increment(amount),
-            updatedAt: new Date()
-        });
-    } catch (error) {
-        console.error('Failed to update trending popularity:', error);
-    }
-}
-
 // Trending topics now come from the staff-populated "trendingCategories" collection.
 async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
     const items = [];
@@ -3898,7 +3885,7 @@ function getPostHTML(post, options = {}) {
         let commentPreviewHtml = '';
         if (post.previewComment) {
             commentPreviewHtml = `
-                <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px;">
+                <div class="post-comment-preview" style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px;">
                     <span style="font-weight:bold; color:var(--text-main);">${escapeHtml(post.previewComment.author)}:</span>
                     <span>${escapeHtml(post.previewComment.text)}</span>
                     ${post.previewComment.likes ? `<span style="margin-left:auto; font-size:0.75rem; display:flex; align-items:center; gap:3px;"><i class="ph-fill ph-thumbs-up"></i> ${post.previewComment.likes}</span>` : ''}
@@ -5163,9 +5150,6 @@ window.createPost = async function () {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
             await incrementTagUses(normalizedTags);
-            if (resolvedCategoryId) {
-                incrementTrendingPopularity(resolvedCategoryId, 5);
-            }
         }
 
         if (locationValue) {
@@ -6058,17 +6042,6 @@ window.sendComment = async function () {
             }
         });
         const post = allPosts.find(function (p) { return p.id === activePostId; });
-        let categorySlug = post?.categoryId || post?.categorySlug || '';
-        if (!categorySlug) {
-            try {
-                const postSnap = await getDoc(postRef);
-                const postData = postSnap.exists() ? postSnap.data() : null;
-                categorySlug = postData?.categoryId || postData?.categorySlug || '';
-            } catch (error) {
-                console.warn('Unable to resolve post category', error);
-            }
-        }
-        if (categorySlug) incrementTrendingPopularity(categorySlug, 1);
         if (post?.userId && post.userId !== currentUser.uid) {
             createNotificationOnce({
                 targetUid: post.userId,
@@ -6212,12 +6185,57 @@ window.confirmDeleteComment = async function (commentId) {
     if (!ok) return;
     try {
         await deleteDoc(doc(db, 'posts', activePostId, 'comments', commentId));
+        await refreshTopCommentPreview(activePostId);
         toast('Comment deleted.', 'info');
     } catch (error) {
         console.error('Comment delete failed', error);
         toast('Failed to delete comment.', 'error');
     }
 };
+
+async function refreshTopCommentPreview(postId) {
+    if (!postId) return;
+    const card = document.getElementById(`post-card-${postId}`);
+    if (!card) return;
+    const cardContent = card.querySelector('.card-content');
+    if (!cardContent) return;
+    let previewContainer = cardContent.querySelector('.post-comment-preview');
+    if (!previewContainer) {
+        previewContainer = document.createElement('div');
+        previewContainer.className = 'post-comment-preview';
+        previewContainer.style.marginTop = '10px';
+        previewContainer.style.padding = '8px';
+        previewContainer.style.background = 'rgba(255,255,255,0.05)';
+        previewContainer.style.borderRadius = '8px';
+        previewContainer.style.fontSize = '0.85rem';
+        previewContainer.style.color = 'var(--text-muted)';
+        previewContainer.style.display = 'flex';
+        previewContainer.style.gap = '6px';
+        cardContent.appendChild(previewContainer);
+    }
+    try {
+        const commentsRef = collection(db, 'posts', postId, 'comments');
+        const commentsSnap = await getDocs(query(commentsRef, orderBy('timestamp', 'desc'), limit(1)));
+        if (commentsSnap.empty) {
+            previewContainer.style.display = 'none';
+            previewContainer.innerHTML = '';
+            return;
+        }
+        const top = commentsSnap.docs[0].data() || {};
+        const author = top.userId ? (getCachedUser(top.userId) || {}) : {};
+        const authorName = resolveDisplayName(author) || author.username || top.author || top.authorName || 'Someone';
+        const text = top.text || '';
+        const likes = Number(top.likes || 0);
+        previewContainer.style.display = 'flex';
+        previewContainer.innerHTML = `
+            <span style="font-weight:bold; color:var(--text-main);">${escapeHtml(authorName)}:</span>
+            <span>${escapeHtml(text)}</span>
+            ${likes ? `<span style="margin-left:auto; font-size:0.75rem; display:flex; align-items:center; gap:3px;"><i class="ph-fill ph-thumbs-up"></i> ${likes}</span>` : ''}
+        `;
+    } catch (error) {
+        console.warn('Failed to refresh comment preview', error);
+    }
+}
 
 window.shareComment = function (commentId) {
     const url = `${window.location.origin}/view-thread/${encodeURIComponent(activePostId)}#comment-${encodeURIComponent(commentId)}`;
