@@ -2685,6 +2685,15 @@ function renderVideoDestinationField() {
     }
 }
 
+function bindVideoDestinationField() {
+    const btn = document.getElementById('video-destination-field');
+    if (!btn || btn.__nexeraBound) return;
+    btn.addEventListener('click', function () {
+        window.openVideoDestinationPicker?.();
+    });
+    btn.__nexeraBound = true;
+}
+
 function setVideoPostingDestination(destination) {
     if (!destination) {
         videoPostingDestinationId = 'no-topic';
@@ -15671,6 +15680,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initMiniPlayerDrag();
     initTrendingTopicsUI();
     initVideoViewerLayout();
+    bindVideoDestinationField();
     enhanceInboxLayout();
     syncInboxContentFilters();
     renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
