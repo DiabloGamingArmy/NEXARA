@@ -5705,6 +5705,7 @@ const renderCommentHtml = function (c, isReply) {
 
     const isLiked = Array.isArray(c.likedBy) && c.likedBy.includes(currentUser?.uid);
     const isDisliked = Array.isArray(c.dislikedBy) && c.dislikedBy.includes(currentUser?.uid);
+    const isOwner = currentUser?.uid && c.userId === currentUser.uid;
 
     const avatarHtml = renderAvatar({ ...cAuthor, uid: c.userId }, { size: 36 });
     const username = cAuthor.username ? `@${escapeHtml(cAuthor.username)}` : '';
@@ -5717,6 +5718,11 @@ const renderCommentHtml = function (c, isReply) {
          <img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;">
        </div>`
         : "";
+
+    const menuButton = `
+        <button class="comment-menu-btn" onclick="window.openCommentMenu('${c.id}', ${isOwner}, event)" aria-label="Comment options">
+            <i class="ph ph-dots-three-vertical"></i>
+        </button>`;
 
     return `
     <div id="comment-${c.id}" class="comment-item ${isReply ? 'reply-item' : ''}" data-parent="${parentCommentId || ''}">
@@ -5733,6 +5739,7 @@ const renderCommentHtml = function (c, isReply) {
             </div>
             <div class="comment-timestamp">${timestampText}</div>
           </div>
+          ${menuButton}
         </div>
 
         <div class="comment-body-text">
@@ -6103,6 +6110,135 @@ function updateCommentReactionUI(commentId, likes, dislikes, isLiked, isDisliked
         dislikeBtn.innerHTML = `<i class="${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down"></i> <span class="comment-dislike-count" id="comment-dislike-count-${commentId}">${dislikes}</span>`;
     }
 }
+
+window.openCommentMenu = function (commentId, isOwner, event) {
+    event?.stopPropagation?.();
+    const comment = threadComments.find(function (c) { return c.id === commentId; })
+        || optimisticThreadComments.find(function (c) { return c.id === commentId; });
+    if (!comment) return;
+    const options = [];
+    if (isOwner) {
+        options.push({ label: 'Edit Comment', action: function () { window.beginEditComment(commentId); } });
+        options.push({ label: 'Delete Comment', action: function () { window.confirmDeleteComment(commentId); } });
+        options.push({ label: 'Share', action: function () { window.shareComment(commentId); } });
+        options.push({ label: 'Report', action: function () { window.reportContent(comment, 'comments'); } });
+    } else {
+        options.push({ label: 'Share', action: function () { window.shareComment(commentId); } });
+        options.push({ label: 'Message Author', action: function () { window.openUserProfile(comment.userId); } });
+        options.push({ label: 'Report', action: function () { window.reportContent(comment, 'comments'); } });
+    }
+    renderCommentMenu(options, event);
+};
+
+function renderCommentMenu(options = [], event) {
+    let menu = document.getElementById('comment-options-menu');
+    if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'comment-options-menu';
+        menu.className = 'comment-options-menu menu-surface';
+        document.body.appendChild(menu);
+    }
+    menu.innerHTML = options.map(function (opt, idx) {
+        return `<button type="button" data-comment-menu-idx="${idx}">${escapeHtml(opt.label)}</button>`;
+    }).join('');
+
+    menu.querySelectorAll('button').forEach(function (btn) {
+        const idx = Number(btn.dataset.commentMenuIdx || 0);
+        btn.onclick = function () {
+            closeCommentMenu();
+            options[idx]?.action?.();
+        };
+    });
+
+    if (event?.currentTarget) {
+        const rect = event.currentTarget.getBoundingClientRect();
+        menu.style.top = `${rect.bottom + window.scrollY + 6}px`;
+        menu.style.left = `${Math.max(10, rect.right + window.scrollX - menu.offsetWidth)}px`;
+    }
+    menu.classList.add('open');
+    document.addEventListener('click', handleCommentMenuOutside, true);
+    document.addEventListener('keydown', handleCommentMenuEscape, true);
+}
+
+function closeCommentMenu() {
+    const menu = document.getElementById('comment-options-menu');
+    if (menu) menu.classList.remove('open');
+    document.removeEventListener('click', handleCommentMenuOutside, true);
+    document.removeEventListener('keydown', handleCommentMenuEscape, true);
+}
+
+function handleCommentMenuOutside(event) {
+    const menu = document.getElementById('comment-options-menu');
+    if (!menu) return;
+    if (menu.contains(event.target)) return;
+    closeCommentMenu();
+}
+
+function handleCommentMenuEscape(event) {
+    if (event.key === 'Escape') closeCommentMenu();
+}
+
+window.beginEditComment = function (commentId) {
+    const comment = threadComments.find(function (c) { return c.id === commentId; });
+    if (!comment || comment.userId !== currentUser?.uid) {
+        return toast('You can only edit your own comment.', 'error');
+    }
+    const nextText = prompt('Edit your comment:', comment.text || '');
+    if (nextText === null) return;
+    const trimmed = nextText.trim();
+    if (!trimmed) return toast('Comment cannot be empty.', 'error');
+    updateDoc(doc(db, 'posts', activePostId, 'comments', commentId), { text: trimmed })
+        .then(function () { toast('Comment updated.', 'info'); })
+        .catch(function (error) {
+            console.error('Comment update failed', error);
+            toast('Failed to update comment.', 'error');
+        });
+};
+
+window.confirmDeleteComment = async function (commentId) {
+    const comment = threadComments.find(function (c) { return c.id === commentId; });
+    if (!comment || comment.userId !== currentUser?.uid) {
+        return toast('You can only delete your own comment.', 'error');
+    }
+    const ok = confirm('Delete this comment?');
+    if (!ok) return;
+    try {
+        await deleteDoc(doc(db, 'posts', activePostId, 'comments', commentId));
+        toast('Comment deleted.', 'info');
+    } catch (error) {
+        console.error('Comment delete failed', error);
+        toast('Failed to delete comment.', 'error');
+    }
+};
+
+window.shareComment = function (commentId) {
+    const url = `${window.location.origin}/view-thread/${encodeURIComponent(activePostId)}#comment-${encodeURIComponent(commentId)}`;
+    navigator.clipboard?.writeText(url).then(function () {
+        toast('Comment link copied', 'info');
+    }).catch(function () {
+        toast('Unable to copy link.', 'error');
+    });
+};
+
+window.reportContent = async function (item, type) {
+    if (!requireAuth()) return;
+    const reason = prompt('Why are you reporting this?') || '';
+    if (!reason.trim()) return;
+    const reportsRef = collection(db, 'reports', type);
+    try {
+        await addDoc(reportsRef, {
+            contentId: item.id,
+            contentType: type,
+            reportedBy: currentUser.uid,
+            reason: reason.trim().slice(0, 500),
+            createdAt: serverTimestamp()
+        });
+        toast('Thank you for your report.', 'info');
+    } catch (error) {
+        console.error('Report failed', error);
+        toast('Could not submit report.', 'error');
+    }
+};
 
 window.toggleCommentLike = async function (commentId, event) {
     if (event) event.stopPropagation();
@@ -7648,7 +7784,7 @@ window.handlePostOptionSelect = function (action) {
 }
 window.openReportModal = function () { closePostOptionsDropdown(); const opts = document.getElementById('post-options-modal'); if (opts) opts.style.display = 'none'; const modal = document.getElementById('report-modal'); if (modal) modal.style.display = 'flex'; }
 window.closeReportModal = function () { const modal = document.getElementById('report-modal'); if (modal) modal.style.display = 'none'; }
-window.submitReport = async function () { if (!requireAuth()) return; if (!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if (!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports'), { postId: activeOptionsPost.id, reportedUserId: activeOptionsPost.ownerId, reporterUserId: currentUser.uid, category, details, createdAt: serverTimestamp(), context: activeOptionsPost.context || currentViewId, type: 'post', reason: details }); if (detailEl) detailEl.value = ''; if (categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch (e) { console.error(e); toast('Could not submit report.', 'error'); } }
+window.submitReport = async function () { if (!requireAuth()) return; if (!activeOptionsPost || !activeOptionsPost.id || !activeOptionsPost.ownerId) return toast('No post selected', 'error'); const categoryEl = document.getElementById('report-category'); const detailEl = document.getElementById('report-details'); const category = categoryEl ? categoryEl.value : ''; const details = detailEl ? detailEl.value.trim().substring(0, 500) : ''; if (!category) return toast('Please choose a category.', 'error'); try { await addDoc(collection(db, 'reports', 'threads'), { contentId: activeOptionsPost.id, contentType: 'thread', reportedBy: currentUser.uid, reason: details, createdAt: serverTimestamp() }); if (detailEl) detailEl.value = ''; if (categoryEl) categoryEl.value = ''; window.closeReportModal(); toast('Report submitted', 'info'); } catch (e) { console.error(e); toast('Could not submit report.', 'error'); } }
 window.confirmDeletePost = async function () { if (!activeOptionsPost || !activeOptionsPost.id) return; if (!currentUser || activeOptionsPost.ownerId !== currentUser.uid) return toast('You can only delete your own post.', 'error'); const ok = confirm('Are you sure?'); if (!ok) return; try { await deleteDoc(doc(db, 'posts', activeOptionsPost.id)); allPosts = allPosts.filter(function (p) { return p.id !== activeOptionsPost.id; }); renderFeed(); if (currentViewId === 'profile') renderProfile(); if (currentViewId === 'public-profile' && viewingUserId) renderPublicProfile(viewingUserId); if (activePostId === activeOptionsPost.id) { activePostId = null; window.navigateTo('feed'); const threadStream = document.getElementById('thread-stream'); if (threadStream) threadStream.innerHTML = ''; } window.closePostOptions(); toast('Post deleted', 'info'); } catch (e) { console.error('Delete error', e); toast('Failed to delete post', 'error'); } }
 
 window.beginEditPost = function () {

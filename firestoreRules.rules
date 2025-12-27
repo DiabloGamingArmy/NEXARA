@@ -170,8 +170,14 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['slug','popularity','updatedAt'])
         && request.resource.data.slug == resource.data.slug
         && (request.resource.data.popularity is number)
-        && (request.resource.data.popularity >= resource.data.popularity)
+        && (request.resource.data.popularity >= 0)
       );
+    }
+
+    match /reports/{type}/{reportId} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn() && isStaffAccount();
+      allow delete: if false;
     }
 
     // -------------------------

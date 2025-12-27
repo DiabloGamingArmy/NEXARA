@@ -9,7 +9,7 @@
 
 const {setGlobalOptions} = require("firebase-functions");
 const {onCall, onRequest} = require("firebase-functions/https");
-const {onDocumentCreated} = require("firebase-functions/v2/firestore");
+const {onDocumentCreated, onDocumentDeleted} = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 
@@ -86,6 +86,20 @@ exports.onCommentCreate = onDocumentCreated("posts/{postId}/comments/{commentId}
   const postData = postSnap.exists ? postSnap.data() : {};
   const slug = postData?.categoryId || postData?.categorySlug || postData?.category;
   await updateTrendingPopularity(slug, 1);
+});
+
+exports.onPostDelete = onDocumentDeleted("posts/{postId}", async (event) => {
+  const data = event.data?.data() || {};
+  const slug = data.categoryId || data.categorySlug || data.category;
+  await updateTrendingPopularity(slug, -5);
+});
+
+exports.onCommentDelete = onDocumentDeleted("posts/{postId}/comments/{commentId}", async (event) => {
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : {};
+  const slug = postData?.categoryId || postData?.categorySlug || postData?.category;
+  await updateTrendingPopularity(slug, -1);
 });
 
 exports.createUploadSession = onCall((data, context) => {
