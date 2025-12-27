@@ -107,6 +107,8 @@ let conversationListVisibleCount = 30;
 let inboxMode = 'messages';
 let inboxNotificationsUnsubscribe = null;
 let inboxNotifications = [];
+let contentNotificationsUnsubscribe = null;
+let contentNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -1655,6 +1657,7 @@ function initApp(onReady) {
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 loadInboxModeFromStorage();
                 initInboxNotifications(user.uid);
+                initContentNotifications(user.uid);
                 updateTimeCapsule();
                 const path = window.location.pathname || '/';
                 if (path === '/' || path === '/home') {
@@ -1682,7 +1685,12 @@ function initApp(onReady) {
                     try { inboxNotificationsUnsubscribe(); } catch (err) { }
                     inboxNotificationsUnsubscribe = null;
                 }
+                if (contentNotificationsUnsubscribe) {
+                    try { contentNotificationsUnsubscribe(); } catch (err) { }
+                    contentNotificationsUnsubscribe = null;
+                }
                 inboxNotifications = [];
+                contentNotifications = [];
                 inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
                 updateInboxNavBadge();
                 followedCategories = new Set();
@@ -8144,6 +8152,27 @@ function getNotificationBucket(notification = {}) {
     return 'account';
 }
 
+function getContentNotificationBucket(notification = {}) {
+    const contentType = (notification.contentType || '').toLowerCase();
+    if (contentType === 'video' || contentType === 'videos') return 'videos';
+    if (contentType === 'livestream' || contentType === 'live' || contentType === 'stream' || contentType === 'livestreams') return 'livestreams';
+    if (contentType === 'post' || contentType === 'posts') return 'posts';
+    return null;
+}
+
+function formatContentTypeLabel(contentType = '') {
+    const normalized = (contentType || '').toLowerCase();
+    if (normalized === 'video' || normalized === 'videos') return 'video';
+    if (normalized === 'livestream' || normalized === 'live' || normalized === 'stream' || normalized === 'livestreams') return 'live stream';
+    return 'post';
+}
+
+function buildContentNotificationDescription(notification = {}) {
+    const actionLabel = formatNotificationAction(notification.actionType || 'activity');
+    const contentLabel = formatContentTypeLabel(notification.contentType);
+    return `${actionLabel} your ${contentLabel}.`;
+}
+
 function formatNotificationAction(action = '') {
     const normalized = (action || '').toLowerCase();
     const map = {
@@ -8244,6 +8273,12 @@ function updateInboxNavBadge() {
 
 function updateInboxNotificationCounts() {
     const counts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
+    contentNotifications.forEach(function (notif) {
+        if (notif.isRead) return;
+        const bucket = getContentNotificationBucket(notif);
+        if (!bucket) return;
+        counts[bucket] = (counts[bucket] || 0) + 1;
+    });
     inboxNotifications.forEach(function (notif) {
         if (notif.read) return;
         const bucket = getNotificationBucket(notif);
@@ -8299,6 +8334,70 @@ function markNotificationRead(notif) {
     const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
     updateDoc(notifRef, { read: true }).catch(function (err) {
         console.warn('Failed to mark notification read', err?.message || err);
+    });
+}
+
+function markContentNotificationRead(notif) {
+    if (!currentUser || !notif || notif.isRead || !notif.id) return;
+    notif.isRead = true;
+    updateInboxNotificationCounts();
+    const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
+    updateDoc(notifRef, { isRead: true }).catch(function (err) {
+        console.warn('Failed to mark content notification read', err?.message || err);
+    });
+}
+
+function renderContentNotificationList(mode = 'posts') {
+    const listEl = document.getElementById(`inbox-list-${mode}`);
+    const emptyEl = document.getElementById(`inbox-empty-${mode}`);
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const bucketed = contentNotifications
+        .filter(function (notif) { return getContentNotificationBucket(notif) === mode; })
+        .sort(function (a, b) {
+            const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+            const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+            return bTs - aTs;
+        });
+    if (!bucketed.length) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    bucketed.slice(0, 50).forEach(function (notif) {
+        const actorName = notif.actorName || 'Someone';
+        const description = buildContentNotificationDescription(notif);
+        const meta = formatMessageHoverTimestamp(notif.createdAt) || '';
+        const title = (notif.contentTitle || '').trim();
+        const thumb = (notif.contentThumbnailUrl || '').trim();
+        const row = document.createElement('div');
+        row.className = 'inbox-notification-item inbox-notification-item--content';
+        row.innerHTML = `
+            <div class="conversation-avatar-slot">${renderAvatar({
+                uid: notif.actorId || 'actor',
+                username: actorName,
+                displayName: actorName,
+                photoURL: notif.actorPhotoUrl || '',
+                avatarColor: computeAvatarColor(actorName)
+            }, { size: 42 })}</div>
+            <div class="inbox-notification-text">
+                <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(description)}</div>
+                ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+            </div>
+            ${(thumb || title) ? `<div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>` : ''}
+        `;
+        row.onclick = function () {
+            markContentNotificationRead(notif);
+            const contentType = (notif.contentType || '').toLowerCase();
+            if ((contentType === 'post' || contentType === 'posts') && notif.contentId) {
+                window.openThread(notif.contentId);
+            } else if ((contentType === 'video' || contentType === 'videos') && notif.contentId && typeof window.openVideoDetail === 'function') {
+                window.openVideoDetail(notif.contentId);
+            } else if ((contentType === 'livestream' || contentType === 'live' || contentType === 'stream' || contentType === 'livestreams') && notif.contentId && typeof window.openLiveSession === 'function') {
+                window.openLiveSession(notif.contentId);
+            }
+        };
+        listEl.appendChild(row);
     });
 }
 
@@ -8388,7 +8487,7 @@ function setInboxMode(mode = 'messages', options = {}) {
     });
     if (inboxMode === 'content') {
         ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
-            renderInboxNotifications(contentMode);
+            renderContentNotificationList(contentMode);
         });
         syncInboxContentFilters();
     } else if (inboxMode !== 'messages') {
@@ -9020,9 +9119,27 @@ function initInboxNotifications(userId) {
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
+        if (inboxMode && inboxMode !== 'messages' && inboxMode !== 'content') {
+            renderInboxNotifications(inboxMode);
+        }
+    }, function (err) {
+        handleSnapshotError('Inbox notifications', err);
+    });
+}
+
+function initContentNotifications(userId) {
+    if (contentNotificationsUnsubscribe) {
+        try { contentNotificationsUnsubscribe(); } catch (err) { }
+        contentNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        contentNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        updateInboxNotificationCounts();
         if (inboxMode === 'content') {
             ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
-                renderInboxNotifications(contentMode);
+                renderContentNotificationList(contentMode);
             });
             syncInboxContentFilters();
             return;
@@ -9031,7 +9148,7 @@ function initInboxNotifications(userId) {
             renderInboxNotifications(inboxMode);
         }
     }, function (err) {
-        handleSnapshotError('Inbox notifications', err);
+        handleSnapshotError('Content notifications', err);
     });
 }
 
