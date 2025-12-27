@@ -1,7 +1,7 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
@@ -80,12 +80,18 @@ let pendingVideoPreviewUrl = null;
 let pendingVideoThumbnailBlob = null;
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
+let pendingVideoDurationSeconds = null;
 let videoTags = [];
 let videoMentions = [];
 let videoMentionSearchTimer = null;
 let videoUploadMode = 'create';
 let editingVideoId = null;
 let editingVideoData = null;
+let videoDestinationLoading = false;
+let videoDestinationError = '';
+let videoDestinationLoaded = false;
+let videoCategories = [];
+let videoCategoryIndex = new Map();
 let miniPlayerState = null;
 let miniPlayerMode = null;
 let videoDetailReturnPath = '/videos';
@@ -120,6 +126,7 @@ const FEED_BATCH_SIZE = 5;
 const FEED_PREFETCH_OFFSET = 2;
 const FEED_PREFETCH_ROOT_MARGIN = '0px 0px 400px 0px';
 const animatedItemKeys = new Set();
+const videoDurationBackfill = new Set();
 const feedPagination = {
     lastDoc: null,
     loading: false,
@@ -959,6 +966,7 @@ window.Nexera.releaseSplash = function (reason = 'release') {
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
+let staffTrendingSyncBound = false;
 let activeOptionsPost = null;
 let threadComments = [];
 let optimisticThreadComments = [];
@@ -1370,13 +1378,24 @@ const TRENDING_RANGE_WINDOWS = {
 
 const TRENDING_RANGE_STORAGE_KEY = 'nexera_trending_timeframe';
 const TRENDING_DEFAULT_RANGE = 'six_months';
-const TRENDING_PAGE_SIZE = 6;
+const TRENDING_PAGE_SIZE = 3;
+const TRENDING_RANGE_FIELDS = {
+    day: 'interactions1d',
+    week: 'interactions7d',
+    month: 'interactions1mo',
+    six_months: 'interactions6mo',
+    year: 'interactions1y',
+    five_years: 'totalInteractions',
+    lifetime: 'totalInteractions'
+};
 
 const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
     loading: false,
     lastLoaded: 0,
-    visibleCount: TRENDING_PAGE_SIZE,
+    items: [],
+    lastDoc: null,
+    hasMore: false,
     lastLoadSucceeded: false,
     needsRefresh: false
 };
@@ -1826,100 +1845,50 @@ function normalizeTrendingTopic(entry) {
     return { topicId: entry.topicId || entry.id || slugifyCategory(name), name, count };
 }
 
-async function fetchTopicStats(range) {
-    if (!range) return [];
-    try {
-        const interactionsField = `interactions.${range}`;
-        const topicsRef = collection(db, 'topics');
-        const snapshot = await getDocs(query(
-            topicsRef,
-            where(interactionsField, '>', 0),
-            orderBy(interactionsField, 'desc'),
-            limit(50)
-        ));
-        if (!snapshot.empty) {
-            return snapshot.docs.map(function (docSnap) {
-                const data = docSnap.data() || {};
-                const count = data?.interactions?.[range] || 0;
-                return normalizeTrendingTopic({ ...data, topicId: docSnap.id, count });
-            }).filter(function (topic) { return (topic.count || 0) > 0; });
-        }
-    } catch (error) {
-        console.debug('Trending topics collection query failed', error?.message || error);
-    }
-    try {
-        const rangeDoc = await getDoc(doc(db, 'topicStats', range));
-        if (rangeDoc.exists()) {
-            const data = rangeDoc.data() || {};
-            const topics = data.topics || data.items || data.trending || [];
-            if (Array.isArray(topics) && topics.length) {
-                return topics.map(normalizeTrendingTopic).filter(Boolean);
-            }
-        }
-    } catch (error) {
-        console.debug('Trending topics range doc missing', error?.message || error);
-    }
+// Trending topics now come from the staff-populated "Trending Categories" collection.
+async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
+    const field = TRENDING_RANGE_FIELDS[range] || TRENDING_RANGE_FIELDS[TRENDING_DEFAULT_RANGE];
+    const items = [];
+    let lastDoc = startAfterDoc || null;
+    let hasMore = true;
+    let iterations = 0;
 
-    try {
-        const statsRef = collection(db, 'topicStats');
-        const snapshot = await getDocs(query(statsRef, where('range', '==', range), orderBy('count', 'desc'), limit(10)));
-        if (!snapshot.empty) {
-            return snapshot.docs.map(function (docSnap) {
-                return normalizeTrendingTopic({ ...docSnap.data(), topicId: docSnap.id });
-            }).filter(Boolean);
+    while (items.length < TRENDING_PAGE_SIZE && hasMore && iterations < 4) {
+        const constraints = [orderBy(field, 'desc'), limit(TRENDING_PAGE_SIZE + 1)];
+        if (lastDoc) constraints.splice(1, 0, startAfter(lastDoc));
+        const snapshot = await getDocs(query(collection(db, 'Trending Categories'), ...constraints));
+        const docs = snapshot.docs;
+        if (!docs.length) {
+            hasMore = false;
+            break;
         }
-    } catch (error) {
-        console.debug('Trending topics query failed', error?.message || error);
+        hasMore = docs.length > TRENDING_PAGE_SIZE;
+        const pageDocs = hasMore ? docs.slice(0, TRENDING_PAGE_SIZE) : docs;
+        lastDoc = docs[docs.length - 1] || lastDoc;
+        iterations += 1;
+
+        for (const docSnap of pageDocs) {
+            const data = docSnap.data() || {};
+            const count = Number(data[field] ?? data.totalInteractions ?? 0) || 0;
+            if (count <= 0) continue;
+            const categoryMeta = await getCategoryMetaBySlug(docSnap.id);
+            if (!categoryMeta) continue;
+            if (categoryMeta.hidden === true || categoryMeta.isPublic === false) continue;
+            items.push({
+                topicId: docSnap.id,
+                categorySlug: docSnap.id,
+                name: categoryMeta.name || categoryMeta.slug || docSnap.id,
+                count
+            });
+            if (items.length >= TRENDING_PAGE_SIZE) break;
+        }
     }
 
-    return [];
-}
-
-function aggregateTrendingTopics(range) {
-    const windowMs = TRENDING_RANGE_WINDOWS[range]?.ms;
-    const cutoff = windowMs ? Date.now() - windowMs : null;
-    const shouldInclude = function (ts) {
-        if (!cutoff) return true;
-        return ts >= cutoff;
+    return {
+        items,
+        lastDoc,
+        hasMore
     };
-
-    const counts = new Map();
-    const addTopic = function (topic, timestamp) {
-        const label = typeof topic === 'string' ? topic.trim() : '';
-        if (!label || label.toLowerCase() === 'general') return;
-        if (!shouldInclude(timestamp)) return;
-        counts.set(label, (counts.get(label) || 0) + 1);
-    };
-
-    allPosts.forEach(function (post) {
-        addTopic(post.category, getFeedItemTimestamp(post));
-    });
-
-    const videoSource = (homeVideosCache && homeVideosCache.length) ? homeVideosCache : (videosCache || []);
-    videoSource.forEach(function (video) {
-        addTopic(video.category || video.genre || video.categoryLabel, getFeedItemTimestamp(video));
-    });
-
-    const sessionSource = (homeLiveSessionsCache && homeLiveSessionsCache.length) ? homeLiveSessionsCache : (liveSessionsCache || []);
-    sessionSource.forEach(function (session) {
-        addTopic(session.category || session.categoryLabel, getFeedItemTimestamp(session));
-    });
-
-    return Array.from(counts.entries())
-        .sort(function (a, b) { return b[1] - a[1]; })
-        .slice(0, 8)
-        .map(function ([name, count]) {
-            return { topicId: slugifyCategory(name), name, count };
-        });
-}
-
-async function getTrendingTopics(range = trendingTopicsState.range) {
-    const stats = await fetchTopicStats(range);
-    if (stats.length) {
-        return stats.slice().filter(function (topic) { return (topic.count || 0) > 0; })
-            .sort(function (a, b) { return (b.count || 0) - (a.count || 0); });
-    }
-    return aggregateTrendingTopics(range);
 }
 
 function renderTrendingTopics(topics) {
@@ -1938,18 +1907,8 @@ function renderTrendingTopics(topics) {
         if (loadMoreWrap) loadMoreWrap.innerHTML = '';
         return;
     }
-    const availableTopics = getAvailableTopicSet();
-    const filteredTopics = topics.filter(function (topic) {
-        return availableTopics.has((topic.name || '').toLowerCase());
-    });
-    if (!filteredTopics.length) {
-        list.innerHTML = `<div class="trend-item"><span>No trending topics yet.</span><span></span></div>`;
-        if (loadMoreWrap) loadMoreWrap.innerHTML = '';
-        return;
-    }
-    const visibleCount = Math.min(trendingTopicsState.visibleCount || TRENDING_PAGE_SIZE, filteredTopics.length);
-    list.classList.toggle('is-scrollable', visibleCount > TRENDING_PAGE_SIZE && filteredTopics.length > TRENDING_PAGE_SIZE);
-    filteredTopics.slice(0, visibleCount).forEach(function (topic) {
+    list.classList.toggle('is-scrollable', topics.length > TRENDING_PAGE_SIZE);
+    topics.forEach(function (topic) {
         const item = document.createElement('div');
         item.className = 'trend-item';
         item.innerHTML = `<span>${escapeHtml(topic.name)}</span><span style=\"color:var(--text-muted);\">${formatCompactNumber(topic.count || 0)}</span>`;
@@ -1964,14 +1923,13 @@ function renderTrendingTopics(topics) {
         loadMoreWrap.innerHTML = '';
     }
 
-    if (visibleCount < filteredTopics.length && loadMoreWrap) {
+    if (trendingTopicsState.hasMore && loadMoreWrap) {
         const loadMore = document.createElement('button');
         loadMore.type = 'button';
         loadMore.className = 'trend-load-more';
         loadMore.textContent = 'Load More';
         loadMore.addEventListener('click', function () {
-            trendingTopicsState.visibleCount = Math.min(filteredTopics.length, visibleCount + TRENDING_PAGE_SIZE);
-            renderTrendingTopics(filteredTopics);
+            loadMoreTrendingTopics();
         });
         loadMoreWrap.appendChild(loadMore);
     }
@@ -1989,15 +1947,21 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
     }
     trendingTopicsState.loading = true;
     trendingTopicsState.lastLoadSucceeded = false;
+    trendingTopicsState.items = [];
+    trendingTopicsState.lastDoc = null;
+    trendingTopicsState.hasMore = false;
     list.classList.remove('is-scrollable');
     list.innerHTML = `<div class="trend-item"><span>Loading topics...</span><span></span></div>`;
     if (loadMoreWrap) loadMoreWrap.innerHTML = '';
     try {
-        const topics = await getTrendingTopics(trendingTopicsState.range);
+        const page = await fetchTrendingTopicsPage(trendingTopicsState.range, null);
+        trendingTopicsState.items = page.items;
+        trendingTopicsState.lastDoc = page.lastDoc;
+        trendingTopicsState.hasMore = page.hasMore;
         trendingTopicsState.lastLoadSucceeded = true;
-        renderTrendingTopics(topics);
+        renderTrendingTopics(trendingTopicsState.items);
         trendingTopicsState.lastLoaded = Date.now();
-        uiDebugLog('trending topics loaded', { range: trendingTopicsState.range, count: topics.length });
+        uiDebugLog('trending topics loaded', { range: trendingTopicsState.range, count: trendingTopicsState.items.length });
     } catch (error) {
         console.warn('Trending topics load failed', error?.message || error);
         list.innerHTML = `<div class="trend-item"><span>Unable to load topics.</span><span></span></div>`;
@@ -2007,6 +1971,22 @@ async function loadTrendingTopics(range = trendingTopicsState.range) {
             trendingTopicsState.needsRefresh = false;
             loadTrendingTopics(trendingTopicsState.range);
         }
+    }
+}
+
+async function loadMoreTrendingTopics() {
+    if (trendingTopicsState.loading || !trendingTopicsState.hasMore) return;
+    trendingTopicsState.loading = true;
+    try {
+        const page = await fetchTrendingTopicsPage(trendingTopicsState.range, trendingTopicsState.lastDoc);
+        trendingTopicsState.items = trendingTopicsState.items.concat(page.items);
+        trendingTopicsState.lastDoc = page.lastDoc;
+        trendingTopicsState.hasMore = page.hasMore;
+        renderTrendingTopics(trendingTopicsState.items);
+    } catch (error) {
+        console.warn('Trending topics pagination failed', error?.message || error);
+    } finally {
+        trendingTopicsState.loading = false;
     }
 }
 
@@ -2021,12 +2001,16 @@ function initTrendingTopicsUI() {
     }
     const resolvedRange = TRENDING_RANGE_WINDOWS[storedRange] ? storedRange : TRENDING_DEFAULT_RANGE;
     trendingTopicsState.range = resolvedRange;
-    trendingTopicsState.visibleCount = TRENDING_PAGE_SIZE;
+    trendingTopicsState.items = [];
+    trendingTopicsState.lastDoc = null;
+    trendingTopicsState.hasMore = false;
     select.value = trendingTopicsState.range;
     if (!select.__nexeraBound) {
         select.addEventListener('change', function () {
             const nextRange = select.value || 'week';
-            trendingTopicsState.visibleCount = TRENDING_PAGE_SIZE;
+            trendingTopicsState.items = [];
+            trendingTopicsState.lastDoc = null;
+            trendingTopicsState.hasMore = false;
             try {
                 window.localStorage?.setItem(TRENDING_RANGE_STORAGE_KEY, nextRange);
             } catch (error) {
@@ -2527,6 +2511,51 @@ function getCategorySnapshot(categoryId) {
     return categories.find(function (c) { return c.id === categoryId; }) || null;
 }
 
+async function loadVideoCategories(force = false) {
+    if (videoDestinationLoading) return;
+    if (videoDestinationLoaded && !force) return;
+    videoDestinationLoading = true;
+    videoDestinationError = '';
+    try {
+        const snap = await getDocs(query(collection(db, 'Categories'), orderBy('name')));
+        videoCategories = snap.docs.map(function (docSnap) {
+            const data = docSnap.data() || {};
+            return { id: docSnap.id, slug: docSnap.id, ...data };
+        }).sort(function (a, b) { return (a.name || a.slug || '').localeCompare(b.name || b.slug || ''); });
+        videoCategoryIndex = new Map(videoCategories.map(function (cat) { return [cat.slug || cat.id, cat]; }));
+        videoDestinationLoaded = true;
+    } catch (error) {
+        console.warn('Unable to load video topics', error);
+        videoDestinationError = 'Unable to load topics.';
+        videoCategories = [];
+        videoCategoryIndex = new Map();
+    } finally {
+        videoDestinationLoading = false;
+    }
+}
+
+async function getCategoryMetaBySlug(slug) {
+    if (!slug) return null;
+    const cached = videoCategoryIndex.get(slug);
+    if (cached) return cached;
+    try {
+        const snap = await getDoc(doc(db, 'Categories', slug));
+        if (!snap.exists()) return null;
+        const data = { id: snap.id, slug: snap.id, ...snap.data() };
+        videoCategoryIndex.set(slug, data);
+        return data;
+    } catch (error) {
+        console.warn('Unable to load category meta', error);
+        return null;
+    }
+}
+
+function resolveCategoryLabelBySlug(slug) {
+    if (!slug || slug === 'no-topic') return 'No topic';
+    const entry = videoCategoryIndex.get(slug);
+    return entry?.name || entry?.slug || 'No topic';
+}
+
 function normalizeMembershipData(raw = {}) {
     const roles = Array.isArray(raw.roles) ? raw.roles : (raw.role ? [raw.role] : []);
     return { ...raw, roles };
@@ -2646,8 +2675,9 @@ function renderDestinationField() {
 function renderVideoDestinationField() {
     const labelEl = document.getElementById('video-destination-current-label');
     const verifiedEl = document.getElementById('video-destination-current-verified');
-    const currentCategoryDoc = videoPostingDestinationId ? getCategorySnapshot(videoPostingDestinationId) : null;
-    if (labelEl) labelEl.textContent = currentCategoryDoc ? currentCategoryDoc.name : (videoPostingDestinationName || 'Select...');
+    const currentCategoryDoc = videoPostingDestinationId ? videoCategoryIndex.get(videoPostingDestinationId) : null;
+    const label = resolveCategoryLabelBySlug(videoPostingDestinationId) || videoPostingDestinationName || 'No topic';
+    if (labelEl) labelEl.textContent = label;
     if (verifiedEl) {
         const isVerified = currentCategoryDoc && currentCategoryDoc.verified;
         verifiedEl.style.display = isVerified ? 'inline-flex' : 'none';
@@ -2656,8 +2686,13 @@ function renderVideoDestinationField() {
 }
 
 function setVideoPostingDestination(destination) {
-    videoPostingDestinationId = destination?.id || null;
-    videoPostingDestinationName = destination?.name || '';
+    if (!destination) {
+        videoPostingDestinationId = 'no-topic';
+        videoPostingDestinationName = 'No topic';
+    } else {
+        videoPostingDestinationId = destination?.id || destination?.slug || 'no-topic';
+        videoPostingDestinationName = destination?.name || destination?.label || resolveCategoryLabelBySlug(videoPostingDestinationId) || 'No topic';
+    }
     renderVideoDestinationField();
 }
 
@@ -2684,6 +2719,7 @@ function syncPostButtonState() {
 
 // --- Destination Picker (DEDUPED / single source of truth) ---
 function computeDestinationTabs() {
+    if (destinationPickerTarget === 'video') return [];
     const tabs = [];
     if (activeDestinationConfig.enableCommunityTab !== false) {
         tabs.push({ type: 'community', label: activeDestinationConfig.communityTabLabel || 'Community' });
@@ -2724,7 +2760,7 @@ function renderDestinationCreateArea() {
     const area = document.getElementById('destination-create-area');
     if (!area) return;
 
-    if (destinationPickerTab !== 'community' || activeDestinationConfig.enableCreateCommunity === false) {
+    if (destinationPickerTarget === 'video' || destinationPickerTab !== 'community' || activeDestinationConfig.enableCreateCommunity === false) {
         area.innerHTML = '';
         return;
     }
@@ -2768,29 +2804,38 @@ function renderDestinationResults() {
     const resultsEl = document.getElementById('destination-results');
     if (!resultsEl) return;
 
-    if (destinationPickerError) {
-        resultsEl.innerHTML = `<div class="destination-error">${destinationPickerError}<div style="margin-top:8px;"><button class="icon-pill" id="destination-retry-btn">Retry</button></div></div>`;
+    const isVideoTarget = destinationPickerTarget === 'video';
+    const loading = isVideoTarget ? videoDestinationLoading : destinationPickerLoading;
+    const error = isVideoTarget ? videoDestinationError : destinationPickerError;
+    if (error) {
+        resultsEl.innerHTML = `<div class="destination-error">${error}<div style="margin-top:8px;"><button class="icon-pill" id="destination-retry-btn">Retry</button></div></div>`;
         const retryBtn = document.getElementById('destination-retry-btn');
-        if (retryBtn) retryBtn.onclick = function () { retryDestinationLoad(); };
+        if (retryBtn) retryBtn.onclick = function () { isVideoTarget ? loadVideoCategories(true).then(renderDestinationPicker) : retryDestinationLoad(); };
         return;
     }
 
-    if (destinationPickerLoading) {
+    if (loading) {
         resultsEl.innerHTML = '<div class="destination-loading"><div class="inline-spinner" style="display:block; margin: 0 auto 8px;"></div>Loading destinations...</div>';
         return;
     }
 
-    const filtered = categories
-        .filter(function (c) { return destinationPickerTab === 'official' ? c.type === 'official' : c.type === 'community'; })
+    const source = isVideoTarget ? videoCategories : categories;
+    const filtered = source
+        .filter(function (c) {
+            if (isVideoTarget) return true;
+            return destinationPickerTab === 'official' ? c.type === 'official' : c.type === 'community';
+        })
         .filter(function (c) {
             return !destinationPickerSearch || (c.name || '').toLowerCase().includes(destinationPickerSearch.toLowerCase());
         })
         .sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
 
     if (!filtered.length) {
-        const message = destinationPickerTab === 'official'
-            ? 'No official destinations found.'
-            : 'No communities found. Create one?';
+        const message = isVideoTarget
+            ? 'No topics found.'
+            : (destinationPickerTab === 'official'
+                ? 'No official destinations found.'
+                : 'No communities found. Create one?');
         resultsEl.innerHTML = `<div class="destination-empty">${message}</div>`;
         return;
     }
@@ -2892,7 +2937,11 @@ function renderDestinationPicker() {
 
     const searchInput = document.getElementById('destination-search-input');
     if (searchInput) {
-        searchInput.placeholder = destinationPickerTab === 'official' ? 'Search official destinations' : 'Search communities';
+        if (destinationPickerTarget === 'video') {
+            searchInput.placeholder = 'Search topics';
+        } else {
+            searchInput.placeholder = destinationPickerTab === 'official' ? 'Search official destinations' : 'Search communities';
+        }
         searchInput.value = destinationPickerSearch;
         searchInput.oninput = function (e) {
             const value = e.target.value;
@@ -2914,6 +2963,14 @@ function openDestinationPicker(config = {}) {
     destinationPickerSelectionId = destinationPickerTarget === 'video'
         ? (videoPostingDestinationId || selectedCategoryId)
         : selectedCategoryId;
+    if (destinationPickerTarget === 'video') {
+        videoDestinationLoading = true;
+        videoDestinationError = '';
+        loadVideoCategories().then(function () {
+            renderVideoDestinationField();
+            renderDestinationPicker();
+        });
+    }
     destinationPickerOpen = true;
 
     const currentCategoryDoc = destinationPickerSelectionId ? getCategorySnapshot(destinationPickerSelectionId) : null;
@@ -10771,21 +10828,13 @@ function findCategoryByName(name) {
 
 function ensureVideoPostingDestination() {
     if (videoPostingDestinationId) return;
-    const fallback = selectedCategoryId ? getCategorySnapshot(selectedCategoryId) : null;
-    if (fallback) {
-        setVideoPostingDestination({ id: fallback.id || selectedCategoryId, name: fallback.name });
-        return;
-    }
-    if (categories.length) {
-        const first = categories[0];
-        setVideoPostingDestination({ id: first.id, name: first.name });
-    }
+    setVideoPostingDestination({ id: 'no-topic', name: 'No topic' });
 }
 
 function getVideoPostingTopicName() {
+    if (videoPostingDestinationId === 'no-topic') return 'No topic';
     if (videoPostingDestinationName) return videoPostingDestinationName;
-    const snapshot = videoPostingDestinationId ? getCategorySnapshot(videoPostingDestinationId) : null;
-    return snapshot?.name || '';
+    return resolveCategoryLabelBySlug(videoPostingDestinationId) || 'No topic';
 }
 
 function applyVideoUploadDefaults() {
@@ -10799,8 +10848,8 @@ function applyVideoUploadDefaults() {
     setVideoSelectValue('video-category', VIDEO_UPLOAD_DEFAULTS.category);
     setVideoSelectValue('video-language', VIDEO_UPLOAD_DEFAULTS.language);
     setVideoSelectValue('video-license', VIDEO_UPLOAD_DEFAULTS.license);
-    videoPostingDestinationId = null;
-    videoPostingDestinationName = '';
+    videoPostingDestinationId = 'no-topic';
+    videoPostingDestinationName = 'No topic';
     ensureVideoPostingDestination();
     renderVideoDestinationField();
     const scheduledInput = document.getElementById('video-scheduled-at');
@@ -10844,15 +10893,13 @@ function populateVideoUploadForm(video = {}) {
     setVideoSelectValue('video-category', video.category, VIDEO_UPLOAD_DEFAULTS.category);
     setVideoSelectValue('video-language', video.language, VIDEO_UPLOAD_DEFAULTS.language);
     setVideoSelectValue('video-license', video.license, VIDEO_UPLOAD_DEFAULTS.license);
-    videoPostingDestinationId = null;
-    videoPostingDestinationName = video.topic || '';
-    const matchedCategory = findCategoryByName(videoPostingDestinationName);
-    if (matchedCategory) {
-        videoPostingDestinationId = matchedCategory.id;
-        videoPostingDestinationName = matchedCategory.name;
-    }
+    videoPostingDestinationId = video.categorySlug || 'no-topic';
+    videoPostingDestinationName = resolveCategoryLabelBySlug(videoPostingDestinationId) || 'No topic';
     ensureVideoPostingDestination();
     renderVideoDestinationField();
+    loadVideoCategories().then(function () {
+        renderVideoDestinationField();
+    });
     const scheduledInput = document.getElementById('video-scheduled-at');
     if (scheduledInput) {
         if (video.scheduledAt && typeof video.scheduledAt.toDate === 'function') {
@@ -10875,6 +10922,9 @@ function populateVideoUploadForm(video = {}) {
 window.openVideoUploadModal = function () {
     setVideoUploadModalMode('create');
     applyVideoUploadDefaults();
+    loadVideoCategories().then(function () {
+        renderVideoDestinationField();
+    });
     return window.toggleVideoUploadModal(true);
 };
 window.toggleVideoUploadModal = function (show = true) {
@@ -10921,6 +10971,7 @@ window.toggleVideoUploadModal = function (show = true) {
         }
         pendingVideoThumbnailBlob = null;
         pendingVideoHasCustomThumbnail = false;
+        pendingVideoDurationSeconds = null;
         resetVideoUploadMeta();
         setVideoUploadModalMode('create');
         applyVideoUploadDefaults();
@@ -11364,6 +11415,33 @@ async function generateThumbnailFromVideo(file) {
     }
 }
 
+function resolveVideoDurationFromFile(file, previewUrl = null) {
+    if (!file && !previewUrl) return Promise.resolve(null);
+    return new Promise(function (resolve) {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+        const needsCleanup = !previewUrl;
+        const url = previewUrl || URL.createObjectURL(file);
+
+        const finalize = function (value) {
+            if (needsCleanup) URL.revokeObjectURL(url);
+            resolve(value);
+        };
+
+        video.onloadedmetadata = function () {
+            const duration = Number(video.duration || 0) || 0;
+            finalize(duration ? Math.round(duration) : null);
+        };
+        video.onerror = function () { finalize(null); };
+        video.src = url;
+        video.load();
+    });
+}
+
 window.handleVideoFileChange = async function (event) {
     const input = event?.target;
     const file = input?.files?.[0];
@@ -11382,6 +11460,7 @@ window.handleVideoFileChange = async function (event) {
         if (thumbPreview) thumbPreview.src = '';
         pendingVideoThumbnailBlob = null;
         pendingVideoHasCustomThumbnail = false;
+        pendingVideoDurationSeconds = null;
         return;
     }
 
@@ -11402,6 +11481,8 @@ window.handleVideoFileChange = async function (event) {
         previewPlayer.load();
     }
     if (preview) preview.classList.add('active');
+
+    pendingVideoDurationSeconds = await resolveVideoDurationFromFile(file, pendingVideoPreviewUrl);
 
     if (!pendingVideoHasCustomThumbnail) {
         pendingVideoThumbnailBlob = await generateThumbnailFromVideo(file);
@@ -11496,7 +11577,8 @@ window.updateVideoDetails = async function () {
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
-    const topic = getVideoPostingTopicName() || category;
+    const categorySlug = videoPostingDestinationId && videoPostingDestinationId !== 'no-topic' ? videoPostingDestinationId : 'no-topic';
+    const topic = resolveCategoryLabelBySlug(categorySlug) || 'No topic';
     const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
     const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
     const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
@@ -11545,6 +11627,7 @@ window.updateVideoDetails = async function () {
             scheduledVisibility,
             scheduledAt,
             category,
+            categorySlug,
             topic,
             language,
             license,
@@ -11571,6 +11654,7 @@ window.updateVideoDetails = async function () {
             cached.scheduledVisibility = scheduledVisibility;
             cached.scheduledAt = scheduledAt;
             cached.category = category;
+            cached.categorySlug = categorySlug;
             cached.topic = topic;
             cached.language = language;
             cached.license = license;
@@ -11925,6 +12009,9 @@ function initVideoFeed(options = {}) {
     debugVideo('feed-init', { force });
     renderVideosTopBar();
     renderVideoFeed([]);
+    loadVideoCategories().then(function () {
+        refreshVideoFeedWithFilters({ skipTopBar: true });
+    });
     videosPagination.lastDoc = null;
     videosPagination.done = false;
     debugVideo('feed-fetch-start');
@@ -11979,6 +12066,35 @@ function formatVideoDuration(video = {}) {
     const secs = Math.floor(seconds % 60);
     if (!seconds) return '0:00';
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function backfillVideoDuration(video = {}) {
+    if (!video || !video.id) return;
+    if (Number(video.duration || 0) > 0) return;
+    if (videoDurationBackfill.has(video.id)) return;
+    const src = video.videoURL || video.url || '';
+    if (!src) return;
+    videoDurationBackfill.add(video.id);
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.src = src;
+    probe.onloadedmetadata = function () {
+        const duration = Math.round(Number(probe.duration || 0) || 0);
+        if (duration > 0) {
+            video.duration = duration;
+            const durationEl = document.querySelector(`.video-card[data-video-id="${video.id}"] .video-duration`);
+            if (durationEl) durationEl.textContent = formatVideoDuration(video);
+            updateDoc(doc(db, 'videos', video.id), { duration }).catch(function (error) {
+                console.warn('Unable to backfill video duration', error);
+            });
+        } else {
+            videoDurationBackfill.delete(video.id);
+        }
+    };
+    probe.onerror = function () {
+        videoDurationBackfill.delete(video.id);
+    };
+    probe.load();
 }
 
 function resolveVideoThumbnail(video = {}) {
@@ -12138,6 +12254,7 @@ function openVideoFromFeed(videoId, videoData) {
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
     const canEdit = !!(currentUser?.uid && video.ownerId === currentUser.uid);
+    backfillVideoDuration(video);
     const result = buildVideoCardElement({
         video,
         author,
@@ -12148,6 +12265,7 @@ function buildVideoCard(video) {
             resolveVideoThumbnail,
             getVideoViewCount,
             formatVideoDuration,
+            resolveCategoryLabelBySlug,
             applyAvatarToElement,
             ensureVideoStats
         },
@@ -13955,7 +14073,8 @@ window.uploadVideo = async function () {
     const mentions = normalizeMentionsField(videoMentions || []);
     const visibility = document.getElementById('video-visibility').value || 'public';
     const category = document.getElementById('video-category')?.value || VIDEO_UPLOAD_DEFAULTS.category;
-    const topic = getVideoPostingTopicName() || category;
+    const categorySlug = videoPostingDestinationId && videoPostingDestinationId !== 'no-topic' ? videoPostingDestinationId : 'no-topic';
+    const topic = resolveCategoryLabelBySlug(categorySlug) || 'No topic';
     const language = document.getElementById('video-language')?.value || VIDEO_UPLOAD_DEFAULTS.language;
     const license = document.getElementById('video-license')?.value || VIDEO_UPLOAD_DEFAULTS.license;
     const allowDownload = getVideoToggleValue('video-allow-download', VIDEO_UPLOAD_DEFAULTS.allowDownload);
@@ -13969,6 +14088,7 @@ window.uploadVideo = async function () {
     let uploadSession = null;
     let videoId = `${Date.now()}`;
     let storagePath = `videos/${currentUser.uid}/${videoId}`;
+    const draftDuration = pendingVideoDurationSeconds;
     if (USE_UPLOAD_SESSION) {
         try {
             console.info('[VideoUpload] Requesting upload session');
@@ -14072,6 +14192,7 @@ window.uploadVideo = async function () {
             description,
             tags,
             mentions,
+            duration: draftDuration || null,
             createdAt: serverTimestamp(),
             storagePath,
             videoURL,
@@ -14088,6 +14209,7 @@ window.uploadVideo = async function () {
             ageRestricted,
             containsSensitiveContent,
             category,
+            categorySlug,
             topic,
             language,
             license,
@@ -15332,6 +15454,41 @@ function renderStaffConsole() {
     listenVerificationRequests();
     listenReports();
     listenAdminLogs();
+    bindTrendingCategoriesSync();
+}
+
+// Staff-only sync helper to seed Trending Categories from Categories.
+function bindTrendingCategoriesSync() {
+    const btn = document.getElementById('sync-trending-categories');
+    if (!btn || staffTrendingSyncBound) return;
+    staffTrendingSyncBound = true;
+    btn.addEventListener('click', async function () {
+        try {
+            const categoriesSnap = await getDocs(collection(db, 'Categories'));
+            const batch = writeBatch(db);
+            categoriesSnap.forEach(function (docSnap) {
+                const data = docSnap.data() || {};
+                const slug = docSnap.id;
+                const name = data.name || slug;
+                const trendingRef = doc(db, 'Trending Categories', slug);
+                batch.set(trendingRef, {
+                    name,
+                    totalInteractions: 0,
+                    interactions1d: 0,
+                    interactions7d: 0,
+                    interactions1mo: 0,
+                    interactions6mo: 0,
+                    interactions1y: 0,
+                    lastUpdated: serverTimestamp()
+                }, { merge: true });
+            });
+            await batch.commit();
+            alert('Trending categories synced successfully.');
+        } catch (err) {
+            console.error('Error syncing trending categories:', err);
+            alert('Failed to sync trending categories. Check console for details.');
+        }
+    });
 }
 
 function listenVerificationRequests() {

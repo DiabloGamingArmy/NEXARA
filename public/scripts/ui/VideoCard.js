@@ -18,6 +18,7 @@ export function buildVideoCardElement({
         resolveVideoThumbnail,
         getVideoViewCount,
         formatVideoDuration,
+        resolveCategoryLabelBySlug,
         applyAvatarToElement,
         ensureVideoStats
     } = utils || {};
@@ -25,6 +26,7 @@ export function buildVideoCardElement({
     ensureVideoStats?.(video);
     const card = document.createElement('div');
     card.className = 'video-card';
+    if (video?.id) card.dataset.videoId = video.id;
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
     card.setAttribute('aria-label', `Open video ${video.title || video.caption || 'details'}`);
@@ -40,8 +42,8 @@ export function buildVideoCardElement({
 
     const views = document.createElement('div');
     views.className = 'video-views';
-    const topicLabel = video.topic || video.category || video.categoryLabel || video.genre;
-    views.textContent = topicLabel ? topicLabel : 'No topic';
+    const topicSlug = video.categorySlug || null;
+    views.textContent = resolveCategoryLabelBySlug?.(topicSlug) || 'No topic';
     thumb.appendChild(views);
 
     const meta = document.createElement('div');
