@@ -112,6 +112,7 @@ let contentNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
+let inboxModeRestored = false;
 const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
 var activeUploadId = window.activeUploadId || null;
@@ -1654,6 +1655,7 @@ function initApp(onReady) {
                 startCategoryStreams(user.uid);
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
+                loadInboxModeFromStorage();
                 initInboxNotifications(user.uid);
                 initContentNotifications(user.uid);
                 updateTimeCapsule();
@@ -8200,6 +8202,25 @@ function formatNotificationEntity(entityType = '') {
     return map[normalized] || 'post';
 }
 
+function loadInboxModeFromStorage() {
+    if (inboxModeRestored) return;
+    inboxModeRestored = true;
+    try {
+        const savedMode = window.localStorage?.getItem('nexera_last_inbox_mode');
+        const savedContent = window.localStorage?.getItem('nexera_last_inbox_contentMode');
+        const allowedModes = ['messages', 'content', 'account'];
+        if (allowedModes.includes(savedMode)) {
+            inboxMode = savedMode;
+        }
+        const allowedContent = ['posts', 'videos', 'livestreams'];
+        if (allowedContent.includes(savedContent)) {
+            inboxContentPreferred = savedContent;
+        }
+    } catch (err) {
+        console.warn('Unable to read inbox mode', err?.message || err);
+    }
+}
+
 function computeUnreadMessageTotal() {
     return conversationMappings.reduce(function (sum, mapping) {
         return sum + (mapping.unreadCount || 0);
@@ -8261,8 +8282,8 @@ function updateInboxNotificationCounts() {
     inboxNotifications.forEach(function (notif) {
         if (notif.read) return;
         const bucket = getNotificationBucket(notif);
-        if (bucket !== 'account') return;
-        counts.account = (counts.account || 0) + 1;
+        if (!bucket) return;
+        counts[bucket] = (counts[bucket] || 0) + 1;
     });
     inboxNotificationCounts = counts;
     updateInboxNavBadge();
@@ -8295,7 +8316,7 @@ function toggleInboxContentFilter(mode) {
         inboxContentFilters = { posts: true, videos: true, livestreams: true };
     }
     syncInboxContentFilters();
-    renderContentNotificationList(mode);
+    renderInboxNotifications(mode);
     try {
         window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
         window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
@@ -9121,6 +9142,10 @@ function initContentNotifications(userId) {
                 renderContentNotificationList(contentMode);
             });
             syncInboxContentFilters();
+            return;
+        }
+        if (inboxMode && inboxMode !== 'messages') {
+            renderInboxNotifications(inboxMode);
         }
     }, function (err) {
         handleSnapshotError('Content notifications', err);
@@ -11050,11 +11075,14 @@ window.openMessagesPage = async function () {
     conversationListFilter = 'all';
     conversationListSearchTerm = '';
     conversationListVisibleCount = 30;
-    setInboxMode('messages');
+    loadInboxModeFromStorage();
     const searchInput = document.getElementById('conversation-list-search');
     if (searchInput) searchInput.value = '';
     window.navigateTo('messages');
     setConversationFilter('all');
+    setTimeout(function () {
+        setInboxMode(inboxMode || 'messages');
+    }, 0);
     await initConversations();
 };
 
