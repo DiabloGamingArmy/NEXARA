@@ -1845,7 +1845,7 @@ function normalizeTrendingTopic(entry) {
     return { topicId: entry.topicId || entry.id || slugifyCategory(name), name, count };
 }
 
-// Trending topics now come from the staff-populated "Trending Categories" collection.
+// Trending topics now come from the staff-populated "TrendingCategories" collection.
 async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
     const field = TRENDING_RANGE_FIELDS[range] || TRENDING_RANGE_FIELDS[TRENDING_DEFAULT_RANGE];
     const items = [];
@@ -1856,7 +1856,7 @@ async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
     while (items.length < TRENDING_PAGE_SIZE && hasMore && iterations < 4) {
         const constraints = [orderBy(field, 'desc'), limit(TRENDING_PAGE_SIZE + 1)];
         if (lastDoc) constraints.splice(1, 0, startAfter(lastDoc));
-        const snapshot = await getDocs(query(collection(db, 'Trending Categories'), ...constraints));
+        const snapshot = await getDocs(query(collection(db, 'TrendingCategories'), ...constraints));
         const docs = snapshot.docs;
         if (!docs.length) {
             hasMore = false;
@@ -15466,7 +15466,7 @@ function renderStaffConsole() {
     bindTrendingCategoriesSync();
 }
 
-// Staff-only sync helper to seed Trending Categories from Categories.
+// Staff-only sync helper to seed TrendingCategories from Categories.
 function bindTrendingCategoriesSync() {
     const btn = document.getElementById('sync-trending-categories');
     if (!btn || staffTrendingSyncBound) return;
@@ -15479,7 +15479,7 @@ function bindTrendingCategoriesSync() {
                 const data = docSnap.data() || {};
                 const slug = docSnap.id;
                 const name = data.name || slug;
-                const trendingRef = doc(db, 'Trending Categories', slug);
+                const trendingRef = doc(db, 'TrendingCategories', slug);
                 batch.set(trendingRef, {
                     name,
                     totalInteractions: 0,
