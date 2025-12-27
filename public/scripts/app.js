@@ -1379,16 +1379,6 @@ const TRENDING_RANGE_WINDOWS = {
 const TRENDING_RANGE_STORAGE_KEY = 'nexera_trending_timeframe';
 const TRENDING_DEFAULT_RANGE = 'six_months';
 const TRENDING_PAGE_SIZE = 3;
-const TRENDING_RANGE_FIELDS = {
-    day: 'interactions1d',
-    week: 'interactions7d',
-    month: 'interactions1mo',
-    six_months: 'interactions6mo',
-    year: 'interactions1y',
-    five_years: 'totalInteractions',
-    lifetime: 'totalInteractions'
-};
-
 const trendingTopicsState = {
     range: TRENDING_DEFAULT_RANGE,
     loading: false,
@@ -1845,18 +1835,27 @@ function normalizeTrendingTopic(entry) {
     return { topicId: entry.topicId || entry.id || slugifyCategory(name), name, count };
 }
 
-// Trending topics now come from the staff-populated "TrendingCategories" collection.
+function formatSlugLabel(slug = '') {
+    return slug.replace(/[-_]+/g, ' ').replace(/\b\w/g, function (m) { return m.toUpperCase(); });
+}
+
+function resolveCategoryNameBySlug(slug) {
+    if (!slug) return 'Unknown';
+    const match = categories.find(function (cat) { return cat.slug === slug || cat.id === slug; });
+    return match?.name || formatSlugLabel(slug);
+}
+
+// Trending topics now come from the staff-populated "trendingCategories" collection.
 async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
-    const field = TRENDING_RANGE_FIELDS[range] || TRENDING_RANGE_FIELDS[TRENDING_DEFAULT_RANGE];
     const items = [];
     let lastDoc = startAfterDoc || null;
     let hasMore = true;
     let iterations = 0;
 
     while (items.length < TRENDING_PAGE_SIZE && hasMore && iterations < 4) {
-        const constraints = [orderBy(field, 'desc'), limit(TRENDING_PAGE_SIZE + 1)];
+        const constraints = [orderBy('popularity', 'desc'), limit(TRENDING_PAGE_SIZE + 1)];
         if (lastDoc) constraints.splice(1, 0, startAfter(lastDoc));
-        const snapshot = await getDocs(query(collection(db, 'TrendingCategories'), ...constraints));
+        const snapshot = await getDocs(query(collection(db, 'trendingCategories'), ...constraints));
         const docs = snapshot.docs;
         if (!docs.length) {
             hasMore = false;
@@ -1869,15 +1868,12 @@ async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
 
         for (const docSnap of pageDocs) {
             const data = docSnap.data() || {};
-            const count = Number(data[field] ?? data.totalInteractions ?? 0) || 0;
+            const count = Number(data.popularity || 0) || 0;
             if (count <= 0) continue;
-            const categoryMeta = await getCategoryMetaBySlug(docSnap.id);
-            if (!categoryMeta) continue;
-            if (categoryMeta.hidden === true || categoryMeta.isPublic === false) continue;
             items.push({
-                topicId: docSnap.id,
-                categorySlug: docSnap.id,
-                name: categoryMeta.name || categoryMeta.slug || docSnap.id,
+                topicId: data.slug || docSnap.id,
+                categorySlug: data.slug || docSnap.id,
+                name: resolveCategoryNameBySlug(data.slug || docSnap.id),
                 count
             });
             if (items.length >= TRENDING_PAGE_SIZE) break;
@@ -1913,8 +1909,7 @@ function renderTrendingTopics(topics) {
         item.className = 'trend-item';
         item.innerHTML = `<span>${escapeHtml(topic.name)}</span><span style=\"color:var(--text-muted);\">${formatCompactNumber(topic.count || 0)}</span>`;
         item.addEventListener('click', function () {
-            if (typeof window.setCategory === 'function') window.setCategory(topic.name);
-            moveTopicPillAfterAnchors(topic.name);
+            window.location.href = `/category/${encodeURIComponent(topic.categorySlug || topic.topicId || '')}`;
         });
         list.appendChild(item);
     });
@@ -15466,36 +15461,62 @@ function renderStaffConsole() {
     bindTrendingCategoriesSync();
 }
 
-// Staff-only sync helper to seed TrendingCategories from Categories.
+async function syncTrendingCategories() {
+    const categoriesSnap = await getDocs(collection(db, 'categories'));
+    const scores = [];
+
+    for (const docSnap of categoriesSnap.docs) {
+        const data = docSnap.data() || {};
+        const slug = data.slug || docSnap.id;
+        if (!slug) continue;
+        const memberCount = Number(data.memberCount || 0) || 0;
+        let postCount = 0;
+        let commentCount = 0;
+
+        const postsSnap = await getDocs(query(collection(db, 'posts'), where('categoryId', '==', slug)));
+        postsSnap.forEach(function (postDoc) {
+            postCount += 1;
+            const postData = postDoc.data() || {};
+            const postComments = Number(postData.comments || postData.commentCount || postData.stats?.comments || 0) || 0;
+            commentCount += postComments;
+        });
+
+        const popularity = Math.round((postCount * 5) + (memberCount * 2) + commentCount);
+        scores.push({ slug, popularity });
+    }
+
+    scores.sort(function (a, b) { return b.popularity - a.popularity; });
+    const topScores = scores.slice(0, 10);
+    const batch = writeBatch(db);
+    const now = serverTimestamp();
+
+    topScores.forEach(function (entry) {
+        const ref = doc(db, 'trendingCategories', entry.slug);
+        batch.set(ref, {
+            slug: entry.slug,
+            popularity: entry.popularity,
+            updatedAt: now
+        }, { merge: true });
+    });
+
+    await batch.commit();
+}
+
+// Staff-only sync helper to seed trendingCategories from categories.
 function bindTrendingCategoriesSync() {
     const btn = document.getElementById('sync-trending-categories');
     if (!btn || staffTrendingSyncBound) return;
     staffTrendingSyncBound = true;
     btn.addEventListener('click', async function () {
+        btn.disabled = true;
         try {
-            const categoriesSnap = await getDocs(collection(db, 'Categories'));
-            const batch = writeBatch(db);
-            categoriesSnap.forEach(function (docSnap) {
-                const data = docSnap.data() || {};
-                const slug = docSnap.id;
-                const name = data.name || slug;
-                const trendingRef = doc(db, 'TrendingCategories', slug);
-                batch.set(trendingRef, {
-                    name,
-                    totalInteractions: 0,
-                    interactions1d: 0,
-                    interactions7d: 0,
-                    interactions1mo: 0,
-                    interactions6mo: 0,
-                    interactions1y: 0,
-                    lastUpdated: serverTimestamp()
-                }, { merge: true });
-            });
-            await batch.commit();
+            await syncTrendingCategories();
             alert('Trending categories synced successfully.');
         } catch (err) {
             console.error('Error syncing trending categories:', err);
             alert('Failed to sync trending categories. Check console for details.');
+        } finally {
+            btn.disabled = false;
         }
     });
 }
