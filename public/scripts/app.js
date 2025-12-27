@@ -4253,7 +4253,7 @@ window.toggleLike = async function (postId, event) {
             }
             await updateDoc(postRef, updatePayload);
             if (post.userId && post.userId !== currentUser.uid) {
-                createNotificationOnce({
+                await createNotificationOnce({
                     targetUid: post.userId,
                     actorUid: currentUser.uid,
                     entityType: 'post',
@@ -4261,7 +4261,7 @@ window.toggleLike = async function (postId, event) {
                     actionType: 'like',
                     type: 'like',
                     previewText: (post.title || post.content || '').slice(0, 140)
-                }).catch(function () {});
+                });
             }
         }
     } catch (e) {
@@ -6045,7 +6045,7 @@ window.sendComment = async function () {
         });
         const post = allPosts.find(function (p) { return p.id === activePostId; });
         if (post?.userId && post.userId !== currentUser.uid) {
-            createNotificationOnce({
+            await createNotificationOnce({
                 targetUid: post.userId,
                 actorUid: currentUser.uid,
                 entityType: 'post',
@@ -6053,7 +6053,7 @@ window.sendComment = async function () {
                 actionType: 'comment',
                 type: 'comment',
                 previewText: text.slice(0, 140)
-            }).catch(function () {});
+            });
         }
 
         resetInputBox();
@@ -8122,24 +8122,29 @@ async function createNotificationOnce(payload = {}) {
     const targetUid = payload.targetUid;
     const actorUid = payload.actorUid;
     if (!targetUid || !actorUid || targetUid === actorUid) return;
-    const docId = buildNotificationDocId(payload);
-    if (!docId) return;
-    const notifRef = doc(db, 'notifications', targetUid, 'items', docId);
-    const snap = await getDoc(notifRef);
-    if (snap.exists()) return;
-    const body = {
-        createdAt: serverTimestamp(),
-        read: false,
-        actorUid,
-        targetUid,
-        entityType: payload.entityType || null,
-        entityId: payload.entityId || null,
-        actionType: payload.actionType || payload.type || null,
-        type: payload.type || payload.actionType || 'activity',
-        previewText: payload.previewText || '',
-        extra: payload.extra || null
-    };
-    await setDoc(notifRef, body, { merge: false });
+    const notificationKey = buildNotificationDocId(payload);
+    if (!notificationKey) return;
+    const notifRef = doc(db, 'notifications', targetUid, 'items', notificationKey);
+    try {
+        const snap = await getDoc(notifRef);
+        if (snap.exists()) return;
+        const body = {
+            createdAt: serverTimestamp(),
+            read: false,
+            notificationKey,
+            actorUid,
+            targetUid,
+            entityType: payload.entityType || null,
+            entityId: payload.entityId || null,
+            actionType: payload.actionType || payload.type || null,
+            type: payload.type || payload.actionType || 'activity',
+            previewText: payload.previewText || '',
+            extra: payload.extra || null
+        };
+        await setDoc(notifRef, body, { merge: false });
+    } catch (err) {
+        console.warn('[notifications] createNotificationOnce failed', err?.message || err);
+    }
 }
 
 function getNotificationBucket(notification = {}) {
@@ -14649,7 +14654,7 @@ window.likeVideo = async function (videoId) {
             }
             await Promise.all(writes);
             if (video?.ownerId && video.ownerId !== currentUser.uid) {
-                createNotificationOnce({
+                await createNotificationOnce({
                     targetUid: video.ownerId,
                     actorUid: currentUser.uid,
                     entityType: 'video',
@@ -14657,7 +14662,7 @@ window.likeVideo = async function (videoId) {
                     actionType: 'like',
                     type: 'like',
                     previewText: (video.title || video.description || '').slice(0, 140)
-                }).catch(function () {});
+                });
             }
         }
     } catch (err) {
