@@ -2568,6 +2568,25 @@ body.light-mode .category-pill.active .topic-verified-icon {
     box-shadow: 0 0 0 3px rgba(0, 242, 234, 0.18);
 }
 
+.glass-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0.6rem 1rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-main);
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.glass-button:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
 .modal-actions {
     display: flex;
     justify-content: flex-end;

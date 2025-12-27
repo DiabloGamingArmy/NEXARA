@@ -389,6 +389,16 @@
                     <label class="settings-label" for="video-description">Description</label>
                     <textarea id="video-description" class="form-input" rows="3"
                         placeholder="Add a short description"></textarea>
+                    <button id="video-destination-field" class="destination-field" type="button"
+                        onclick="window.openVideoDestinationPicker()" aria-label="Select posting destination for video">
+                        <div class="destination-field-label">Posting to</div>
+                        <div class="destination-field-value">
+                            <span id="video-destination-current-label">No topic</span>
+                            <span id="video-destination-current-verified" class="verified-badge"
+                                style="display:none;"></span>
+                        </div>
+                        <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
+                    </button>
                     <div class="composer-meta-controls">
                         <button type="button" class="icon-pill" onclick="window.toggleVideoTagInput()"><i
                                 class="ph ph-hash"></i> Tags</button>
