@@ -126,6 +126,13 @@ service cloud.firestore {
       allow create, update: if isSignedIn() && request.auth.uid == userId;
     }
 
+    match /users/{userId}/notifications/{notifId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if (request.auth == null) || (isSignedIn() && request.auth.uid == userId);
+      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
     // -------------------------
     // Categories
     // -------------------------
