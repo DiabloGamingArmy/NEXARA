@@ -11076,14 +11076,17 @@ window.openMessagesPage = async function () {
     conversationListSearchTerm = '';
     conversationListVisibleCount = 30;
     loadInboxModeFromStorage();
+    const nextMode = inboxMode || 'messages';
     const searchInput = document.getElementById('conversation-list-search');
     if (searchInput) searchInput.value = '';
     window.navigateTo('messages');
     setConversationFilter('all');
     setTimeout(function () {
-        setInboxMode(inboxMode || 'messages');
+        setInboxMode(nextMode);
     }, 0);
-    await initConversations();
+    if (nextMode === 'messages') {
+        await initConversations();
+    }
 };
 
 window.sharePost = async function (postId, event) {
