@@ -160,6 +160,21 @@ service cloud.firestore {
     }
 
     // -------------------------
+    // Trending categories (server-written)
+    // -------------------------
+    match /trendingCategories/{topicId} {
+      allow read: if true;
+      allow create, delete: if isSignedIn() && isStaffAccount();
+      allow update: if (isSignedIn() && isStaffAccount()) || (
+        isSignedIn()
+        && request.resource.data.keys().hasOnly(['slug','popularity','updatedAt'])
+        && request.resource.data.slug == resource.data.slug
+        && (request.resource.data.popularity is number)
+        && (request.resource.data.popularity >= resource.data.popularity)
+      );
+    }
+
+    // -------------------------
     // Posts
     // -------------------------
     match /posts/{postId} {
