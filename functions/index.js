@@ -9,7 +9,7 @@
 
 const {setGlobalOptions} = require("firebase-functions");
 const {onCall, onRequest} = require("firebase-functions/https");
-const {onDocumentCreated, onDocumentDeleted} = require("firebase-functions/v2/firestore");
+const {onDocumentCreated, onDocumentDeleted, onDocumentUpdated} = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 
@@ -46,6 +46,71 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 const {FieldValue} = admin.firestore;
+
+async function resolveActorProfile(actorId) {
+  if (!actorId) return {actorName: "Someone", actorPhotoUrl: ""};
+  try {
+    const userRecord = await admin.auth().getUser(actorId);
+    return {
+      actorName: userRecord.displayName || userRecord.email || "Someone",
+      actorPhotoUrl: userRecord.photoURL || "",
+    };
+  } catch (error) {
+    logger.warn("Unable to resolve actor profile", {actorId, error: error.message});
+    return {actorName: "Someone", actorPhotoUrl: ""};
+  }
+}
+
+function buildPostPreview(post = {}) {
+  const title = post.title || post.content || post.body || post.text || "";
+  const preview = typeof title === "string" ? title.slice(0, 80) : "";
+  return {
+    title: preview,
+    thumbnail: post.mediaUrl || post.thumbnailUrl || post.thumbnail || "",
+  };
+}
+
+function buildVideoPreview(video = {}) {
+  const title = video.title || video.description || "";
+  return {
+    title: typeof title === "string" ? title.slice(0, 80) : "",
+    thumbnail: video.thumbURL || video.thumbnail || video.previewImage || "",
+  };
+}
+
+function buildLivePreview(session = {}) {
+  const title = session.title || session.name || "Live stream";
+  return {
+    title: typeof title === "string" ? title.slice(0, 80) : "Live stream",
+    thumbnail: session.thumbnail || session.thumbnailUrl || session.coverImage || session.imageUrl || "",
+  };
+}
+
+async function createContentNotification({
+  actorId,
+  targetUserId,
+  contentId,
+  contentType,
+  actionType,
+  contentTitle,
+  contentThumbnailUrl,
+}) {
+  if (!actorId || !targetUserId || actorId === targetUserId) return;
+  const {actorName, actorPhotoUrl} = await resolveActorProfile(actorId);
+  await db.collection("users").doc(targetUserId).collection("notifications").add({
+    actorId,
+    actorName,
+    actorPhotoUrl,
+    targetUserId,
+    contentId,
+    contentType,
+    actionType,
+    contentTitle: contentTitle || "",
+    contentThumbnailUrl: contentThumbnailUrl || "",
+    createdAt: FieldValue.serverTimestamp(),
+    isRead: false,
+  });
+}
 
 async function updateTrendingPopularity(slug, delta) {
   if (!slug) return;
@@ -100,6 +165,121 @@ exports.onCommentDelete = onDocumentDeleted("posts/{postId}/comments/{commentId}
   const postData = postSnap.exists ? postSnap.data() : {};
   const slug = postData?.categoryId || postData?.categorySlug || postData?.category;
   await updateTrendingPopularity(slug, -1);
+});
+
+exports.onPostReaction = onDocumentUpdated("posts/{postId}", async (event) => {
+  const before = event.data?.before?.data() || {};
+  const after = event.data?.after?.data() || {};
+  const ownerId = after.userId || before.userId;
+  if (!ownerId) return;
+
+  const beforeLiked = new Set(Array.isArray(before.likedBy) ? before.likedBy : []);
+  const afterLiked = new Set(Array.isArray(after.likedBy) ? after.likedBy : []);
+  const addedLikes = [...afterLiked].filter((uid) => !beforeLiked.has(uid));
+
+  const beforeDisliked = new Set(Array.isArray(before.dislikedBy) ? before.dislikedBy : []);
+  const afterDisliked = new Set(Array.isArray(after.dislikedBy) ? after.dislikedBy : []);
+  const addedDislikes = [...afterDisliked].filter((uid) => !beforeDisliked.has(uid));
+
+  if (!addedLikes.length && !addedDislikes.length) return;
+
+  const preview = buildPostPreview(after);
+  const tasks = [];
+  addedLikes.forEach((actorId) => tasks.push(createContentNotification({
+    actorId,
+    targetUserId: ownerId,
+    contentId: event.params.postId,
+    contentType: "post",
+    actionType: "like",
+    contentTitle: preview.title,
+    contentThumbnailUrl: preview.thumbnail,
+  })));
+  addedDislikes.forEach((actorId) => tasks.push(createContentNotification({
+    actorId,
+    targetUserId: ownerId,
+    contentId: event.params.postId,
+    contentType: "post",
+    actionType: "dislike",
+    contentTitle: preview.title,
+    contentThumbnailUrl: preview.thumbnail,
+  })));
+  await Promise.all(tasks);
+});
+
+exports.onPostCommentNotification = onDocumentCreated("posts/{postId}/comments/{commentId}", async (event) => {
+  const comment = event.data?.data() || {};
+  const actorId = comment.userId;
+  if (!actorId) return;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
+    actorId,
+    targetUserId: postData.userId,
+    contentId: postId,
+    contentType: "post",
+    actionType: "comment",
+    contentTitle: preview.title,
+    contentThumbnailUrl: preview.thumbnail,
+  });
+});
+
+exports.onVideoLike = onDocumentCreated("videos/{videoId}/likes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const videoId = event.params.videoId;
+  const videoSnap = await db.collection("videos").doc(videoId).get();
+  const videoData = videoSnap.exists ? videoSnap.data() : null;
+  if (!videoData || !videoData.ownerId) return;
+  const preview = buildVideoPreview(videoData);
+  await createContentNotification({
+    actorId,
+    targetUserId: videoData.ownerId,
+    contentId: videoId,
+    contentType: "video",
+    actionType: "like",
+    contentTitle: preview.title,
+    contentThumbnailUrl: preview.thumbnail,
+  });
+});
+
+exports.onVideoDislike = onDocumentCreated("videos/{videoId}/dislikes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const videoId = event.params.videoId;
+  const videoSnap = await db.collection("videos").doc(videoId).get();
+  const videoData = videoSnap.exists ? videoSnap.data() : null;
+  if (!videoData || !videoData.ownerId) return;
+  const preview = buildVideoPreview(videoData);
+  await createContentNotification({
+    actorId,
+    targetUserId: videoData.ownerId,
+    contentId: videoId,
+    contentType: "video",
+    actionType: "dislike",
+    contentTitle: preview.title,
+    contentThumbnailUrl: preview.thumbnail,
+  });
+});
+
+exports.onLiveStreamChat = onDocumentCreated("liveStreams/{sessionId}/chat/{chatId}", async (event) => {
+  const chat = event.data?.data() || {};
+  const actorId = chat.senderId || chat.userId;
+  if (!actorId) return;
+  const sessionId = event.params.sessionId;
+  const sessionSnap = await db.collection("liveStreams").doc(sessionId).get();
+  const sessionData = sessionSnap.exists ? sessionSnap.data() : null;
+  if (!sessionData || !sessionData.hostId) return;
+  const preview = buildLivePreview(sessionData);
+  await createContentNotification({
+    actorId,
+    targetUserId: sessionData.hostId,
+    contentId: sessionId,
+    contentType: "liveStream",
+    actionType: "comment",
+    contentTitle: preview.title,
+    contentThumbnailUrl: preview.thumbnail,
+  });
 });
 
 exports.createUploadSession = onCall((data, context) => {
