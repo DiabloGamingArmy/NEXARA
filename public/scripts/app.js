@@ -110,6 +110,7 @@ let inboxNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
+let inboxModeRestored = false;
 const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
 var activeUploadId = window.activeUploadId || null;
@@ -1652,6 +1653,7 @@ function initApp(onReady) {
                 startCategoryStreams(user.uid);
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
+                loadInboxModeFromStorage();
                 initInboxNotifications(user.uid);
                 updateTimeCapsule();
                 const path = window.location.pathname || '/';
@@ -1843,19 +1845,6 @@ function resolveCategoryNameBySlug(slug) {
     if (!slug) return 'Unknown';
     const match = categories.find(function (cat) { return cat.slug === slug || cat.id === slug; });
     return match?.name || formatSlugLabel(slug);
-}
-
-async function incrementTrendingPopularity(slug, amount = 1) {
-    if (!slug) return;
-    try {
-        const ref = doc(db, 'trendingCategories', slug);
-        await updateDoc(ref, {
-            popularity: increment(amount),
-            updatedAt: new Date()
-        });
-    } catch (error) {
-        console.error('Failed to update trending popularity:', error);
-    }
 }
 
 // Trending topics now come from the staff-populated "trendingCategories" collection.
@@ -3890,7 +3879,7 @@ function getPostHTML(post, options = {}) {
         let commentPreviewHtml = '';
         if (post.previewComment) {
             commentPreviewHtml = `
-                <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px;">
+                <div class="post-comment-preview" style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px;">
                     <span style="font-weight:bold; color:var(--text-main);">${escapeHtml(post.previewComment.author)}:</span>
                     <span>${escapeHtml(post.previewComment.text)}</span>
                     ${post.previewComment.likes ? `<span style="margin-left:auto; font-size:0.75rem; display:flex; align-items:center; gap:3px;"><i class="ph-fill ph-thumbs-up"></i> ${post.previewComment.likes}</span>` : ''}
@@ -5155,9 +5144,6 @@ window.createPost = async function () {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
             await incrementTagUses(normalizedTags);
-            if (resolvedCategoryId) {
-                incrementTrendingPopularity(resolvedCategoryId, 5);
-            }
         }
 
         if (locationValue) {
@@ -6050,17 +6036,6 @@ window.sendComment = async function () {
             }
         });
         const post = allPosts.find(function (p) { return p.id === activePostId; });
-        let categorySlug = post?.categoryId || post?.categorySlug || '';
-        if (!categorySlug) {
-            try {
-                const postSnap = await getDoc(postRef);
-                const postData = postSnap.exists() ? postSnap.data() : null;
-                categorySlug = postData?.categoryId || postData?.categorySlug || '';
-            } catch (error) {
-                console.warn('Unable to resolve post category', error);
-            }
-        }
-        if (categorySlug) incrementTrendingPopularity(categorySlug, 1);
         if (post?.userId && post.userId !== currentUser.uid) {
             createNotificationOnce({
                 targetUid: post.userId,
@@ -6204,12 +6179,57 @@ window.confirmDeleteComment = async function (commentId) {
     if (!ok) return;
     try {
         await deleteDoc(doc(db, 'posts', activePostId, 'comments', commentId));
+        await refreshTopCommentPreview(activePostId);
         toast('Comment deleted.', 'info');
     } catch (error) {
         console.error('Comment delete failed', error);
         toast('Failed to delete comment.', 'error');
     }
 };
+
+async function refreshTopCommentPreview(postId) {
+    if (!postId) return;
+    const card = document.getElementById(`post-card-${postId}`);
+    if (!card) return;
+    const cardContent = card.querySelector('.card-content');
+    if (!cardContent) return;
+    let previewContainer = cardContent.querySelector('.post-comment-preview');
+    if (!previewContainer) {
+        previewContainer = document.createElement('div');
+        previewContainer.className = 'post-comment-preview';
+        previewContainer.style.marginTop = '10px';
+        previewContainer.style.padding = '8px';
+        previewContainer.style.background = 'rgba(255,255,255,0.05)';
+        previewContainer.style.borderRadius = '8px';
+        previewContainer.style.fontSize = '0.85rem';
+        previewContainer.style.color = 'var(--text-muted)';
+        previewContainer.style.display = 'flex';
+        previewContainer.style.gap = '6px';
+        cardContent.appendChild(previewContainer);
+    }
+    try {
+        const commentsRef = collection(db, 'posts', postId, 'comments');
+        const commentsSnap = await getDocs(query(commentsRef, orderBy('timestamp', 'desc'), limit(1)));
+        if (commentsSnap.empty) {
+            previewContainer.style.display = 'none';
+            previewContainer.innerHTML = '';
+            return;
+        }
+        const top = commentsSnap.docs[0].data() || {};
+        const author = top.userId ? (getCachedUser(top.userId) || {}) : {};
+        const authorName = resolveDisplayName(author) || author.username || top.author || top.authorName || 'Someone';
+        const text = top.text || '';
+        const likes = Number(top.likes || 0);
+        previewContainer.style.display = 'flex';
+        previewContainer.innerHTML = `
+            <span style="font-weight:bold; color:var(--text-main);">${escapeHtml(authorName)}:</span>
+            <span>${escapeHtml(text)}</span>
+            ${likes ? `<span style="margin-left:auto; font-size:0.75rem; display:flex; align-items:center; gap:3px;"><i class="ph-fill ph-thumbs-up"></i> ${likes}</span>` : ''}
+        `;
+    } catch (error) {
+        console.warn('Failed to refresh comment preview', error);
+    }
+}
 
 window.shareComment = function (commentId) {
     const url = `${window.location.origin}/view-thread/${encodeURIComponent(activePostId)}#comment-${encodeURIComponent(commentId)}`;
@@ -8128,6 +8148,7 @@ function formatNotificationAction(action = '') {
     const normalized = (action || '').toLowerCase();
     const map = {
         like: 'liked',
+        dislike: 'disliked',
         comment: 'commented on',
         reply: 'replied to',
         mention: 'mentioned you in',
@@ -8152,6 +8173,25 @@ function formatNotificationEntity(entityType = '') {
     return map[normalized] || 'post';
 }
 
+function loadInboxModeFromStorage() {
+    if (inboxModeRestored) return;
+    inboxModeRestored = true;
+    try {
+        const savedMode = window.localStorage?.getItem('nexera_last_inbox_mode');
+        const savedContent = window.localStorage?.getItem('nexera_last_inbox_contentMode');
+        const allowedModes = ['messages', 'content', 'account'];
+        if (allowedModes.includes(savedMode)) {
+            inboxMode = savedMode;
+        }
+        const allowedContent = ['posts', 'videos', 'livestreams'];
+        if (allowedContent.includes(savedContent)) {
+            inboxContentPreferred = savedContent;
+        }
+    } catch (err) {
+        console.warn('Unable to read inbox mode', err?.message || err);
+    }
+}
+
 function computeUnreadMessageTotal() {
     return conversationMappings.reduce(function (sum, mapping) {
         return sum + (mapping.unreadCount || 0);
@@ -8159,8 +8199,8 @@ function computeUnreadMessageTotal() {
 }
 
 function computeUnreadNotificationTotal() {
-    return inboxNotifications.reduce(function (sum, notif) {
-        return sum + (!notif.read ? 1 : 0);
+    return Object.values(inboxNotificationCounts).reduce(function (sum, count) {
+        return sum + (count || 0);
     }, 0);
 }
 
@@ -8207,6 +8247,7 @@ function updateInboxNotificationCounts() {
     inboxNotifications.forEach(function (notif) {
         if (notif.read) return;
         const bucket = getNotificationBucket(notif);
+        if (!bucket) return;
         counts[bucket] = (counts[bucket] || 0) + 1;
     });
     inboxNotificationCounts = counts;
@@ -8231,11 +8272,22 @@ function toggleInboxContentFilter(mode) {
     if (inboxMode !== 'content') {
         setInboxMode('content', { skipRouteUpdate: true });
     }
+    const wasEnabled = inboxContentFilters[mode];
     inboxContentFilters[mode] = !inboxContentFilters[mode];
+    if (!wasEnabled) {
+        inboxContentPreferred = mode;
+    }
     if (!Object.values(inboxContentFilters).some(Boolean)) {
         inboxContentFilters = { posts: true, videos: true, livestreams: true };
     }
     syncInboxContentFilters();
+    renderInboxNotifications(mode);
+    try {
+        window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
+        window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
+    } catch (err) {
+        console.warn('Unable to persist inbox content preference', err?.message || err);
+    }
 }
 
 window.toggleInboxContentFilter = toggleInboxContentFilter;
@@ -8343,6 +8395,14 @@ function setInboxMode(mode = 'messages', options = {}) {
         renderInboxNotifications(inboxMode);
     }
     refreshInboxLayout();
+    try {
+        window.localStorage?.setItem('nexera_last_inbox_mode', inboxMode);
+        if (inboxMode === 'content') {
+            window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || 'posts');
+        }
+    } catch (err) {
+        console.warn('Unable to persist inbox mode', err?.message || err);
+    }
     if (!skipRouteUpdate && routeView === 'messages') {
         let nextPath = '/inbox';
         if (inboxMode === 'content') {
@@ -8965,7 +9025,9 @@ function initInboxNotifications(userId) {
                 renderInboxNotifications(contentMode);
             });
             syncInboxContentFilters();
-        } else if (inboxMode && inboxMode !== 'messages') {
+            return;
+        }
+        if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
     }, function (err) {
@@ -10896,11 +10958,14 @@ window.openMessagesPage = async function () {
     conversationListFilter = 'all';
     conversationListSearchTerm = '';
     conversationListVisibleCount = 30;
-    setInboxMode('messages');
+    loadInboxModeFromStorage();
     const searchInput = document.getElementById('conversation-list-search');
     if (searchInput) searchInput.value = '';
     window.navigateTo('messages');
     setConversationFilter('all');
+    setTimeout(function () {
+        setInboxMode(inboxMode || 'messages');
+    }, 0);
     await initConversations();
 };
 

@@ -189,7 +189,23 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
         return { type: 'messages', conversationId: segments[1], route };
       }
       if (head === 'inbox') {
-        const mode = segments[1] || 'messages';
+        let mode = null;
+        let contentMode = null;
+        if (segments.length > 1) {
+          mode = segments[1];
+          if (segments.length > 2) contentMode = segments[2];
+          if (mode === 'content' && !contentMode) {
+            contentMode = params.get('type') || null;
+          }
+        } else {
+          try {
+            mode = window.localStorage?.getItem('nexera_last_inbox_mode') || 'messages';
+            contentMode = window.localStorage?.getItem('nexera_last_inbox_contentMode') || 'posts';
+          } catch {
+            mode = 'messages';
+            contentMode = 'posts';
+          }
+        }
         const allowed = ['messages', 'content', 'posts', 'videos', 'livestreams', 'account'];
         if (!allowed.includes(mode)) {
           return { type: 'section', view: SECTION_ROUTES[head], route };
@@ -204,7 +220,7 @@ import { buildMessagesUrl, buildProfileUrl } from './routes.js';
           };
         }
         const conversationId = mode === 'messages' ? (segments[2] || null) : null;
-        const contentMode = mode === 'content' ? (segments[2] || params.get('type') || null) : null;
+        contentMode = mode === 'content' ? (contentMode || 'posts') : null;
         return { type: 'inbox', mode, contentMode, conversationId, route };
       }
       return { type: 'section', view: SECTION_ROUTES[head], route };
