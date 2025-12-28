@@ -8534,6 +8534,7 @@ function toggleInboxContentFilter(mode) {
     }
     syncInboxContentFilters();
     renderContentNotificationList(mode);
+    void markAllContentNotificationsRead(mode);
     try {
         window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
         window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
@@ -8568,6 +8569,41 @@ function markContentNotificationRead(notifId, notif) {
     });
 }
 
+async function markAllContentNotificationsRead(optionalBucket) {
+    if (!currentUser) return;
+    const bucket = optionalBucket || null;
+    const pending = contentNotifications.filter(function (notif) {
+        if (!notif || !notif.id || notifIsRead(notif)) return false;
+        if (!bucket) return true;
+        return getContentNotificationBucket(notif) === bucket;
+    });
+    if (!pending.length) return;
+    pending.forEach(function (notif) {
+        notif.read = true;
+        notif.isRead = true;
+        notif.readAt = new Date();
+    });
+    updateInboxNotificationCounts();
+    const updates = pending.slice();
+    for (let i = 0; i < updates.length; i += 450) {
+        const batch = writeBatch(db);
+        updates.slice(i, i + 450).forEach(function (notif) {
+            const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
+            batch.update(notifRef, {
+                read: true,
+                isRead: true,
+                readAt: serverTimestamp()
+            });
+        });
+        try {
+            await batch.commit();
+        } catch (err) {
+            console.warn('Failed to mark content notifications read', err?.message || err);
+        }
+    }
+    updateInboxNotificationCounts();
+}
+
 function renderContentNotificationList(mode = 'posts') {
     const listEl = document.getElementById(`inbox-list-${mode}`);
     const emptyEl = document.getElementById(`inbox-empty-${mode}`);
@@ -8586,6 +8622,7 @@ function renderContentNotificationList(mode = 'posts') {
     }
     if (emptyEl) emptyEl.style.display = 'none';
     bucketed.slice(0, 50).forEach(function (notif) {
+        const actorId = notif.actorId || notif.actorUid || '';
         const actorName = notif.actorName || 'Someone';
         const description = buildContentNotificationDescription(notif);
         const meta = formatMessageHoverTimestamp(notif.createdAt) || '';
@@ -8593,21 +8630,7 @@ function renderContentNotificationList(mode = 'posts') {
         const thumb = (notif.contentThumbnailUrl || '').trim();
         const row = document.createElement('div');
         row.className = 'inbox-notification-item inbox-notification-item--content';
-        row.innerHTML = `
-            <div class="conversation-avatar-slot">${renderAvatar({
-                uid: notif.actorId || 'actor',
-                username: actorName,
-                displayName: actorName,
-                photoURL: notif.actorPhotoUrl || '',
-                avatarColor: computeAvatarColor(actorName)
-            }, { size: 42 })}</div>
-            <div class="inbox-notification-text">
-                <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(description)}</div>
-                ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
-            </div>
-            ${(thumb || title) ? `<div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>` : ''}
-        `;
-        row.onclick = function () {
+        const openContentTarget = function () {
             markContentNotificationRead(notif.id, notif);
             const contentType = (notif.contentType || '').toLowerCase();
             if ((contentType === 'post' || contentType === 'posts') && notif.contentId) {
@@ -8618,6 +8641,48 @@ function renderContentNotificationList(mode = 'posts') {
                 window.openLiveSession(notif.contentId);
             }
         };
+        row.innerHTML = `
+            <div class="inbox-notification-actor">
+                <div class="conversation-avatar-slot">${renderAvatar({
+                    uid: actorId || 'actor',
+                    username: actorName,
+                    displayName: actorName,
+                    photoURL: notif.actorPhotoUrl || '',
+                    avatarColor: computeAvatarColor(actorName)
+                }, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(description)}</div>
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            </div>
+            ${(thumb || title) ? `<div class="inbox-notification-preview" role="button" tabindex="0">
+                <div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>
+            </div>` : ''}
+        `;
+        row.onclick = openContentTarget;
+        const actorEl = row.querySelector('.inbox-notification-actor');
+        if (actorEl) {
+            actorEl.onclick = function (event) {
+                event.stopPropagation();
+                if (actorId && typeof window.openUserProfile === 'function') {
+                    window.openUserProfile(actorId, event);
+                }
+            };
+        }
+        const previewEl = row.querySelector('.inbox-notification-preview');
+        if (previewEl) {
+            previewEl.onclick = function (event) {
+                event.stopPropagation();
+                openContentTarget();
+            };
+            previewEl.onkeydown = function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContentTarget();
+                }
+            };
+        }
         listEl.appendChild(row);
     });
 }
@@ -8712,6 +8777,7 @@ function setInboxMode(mode = 'messages', options = {}) {
     const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const contentModes = ['posts', 'videos', 'livestreams'];
     const allowed = ['content', 'messages', 'account'].concat(contentModes);
+    const previousMode = inboxMode;
     if (!allowed.includes(mode)) mode = 'messages';
     if (contentModes.includes(mode)) {
         inboxMode = 'content';
@@ -8742,6 +8808,11 @@ function setInboxMode(mode = 'messages', options = {}) {
             renderContentNotificationList(contentMode);
         });
         syncInboxContentFilters();
+        if (previousMode !== 'content') {
+            void markAllContentNotificationsRead();
+        } else if (contentModes.includes(mode)) {
+            void markAllContentNotificationsRead(mode);
+        }
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
