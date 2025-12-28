@@ -1,7 +1,7 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
@@ -31,7 +31,10 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+const db = isSafari
+    ? initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false })
+    : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
 const messaging = getMessaging(app);
@@ -8446,6 +8449,26 @@ function updateInboxNavBadge() {
     updateInboxTabBadges();
 }
 
+function safeUpdateNavBadge(key, count) {
+    try {
+        if (typeof updateNavBadge === 'function') {
+            updateNavBadge(key, count);
+            return;
+        }
+        const el = document.querySelector(`[data-badge="${key}"]`);
+        if (!el) return;
+        if (count > 0) {
+            el.textContent = String(count);
+            el.style.display = 'inline-flex';
+        } else {
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+    } catch (e) {
+        console.warn('[Badges] Failed updating nav badge:', key, e);
+    }
+}
+
 function updateInboxNotificationCounts() {
     let unreadPosts = 0;
     let unreadVideos = 0;
@@ -8474,7 +8497,13 @@ function updateInboxNotificationCounts() {
     };
 
     updateInboxTabBadges();
-    updateNavBadge(unreadAccount + unreadPosts + unreadVideos + unreadLivestreams);
+    const unreadContent = unreadPosts + unreadVideos + unreadLivestreams;
+    const unreadMessages = computeUnreadMessageTotal();
+    const totalUnread = unreadAccount + unreadContent + unreadMessages;
+    safeUpdateNavBadge('inbox', totalUnread);
+    safeUpdateNavBadge('content', unreadContent);
+    safeUpdateNavBadge('account', unreadAccount);
+    safeUpdateNavBadge('messages', unreadMessages);
 }
 
 function syncInboxContentFilters() {
