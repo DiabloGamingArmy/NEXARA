@@ -8126,6 +8126,7 @@ async function createNotificationOnce(payload = {}) {
     if (!notificationKey) return;
     const notifRef = doc(db, 'notifications', targetUid, 'items', notificationKey);
     try {
+        const resolvedType = payload.type || payload.actionType || 'activity';
         const body = {
             createdAt: serverTimestamp(),
             read: false,
@@ -8134,8 +8135,9 @@ async function createNotificationOnce(payload = {}) {
             targetUid,
             entityType: payload.entityType || null,
             entityId: payload.entityId || null,
+            contentType: payload.contentType || payload.entityType || null,
             actionType: payload.actionType || payload.type || null,
-            type: payload.type || payload.actionType || 'activity',
+            type: payload.entityType ? 'content' : resolvedType,
             previewText: payload.previewText || '',
             extra: payload.extra || null
         };
@@ -8157,7 +8159,7 @@ function getNotificationBucket(notification = {}) {
 }
 
 function getContentNotificationBucket(notification = {}) {
-    const contentType = (notification.contentType || '').toLowerCase();
+    const contentType = (notification.contentType || notification.entityType || '').toLowerCase();
     if (contentType === 'video' || contentType === 'videos') return 'videos';
     if (contentType === 'livestream' || contentType === 'live' || contentType === 'stream' || contentType === 'livestreams') return 'livestreams';
     if (contentType === 'post' || contentType === 'posts') return 'posts';
@@ -8278,7 +8280,7 @@ function updateInboxNavBadge() {
 function updateInboxNotificationCounts() {
     const counts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
     contentNotifications.forEach(function (notif) {
-        if (notif.isRead) return;
+        if (notif.read) return;
         const bucket = getContentNotificationBucket(notif);
         if (!bucket) return;
         counts[bucket] = (counts[bucket] || 0) + 1;
@@ -8342,11 +8344,11 @@ function markNotificationRead(notif) {
 }
 
 function markContentNotificationRead(notif) {
-    if (!currentUser || !notif || notif.isRead || !notif.id) return;
-    notif.isRead = true;
+    if (!currentUser || !notif || notif.read || !notif.id) return;
+    notif.read = true;
     updateInboxNotificationCounts();
-    const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
-    updateDoc(notifRef, { isRead: true }).catch(function (err) {
+    const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
+    updateDoc(notifRef, { read: true }).catch(function (err) {
         console.warn('Failed to mark content notification read', err?.message || err);
     });
 }
@@ -9123,7 +9125,10 @@ function initInboxNotifications(userId) {
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
-        if (inboxMode && inboxMode !== 'messages' && inboxMode !== 'content') {
+        if (inboxMode === 'content') {
+            return;
+        }
+        if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
     }, function (err) {
@@ -9137,35 +9142,17 @@ function initContentNotifications(userId) {
         contentNotificationsUnsubscribe = null;
     }
     if (!userId) return;
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(200));
     contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
-        contentNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        contentNotifications = snap.docs
+            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+            .filter(function (notif) { return notif.type === 'content'; });
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            return;
+            const preferred = inboxContentPreferred || 'posts';
+            renderContentNotificationList(preferred);
+            syncInboxContentFilters();
         }
-        if (inboxMode && inboxMode !== 'messages') {
-            renderInboxNotifications(inboxMode);
-        }
-    }, function (err) {
-        handleSnapshotError('Content notifications', err);
-    });
-}
-
-function initContentNotifications(userId) {
-    if (contentNotificationsUnsubscribe) {
-        try { contentNotificationsUnsubscribe(); } catch (err) { }
-        contentNotificationsUnsubscribe = null;
-    }
-    if (!userId) return;
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
-    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
-        contentNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
-        updateInboxNotificationCounts();
-        renderContentNotificationList('posts');
-        renderContentNotificationList('videos');
-        renderContentNotificationList('livestreams');
-        syncInboxContentFilters();
     }, function (err) {
         handleSnapshotError('Content notifications', err);
     });
