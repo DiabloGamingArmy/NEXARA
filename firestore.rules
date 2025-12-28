@@ -130,8 +130,8 @@ service cloud.firestore {
       allow read: if isSignedIn() && request.auth.uid == userId;
       allow create: if false;
       allow update: if isSignedIn() && request.auth.uid == userId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'read'])
-        && (request.resource.data.isRead == true || request.resource.data.read == true);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])
+        && request.resource.data.isRead == true;
       allow delete: if false;
     }
 

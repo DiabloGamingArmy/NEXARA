@@ -101,6 +101,7 @@ async function createContentNotification({
   await db.collection("users").doc(targetUserId).collection("notifications").add({
     actorId,
     actorName,
+    actorAvatar: actorPhotoUrl,
     actorPhotoUrl,
     targetUserId,
     contentId,

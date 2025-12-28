@@ -8345,7 +8345,7 @@ function markContentNotificationRead(notifId, notif) {
     }
     updateInboxNotificationCounts();
     const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notifId);
-    updateDoc(notifRef, { isRead: true, read: true }).catch(function (err) {
+    updateDoc(notifRef, { isRead: true }).catch(function (err) {
         console.warn('Failed to mark content notification read', err?.message || err);
     });
 }
