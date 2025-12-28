@@ -122,6 +122,7 @@ async function createContentNotification({
   if (!actorId || !targetUserId || actorId === targetUserId) return;
   const {actorName, actorPhotoUrl} = await resolveActorProfile(actorId);
   await db.collection("users").doc(targetUserId).collection("notifications").add({
+    type: "content",
     actorId,
     actorName,
     actorAvatar: actorPhotoUrl,
@@ -133,6 +134,7 @@ async function createContentNotification({
     contentTitle: contentTitle || "",
     contentThumbnailUrl: contentThumbnailUrl || "",
     createdAt: FieldValue.serverTimestamp(),
+    read: false,
     isRead: false,
   });
 }
