@@ -128,8 +128,10 @@ service cloud.firestore {
 
     match /users/{userId}/notifications/{notifId} {
       allow read: if isSignedIn() && request.auth.uid == userId;
-      allow create: if (request.auth == null) || (isSignedIn() && request.auth.uid == userId);
-      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow create: if false;
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'read'])
+        && (request.resource.data.isRead == true || request.resource.data.read == true);
       allow delete: if false;
     }
 

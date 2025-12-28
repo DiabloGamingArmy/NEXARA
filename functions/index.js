@@ -8,6 +8,7 @@
  */
 
 const {setGlobalOptions} = require("firebase-functions");
+const {onCall: onCallV2} = require("firebase-functions/v2/https");
 const {onCall, onRequest} = require("firebase-functions/https");
 const {onDocumentCreated, onDocumentDeleted, onDocumentUpdated} = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
@@ -294,4 +295,54 @@ exports.createUploadSession = onCall((data, context) => {
     contentType: data?.type || null,
     size: data?.size || null,
   };
+});
+
+exports.notifyMention = onCallV2(async (request) => {
+  const data = request.data || {};
+  const auth = request.auth;
+  if (!auth || !auth.uid) throw new Error("unauthenticated");
+
+  const actorId = auth.uid;
+  const targetUserId = (data.targetUserId || "").toString();
+  const postId = (data.postId || "").toString();
+  const handle = (data.handle || "").toString();
+  const postTitle = (data.postTitle || "").toString();
+  const thumbnailUrl = (data.thumbnailUrl || "").toString();
+
+  if (!targetUserId || !postId) throw new Error("invalid-argument");
+  if (targetUserId === actorId) return {ok: true, skipped: "self"};
+
+  let actorName = "Someone";
+  let actorPhotoUrl = "";
+  try {
+    const actorDoc = await db.collection("users").doc(actorId).get();
+    if (actorDoc.exists) {
+      const userData = actorDoc.data() || {};
+      actorName = userData.name || userData.displayName || userData.username || actorName;
+      actorPhotoUrl = userData.photoURL || userData.photoUrl || "";
+    }
+  } catch (error) {}
+
+  const docId = `mention_${actorId}_${postId}`;
+
+  await db.collection("users")
+      .doc(targetUserId)
+      .collection("notifications")
+      .doc(docId)
+      .set({
+        actorId,
+        actorName,
+        actorPhotoUrl,
+        targetUserId,
+        contentId: postId,
+        contentType: "post",
+        actionType: "mention",
+        contentTitle: postTitle || "Post",
+        contentThumbnailUrl: thumbnailUrl || "",
+        previewText: handle ? `@${handle}` : "",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        isRead: false,
+      }, {merge: false});
+
+  return {ok: true};
 });

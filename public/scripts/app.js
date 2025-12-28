@@ -1656,7 +1656,6 @@ function initApp(onReady) {
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 loadInboxModeFromStorage();
-                initInboxNotifications(user.uid);
                 initContentNotifications(user.uid);
                 updateTimeCapsule();
                 const path = window.location.pathname || '/';
@@ -4252,17 +4251,6 @@ window.toggleLike = async function (postId, event) {
                 updatePayload.dislikedBy = arrayRemove(currentUser.uid);
             }
             await updateDoc(postRef, updatePayload);
-            if (post.userId && post.userId !== currentUser.uid) {
-                await createNotificationOnce({
-                    targetUid: post.userId,
-                    actorUid: currentUser.uid,
-                    entityType: 'post',
-                    entityId: postId,
-                    actionType: 'like',
-                    type: 'like',
-                    previewText: (post.title || post.content || '').slice(0, 140)
-                });
-            }
         }
     } catch (e) {
         console.error("Like error:", e);
@@ -4947,16 +4935,16 @@ async function resolveMentionProfiles(mentions = []) {
     return results;
 }
 
-async function notifyMentionedUsers(resolved = [], postId) {
+async function notifyMentionedUsers(resolved = [], postId, meta = {}) {
+    if (!resolved.length || !postId) return;
+    const fn = httpsCallable(functions, 'notifyMention');
     const tasks = resolved.map(function (entry) {
-        return createNotificationOnce({
-            targetUid: entry.uid,
-            actorUid: currentUser.uid,
-            entityType: 'post',
-            entityId: postId,
-            actionType: 'mention',
-            type: 'mention',
-            previewText: entry.handle ? `@${entry.handle}` : ''
+        return fn({
+            targetUserId: entry.uid,
+            postId,
+            handle: entry.handle || '',
+            postTitle: meta?.title || '',
+            thumbnailUrl: meta?.thumbnailUrl || ''
         });
     });
     await Promise.all(tasks);
@@ -5150,7 +5138,12 @@ window.createPost = async function () {
             currentEditPost = null;
         } else {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
-            if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
+            if (notificationTargets.length) {
+                await notifyMentionedUsers(notificationTargets, postRef.id, {
+                    title,
+                    thumbnailUrl: mediaUrl || ''
+                });
+            }
             await incrementTagUses(normalizedTags);
         }
 
@@ -6043,19 +6036,6 @@ window.sendComment = async function () {
                 likes: 0
             }
         });
-        const post = allPosts.find(function (p) { return p.id === activePostId; });
-        if (post?.userId && post.userId !== currentUser.uid) {
-            await createNotificationOnce({
-                targetUid: post.userId,
-                actorUid: currentUser.uid,
-                entityType: 'post',
-                entityId: activePostId,
-                actionType: 'comment',
-                type: 'comment',
-                previewText: text.slice(0, 140)
-            });
-        }
-
         resetInputBox();
         document.getElementById('attach-btn-text').textContent = "📎 Attach";
         document.getElementById('attach-btn-text').style.color = "var(--text-muted)";
@@ -8148,6 +8128,10 @@ async function createNotificationOnce(payload = {}) {
     }
 }
 
+function notifIsRead(notification = {}) {
+    return notification?.read === true || notification?.isRead === true;
+}
+
 function getNotificationBucket(notification = {}) {
     const entityType = (notification.entityType || '').toLowerCase();
     const type = (notification.type || notification.actionType || '').toLowerCase();
@@ -8285,19 +8269,13 @@ function updateInboxNotificationCounts() {
 
     // Content notifications: type is usually "content"; the real category is contentType/entityType.
     contentNotifications.forEach((notif) => {
-        if (notif?.read === true) return;
+        if (notifIsRead(notif)) return;
         const bucket = getContentNotificationBucket(notif);
         if (bucket === 'posts') unreadPosts++;
         else if (bucket === 'videos') unreadVideos++;
         else if (bucket === 'livestreams') unreadLivestreams++;
     });
-
-    // Inbox notifications: count only "account" bucket as the Inbox tab count.
-    inboxNotifications.forEach((notif) => {
-        if (notif?.read === true) return;
-        const bucket = getNotificationBucket(notif);
-        if (bucket === 'account') unreadAccount++;
-    });
+    unreadAccount = 0;
 
     inboxNotificationCounts = {
         posts: unreadPosts,
@@ -8349,7 +8327,7 @@ function toggleInboxContentFilter(mode) {
 window.toggleInboxContentFilter = toggleInboxContentFilter;
 
 function markNotificationRead(notif) {
-    if (!currentUser || !notif || notif.read || !notif.id) return;
+    if (!currentUser || !notif || notifIsRead(notif) || !notif.id) return;
     notif.read = true;
     updateInboxNotificationCounts();
     const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
@@ -8358,12 +8336,16 @@ function markNotificationRead(notif) {
     });
 }
 
-function markContentNotificationRead(notif) {
-    if (!currentUser || !notif || notif.read || !notif.id) return;
-    notif.read = true;
+function markContentNotificationRead(notifId, notif) {
+    if (!currentUser || !notifId) return;
+    if (notif && notifIsRead(notif)) return;
+    if (notif) {
+        notif.read = true;
+        notif.isRead = true;
+    }
     updateInboxNotificationCounts();
-    const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
-    updateDoc(notifRef, { read: true }).catch(function (err) {
+    const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notifId);
+    updateDoc(notifRef, { isRead: true, read: true }).catch(function (err) {
         console.warn('Failed to mark content notification read', err?.message || err);
     });
 }
@@ -8408,7 +8390,7 @@ function renderContentNotificationList(mode = 'posts') {
             ${(thumb || title) ? `<div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>` : ''}
         `;
         row.onclick = function () {
-            markContentNotificationRead(notif);
+            markContentNotificationRead(notif.id, notif);
             const contentType = (notif.contentType || '').toLowerCase();
             if ((contentType === 'post' || contentType === 'posts') && notif.contentId) {
                 window.openThread(notif.contentId);
@@ -9157,11 +9139,13 @@ function initContentNotifications(userId) {
         contentNotificationsUnsubscribe = null;
     }
     if (!userId) return;
-    const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(200));
+    const DEBUG_NOTIFS = (location.hostname === 'localhost')
+        || window.localStorage?.getItem('debugNotifs') === '1';
+    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
     contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
         contentNotifications = snap.docs
-            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
-            .filter(function (notif) { return notif.type === 'content'; });
+            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
             const preferred = inboxContentPreferred || 'posts';
@@ -9169,6 +9153,7 @@ function initContentNotifications(userId) {
             syncInboxContentFilters();
         }
     }, function (err) {
+        if (DEBUG_NOTIFS) console.warn('[Notifs] content snapshot error', err);
         handleSnapshotError('Content notifications', err);
     });
 }
@@ -14669,17 +14654,6 @@ window.likeVideo = async function (videoId) {
                 writes.push(updateDoc(videoRef, { 'stats.dislikes': increment(-1) }));
             }
             await Promise.all(writes);
-            if (video?.ownerId && video.ownerId !== currentUser.uid) {
-                await createNotificationOnce({
-                    targetUid: video.ownerId,
-                    actorUid: currentUser.uid,
-                    entityType: 'video',
-                    entityId: videoId,
-                    actionType: 'like',
-                    type: 'like',
-                    previewText: (video.title || video.description || '').slice(0, 140)
-                });
-            }
         }
     } catch (err) {
         console.error('Video like failed', err);
