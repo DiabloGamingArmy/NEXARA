@@ -68,3 +68,7 @@ node_modules/
 # dataconnect generated files
 .dataconnect
 functions/.env.*
+
+# env files
+functions/.env*
+.env*
