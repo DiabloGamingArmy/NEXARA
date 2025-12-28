@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "firebase emulators:start --only hosting,firestore,storage",
     "build": "npm run build:css",
-    "build:css": "npx tailwindcss -i assets/tailwind-input.css -o public/assets/tailwind.css --minify"
+    "build:css": "tailwindcss -i assets/tailwind-input.css -o public/assets/tailwind.css --minify"
   },
   "dependencies": {
     "@dataconnect/generated": "file:src/dataconnect-generated"
