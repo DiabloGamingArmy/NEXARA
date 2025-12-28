@@ -19,6 +19,16 @@ npm run build
 * Client config is embedded in `public/scripts/app.js`.
 * Supporting Firebase module layout lives under `public/scripts/`.
 
+## Push notifications (FCM Web Push)
+
+* Set the VAPID key in the client by defining `window.NEXERA_FCM_VAPID_KEY` (Firebase Console → Cloud Messaging → Web Push certificates).
+  * Example: add a small inline script in your hosting HTML before `app.js` loads, or inject via your hosting environment.
+
+Local test flow:
+1) Enable notifications via Profile & Settings → Notifications.
+2) Confirm a token doc appears at `users/{uid}/pushTokens/{tokenDocId}`.
+3) Send a DM from another account and verify the in-app badge updates and a push appears (when the tab is backgrounded).
+
 ## Rules and deployment
 
 * Firestore rules: `firestore.rules`
