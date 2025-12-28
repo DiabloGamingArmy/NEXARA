@@ -8286,8 +8286,8 @@ function updateInboxNotificationCounts() {
     inboxNotifications.forEach(function (notif) {
         if (notif.read) return;
         const bucket = getNotificationBucket(notif);
-        if (!bucket) return;
-        counts[bucket] = (counts[bucket] || 0) + 1;
+        if (bucket !== 'account') return;
+        counts.account = (counts.account || 0) + 1;
     });
     inboxNotificationCounts = counts;
     updateInboxNavBadge();
@@ -8320,7 +8320,7 @@ function toggleInboxContentFilter(mode) {
         inboxContentFilters = { posts: true, videos: true, livestreams: true };
     }
     syncInboxContentFilters();
-    renderInboxNotifications(mode);
+    renderContentNotificationList(mode);
     try {
         window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
         window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
@@ -9142,15 +9142,30 @@ function initContentNotifications(userId) {
         contentNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
-                renderContentNotificationList(contentMode);
-            });
-            syncInboxContentFilters();
             return;
         }
         if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
+    }, function (err) {
+        handleSnapshotError('Content notifications', err);
+    });
+}
+
+function initContentNotifications(userId) {
+    if (contentNotificationsUnsubscribe) {
+        try { contentNotificationsUnsubscribe(); } catch (err) { }
+        contentNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        contentNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        updateInboxNotificationCounts();
+        renderContentNotificationList('posts');
+        renderContentNotificationList('videos');
+        renderContentNotificationList('livestreams');
+        syncInboxContentFilters();
     }, function (err) {
         handleSnapshotError('Content notifications', err);
     });
