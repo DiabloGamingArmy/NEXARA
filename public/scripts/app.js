@@ -126,6 +126,7 @@ let inboxNotificationsUnsubscribe = null;
 let inboxNotifications = [];
 let contentNotificationsUnsubscribe = null;
 let contentNotifications = [];
+let contentNotificationsLegacyFetched = false;
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -8533,7 +8534,7 @@ function markContentNotificationRead(notifId, notif) {
     }
     updateInboxNotificationCounts();
     const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notifId);
-    updateDoc(notifRef, { isRead: true }).catch(function (err) {
+    updateDoc(notifRef, { isRead: true, read: true }).catch(function (err) {
         console.warn('Failed to mark content notification read', err?.message || err);
     });
 }
@@ -9363,19 +9364,54 @@ function initContentNotifications(userId) {
         contentNotificationsUnsubscribe = null;
     }
     if (!userId) return;
+    contentNotificationsLegacyFetched = false;
     const DEBUG_NOTIFS = (location.hostname === 'localhost')
         || window.localStorage?.getItem('debugNotifs') === '1';
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
-    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
-        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
-        contentNotifications = snap.docs
-            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'content'),
+        orderBy('createdAt', 'desc'),
+        limit(200)
+    );
+    if (DEBUG_NOTIFS) console.debug('[Notifs] content listener: typed');
+    const applyContentNotifications = function (nextNotifications = []) {
+        contentNotifications = nextNotifications;
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            const preferred = inboxContentPreferred || 'posts';
-            renderContentNotificationList(preferred);
+            renderContentNotificationList('posts');
+            renderContentNotificationList('videos');
+            renderContentNotificationList('livestreams');
             syncInboxContentFilters();
         }
+    };
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
+        const typedNotifications = snap.docs
+            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        applyContentNotifications(typedNotifications);
+        if (!snap.empty || contentNotificationsLegacyFetched) return;
+        contentNotificationsLegacyFetched = true;
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content fallback: legacy getDocs');
+        const legacyRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
+        getDocs(legacyRef).then(function (legacySnap) {
+            if (contentNotifications.length) return;
+            const existingIds = new Set(typedNotifications.map(function (notif) { return notif.id; }));
+            const legacyNotifications = legacySnap.docs
+                .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+                .filter(function (notif) {
+                    if ((notif.type || '').toLowerCase() === 'dm') return false;
+                    return !!getContentNotificationBucket(notif);
+                })
+                .filter(function (notif) { return !existingIds.has(notif.id); });
+            const merged = typedNotifications.concat(legacyNotifications).sort(function (a, b) {
+                const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+                const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+                return bTs - aTs;
+            });
+            applyContentNotifications(merged);
+        }).catch(function (err) {
+            if (DEBUG_NOTIFS) console.warn('[Notifs] content fallback error', err);
+        });
     }, function (err) {
         if (DEBUG_NOTIFS) console.warn('[Notifs] content snapshot error', err);
         handleSnapshotError('Content notifications', err);
