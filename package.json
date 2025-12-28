@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "@dataconnect/generated": "file:src/dataconnect-generated"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.17"
   }
 }
