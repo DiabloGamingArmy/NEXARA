@@ -1673,7 +1673,6 @@ function initApp(onReady) {
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 loadInboxModeFromStorage();
-                initInboxNotifications(user.uid);
                 initContentNotifications(user.uid);
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
