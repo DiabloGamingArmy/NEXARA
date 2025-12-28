@@ -1,7 +1,7 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
@@ -31,7 +31,10 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+const db = isSafari
+    ? initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false })
+    : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
 const messaging = getMessaging(app);
@@ -126,6 +129,7 @@ let inboxNotificationsUnsubscribe = null;
 let inboxNotifications = [];
 let contentNotificationsUnsubscribe = null;
 let contentNotifications = [];
+let contentNotificationsLegacyFetched = false;
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -8445,6 +8449,26 @@ function updateInboxNavBadge() {
     updateInboxTabBadges();
 }
 
+function safeUpdateNavBadge(key, count) {
+    try {
+        if (typeof updateNavBadge === 'function') {
+            updateNavBadge(key, count);
+            return;
+        }
+        const el = document.querySelector(`[data-badge="${key}"]`);
+        if (!el) return;
+        if (count > 0) {
+            el.textContent = String(count);
+            el.style.display = 'inline-flex';
+        } else {
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+    } catch (e) {
+        console.warn('[Badges] Failed updating nav badge:', key, e);
+    }
+}
+
 function updateInboxNotificationCounts() {
     let unreadPosts = 0;
     let unreadVideos = 0;
@@ -8473,7 +8497,13 @@ function updateInboxNotificationCounts() {
     };
 
     updateInboxTabBadges();
-    updateNavBadge(unreadAccount + unreadPosts + unreadVideos + unreadLivestreams);
+    const unreadContent = unreadPosts + unreadVideos + unreadLivestreams;
+    const unreadMessages = computeUnreadMessageTotal();
+    const totalUnread = unreadAccount + unreadContent + unreadMessages;
+    safeUpdateNavBadge('inbox', totalUnread);
+    safeUpdateNavBadge('content', unreadContent);
+    safeUpdateNavBadge('account', unreadAccount);
+    safeUpdateNavBadge('messages', unreadMessages);
 }
 
 function syncInboxContentFilters() {
@@ -8533,7 +8563,7 @@ function markContentNotificationRead(notifId, notif) {
     }
     updateInboxNotificationCounts();
     const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notifId);
-    updateDoc(notifRef, { isRead: true }).catch(function (err) {
+    updateDoc(notifRef, { isRead: true, read: true }).catch(function (err) {
         console.warn('Failed to mark content notification read', err?.message || err);
     });
 }
@@ -9363,19 +9393,54 @@ function initContentNotifications(userId) {
         contentNotificationsUnsubscribe = null;
     }
     if (!userId) return;
+    contentNotificationsLegacyFetched = false;
     const DEBUG_NOTIFS = (location.hostname === 'localhost')
         || window.localStorage?.getItem('debugNotifs') === '1';
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
-    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
-        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
-        contentNotifications = snap.docs
-            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'content'),
+        orderBy('createdAt', 'desc'),
+        limit(200)
+    );
+    if (DEBUG_NOTIFS) console.debug('[Notifs] content listener: typed');
+    const applyContentNotifications = function (nextNotifications = []) {
+        contentNotifications = nextNotifications;
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            const preferred = inboxContentPreferred || 'posts';
-            renderContentNotificationList(preferred);
+            renderContentNotificationList('posts');
+            renderContentNotificationList('videos');
+            renderContentNotificationList('livestreams');
             syncInboxContentFilters();
         }
+    };
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
+        const typedNotifications = snap.docs
+            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        applyContentNotifications(typedNotifications);
+        if (!snap.empty || contentNotificationsLegacyFetched) return;
+        contentNotificationsLegacyFetched = true;
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content fallback: legacy getDocs');
+        const legacyRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
+        getDocs(legacyRef).then(function (legacySnap) {
+            if (contentNotifications.length) return;
+            const existingIds = new Set(typedNotifications.map(function (notif) { return notif.id; }));
+            const legacyNotifications = legacySnap.docs
+                .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+                .filter(function (notif) {
+                    if ((notif.type || '').toLowerCase() === 'dm') return false;
+                    return !!getContentNotificationBucket(notif);
+                })
+                .filter(function (notif) { return !existingIds.has(notif.id); });
+            const merged = typedNotifications.concat(legacyNotifications).sort(function (a, b) {
+                const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+                const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+                return bTs - aTs;
+            });
+            applyContentNotifications(merged);
+        }).catch(function (err) {
+            if (DEBUG_NOTIFS) console.warn('[Notifs] content fallback error', err);
+        });
     }, function (err) {
         if (DEBUG_NOTIFS) console.warn('[Notifs] content snapshot error', err);
         handleSnapshotError('Content notifications', err);
