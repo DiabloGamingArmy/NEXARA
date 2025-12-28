@@ -72,3 +72,4 @@ functions/.env.*
 # env files
 functions/.env*
 .env*
+public/assets/tailwind.css
