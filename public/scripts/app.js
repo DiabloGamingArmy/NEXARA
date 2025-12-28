@@ -107,9 +107,12 @@ let conversationListVisibleCount = 30;
 let inboxMode = 'messages';
 let inboxNotificationsUnsubscribe = null;
 let inboxNotifications = [];
+let contentNotificationsUnsubscribe = null;
+let contentNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
+let inboxModeRestored = false;
 const USE_UPLOAD_SESSION = false;
 var uploadTasks = window.uploadTasks || (window.uploadTasks = []);
 var activeUploadId = window.activeUploadId || null;
@@ -1652,7 +1655,9 @@ function initApp(onReady) {
                 startCategoryStreams(user.uid);
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
+                loadInboxModeFromStorage();
                 initInboxNotifications(user.uid);
+                initContentNotifications(user.uid);
                 updateTimeCapsule();
                 const path = window.location.pathname || '/';
                 if (path === '/' || path === '/home') {
@@ -1680,7 +1685,12 @@ function initApp(onReady) {
                     try { inboxNotificationsUnsubscribe(); } catch (err) { }
                     inboxNotificationsUnsubscribe = null;
                 }
+                if (contentNotificationsUnsubscribe) {
+                    try { contentNotificationsUnsubscribe(); } catch (err) { }
+                    contentNotificationsUnsubscribe = null;
+                }
                 inboxNotifications = [];
+                contentNotifications = [];
                 inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
                 updateInboxNavBadge();
                 followedCategories = new Set();
@@ -1843,19 +1853,6 @@ function resolveCategoryNameBySlug(slug) {
     if (!slug) return 'Unknown';
     const match = categories.find(function (cat) { return cat.slug === slug || cat.id === slug; });
     return match?.name || formatSlugLabel(slug);
-}
-
-async function incrementTrendingPopularity(slug, amount = 1) {
-    if (!slug) return;
-    try {
-        const ref = doc(db, 'trendingCategories', slug);
-        await updateDoc(ref, {
-            popularity: increment(amount),
-            updatedAt: new Date()
-        });
-    } catch (error) {
-        console.error('Failed to update trending popularity:', error);
-    }
 }
 
 // Trending topics now come from the staff-populated "trendingCategories" collection.
@@ -3890,7 +3887,7 @@ function getPostHTML(post, options = {}) {
         let commentPreviewHtml = '';
         if (post.previewComment) {
             commentPreviewHtml = `
-                <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px;">
+                <div class="post-comment-preview" style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:8px; font-size:0.85rem; color:var(--text-muted); display:flex; gap:6px;">
                     <span style="font-weight:bold; color:var(--text-main);">${escapeHtml(post.previewComment.author)}:</span>
                     <span>${escapeHtml(post.previewComment.text)}</span>
                     ${post.previewComment.likes ? `<span style="margin-left:auto; font-size:0.75rem; display:flex; align-items:center; gap:3px;"><i class="ph-fill ph-thumbs-up"></i> ${post.previewComment.likes}</span>` : ''}
@@ -4256,7 +4253,7 @@ window.toggleLike = async function (postId, event) {
             }
             await updateDoc(postRef, updatePayload);
             if (post.userId && post.userId !== currentUser.uid) {
-                createNotificationOnce({
+                await createNotificationOnce({
                     targetUid: post.userId,
                     actorUid: currentUser.uid,
                     entityType: 'post',
@@ -4264,7 +4261,7 @@ window.toggleLike = async function (postId, event) {
                     actionType: 'like',
                     type: 'like',
                     previewText: (post.title || post.content || '').slice(0, 140)
-                }).catch(function () {});
+                });
             }
         }
     } catch (e) {
@@ -5155,9 +5152,6 @@ window.createPost = async function () {
             const postRef = await addDoc(collection(db, 'posts'), postPayload);
             if (notificationTargets.length) await notifyMentionedUsers(notificationTargets, postRef.id);
             await incrementTagUses(normalizedTags);
-            if (resolvedCategoryId) {
-                incrementTrendingPopularity(resolvedCategoryId, 5);
-            }
         }
 
         if (locationValue) {
@@ -6050,19 +6044,8 @@ window.sendComment = async function () {
             }
         });
         const post = allPosts.find(function (p) { return p.id === activePostId; });
-        let categorySlug = post?.categoryId || post?.categorySlug || '';
-        if (!categorySlug) {
-            try {
-                const postSnap = await getDoc(postRef);
-                const postData = postSnap.exists() ? postSnap.data() : null;
-                categorySlug = postData?.categoryId || postData?.categorySlug || '';
-            } catch (error) {
-                console.warn('Unable to resolve post category', error);
-            }
-        }
-        if (categorySlug) incrementTrendingPopularity(categorySlug, 1);
         if (post?.userId && post.userId !== currentUser.uid) {
-            createNotificationOnce({
+            await createNotificationOnce({
                 targetUid: post.userId,
                 actorUid: currentUser.uid,
                 entityType: 'post',
@@ -6070,7 +6053,7 @@ window.sendComment = async function () {
                 actionType: 'comment',
                 type: 'comment',
                 previewText: text.slice(0, 140)
-            }).catch(function () {});
+            });
         }
 
         resetInputBox();
@@ -6204,12 +6187,57 @@ window.confirmDeleteComment = async function (commentId) {
     if (!ok) return;
     try {
         await deleteDoc(doc(db, 'posts', activePostId, 'comments', commentId));
+        await refreshTopCommentPreview(activePostId);
         toast('Comment deleted.', 'info');
     } catch (error) {
         console.error('Comment delete failed', error);
         toast('Failed to delete comment.', 'error');
     }
 };
+
+async function refreshTopCommentPreview(postId) {
+    if (!postId) return;
+    const card = document.getElementById(`post-card-${postId}`);
+    if (!card) return;
+    const cardContent = card.querySelector('.card-content');
+    if (!cardContent) return;
+    let previewContainer = cardContent.querySelector('.post-comment-preview');
+    if (!previewContainer) {
+        previewContainer = document.createElement('div');
+        previewContainer.className = 'post-comment-preview';
+        previewContainer.style.marginTop = '10px';
+        previewContainer.style.padding = '8px';
+        previewContainer.style.background = 'rgba(255,255,255,0.05)';
+        previewContainer.style.borderRadius = '8px';
+        previewContainer.style.fontSize = '0.85rem';
+        previewContainer.style.color = 'var(--text-muted)';
+        previewContainer.style.display = 'flex';
+        previewContainer.style.gap = '6px';
+        cardContent.appendChild(previewContainer);
+    }
+    try {
+        const commentsRef = collection(db, 'posts', postId, 'comments');
+        const commentsSnap = await getDocs(query(commentsRef, orderBy('timestamp', 'desc'), limit(1)));
+        if (commentsSnap.empty) {
+            previewContainer.style.display = 'none';
+            previewContainer.innerHTML = '';
+            return;
+        }
+        const top = commentsSnap.docs[0].data() || {};
+        const author = top.userId ? (getCachedUser(top.userId) || {}) : {};
+        const authorName = resolveDisplayName(author) || author.username || top.author || top.authorName || 'Someone';
+        const text = top.text || '';
+        const likes = Number(top.likes || 0);
+        previewContainer.style.display = 'flex';
+        previewContainer.innerHTML = `
+            <span style="font-weight:bold; color:var(--text-main);">${escapeHtml(authorName)}:</span>
+            <span>${escapeHtml(text)}</span>
+            ${likes ? `<span style="margin-left:auto; font-size:0.75rem; display:flex; align-items:center; gap:3px;"><i class="ph-fill ph-thumbs-up"></i> ${likes}</span>` : ''}
+        `;
+    } catch (error) {
+        console.warn('Failed to refresh comment preview', error);
+    }
+}
 
 window.shareComment = function (commentId) {
     const url = `${window.location.origin}/view-thread/${encodeURIComponent(activePostId)}#comment-${encodeURIComponent(commentId)}`;
@@ -8094,24 +8122,30 @@ async function createNotificationOnce(payload = {}) {
     const targetUid = payload.targetUid;
     const actorUid = payload.actorUid;
     if (!targetUid || !actorUid || targetUid === actorUid) return;
-    const docId = buildNotificationDocId(payload);
-    if (!docId) return;
-    const notifRef = doc(db, 'notifications', targetUid, 'items', docId);
-    const snap = await getDoc(notifRef);
-    if (snap.exists()) return;
-    const body = {
-        createdAt: serverTimestamp(),
-        read: false,
-        actorUid,
-        targetUid,
-        entityType: payload.entityType || null,
-        entityId: payload.entityId || null,
-        actionType: payload.actionType || payload.type || null,
-        type: payload.type || payload.actionType || 'activity',
-        previewText: payload.previewText || '',
-        extra: payload.extra || null
-    };
-    await setDoc(notifRef, body, { merge: false });
+    const notificationKey = buildNotificationDocId(payload);
+    if (!notificationKey) return;
+    const notifRef = doc(db, 'notifications', targetUid, 'items', notificationKey);
+    try {
+        const resolvedType = payload.type || payload.actionType || 'activity';
+        const body = {
+            createdAt: serverTimestamp(),
+            read: false,
+            notificationKey,
+            actorUid,
+            targetUid,
+            entityType: payload.entityType || null,
+            entityId: payload.entityId || null,
+            contentType: payload.contentType || payload.entityType || null,
+            actionType: payload.actionType || payload.type || null,
+            type: payload.entityType ? 'content' : resolvedType,
+            previewText: payload.previewText || '',
+            extra: payload.extra || null
+        };
+        await setDoc(notifRef, body, { merge: false });
+    } catch (err) {
+        if (err?.code === 'permission-denied') return;
+        console.warn('[notifications] createNotificationOnce failed', err?.message || err);
+    }
 }
 
 function getNotificationBucket(notification = {}) {
@@ -8124,10 +8158,32 @@ function getNotificationBucket(notification = {}) {
     return 'account';
 }
 
+function getContentNotificationBucket(notification = {}) {
+    const contentType = (notification.contentType || notification.entityType || '').toLowerCase();
+    if (contentType === 'video' || contentType === 'videos') return 'videos';
+    if (contentType === 'livestream' || contentType === 'live' || contentType === 'stream' || contentType === 'livestreams') return 'livestreams';
+    if (contentType === 'post' || contentType === 'posts') return 'posts';
+    return null;
+}
+
+function formatContentTypeLabel(contentType = '') {
+    const normalized = (contentType || '').toLowerCase();
+    if (normalized === 'video' || normalized === 'videos') return 'video';
+    if (normalized === 'livestream' || normalized === 'live' || normalized === 'stream' || normalized === 'livestreams') return 'live stream';
+    return 'post';
+}
+
+function buildContentNotificationDescription(notification = {}) {
+    const actionLabel = formatNotificationAction(notification.actionType || 'activity');
+    const contentLabel = formatContentTypeLabel(notification.contentType);
+    return `${actionLabel} your ${contentLabel}.`;
+}
+
 function formatNotificationAction(action = '') {
     const normalized = (action || '').toLowerCase();
     const map = {
         like: 'liked',
+        dislike: 'disliked',
         comment: 'commented on',
         reply: 'replied to',
         mention: 'mentioned you in',
@@ -8152,6 +8208,25 @@ function formatNotificationEntity(entityType = '') {
     return map[normalized] || 'post';
 }
 
+function loadInboxModeFromStorage() {
+    if (inboxModeRestored) return;
+    inboxModeRestored = true;
+    try {
+        const savedMode = window.localStorage?.getItem('nexera_last_inbox_mode');
+        const savedContent = window.localStorage?.getItem('nexera_last_inbox_contentMode');
+        const allowedModes = ['messages', 'content', 'account'];
+        if (allowedModes.includes(savedMode)) {
+            inboxMode = savedMode;
+        }
+        const allowedContent = ['posts', 'videos', 'livestreams'];
+        if (allowedContent.includes(savedContent)) {
+            inboxContentPreferred = savedContent;
+        }
+    } catch (err) {
+        console.warn('Unable to read inbox mode', err?.message || err);
+    }
+}
+
 function computeUnreadMessageTotal() {
     return conversationMappings.reduce(function (sum, mapping) {
         return sum + (mapping.unreadCount || 0);
@@ -8159,8 +8234,8 @@ function computeUnreadMessageTotal() {
 }
 
 function computeUnreadNotificationTotal() {
-    return inboxNotifications.reduce(function (sum, notif) {
-        return sum + (!notif.read ? 1 : 0);
+    return Object.values(inboxNotificationCounts).reduce(function (sum, count) {
+        return sum + (count || 0);
     }, 0);
 }
 
@@ -8204,10 +8279,17 @@ function updateInboxNavBadge() {
 
 function updateInboxNotificationCounts() {
     const counts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
+    contentNotifications.forEach(function (notif) {
+        if (notif.read) return;
+        const bucket = getContentNotificationBucket(notif);
+        if (!bucket) return;
+        counts[bucket] = (counts[bucket] || 0) + 1;
+    });
     inboxNotifications.forEach(function (notif) {
         if (notif.read) return;
         const bucket = getNotificationBucket(notif);
-        counts[bucket] = (counts[bucket] || 0) + 1;
+        if (bucket !== 'account') return;
+        counts.account = (counts.account || 0) + 1;
     });
     inboxNotificationCounts = counts;
     updateInboxNavBadge();
@@ -8231,11 +8313,22 @@ function toggleInboxContentFilter(mode) {
     if (inboxMode !== 'content') {
         setInboxMode('content', { skipRouteUpdate: true });
     }
+    const wasEnabled = inboxContentFilters[mode];
     inboxContentFilters[mode] = !inboxContentFilters[mode];
+    if (!wasEnabled) {
+        inboxContentPreferred = mode;
+    }
     if (!Object.values(inboxContentFilters).some(Boolean)) {
         inboxContentFilters = { posts: true, videos: true, livestreams: true };
     }
     syncInboxContentFilters();
+    renderContentNotificationList(mode);
+    try {
+        window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
+        window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
+    } catch (err) {
+        console.warn('Unable to persist inbox content preference', err?.message || err);
+    }
 }
 
 window.toggleInboxContentFilter = toggleInboxContentFilter;
@@ -8247,6 +8340,70 @@ function markNotificationRead(notif) {
     const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
     updateDoc(notifRef, { read: true }).catch(function (err) {
         console.warn('Failed to mark notification read', err?.message || err);
+    });
+}
+
+function markContentNotificationRead(notif) {
+    if (!currentUser || !notif || notif.read || !notif.id) return;
+    notif.read = true;
+    updateInboxNotificationCounts();
+    const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
+    updateDoc(notifRef, { read: true }).catch(function (err) {
+        console.warn('Failed to mark content notification read', err?.message || err);
+    });
+}
+
+function renderContentNotificationList(mode = 'posts') {
+    const listEl = document.getElementById(`inbox-list-${mode}`);
+    const emptyEl = document.getElementById(`inbox-empty-${mode}`);
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const bucketed = contentNotifications
+        .filter(function (notif) { return getContentNotificationBucket(notif) === mode; })
+        .sort(function (a, b) {
+            const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+            const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+            return bTs - aTs;
+        });
+    if (!bucketed.length) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    bucketed.slice(0, 50).forEach(function (notif) {
+        const actorName = notif.actorName || 'Someone';
+        const description = buildContentNotificationDescription(notif);
+        const meta = formatMessageHoverTimestamp(notif.createdAt) || '';
+        const title = (notif.contentTitle || '').trim();
+        const thumb = (notif.contentThumbnailUrl || '').trim();
+        const row = document.createElement('div');
+        row.className = 'inbox-notification-item inbox-notification-item--content';
+        row.innerHTML = `
+            <div class="conversation-avatar-slot">${renderAvatar({
+                uid: notif.actorId || 'actor',
+                username: actorName,
+                displayName: actorName,
+                photoURL: notif.actorPhotoUrl || '',
+                avatarColor: computeAvatarColor(actorName)
+            }, { size: 42 })}</div>
+            <div class="inbox-notification-text">
+                <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(description)}</div>
+                ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+            </div>
+            ${(thumb || title) ? `<div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>` : ''}
+        `;
+        row.onclick = function () {
+            markContentNotificationRead(notif);
+            const contentType = (notif.contentType || '').toLowerCase();
+            if ((contentType === 'post' || contentType === 'posts') && notif.contentId) {
+                window.openThread(notif.contentId);
+            } else if ((contentType === 'video' || contentType === 'videos') && notif.contentId && typeof window.openVideoDetail === 'function') {
+                window.openVideoDetail(notif.contentId);
+            } else if ((contentType === 'livestream' || contentType === 'live' || contentType === 'stream' || contentType === 'livestreams') && notif.contentId && typeof window.openLiveSession === 'function') {
+                window.openLiveSession(notif.contentId);
+            }
+        };
+        listEl.appendChild(row);
     });
 }
 
@@ -8336,13 +8493,21 @@ function setInboxMode(mode = 'messages', options = {}) {
     });
     if (inboxMode === 'content') {
         ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
-            renderInboxNotifications(contentMode);
+            renderContentNotificationList(contentMode);
         });
         syncInboxContentFilters();
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
     refreshInboxLayout();
+    try {
+        window.localStorage?.setItem('nexera_last_inbox_mode', inboxMode);
+        if (inboxMode === 'content') {
+            window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || 'posts');
+        }
+    } catch (err) {
+        console.warn('Unable to persist inbox mode', err?.message || err);
+    }
     if (!skipRouteUpdate && routeView === 'messages') {
         let nextPath = '/inbox';
         if (inboxMode === 'content') {
@@ -8961,15 +9126,35 @@ function initInboxNotifications(userId) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
-                renderInboxNotifications(contentMode);
-            });
-            syncInboxContentFilters();
-        } else if (inboxMode && inboxMode !== 'messages') {
+            return;
+        }
+        if (inboxMode && inboxMode !== 'messages') {
             renderInboxNotifications(inboxMode);
         }
     }, function (err) {
         handleSnapshotError('Inbox notifications', err);
+    });
+}
+
+function initContentNotifications(userId) {
+    if (contentNotificationsUnsubscribe) {
+        try { contentNotificationsUnsubscribe(); } catch (err) { }
+        contentNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(200));
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        contentNotifications = snap.docs
+            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+            .filter(function (notif) { return notif.type === 'content'; });
+        updateInboxNotificationCounts();
+        if (inboxMode === 'content') {
+            const preferred = inboxContentPreferred || 'posts';
+            renderContentNotificationList(preferred);
+            syncInboxContentFilters();
+        }
+    }, function (err) {
+        handleSnapshotError('Content notifications', err);
     });
 }
 
@@ -10896,12 +11081,18 @@ window.openMessagesPage = async function () {
     conversationListFilter = 'all';
     conversationListSearchTerm = '';
     conversationListVisibleCount = 30;
-    setInboxMode('messages');
+    loadInboxModeFromStorage();
+    const nextMode = inboxMode || 'messages';
     const searchInput = document.getElementById('conversation-list-search');
     if (searchInput) searchInput.value = '';
     window.navigateTo('messages');
     setConversationFilter('all');
-    await initConversations();
+    setTimeout(function () {
+        setInboxMode(nextMode);
+    }, 0);
+    if (nextMode === 'messages') {
+        await initConversations();
+    }
 };
 
 window.sharePost = async function (postId, event) {
@@ -14464,7 +14655,7 @@ window.likeVideo = async function (videoId) {
             }
             await Promise.all(writes);
             if (video?.ownerId && video.ownerId !== currentUser.uid) {
-                createNotificationOnce({
+                await createNotificationOnce({
                     targetUid: video.ownerId,
                     actorUid: currentUser.uid,
                     entityType: 'video',
@@ -14472,7 +14663,7 @@ window.likeVideo = async function (videoId) {
                     actionType: 'like',
                     type: 'like',
                     previewText: (video.title || video.description || '').slice(0, 140)
-                }).catch(function () {});
+                });
             }
         }
     } catch (err) {
