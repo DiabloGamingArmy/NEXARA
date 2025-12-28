@@ -2551,7 +2551,7 @@ async function loadVideoCategories(force = false) {
     videoDestinationLoading = true;
     videoDestinationError = '';
     try {
-        const snap = await getDocs(query(collection(db, 'Categories'), orderBy('name')));
+        const snap = await getDocs(query(collection(db, 'categories'), orderBy('name')));
         videoCategories = snap.docs.map(function (docSnap) {
             const data = docSnap.data() || {};
             return { id: docSnap.id, slug: docSnap.id, ...data };
@@ -2573,7 +2573,7 @@ async function getCategoryMetaBySlug(slug) {
     const cached = videoCategoryIndex.get(slug);
     if (cached) return cached;
     try {
-        const snap = await getDoc(doc(db, 'Categories', slug));
+        const snap = await getDoc(doc(db, 'categories', slug));
         if (!snap.exists()) return null;
         const data = { id: snap.id, slug: snap.id, ...snap.data() };
         videoCategoryIndex.set(slug, data);
@@ -8449,21 +8449,21 @@ function updateInboxNavBadge() {
     updateInboxTabBadges();
 }
 
+function updateNavBadge(key, count) {
+    const el = document.querySelector(`[data-badge="${key}"]`);
+    if (!el) return;
+    if (count > 0) {
+        el.textContent = String(count);
+        el.style.display = 'inline-flex';
+    } else {
+        el.textContent = '';
+        el.style.display = 'none';
+    }
+}
+
 function safeUpdateNavBadge(key, count) {
     try {
-        if (typeof updateNavBadge === 'function') {
-            updateNavBadge(key, count);
-            return;
-        }
-        const el = document.querySelector(`[data-badge="${key}"]`);
-        if (!el) return;
-        if (count > 0) {
-            el.textContent = String(count);
-            el.style.display = 'inline-flex';
-        } else {
-            el.textContent = '';
-            el.style.display = 'none';
-        }
+        updateNavBadge(key, count);
     } catch (e) {
         console.warn('[Badges] Failed updating nav badge:', key, e);
     }
