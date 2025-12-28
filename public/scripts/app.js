@@ -9123,6 +9123,24 @@ function initInboxNotifications(userId) {
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
+        if (inboxMode && inboxMode !== 'messages' && inboxMode !== 'content') {
+            renderInboxNotifications(inboxMode);
+        }
+    }, function (err) {
+        handleSnapshotError('Inbox notifications', err);
+    });
+}
+
+function initContentNotifications(userId) {
+    if (contentNotificationsUnsubscribe) {
+        try { contentNotificationsUnsubscribe(); } catch (err) { }
+        contentNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(50));
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        contentNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        updateInboxNotificationCounts();
         if (inboxMode === 'content') {
             return;
         }
@@ -9130,7 +9148,7 @@ function initInboxNotifications(userId) {
             renderInboxNotifications(inboxMode);
         }
     }, function (err) {
-        handleSnapshotError('Inbox notifications', err);
+        handleSnapshotError('Content notifications', err);
     });
 }
 
