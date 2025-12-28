@@ -87,6 +87,29 @@ function buildLivePreview(session = {}) {
   };
 }
 
+function buildMessagePreview(message = {}) {
+  const text = (message.text || "").toString().trim();
+  if (text) return text.slice(0, 120);
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+  const mediaType = (message.mediaType || message.type || "").toString().toLowerCase();
+  const attachmentType = attachments[0]?.type || "";
+  const typeHint = (attachmentType || mediaType).toLowerCase();
+  if (typeHint.includes("image")) return "Sent a photo";
+  if (typeHint.includes("video")) return "Sent a video";
+  if (attachments.length) return "Sent an attachment";
+  if (message.mediaURL || message.mediaPath) return "Sent media";
+  return "New message";
+}
+
+function pickOtherParticipantField(participants = [], values = [], targetUid = "") {
+  if (!Array.isArray(values) || !Array.isArray(participants)) return [];
+  const mapped = [];
+  participants.forEach((uid, idx) => {
+    if (uid !== targetUid) mapped.push(values[idx] || "");
+  });
+  return mapped;
+}
+
 async function createContentNotification({
   actorId,
   targetUserId,
@@ -282,6 +305,114 @@ exports.onLiveStreamChat = onDocumentCreated("liveStreams/{sessionId}/chat/{chat
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
   });
+});
+
+exports.onConversationMessage = onDocumentCreated("conversations/{conversationId}/messages/{messageId}", async (event) => {
+  const message = event.data?.data() || {};
+  const senderId = message.senderId;
+  if (!senderId) return;
+  const conversationId = event.params.conversationId;
+  const messageId = event.params.messageId;
+
+  const convoSnap = await db.collection("conversations").doc(conversationId).get();
+  if (!convoSnap.exists) return;
+  const convo = convoSnap.data() || {};
+  const participants = Array.isArray(convo.participants) ? convo.participants : [];
+  if (!participants.length) return;
+
+  const recipients = participants.filter((uid) => uid && uid !== senderId);
+  if (!recipients.length) return;
+
+  const preview = buildMessagePreview(message);
+  const {actorName} = await resolveActorProfile(senderId);
+  const isGroup = participants.length > 2 || convo.type === "group";
+  const convoTitle = convo.title || "";
+  const notificationTitle = isGroup && convoTitle ? `${actorName} in ${convoTitle}` : actorName;
+  const messageTimestamp = message.createdAt || FieldValue.serverTimestamp();
+
+  const convoRef = db.collection("conversations").doc(conversationId);
+  const convoUpdate = {
+    lastMessagePreview: preview,
+    lastMessageSenderId: senderId,
+    lastMessageAt: messageTimestamp,
+    updatedAt: FieldValue.serverTimestamp(),
+    [`unreadCounts.${senderId}`]: 0,
+  };
+  recipients.forEach((uid) => {
+    convoUpdate[`unreadCounts.${uid}`] = FieldValue.increment(1);
+  });
+
+  const batch = db.batch();
+  batch.set(convoRef, convoUpdate, {merge: true});
+
+  participants.forEach((uid) => {
+    const mappingRef = db.collection("users").doc(uid).collection("conversations").doc(conversationId);
+    const mappingUpdate = {
+      conversationId,
+      participants,
+      otherParticipantIds: participants.filter((pid) => pid !== uid),
+      otherParticipantUsernames: pickOtherParticipantField(participants, convo.participantUsernames || [], uid),
+      otherParticipantNames: pickOtherParticipantField(participants, convo.participantNames || [], uid),
+      otherParticipantAvatars: pickOtherParticipantField(participants, convo.participantAvatars || [], uid),
+      lastMessagePreview: preview,
+      lastMessageSenderId: senderId,
+      lastMessageAt: messageTimestamp,
+    };
+    mappingUpdate.unreadCount = uid === senderId ? 0 : FieldValue.increment(1);
+    batch.set(mappingRef, mappingUpdate, {merge: true});
+  });
+
+  recipients.forEach((uid) => {
+    const notifRef = db.collection("users")
+        .doc(uid)
+        .collection("notifications")
+        .doc(`dm_${conversationId}_${messageId}`);
+    batch.set(notifRef, {
+      type: "dm",
+      conversationId,
+      messageId,
+      fromUid: senderId,
+      title: notificationTitle,
+      body: preview,
+      createdAt: FieldValue.serverTimestamp(),
+      read: false,
+    }, {merge: false});
+  });
+
+  await batch.commit();
+
+  await Promise.all(recipients.map(async (uid) => {
+    const tokensSnap = await db.collection("users").doc(uid).collection("pushTokens").get();
+    if (tokensSnap.empty) return;
+    const tokenEntries = tokensSnap.docs
+        .map((docSnap) => ({token: docSnap.data()?.token, ref: docSnap.ref}))
+        .filter((entry) => entry.token);
+    if (!tokenEntries.length) return;
+    const response = await admin.messaging().sendEachForMulticast({
+      tokens: tokenEntries.map((entry) => entry.token),
+      notification: {
+        title: notificationTitle,
+        body: preview,
+      },
+      data: {
+        kind: "dm",
+        conversationId,
+        messageId,
+        fromUid: senderId,
+      },
+    });
+    const deletions = [];
+    response.responses.forEach((res, idx) => {
+      if (res.success) return;
+      const code = res.error?.code || "";
+      if (code === "messaging/invalid-registration-token" || code === "messaging/registration-token-not-registered") {
+        deletions.push(tokenEntries[idx].ref.delete());
+      }
+    });
+    if (deletions.length) {
+      await Promise.all(deletions);
+    }
+  }));
 });
 
 exports.createUploadSession = onCall((data, context) => {

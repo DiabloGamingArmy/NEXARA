@@ -130,9 +130,13 @@ service cloud.firestore {
       allow read: if isSignedIn() && request.auth.uid == userId;
       allow create: if false;
       allow update: if isSignedIn() && request.auth.uid == userId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead'])
-        && request.resource.data.isRead == true;
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'read'])
+        && (request.resource.data.isRead == true || request.resource.data.read == true);
       allow delete: if false;
+    }
+
+    match /users/{userId}/pushTokens/{tokenId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
     // -------------------------
@@ -275,9 +279,11 @@ service cloud.firestore {
 
       allow read: if isSignedIn() && (request.auth.uid == userId);
 
-      allow create, update, delete: if isSignedIn()
-        && (request.auth.uid == userId
-            || (request.auth.uid in convoParticipants() && userId in convoParticipants()));
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['unreadCount'])
+            || request.resource.data.unreadCount == 0);
+      allow delete: if isSignedIn() && request.auth.uid == userId;
     }
 
     // -------------------------

@@ -4,6 +4,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
+import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -33,6 +34,8 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
+const messaging = getMessaging(app);
+const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 
 // --- Global State & Cache ---
 let currentUser = null;
@@ -78,6 +81,20 @@ let videoFilter = 'All';
 let videoSortMode = 'recent';
 let pendingVideoPreviewUrl = null;
 let pendingVideoThumbnailBlob = null;
+
+let messagingRegistration = null;
+let messagingListenerReady = false;
+const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () {
+        ensurePushSettingsUI();
+        initMessagingForegroundListener();
+    });
+} else {
+    ensurePushSettingsUI();
+    initMessagingForegroundListener();
+}
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
 let pendingVideoDurationSeconds = null;
@@ -1657,6 +1674,10 @@ function initApp(onReady) {
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 loadInboxModeFromStorage();
                 initContentNotifications(user.uid);
+                if ('Notification' in window && Notification.permission === 'granted') {
+                    registerMessagingServiceWorker();
+                    syncStoredPushToken(user.uid);
+                }
                 updateTimeCapsule();
                 const path = window.location.pathname || '/';
                 if (path === '/' || path === '/home') {
@@ -1669,9 +1690,11 @@ function initApp(onReady) {
                 ensureVideoTaskViewerBindings();
                 uploadManager.restorePendingUploads(currentUser.uid);
             } else {
+                const previousUserId = currentUser?.uid;
                 currentUser = null;
                 updateAuthClaims({});
                 ListenerRegistry.clearAll(); // Cleanup listeners on logout to prevent permission errors.
+                if (previousUserId) removePushTokenForUser(previousUserId);
                 if (followedTopicsUnsubscribe) {
                     try { followedTopicsUnsubscribe(); } catch (err) { }
                     followedTopicsUnsubscribe = null;
@@ -5261,6 +5284,7 @@ window.toggleSettingsModal = function (show) {
         syncThemeRadios(userProfile.theme || 'system');
         updateSettingsAvatarPreview(userProfile.photoURL);
         updateRemovePhotoButtonState();
+        updatePushSettingsUI();
 
         const uploadInput = document.getElementById('set-pic-file');
         const cameraInput = document.getElementById('set-pic-camera');
@@ -8132,9 +8156,169 @@ function notifIsRead(notification = {}) {
     return notification?.read === true || notification?.isRead === true;
 }
 
+function getPushTokenDocId(token = '') {
+    const raw = String(token || '');
+    const encoded = btoa(unescape(encodeURIComponent(raw))).replace(/=+$/g, '');
+    return encoded.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function getStoredPushToken() {
+    return window.localStorage?.getItem(PUSH_TOKEN_STORAGE_KEY) || '';
+}
+
+async function registerMessagingServiceWorker() {
+    if (!('serviceWorker' in navigator)) return null;
+    if (messagingRegistration) return messagingRegistration;
+    try {
+        messagingRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+        return messagingRegistration;
+    } catch (err) {
+        console.warn('Unable to register messaging service worker', err?.message || err);
+        return null;
+    }
+}
+
+async function upsertPushToken(uid, token) {
+    if (!uid || !token) return;
+    const docId = getPushTokenDocId(token);
+    await setDoc(doc(db, `users/${uid}/pushTokens/${docId}`), {
+        token,
+        platform: 'web',
+        createdAt: serverTimestamp(),
+        lastSeenAt: serverTimestamp(),
+        userAgent: navigator.userAgent || ''
+    }, { merge: true });
+}
+
+async function syncStoredPushToken(uid) {
+    if (!uid || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    const token = getStoredPushToken();
+    if (!token) return;
+    try {
+        await upsertPushToken(uid, token);
+    } catch (err) {
+        console.warn('Unable to sync push token', err?.message || err);
+    }
+}
+
+async function enablePushNotifications() {
+    if (!currentUser) return toast('Please log in to enable notifications.', 'info');
+    if (!('Notification' in window)) return toast('Notifications are not supported in this browser.', 'error');
+    if (!FCM_VAPID_KEY) return toast('Push notifications are not configured yet.', 'error');
+
+    const permission = await Notification.requestPermission();
+    updatePushSettingsUI();
+    if (permission !== 'granted') {
+        return toast('Notifications permission not granted.', 'info');
+    }
+    const registration = await registerMessagingServiceWorker();
+    if (!registration) return toast('Unable to register notifications.', 'error');
+    try {
+        const token = await getToken(messaging, { vapidKey: FCM_VAPID_KEY, serviceWorkerRegistration: registration });
+        if (!token) return toast('Unable to enable notifications.', 'error');
+        window.localStorage?.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+        await upsertPushToken(currentUser.uid, token);
+        toast('Notifications enabled.', 'success');
+        updatePushSettingsUI();
+    } catch (err) {
+        console.warn('Unable to enable push notifications', err?.message || err);
+        toast('Unable to enable notifications.', 'error');
+    }
+}
+
+async function disablePushNotifications() {
+    if (!currentUser) return;
+    const token = getStoredPushToken();
+    if (!token) return;
+    const docId = getPushTokenDocId(token);
+    try {
+        await deleteDoc(doc(db, `users/${currentUser.uid}/pushTokens/${docId}`));
+    } catch (err) {
+        console.warn('Unable to remove push token doc', err?.message || err);
+    }
+    try {
+        await deleteFcmToken(messaging);
+    } catch (err) {
+        console.warn('Unable to delete FCM token', err?.message || err);
+    }
+    window.localStorage?.removeItem(PUSH_TOKEN_STORAGE_KEY);
+    updatePushSettingsUI();
+}
+
+async function removePushTokenForUser(uid) {
+    if (!uid) return;
+    const token = getStoredPushToken();
+    if (!token) return;
+    const docId = getPushTokenDocId(token);
+    try {
+        await deleteDoc(doc(db, `users/${uid}/pushTokens/${docId}`));
+    } catch (err) {
+        console.warn('Unable to remove push token for user', err?.message || err);
+    }
+}
+
+function updatePushSettingsUI() {
+    const statusEl = document.getElementById('push-notif-status');
+    const btn = document.getElementById('push-notif-enable-btn');
+    if (!statusEl && !btn) return;
+    if (!('Notification' in window)) {
+        if (statusEl) statusEl.textContent = 'Notifications are not supported in this browser.';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    if (!FCM_VAPID_KEY) {
+        if (statusEl) statusEl.textContent = 'Notifications are not configured yet.';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    if (Notification.permission === 'granted') {
+        if (statusEl) statusEl.textContent = 'Enabled for this browser.';
+        if (btn) btn.disabled = true;
+    } else if (Notification.permission === 'denied') {
+        if (statusEl) statusEl.textContent = 'Blocked in this browser settings.';
+        if (btn) btn.disabled = true;
+    } else {
+        if (statusEl) statusEl.textContent = 'Disabled. Enable to receive message alerts.';
+        if (btn) btn.disabled = false;
+    }
+}
+
+function ensurePushSettingsUI() {
+    const modalContent = document.querySelector('#settings-modal .modal-content');
+    if (!modalContent || document.getElementById('push-notif-settings')) return;
+    const section = document.createElement('div');
+    section.className = 'settings-section';
+    section.id = 'push-notif-settings';
+    section.innerHTML = `
+        <div class="settings-section-header">Notifications</div>
+        <div id="push-notif-status" class="settings-hint" style="margin-bottom:10px;">Checking notification status...</div>
+        <button type="button" id="push-notif-enable-btn" class="create-btn-sidebar">Enable Notifications</button>
+    `;
+    modalContent.appendChild(section);
+    const btn = section.querySelector('#push-notif-enable-btn');
+    if (btn) btn.onclick = function () { enablePushNotifications(); };
+    updatePushSettingsUI();
+}
+
+function initMessagingForegroundListener() {
+    if (messagingListenerReady) return;
+    messagingListenerReady = true;
+    onMessage(messaging, function (payload) {
+        const data = payload?.data || {};
+        if (data.kind !== 'dm') return;
+        const conversationId = data.conversationId || '';
+        if (currentViewId === 'messages' && activeConversationId === conversationId) return;
+        const title = payload?.notification?.title || 'New message';
+        const body = payload?.notification?.body || 'You have a new message.';
+        toast(`${title}: ${body}`, 'info');
+    });
+}
+
 function getNotificationBucket(notification = {}) {
     const entityType = (notification.entityType || '').toLowerCase();
     const type = (notification.type || notification.actionType || '').toLowerCase();
+    if (type === 'dm') return 'account';
     if (entityType === 'video' || entityType === 'videos') return 'videos';
     if (entityType === 'livestream' || entityType === 'live' || entityType === 'stream') return 'livestreams';
     if (entityType === 'post' || entityType === 'posts') return 'posts';
@@ -8275,7 +8459,11 @@ function updateInboxNotificationCounts() {
         else if (bucket === 'videos') unreadVideos++;
         else if (bucket === 'livestreams') unreadLivestreams++;
     });
-    unreadAccount = 0;
+    inboxNotifications.forEach((notif) => {
+        if (notifIsRead(notif)) return;
+        const bucket = getNotificationBucket(notif);
+        if (bucket === 'account') unreadAccount++;
+    });
 
     inboxNotificationCounts = {
         posts: unreadPosts,
@@ -8330,7 +8518,7 @@ function markNotificationRead(notif) {
     if (!currentUser || !notif || notifIsRead(notif) || !notif.id) return;
     notif.read = true;
     updateInboxNotificationCounts();
-    const notifRef = doc(db, 'notifications', currentUser.uid, 'items', notif.id);
+    const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
     updateDoc(notifRef, { read: true }).catch(function (err) {
         console.warn('Failed to mark notification read', err?.message || err);
     });
@@ -8422,39 +8610,70 @@ function renderInboxNotifications(mode = 'posts') {
     }
     if (emptyEl) emptyEl.style.display = 'none';
     bucketed.slice(0, 50).forEach(function (notif) {
-        const actor = notif.actorUid ? (getCachedUser(notif.actorUid) || {}) : {};
-        const actorName = resolveDisplayName(actor) || actor.username || 'Someone';
-        const actionLabel = formatNotificationAction(notif.actionType || notif.type);
-        const entityLabel = formatNotificationEntity(notif.entityType || 'post');
+        const isDm = (notif.type || '').toLowerCase() === 'dm';
         const meta = formatMessageHoverTimestamp(notif.createdAt) || '';
-        const preview = (notif.previewText || '').trim();
         const row = document.createElement('div');
         row.className = 'inbox-notification-item';
-        row.innerHTML = `
-            <div class="conversation-avatar-slot">${renderAvatar({
-                uid: notif.actorUid || 'actor',
-                username: actor.username || actorName,
-                displayName: actorName,
-                photoURL: actor.photoURL || '',
-                avatarColor: actor.avatarColor || computeAvatarColor(actor.username || actorName)
-            }, { size: 42 })}</div>
-            <div class="inbox-notification-text">
-                <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(actionLabel)} your ${escapeHtml(entityLabel)}.</div>
-                ${preview ? `<div class=\"inbox-notification-meta\">${escapeHtml(preview)}</div>` : ''}
-                ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
-            </div>
-        `;
-        row.onclick = function () {
-            markNotificationRead(notif);
-            const entityType = (notif.entityType || '').toLowerCase();
-            if ((entityType === 'post' || entityType === 'posts') && notif.entityId) {
-                window.openThread(notif.entityId);
-            } else if ((entityType === 'video' || entityType === 'videos') && notif.entityId && typeof window.openVideoDetail === 'function') {
-                window.openVideoDetail(notif.entityId);
-            } else if ((entityType === 'livestream' || entityType === 'live' || entityType === 'stream') && notif.entityId && typeof window.openLiveSession === 'function') {
-                window.openLiveSession(notif.entityId);
-            }
-        };
+
+        if (isDm) {
+            const senderId = notif.fromUid || notif.actorUid || '';
+            const sender = senderId ? (getCachedUser(senderId) || {}) : {};
+            const senderName = notif.title || resolveDisplayName(sender) || sender.username || 'New message';
+            const preview = (notif.body || '').trim();
+            row.innerHTML = `
+                <div class="conversation-avatar-slot">${renderAvatar({
+                    uid: senderId || 'sender',
+                    username: sender.username || senderName,
+                    displayName: senderName,
+                    photoURL: sender.photoURL || '',
+                    avatarColor: sender.avatarColor || computeAvatarColor(sender.username || senderName)
+                }, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(senderName)}</strong></div>
+                    ${preview ? `<div class=\"inbox-notification-meta\">${escapeHtml(preview)}</div>` : ''}
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            `;
+            row.onclick = function () {
+                markNotificationRead(notif);
+                if (notif.conversationId) {
+                    openConversation(notif.conversationId);
+                } else {
+                    window.navigateTo('messages');
+                }
+            };
+        } else {
+            const actor = notif.actorUid ? (getCachedUser(notif.actorUid) || {}) : {};
+            const actorName = resolveDisplayName(actor) || actor.username || 'Someone';
+            const actionLabel = formatNotificationAction(notif.actionType || notif.type);
+            const entityLabel = formatNotificationEntity(notif.entityType || 'post');
+            const preview = (notif.previewText || '').trim();
+            row.innerHTML = `
+                <div class="conversation-avatar-slot">${renderAvatar({
+                    uid: notif.actorUid || 'actor',
+                    username: actor.username || actorName,
+                    displayName: actorName,
+                    photoURL: actor.photoURL || '',
+                    avatarColor: actor.avatarColor || computeAvatarColor(actor.username || actorName)
+                }, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(actionLabel)} your ${escapeHtml(entityLabel)}.</div>
+                    ${preview ? `<div class=\"inbox-notification-meta\">${escapeHtml(preview)}</div>` : ''}
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            `;
+            row.onclick = function () {
+                markNotificationRead(notif);
+                const entityType = (notif.entityType || '').toLowerCase();
+                if ((entityType === 'post' || entityType === 'posts') && notif.entityId) {
+                    window.openThread(notif.entityId);
+                } else if ((entityType === 'video' || entityType === 'videos') && notif.entityId && typeof window.openVideoDetail === 'function') {
+                    window.openVideoDetail(notif.entityId);
+                } else if ((entityType === 'livestream' || entityType === 'live' || entityType === 'stream') && notif.entityId && typeof window.openLiveSession === 'function') {
+                    window.openLiveSession(notif.entityId);
+                }
+            };
+        }
         listEl.appendChild(row);
     });
 }
@@ -9118,7 +9337,12 @@ function initInboxNotifications(userId) {
         inboxNotificationsUnsubscribe = null;
     }
     if (!userId) return;
-    const notifRef = query(collection(db, 'notifications', userId, 'items'), orderBy('createdAt', 'desc'), limit(50));
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'dm'),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+    );
     inboxNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
         inboxNotifications = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         updateInboxNotificationCounts();
@@ -10575,7 +10799,6 @@ async function sendChatPayload(conversationId, payload = {}) {
     } else {
         await addDoc(collection(db, 'conversations', conversationId, 'messages'), message);
     }
-    await updateConversationUnread(conversationId, participants, payload);
 }
 
 function isRetryableUploadError(error) {
