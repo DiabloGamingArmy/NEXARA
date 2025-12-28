@@ -8126,8 +8126,6 @@ async function createNotificationOnce(payload = {}) {
     if (!notificationKey) return;
     const notifRef = doc(db, 'notifications', targetUid, 'items', notificationKey);
     try {
-        const snap = await getDoc(notifRef);
-        if (snap.exists()) return;
         const body = {
             createdAt: serverTimestamp(),
             read: false,
@@ -8143,6 +8141,7 @@ async function createNotificationOnce(payload = {}) {
         };
         await setDoc(notifRef, body, { merge: false });
     } catch (err) {
+        if (err?.code === 'permission-denied') return;
         console.warn('[notifications] createNotificationOnce failed', err?.message || err);
     }
 }
