@@ -8278,21 +8278,36 @@ function updateInboxNavBadge() {
 }
 
 function updateInboxNotificationCounts() {
-    const counts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
-    contentNotifications.forEach(function (notif) {
-        if (notif.read) return;
+    let unreadPosts = 0;
+    let unreadVideos = 0;
+    let unreadLivestreams = 0;
+    let unreadAccount = 0;
+
+    // Content notifications: type is usually "content"; the real category is contentType/entityType.
+    contentNotifications.forEach((notif) => {
+        if (notif?.read === true) return;
         const bucket = getContentNotificationBucket(notif);
-        if (!bucket) return;
-        counts[bucket] = (counts[bucket] || 0) + 1;
+        if (bucket === 'posts') unreadPosts++;
+        else if (bucket === 'videos') unreadVideos++;
+        else if (bucket === 'livestreams') unreadLivestreams++;
     });
-    inboxNotifications.forEach(function (notif) {
-        if (notif.read) return;
+
+    // Inbox notifications: count only "account" bucket as the Inbox tab count.
+    inboxNotifications.forEach((notif) => {
+        if (notif?.read === true) return;
         const bucket = getNotificationBucket(notif);
-        if (bucket !== 'account') return;
-        counts.account = (counts.account || 0) + 1;
+        if (bucket === 'account') unreadAccount++;
     });
-    inboxNotificationCounts = counts;
-    updateInboxNavBadge();
+
+    inboxNotificationCounts = {
+        posts: unreadPosts,
+        videos: unreadVideos,
+        livestreams: unreadLivestreams,
+        account: unreadAccount
+    };
+
+    updateInboxTabBadges();
+    updateNavBadge(unreadAccount + unreadPosts + unreadVideos + unreadLivestreams);
 }
 
 function syncInboxContentFilters() {
