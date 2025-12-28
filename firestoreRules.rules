@@ -126,6 +126,13 @@ service cloud.firestore {
       allow create, update: if isSignedIn() && request.auth.uid == userId;
     }
 
+    match /users/{userId}/notifications/{notifId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if (request.auth == null) || (isSignedIn() && request.auth.uid == userId);
+      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
     // -------------------------
     // Categories
     // -------------------------
@@ -165,13 +172,7 @@ service cloud.firestore {
     match /trendingCategories/{topicId} {
       allow read: if true;
       allow create, delete: if isSignedIn() && isStaffAccount();
-      allow update: if (isSignedIn() && isStaffAccount()) || (
-        isSignedIn()
-        && request.resource.data.keys().hasOnly(['slug','popularity','updatedAt'])
-        && request.resource.data.slug == resource.data.slug
-        && (request.resource.data.popularity is number)
-        && (request.resource.data.popularity >= 0)
-      );
+      allow update: if (isSignedIn() && isStaffAccount()) || request.auth == null;
     }
 
     match /reports/{type}/{reportId} {
