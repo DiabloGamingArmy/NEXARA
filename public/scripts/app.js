@@ -44,9 +44,9 @@ const LIVEKIT_URL = window.NEXERA_LIVEKIT_URL || '';
 const LIVEKIT_ENABLED = !!LIVEKIT_URL;
 let LivekitRoom = null;
 let LivekitRoomEvent = null;
-let createLocalAudioTrack = null;
-let createLocalVideoTrack = null;
-let createLocalScreenTracks = null;
+let livekitCreateLocalAudioTrack = null;
+let livekitCreateLocalVideoTrack = null;
+let livekitCreateLocalScreenTracks = null;
 
 const LIVEKIT_CLIENT_VERSION = "2.5.1";
 const LIVEKIT_CDN_URLS = [
@@ -72,9 +72,9 @@ async function ensureLiveKitLoaded() {
         if (window.LivekitClient) {
           LivekitRoom = window.LivekitClient.Room || null;
           LivekitRoomEvent = window.LivekitClient.RoomEvent || null;
-          createLocalAudioTrack = window.LivekitClient.createLocalAudioTrack || null;
-          createLocalVideoTrack = window.LivekitClient.createLocalVideoTrack || null;
-          createLocalScreenTracks = window.LivekitClient.createLocalScreenTracks || null;
+          livekitCreateLocalAudioTrack = window.LivekitClient.createLocalAudioTrack || null;
+          livekitCreateLocalVideoTrack = window.LivekitClient.createLocalVideoTrack || null;
+          livekitCreateLocalScreenTracks = window.LivekitClient.createLocalScreenTracks || null;
         }
 
         console.log("[LiveKit] livekit-client loaded from:", url);
@@ -89,9 +89,9 @@ async function ensureLiveKitLoaded() {
     window.LivekitClient = null;
     LivekitRoom = null;
     LivekitRoomEvent = null;
-    createLocalAudioTrack = null;
-    createLocalVideoTrack = null;
-    createLocalScreenTracks = null;
+    livekitCreateLocalAudioTrack = null;
+    livekitCreateLocalVideoTrack = null;
+    livekitCreateLocalScreenTracks = null;
     return null;
   })();
 
@@ -9351,7 +9351,7 @@ async function connectToLiveKitRoom(callSession) {
     }
 
     const elements = getCallOverlayElements();
-    if (!LivekitRoom || !createLocalAudioTrack) {
+    if (!LivekitRoom || !livekitCreateLocalAudioTrack) {
         throw new Error('LiveKit client unavailable.');
     }
     const room = new LivekitRoom();
@@ -9395,14 +9395,14 @@ async function connectToLiveKitRoom(callSession) {
     }
     await room.connect(tokenPayload.url, tokenPayload.token);
 
-    livekitLocalAudioTrack = await createLocalAudioTrack();
+    livekitLocalAudioTrack = await livekitCreateLocalAudioTrack();
     await room.localParticipant.publishTrack(livekitLocalAudioTrack);
 
     if (callSession.type === 'video') {
-        if (!createLocalVideoTrack) {
+        if (!livekitCreateLocalVideoTrack) {
             throw new Error('LiveKit video unavailable.');
         }
-        livekitLocalVideoTrack = await createLocalVideoTrack();
+        livekitLocalVideoTrack = await livekitCreateLocalVideoTrack();
         await room.localParticipant.publishTrack(livekitLocalVideoTrack);
         if (elements.localVideo) {
             elements.localVideo.style.display = 'block';
