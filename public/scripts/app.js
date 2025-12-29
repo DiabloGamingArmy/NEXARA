@@ -1677,7 +1677,10 @@ function initApp(onReady) {
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 loadInboxModeFromStorage();
+                const storedInboxMode = inboxMode || 'content';
+                setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
+                initConversations(storedInboxMode === 'messages');
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
                     syncStoredPushToken(user.uid);
@@ -2343,7 +2346,7 @@ async function fetchMissingProfiles(posts) {
                 const fallbackDocs = await Promise.all(missingProfiles.map(function (uid) { return getDoc(doc(db, "users", uid)); }));
                 fallbackDocs.forEach(function (docSnap) {
                     if (docSnap.exists()) {
-                        storeUserInCache(docSnap.id, docSnap.data());
+                        storeUserInCache(docSnap.id, mapUserDocToProfile(docSnap.data()));
                     } else {
                         logMissingProfileOnce(docSnap.id);
                         storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
@@ -2365,7 +2368,23 @@ async function fetchMissingProfiles(posts) {
     } catch (e) {
         if (e?.code === 'permission-denied') {
             logPermissionDeniedOnce('profiles:read:fetchMissingProfiles');
-            Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            try {
+                const fallbackDocs = await Promise.all(Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "users", uid)); }));
+                fallbackDocs.forEach(function (docSnap) {
+                    if (docSnap.exists()) {
+                        storeUserInCache(docSnap.id, mapUserDocToProfile(docSnap.data()));
+                    } else {
+                        buildUnknownUserProfile(docSnap.id);
+                    }
+                });
+            } catch (fallbackError) {
+                if (fallbackError?.code === 'permission-denied') {
+                    logPermissionDeniedOnce('users:read:fetchMissingProfiles');
+                } else {
+                    console.warn('Fallback profile read failed', fallbackError?.message || fallbackError);
+                }
+                Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            }
             return;
         }
         console.error("Error fetching profiles:", e);
@@ -7930,6 +7949,33 @@ function buildUnknownUserProfile(uid) {
     });
 }
 
+function mapUserDocToProfile(data = {}) {
+    const displayName = data.displayName || data.username || 'User';
+    const profile = {
+        displayName,
+        name: displayName,
+        username: data.username || '',
+        photoURL: data.photoURL || data.avatar || '',
+        bio: data.bio || ''
+    };
+    if (data.followersCount != null) {
+        profile.followersCount = data.followersCount;
+    } else if (Array.isArray(data.followers)) {
+        profile.followersCount = data.followers.length;
+    }
+    if (data.followingCount != null) {
+        profile.followingCount = data.followingCount;
+    } else if (Array.isArray(data.following)) {
+        profile.followingCount = data.following.length;
+    }
+    if (data.postsCount != null) {
+        profile.postsCount = data.postsCount;
+    } else if (data.postCount != null) {
+        profile.postsCount = data.postCount;
+    }
+    return profile;
+}
+
 async function resolveUserProfile(uid, options = {}) {
     if (!uid) return buildUnknownUserProfile('user');
     const force = options.force === true;
@@ -7950,22 +7996,27 @@ async function resolveUserProfile(uid, options = {}) {
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
-            try {
-                const fallbackSnap = await getDoc(doc(db, 'users', uid));
-                if (fallbackSnap.exists()) {
-                    return storeUserInCache(uid, fallbackSnap.data());
-                }
-                logMissingProfileOnce(uid);
-            } catch (fallbackError) {
-                if (fallbackError?.code === 'permission-denied') {
-                    logPermissionDeniedOnce(`users:read:${uid}`);
-                } else {
-                    console.warn('User fallback fetch failed', uid, fallbackError?.message || fallbackError);
-                }
+            const fallbackSnap = await getDoc(doc(db, 'users', uid));
+            if (fallbackSnap.exists()) {
+                return storeUserInCache(uid, mapUserDocToProfile(fallbackSnap.data()));
             }
+            logMissingProfileOnce(uid);
         } catch (e) {
             if (e?.code === 'permission-denied') {
                 logPermissionDeniedOnce(`profiles:read:${uid}`);
+                try {
+                    const fallbackSnap = await getDoc(doc(db, 'users', uid));
+                    if (fallbackSnap.exists()) {
+                        return storeUserInCache(uid, mapUserDocToProfile(fallbackSnap.data()));
+                    }
+                    logMissingProfileOnce(uid);
+                } catch (fallbackError) {
+                    if (fallbackError?.code === 'permission-denied') {
+                        logPermissionDeniedOnce(`users:read:${uid}`);
+                    } else {
+                        console.warn('User fallback fetch failed', uid, fallbackError?.message || fallbackError);
+                    }
+                }
             } else {
                 console.warn('User fetch failed', uid, e?.message || e);
             }
@@ -8622,7 +8673,25 @@ function renderContentNotificationList(mode = 'posts') {
         return;
     }
     if (emptyEl) emptyEl.style.display = 'none';
+    let lastTimestamp = null;
+    let lastDateDivider = null;
+    const fragment = document.createDocumentFragment();
     bucketed.slice(0, 50).forEach(function (notif) {
+        const createdDate = toDateSafe(notif.createdAt) || new Date();
+        const isNewDay = !lastDateDivider || !isSameDay(lastDateDivider, createdDate);
+        if (isNewDay) {
+            const dateDivider = document.createElement('div');
+            dateDivider.className = 'message-date-divider';
+            dateDivider.textContent = formatChatDateLabel(createdDate);
+            fragment.appendChild(dateDivider);
+            lastDateDivider = createdDate;
+        } else if (needsTimeGapDivider(createdDate, lastTimestamp)) {
+            const divider = document.createElement('div');
+            divider.className = 'message-time-divider';
+            divider.textContent = formatTimeGapDivider(createdDate);
+            fragment.appendChild(divider);
+        }
+        lastTimestamp = createdDate;
         const actorId = notif.actorId || notif.actorUid || '';
         const actorName = notif.actorName || 'Someone';
         const description = buildContentNotificationDescription(notif);
@@ -8684,8 +8753,9 @@ function renderContentNotificationList(mode = 'posts') {
                 }
             };
         }
-        listEl.appendChild(row);
+        fragment.appendChild(row);
     });
+    listEl.appendChild(fragment);
 }
 
 function renderInboxNotifications(mode = 'posts') {
