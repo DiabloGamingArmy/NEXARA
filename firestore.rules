@@ -304,6 +304,32 @@ service cloud.firestore {
           && (request.auth.uid == resource.data.senderId
               || request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants);
       }
+
+      match /calls/{callId} {
+        allow read: if isConversationParticipant(cid);
+        allow create: if isConversationParticipant(cid)
+          && request.auth.uid == request.resource.data.createdBy
+          && request.resource.data.kind in ['audio', 'video']
+          && request.resource.data.status in ['ringing', 'active', 'ended']
+          && request.resource.data.participants is list
+          && request.auth.uid in request.resource.data.participants;
+        allow update: if isConversationParticipant(cid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && request.resource.data.status in ['ringing', 'active', 'ended'];
+        allow delete: if false;
+
+        match /members/{uid} {
+          allow read: if isConversationParticipant(cid);
+          allow create: if isConversationParticipant(cid)
+            && request.auth.uid == uid
+            && request.resource.data.state in ['invited', 'joined', 'declined', 'left'];
+          allow update: if isConversationParticipant(cid)
+            && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['state', 'updatedAt'])
+            && request.resource.data.state in ['invited', 'joined', 'declined', 'left'];
+          allow delete: if false;
+        }
+      }
     }
 
     match /users/{userId}/conversations/{conversationId} {

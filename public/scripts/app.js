@@ -833,6 +833,10 @@ const videosPagination = {
 };
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
+let activeCallSession = null;
+let callDocUnsubscribe = null;
+let callInviteUnsubscribe = null;
+let callUiInitialized = false;
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -1684,6 +1688,8 @@ function initApp(onReady) {
                 setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
                 initConversations(storedInboxMode === 'messages');
+                initCallUi();
+                initCallInviteListener();
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
                     syncStoredPushToken(user.uid);
@@ -9155,6 +9161,10 @@ function renderMessageHeader(convo = {}) {
         ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
         : 'class="message-thread-profile-btn" type="button" disabled';
 
+    const canCall = !!cid && participants.length > 0 && !!currentUser?.uid;
+    const callDisabledAttr = canCall ? '' : ' disabled aria-disabled="true"';
+    const optionsDisabledAttr = cid ? '' : ' disabled aria-disabled="true"';
+
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
             ${avatar}
@@ -9164,9 +9174,227 @@ function renderMessageHeader(convo = {}) {
             </div>
         </button>
         <div class="message-header-actions">
-            <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"><i class="ph ph-dots-three-outline"></i></button>
+            <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}><i class="ph ph-phone"></i></button>
+            <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}><i class="ph ph-video-camera"></i></button>
+            <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"${optionsDisabledAttr}><i class="ph ph-dots-three-outline"></i></button>
         </div>
     </div>`;
+}
+
+function getCallOverlayElements() {
+    return {
+        overlay: document.getElementById('call-overlay'),
+        avatar: document.getElementById('call-overlay-avatar'),
+        name: document.getElementById('call-overlay-name'),
+        status: document.getElementById('call-overlay-status'),
+        acceptBtn: document.getElementById('call-accept-btn'),
+        declineBtn: document.getElementById('call-decline-btn'),
+        endBtn: document.getElementById('call-end-btn')
+    };
+}
+
+function setCallOverlayVisible(visible) {
+    const { overlay } = getCallOverlayElements();
+    if (!overlay) return;
+    overlay.classList.toggle('is-visible', visible);
+    overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function buildCallOverlayMeta(convo = {}) {
+    const participants = convo.participants || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
+    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    const cid = convo.id || activeConversationId;
+    const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
+    const fallbackAvatar = meta.avatars?.[0] || '';
+    let avatarUser = {
+        uid: cid || primaryOtherId || 'conversation',
+        username: label,
+        displayName: label,
+        photoURL: getConversationAvatarUrl(convo, fallbackAvatar),
+        avatarColor: convo.avatarColor || computeAvatarColor(label)
+    };
+
+    if (primaryOtherId && !getConversationAvatarUrl(convo)) {
+        const otherMeta = resolveParticipantDisplay(convo, primaryOtherId);
+        avatarUser = {
+            ...otherMeta.profile,
+            uid: primaryOtherId,
+            username: otherMeta.username || label,
+            displayName: otherMeta.displayName || label,
+            photoURL: normalizeImageUrl(otherMeta.avatar),
+            avatarColor: otherMeta.avatarColor
+        };
+    }
+
+    return { label, avatarUser };
+}
+
+function formatCallStatusLabel(session) {
+    const kindLabel = session.kind === 'video' ? 'video' : 'audio';
+    if (session.status === 'ringing') {
+        return session.direction === 'incoming'
+            ? `Incoming ${kindLabel} call...`
+            : `Calling (${kindLabel})...`;
+    }
+    if (session.status === 'active') {
+        return `${kindLabel.charAt(0).toUpperCase() + kindLabel.slice(1)} call active`;
+    }
+    return 'Call ended';
+}
+
+async function renderCallOverlay(session) {
+    const elements = getCallOverlayElements();
+    if (!elements.overlay) return;
+    const convo = conversationDetailsCache[session.conversationId]
+        || (await fetchConversation(session.conversationId).catch(function () { return { id: session.conversationId }; }));
+    const meta = buildCallOverlayMeta(convo || {});
+    elements.name.textContent = meta.label;
+    elements.avatar.innerHTML = renderAvatar(meta.avatarUser, { size: 64 });
+    elements.status.textContent = formatCallStatusLabel(session);
+
+    const showAccept = session.direction === 'incoming' && session.status === 'ringing';
+    const showDecline = session.direction === 'incoming' && session.status === 'ringing';
+    const showEnd = session.status === 'active' || session.direction === 'outgoing';
+    if (elements.acceptBtn) elements.acceptBtn.style.display = showAccept ? 'inline-flex' : 'none';
+    if (elements.declineBtn) elements.declineBtn.style.display = showDecline ? 'inline-flex' : 'none';
+    if (elements.endBtn) {
+        elements.endBtn.style.display = showEnd ? 'inline-flex' : 'none';
+        elements.endBtn.textContent = session.status === 'ringing' && session.direction === 'outgoing' ? 'Cancel' : 'End';
+    }
+
+    setCallOverlayVisible(true);
+}
+
+function clearCallOverlay() {
+    setCallOverlayVisible(false);
+}
+
+function setActiveCallSession(session) {
+    activeCallSession = session ? { ...session } : null;
+}
+
+function stopCallDocListener() {
+    if (callDocUnsubscribe) {
+        callDocUnsubscribe();
+        callDocUnsubscribe = null;
+    }
+}
+
+function concludeCallSession() {
+    stopCallDocListener();
+    setActiveCallSession(null);
+    clearCallOverlay();
+}
+
+function listenToCallDoc(conversationId, callId) {
+    stopCallDocListener();
+    const callRef = doc(db, 'conversations', conversationId, 'calls', callId);
+    callDocUnsubscribe = ListenerRegistry.register(`calls:doc:${conversationId}:${callId}`, onSnapshot(callRef, function (snap) {
+        if (!snap.exists()) {
+            concludeCallSession();
+            return;
+        }
+        const data = snap.data() || {};
+        if (!activeCallSession || activeCallSession.callId !== callId) return;
+        activeCallSession = {
+            ...activeCallSession,
+            kind: data.kind || activeCallSession.kind,
+            status: data.status || activeCallSession.status
+        };
+        if (activeCallSession.status === 'ended') {
+            concludeCallSession();
+            return;
+        }
+        renderCallOverlay(activeCallSession);
+    }, function (err) {
+        handleSnapshotError('Call session', err);
+    }));
+}
+
+async function updateCallMemberState(conversationId, callId, state) {
+    if (!conversationId || !callId || !currentUser?.uid) return;
+    const memberRef = doc(db, 'conversations', conversationId, 'calls', callId, 'members', currentUser.uid);
+    await setDoc(memberRef, { state, updatedAt: serverTimestamp() }, { merge: true });
+}
+
+async function endCallIfAllDeclined(conversationId, callId) {
+    const membersSnap = await getDocs(collection(db, 'conversations', conversationId, 'calls', callId, 'members'));
+    if (!membersSnap.size) return;
+    const allDeclined = membersSnap.docs.every(function (docSnap) {
+        const state = docSnap.data().state;
+        return state === 'declined' || state === 'left';
+    });
+    if (allDeclined) {
+        await updateDoc(doc(db, 'conversations', conversationId, 'calls', callId), {
+            status: 'ended',
+            updatedAt: serverTimestamp()
+        });
+    }
+}
+
+async function startIncomingCallSession(callData) {
+    setActiveCallSession({ ...callData, direction: 'incoming' });
+    await renderCallOverlay(activeCallSession);
+    listenToCallDoc(callData.conversationId, callData.callId);
+}
+
+async function initCallUi() {
+    if (callUiInitialized) return;
+    callUiInitialized = true;
+    const elements = getCallOverlayElements();
+    if (elements.acceptBtn) {
+        elements.acceptBtn.onclick = async function () {
+            if (!activeCallSession) return;
+            try {
+                const joinCall = httpsCallable(functions, 'joinCallSession');
+                const response = await joinCall({
+                    conversationId: activeCallSession.conversationId,
+                    callId: activeCallSession.callId
+                });
+                // SFU integration point: joinUrl/token will be consumed here later.
+                activeCallSession = {
+                    ...activeCallSession,
+                    status: 'active',
+                    providerInfo: response?.data || null
+                };
+                await updateCallMemberState(activeCallSession.conversationId, activeCallSession.callId, 'joined');
+                await renderCallOverlay(activeCallSession);
+            } catch (e) {
+                toast('Unable to join call', 'error');
+                console.warn('Join call failed', e?.message || e);
+            }
+        };
+    }
+    if (elements.declineBtn) {
+        elements.declineBtn.onclick = async function () {
+            if (!activeCallSession) return;
+            try {
+                await updateCallMemberState(activeCallSession.conversationId, activeCallSession.callId, 'declined');
+                await endCallIfAllDeclined(activeCallSession.conversationId, activeCallSession.callId);
+                concludeCallSession();
+            } catch (e) {
+                toast('Unable to decline call', 'error');
+                console.warn('Decline call failed', e?.message || e);
+            }
+        };
+    }
+    if (elements.endBtn) {
+        elements.endBtn.onclick = async function () {
+            if (!activeCallSession) return;
+            try {
+                await updateCallMemberState(activeCallSession.conversationId, activeCallSession.callId, 'left');
+                await updateDoc(doc(db, 'conversations', activeCallSession.conversationId, 'calls', activeCallSession.callId), {
+                    status: 'ended',
+                    updatedAt: serverTimestamp()
+                });
+                concludeCallSession();
+            } catch (e) {
+                toast('Unable to end call', 'error');
+                console.warn('End call failed', e?.message || e);
+            }
+        };
+    }
 }
 
 function renderMessages(msgs = [], convo = {}) {
@@ -10190,6 +10418,95 @@ async function openConversation(conversationId) {
     await listenToMessages(conversationId);
     refreshInboxLayout();
 }
+
+async function startDmCall(kind) {
+    if (!activeConversationId || !requireAuth()) return;
+    if (!['audio', 'video'].includes(kind)) return;
+    if (activeCallSession) {
+        toast('You already have a call in progress.', 'info');
+        return;
+    }
+    try {
+        const createCall = httpsCallable(functions, 'createCallSession');
+        const response = await createCall({ conversationId: activeConversationId, kind });
+        const payload = response?.data || {};
+        if (!payload.callId) throw new Error('Missing callId');
+        // SFU integration point: store joinUrl/token from the provider payload later.
+        setActiveCallSession({
+            conversationId: activeConversationId,
+            callId: payload.callId,
+            kind,
+            status: 'ringing',
+            direction: 'outgoing',
+            providerInfo: payload
+        });
+        await renderCallOverlay(activeCallSession);
+        listenToCallDoc(activeConversationId, payload.callId);
+        await updateCallMemberState(activeConversationId, payload.callId, 'joined');
+    } catch (e) {
+        toast('Unable to start call', 'error');
+        console.warn('Start call failed', e?.message || e);
+    }
+}
+
+async function handleIncomingCallSnapshot(snap) {
+    if (!currentUser) return;
+    const invites = [];
+    for (const docSnap of snap.docs) {
+        const data = docSnap.data() || {};
+        if (data.createdBy === currentUser.uid) continue;
+        const conversationId = docSnap.ref.parent.parent?.id;
+        if (!conversationId) continue;
+        const memberSnap = await getDoc(doc(db, 'conversations', conversationId, 'calls', docSnap.id, 'members', currentUser.uid));
+        if (!memberSnap.exists()) continue;
+        if (memberSnap.data().state !== 'invited') continue;
+        invites.push({
+            conversationId,
+            callId: docSnap.id,
+            kind: data.kind || 'audio',
+            status: data.status || 'ringing'
+        });
+    }
+
+    if (!invites.length) {
+        if (activeCallSession?.direction === 'incoming' && activeCallSession?.status === 'ringing') {
+            concludeCallSession();
+        }
+        return;
+    }
+
+    const invite = invites[0];
+    if (activeCallSession) {
+        if (activeCallSession.callId === invite.callId) {
+            activeCallSession = { ...activeCallSession, status: invite.status };
+            await renderCallOverlay(activeCallSession);
+        }
+        return;
+    }
+    await startIncomingCallSession(invite);
+}
+
+function initCallInviteListener() {
+    if (callInviteUnsubscribe) {
+        callInviteUnsubscribe();
+        callInviteUnsubscribe = null;
+    }
+    if (!currentUser) return;
+    const callQuery = query(
+        collectionGroup(db, 'calls'),
+        where('participants', 'array-contains', currentUser.uid),
+        where('status', '==', 'ringing')
+    );
+    callInviteUnsubscribe = ListenerRegistry.register('calls:incoming', onSnapshot(callQuery, function (snap) {
+        handleIncomingCallSnapshot(snap).catch(function (err) {
+            console.warn('Incoming call handler failed', err?.message || err);
+        });
+    }, function (err) {
+        handleSnapshotError('Incoming calls', err);
+    }));
+}
+
+window.startDmCall = startDmCall;
 
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;

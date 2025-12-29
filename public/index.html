@@ -904,7 +904,24 @@
                                 style="display:none;">
                                 <i class="ph ph-arrow-left"></i> Back
                             </button>
-                            <div id="message-header" class="message-thread-header">Select a conversation</div>
+                            <div id="message-header" class="message-thread-header">
+                                <div class="message-header-shell">
+                                    <div class="message-thread-title-row">Select a conversation</div>
+                                    <div class="message-header-actions">
+                                        <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
+                                            onclick="window.startDmCall('audio')" aria-label="Start audio call" disabled>
+                                            <i class="ph ph-phone"></i>
+                                        </button>
+                                        <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
+                                            onclick="window.startDmCall('video')" aria-label="Start video call" disabled>
+                                            <i class="ph ph-video-camera"></i>
+                                        </button>
+                                        <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
+                                            <i class="ph ph-dots-three-outline"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                             <div class="message-header-tools">
                             <input id="conversation-search" class="form-input" placeholder="Search in conversation"
@@ -956,7 +973,7 @@
                         <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
                     </div>
                 </div>
-                <div id="inbox-panel-account" class="inbox-panel">
+    <div id="inbox-panel-account" class="inbox-panel">
                     <div id="inbox-list-account" class="inbox-notification-list"></div>
                     <div id="inbox-empty-account" class="empty-state">No account notifications yet.</div>
                 </div>
@@ -1717,6 +1734,22 @@
                 <button class="icon-btn" type="button"><i class="ph ph-image"></i></button>
                 <button class="icon-btn" type="button"><i class="ph ph-microphone"></i></button>
                 <button class="icon-btn" type="button"><i class="ph ph-paperclip"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Call overlay -->
+    <div id="call-overlay" aria-hidden="true">
+        <div id="call-card" role="dialog" aria-modal="true" aria-label="Call status">
+            <div id="call-overlay-avatar" class="call-avatar"></div>
+            <div class="call-info">
+                <div id="call-overlay-name" class="call-name">Conversation</div>
+                <div id="call-overlay-status" class="call-status">Calling...</div>
+            </div>
+            <div class="call-actions">
+                <button id="call-accept-btn" class="call-action-btn accept" type="button">Accept</button>
+                <button id="call-decline-btn" class="call-action-btn decline" type="button">Decline</button>
+                <button id="call-end-btn" class="call-action-btn end" type="button">End</button>
             </div>
         </div>
     </div>
