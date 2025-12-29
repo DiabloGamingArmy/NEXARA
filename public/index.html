@@ -1760,9 +1760,19 @@
             </div>
             <div class="call-actions">
                 <button id="call-toggle-mic" class="call-action-btn" type="button">Mute</button>
-                <button id="call-toggle-camera" class="call-action-btn" type="button">Camera off</button>
-                <button id="call-toggle-screen" class="call-action-btn" type="button">Share screen</button>
+                <button id="call-toggle-cam" class="call-action-btn" type="button">Camera</button>
+                <button id="call-toggle-share" class="call-action-btn" type="button">Share screen</button>
                 <button id="call-hangup" class="call-action-btn end" type="button">Hang up</button>
+            </div>
+        </div>
+    </div>
+    <div id="call-incoming-prompt" class="call-incoming-prompt" style="display:none;">
+        <div class="call-incoming-card" role="dialog" aria-modal="true" aria-live="polite">
+            <div id="call-incoming-name" class="call-incoming-name">Incoming call</div>
+            <div id="call-incoming-type" class="call-incoming-type">Audio call</div>
+            <div class="call-incoming-actions">
+                <button id="call-incoming-accept" class="call-incoming-btn accept" type="button">Accept</button>
+                <button id="call-incoming-decline" class="call-incoming-btn decline" type="button">Decline</button>
             </div>
         </div>
     </div>

@@ -155,11 +155,13 @@ if (document.readyState === 'loading') {
         ensurePushSettingsUI();
         initCallUi();
         initMessagingForegroundListener();
+        initCallUi();
     });
 } else {
     ensurePushSettingsUI();
     initCallUi();
     initMessagingForegroundListener();
+    initCallUi();
 }
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
@@ -903,6 +905,8 @@ let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
 let livekitLocalScreenTracks = [];
+let incomingCallUnsubscribe = null;
+let incomingPromptCallId = null;
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -1754,7 +1758,7 @@ function initApp(onReady) {
                 setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
                 initConversations(storedInboxMode === 'messages');
-                initCallUi();
+                startListeningForIncomingCalls();
                 refreshDmCallButtons();
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
@@ -9303,10 +9307,15 @@ function getCallOverlayElements() {
         localVideo: document.getElementById('call-local-video'),
         remoteGrid: document.getElementById('call-remote-grid'),
         toggleMic: document.getElementById('call-toggle-mic'),
-        toggleCamera: document.getElementById('call-toggle-camera'),
-        toggleScreen: document.getElementById('call-toggle-screen'),
-        hangup: document.getElementById('call-hangup'),
-        close: document.getElementById('call-overlay-close')
+        toggleCam: document.getElementById('call-toggle-cam'),
+        toggleShare: document.getElementById('call-toggle-share'),
+        hangupBtn: document.getElementById('call-hangup'),
+        closeBtn: document.getElementById('call-overlay-close'),
+        incomingPrompt: document.getElementById('call-incoming-prompt'),
+        incomingName: document.getElementById('call-incoming-name'),
+        incomingType: document.getElementById('call-incoming-type'),
+        incomingAccept: document.getElementById('call-incoming-accept'),
+        incomingDecline: document.getElementById('call-incoming-decline')
     };
 }
 
@@ -9315,6 +9324,26 @@ function setCallOverlayVisible(visible) {
     if (!overlay) return;
     overlay.classList.toggle('is-visible', visible);
     overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function setIncomingPromptVisible(visible) {
+    const { incomingPrompt } = getCallOverlayElements();
+    if (!incomingPrompt) return;
+    incomingPrompt.style.display = visible ? 'flex' : 'none';
+}
+
+function hideIncomingCallPrompt() {
+    incomingPromptCallId = null;
+    setIncomingPromptVisible(false);
+}
+
+function renderIncomingCallPrompt(callData = {}, callerProfile = {}) {
+    const elements = getCallOverlayElements();
+    if (!elements.incomingPrompt) return;
+    const displayName = callerProfile.displayName || callerProfile.name || callerProfile.username || 'Incoming call';
+    if (elements.incomingName) elements.incomingName.textContent = displayName;
+    if (elements.incomingType) elements.incomingType.textContent = (callData.type || 'audio') === 'video' ? 'Video call' : 'Audio call';
+    setIncomingPromptVisible(true);
 }
 
 function resetCallOverlayMedia() {
@@ -9355,6 +9384,7 @@ function clearCallSession() {
     activeCallSession = null;
     resetCallOverlayMedia();
     setCallOverlayVisible(false);
+    hideIncomingCallPrompt();
 }
 
 function attachRemoteTrack(track, participant) {
@@ -9398,18 +9428,9 @@ async function connectToLiveKitRoom(callSession) {
     }
     const room = new LivekitRoom({ adaptiveStream: true, dynacast: true });
     livekitRoom = room;
-    if (elements.toggleMic) {
-        elements.toggleMic.disabled = false;
-        elements.toggleMic.textContent = 'Mute';
-    }
-    if (elements.toggleCamera) {
-        elements.toggleCamera.disabled = callKind !== 'video';
-        elements.toggleCamera.textContent = callKind === 'video' ? 'Camera off' : 'Camera off';
-    }
-    if (elements.toggleScreen) {
-        elements.toggleScreen.disabled = !livekitCreateLocalScreenTracks;
-        elements.toggleScreen.textContent = 'Share screen';
-    }
+    if (elements.toggleMic) elements.toggleMic.disabled = false;
+    if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
+    if (elements.toggleShare) elements.toggleShare.disabled = false;
 
     room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
@@ -9449,6 +9470,11 @@ async function connectToLiveKitRoom(callSession) {
     livekitLocalAudioTrack = await livekitCreateLocalAudioTrack();
     await room.localParticipant.publishTrack(livekitLocalAudioTrack);
 
+    if (elements.toggleMic) {
+        elements.toggleMic.classList.add('active');
+        elements.toggleMic.setAttribute('aria-pressed', 'true');
+    }
+
     if (callKind === 'video') {
         if (!livekitCreateLocalVideoTrack) {
             throw new Error('LiveKit video unavailable.');
@@ -9459,8 +9485,21 @@ async function connectToLiveKitRoom(callSession) {
             elements.localVideo.style.display = 'block';
             livekitLocalVideoTrack.attach(elements.localVideo);
         }
+        if (elements.toggleCam) {
+            elements.toggleCam.classList.add('active');
+            elements.toggleCam.setAttribute('aria-pressed', 'true');
+        }
     } else if (elements.localVideo) {
         elements.localVideo.style.display = 'none';
+        if (elements.toggleCam) {
+            elements.toggleCam.classList.remove('active');
+            elements.toggleCam.setAttribute('aria-pressed', 'false');
+        }
+    }
+
+    if (elements.toggleShare) {
+        elements.toggleShare.classList.remove('active');
+        elements.toggleShare.setAttribute('aria-pressed', 'false');
     }
 
     if (callSession.callId) {
@@ -9471,15 +9510,17 @@ async function connectToLiveKitRoom(callSession) {
             console.warn('Unable to update call status', err?.message || err);
         });
     }
+    if (activeCallSession && activeCallSession.callId === callSession.callId) {
+        activeCallSession = { ...activeCallSession, status: 'active' };
+    }
     await renderCallOverlayStatus(callSession.conversationId, 'Live');
 }
 
 async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     const elements = getCallOverlayElements();
     if (elements.toggleMic) elements.toggleMic.disabled = true;
-    if (elements.toggleCamera) elements.toggleCamera.disabled = true;
-    if (elements.toggleScreen) elements.toggleScreen.disabled = true;
-    if (elements.toggleScreen) elements.toggleScreen.textContent = 'Share screen';
+    if (elements.toggleCam) elements.toggleCam.disabled = true;
+    if (elements.toggleShare) elements.toggleShare.disabled = true;
     if (livekitLocalAudioTrack) {
         livekitLocalAudioTrack.stop();
         livekitLocalAudioTrack = null;
@@ -9502,8 +9543,9 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         livekitRoom = null;
     }
     if (updateStatus && activeCallSession?.callId) {
+        const nextStatus = activeCallSession?.status === 'ringing' ? 'missed' : 'ended';
         await updateDoc(doc(db, 'calls', activeCallSession.callId), {
-            status: 'ended',
+            status: nextStatus,
             endedAt: serverTimestamp()
         }).catch(function (err) {
             console.warn('Unable to update call status', err?.message || err);
@@ -9513,66 +9555,51 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
 }
 
 async function initCallUi() {
-    if (callUiInitialized) return;
-    callUiInitialized = true;
-    const elements = getCallOverlayElements();
-    if (elements.toggleMic) elements.toggleMic.disabled = true;
-    if (elements.toggleCamera) elements.toggleCamera.disabled = true;
-    if (elements.toggleScreen) elements.toggleScreen.disabled = true;
-    if (elements.toggleMic) {
-        elements.toggleMic.onclick = function () {
-            if (!livekitLocalAudioTrack) return;
-            const enabled = livekitLocalAudioTrack.isEnabled;
-            livekitLocalAudioTrack.setEnabled(!enabled);
-            elements.toggleMic.textContent = enabled ? 'Unmute' : 'Mute';
-        };
-    }
-    if (elements.toggleCamera) {
-        elements.toggleCamera.onclick = function () {
-            if (!livekitLocalVideoTrack) return;
-            const enabled = livekitLocalVideoTrack.isEnabled;
-            livekitLocalVideoTrack.setEnabled(!enabled);
-            elements.toggleCamera.textContent = enabled ? 'Camera on' : 'Camera off';
-        };
-    }
-    if (elements.toggleScreen) {
-        elements.toggleScreen.onclick = async function () {
-            if (!livekitRoom || !livekitCreateLocalScreenTracks) return;
-            try {
-                if (!livekitLocalScreenTracks.length) {
-                    livekitLocalScreenTracks = await livekitCreateLocalScreenTracks();
-                    await Promise.all(livekitLocalScreenTracks.map(function (track) {
-                        return livekitRoom.localParticipant.publishTrack(track);
-                    }));
-                    elements.toggleScreen.textContent = 'Stop sharing';
-                } else {
-                    livekitLocalScreenTracks.forEach(function (track) {
-                        livekitRoom.localParticipant.unpublishTrack(track);
-                        track.stop();
-                    });
-                    livekitLocalScreenTracks = [];
-                    elements.toggleScreen.textContent = 'Share screen';
-                }
-            } catch (err) {
-                console.warn('Screen share toggle failed', err?.message || err);
-                toast('Unable to toggle screen sharing.', 'error');
-            }
-        };
-    }
-    if (elements.hangup) {
-        elements.hangup.onclick = function () {
-            leaveLiveKitRoom({ updateStatus: true }).catch(function (err) {
-                console.warn('Hangup failed', err?.message || err);
-            });
-        };
-    }
-    if (elements.close) {
-        elements.close.onclick = function () {
-            leaveLiveKitRoom({ updateStatus: true }).catch(function (err) {
-                console.warn('Close call failed', err?.message || err);
-            });
-        };
-    }
+    const els = getCallOverlayElements();
+    if (!els.closeBtn || !els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
+
+    // Avoid double-binding
+    if (els.hangupBtn.dataset.bound === '1') return;
+    els.hangupBtn.dataset.bound = '1';
+
+    const setActive = (btn, on) => {
+        if (!btn) return;
+        btn.classList.toggle('active', !!on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+
+    let micOn = true;
+    let camOn = false;
+    let shareOn = false;
+
+    els.closeBtn.onclick = async () => { await leaveLiveKitRoom(true); };
+    els.hangupBtn.onclick = async () => { await leaveLiveKitRoom(true); };
+
+    els.toggleMic.onclick = async () => {
+        if (!livekitRoom) return;
+        micOn = !micOn;
+        await livekitRoom.localParticipant.setMicrophoneEnabled(micOn);
+        setActive(els.toggleMic, micOn);
+    };
+
+    els.toggleCam.onclick = async () => {
+        if (!livekitRoom) return;
+        camOn = !camOn;
+        await livekitRoom.localParticipant.setCameraEnabled(camOn);
+        setActive(els.toggleCam, camOn);
+    };
+
+    els.toggleShare.onclick = async () => {
+        if (!livekitRoom) return;
+        shareOn = !shareOn;
+        await livekitRoom.localParticipant.setScreenShareEnabled(shareOn);
+        setActive(els.toggleShare, shareOn);
+    };
+
+    // default states
+    setActive(els.toggleMic, micOn);
+    setActive(els.toggleCam, camOn);
+    setActive(els.toggleShare, shareOn);
 }
 
 function listenToCallStatus(callId, conversationId) {
@@ -9580,17 +9607,100 @@ function listenToCallStatus(callId, conversationId) {
     const callRef = doc(db, 'calls', callId);
     callDocUnsubscribe = ListenerRegistry.register(`call:${callId}`, onSnapshot(callRef, function (snap) {
         if (!snap.exists()) {
+            hideIncomingCallPrompt();
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
         }
         const data = snap.data() || {};
+        if (activeCallSession && activeCallSession.callId === callId) {
+            activeCallSession = { ...activeCallSession, status: data.status || activeCallSession.status };
+        }
         if (data.status === 'ended' || data.status === 'missed') {
+            hideIncomingCallPrompt();
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
+        }
+        if (data.status === 'active' && activeCallSession?.callId === callId && !livekitRoom) {
+            connectToLiveKitRoom(activeCallSession).catch(function (error) {
+                console.warn('Call connect failed', error?.message || error);
+            });
         }
         renderCallOverlayStatus(conversationId, data.status === 'active' ? 'Live' : 'Ringing');
     }, function (err) {
         handleSnapshotError('Call status', err);
+    }));
+}
+
+function startListeningForIncomingCalls() {
+    if (incomingCallUnsubscribe) {
+        incomingCallUnsubscribe();
+        incomingCallUnsubscribe = null;
+    }
+    if (!currentUser?.uid) return;
+
+    const callQuery = query(
+        collection(db, 'calls'),
+        where('status', '==', 'ringing'),
+        where('participants', 'array-contains', currentUser.uid)
+    );
+
+    incomingCallUnsubscribe = ListenerRegistry.register('calls:incoming', onSnapshot(callQuery, function (snap) {
+        if (activeCallSession) {
+            hideIncomingCallPrompt();
+            return;
+        }
+        const incomingDoc = snap.docs.find(function (docSnap) {
+            const data = docSnap.data() || {};
+            return data.createdBy && data.createdBy !== currentUser.uid;
+        });
+
+        if (!incomingDoc) {
+            hideIncomingCallPrompt();
+            return;
+        }
+
+        const data = incomingDoc.data() || {};
+        const callId = incomingDoc.id;
+        if (incomingPromptCallId === callId) return;
+        incomingPromptCallId = callId;
+
+        resolveUserProfile(data.createdBy).then(function (profile) {
+            renderIncomingCallPrompt(data, profile || {});
+        }).catch(function () {
+            renderIncomingCallPrompt(data, {});
+        });
+
+        const elements = getCallOverlayElements();
+        if (elements.incomingAccept) {
+            elements.incomingAccept.onclick = async function () {
+                if (activeCallSession) return;
+                await updateDoc(doc(db, 'calls', callId), {
+                    status: 'active',
+                    startedAt: serverTimestamp()
+                });
+                hideIncomingCallPrompt();
+                activeCallSession = {
+                    callId,
+                    conversationId: data.conversationId,
+                    type: data.type || 'audio',
+                    status: 'active',
+                    direction: 'incoming',
+                    roomName: `call_${callId}`
+                };
+                await connectToLiveKitRoom(activeCallSession);
+            };
+        }
+        if (elements.incomingDecline) {
+            elements.incomingDecline.onclick = async function () {
+                await updateDoc(doc(db, 'calls', callId), {
+                    status: 'missed',
+                    endedAt: serverTimestamp()
+                });
+                hideIncomingCallPrompt();
+            };
+        }
+    }, function (err) {
+        handleSnapshotError('Incoming calls', err);
     }));
 }
 
@@ -9622,7 +9732,7 @@ async function joinCallInvite(conversationId, callId) {
     activeCallSession = {
         callId,
         conversationId,
-        roomName: callData.roomName || `dm_${conversationId}`,
+        roomName: `call_${callId}`,
         type: callData.type || 'audio'
     };
     await renderCallOverlayStatus(conversationId, 'Connecting...');
@@ -10686,14 +10796,28 @@ async function startDmCall(kind) {
         return;
     }
     try {
-        const roomName = `dm_${activeConversationId}`;
+        const conversationId = activeConversationId;
+        const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
+        const participants = convo?.participants || [];
+        if (!participants.length) return;
+        const callRef = await addDoc(collection(db, 'calls'), {
+            createdBy: currentUser.uid,
+            conversationId,
+            type: kind,
+            status: 'ringing',
+            participants
+        });
+        const callId = callRef.id;
         activeCallSession = {
-            conversationId: activeConversationId,
-            roomName,
-            kind
+            callId,
+            conversationId,
+            type: kind,
+            status: 'ringing',
+            direction: 'outgoing',
+            roomName: `call_${callId}`
         };
-        await renderCallOverlayStatus(activeConversationId, 'Connecting...');
-        await connectToLiveKitRoom(activeCallSession);
+        await renderCallOverlayStatus(conversationId, 'Calling…');
+        listenToCallStatus(callId, conversationId);
     } catch (e) {
         toast('Unable to start call', 'error');
         console.warn('Start call failed', e?.message || e);
