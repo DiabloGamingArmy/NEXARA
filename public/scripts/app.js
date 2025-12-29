@@ -9437,7 +9437,7 @@ function listenToCallStatus(callId, conversationId) {
     }));
 }
 
-async function startDmCall(type) {
+async function startLivekitDmCall(type) {
     if (!LIVEKIT_ENABLED) return;
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(type)) return;
@@ -9527,7 +9527,7 @@ async function joinCallInvite(conversationId, callId) {
     }
 }
 
-window.startDmCall = startDmCall;
+window.startDmCall = startLivekitDmCall;
 window.joinCallInvite = joinCallInvite;
 
 function renderMessages(msgs = [], convo = {}) {
