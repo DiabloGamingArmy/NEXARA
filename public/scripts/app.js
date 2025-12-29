@@ -153,11 +153,13 @@ const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
         ensurePushSettingsUI();
+        initCallUi();
         initMessagingForegroundListener();
         initCallUi();
     });
 } else {
     ensurePushSettingsUI();
+    initCallUi();
     initMessagingForegroundListener();
     initCallUi();
 }
