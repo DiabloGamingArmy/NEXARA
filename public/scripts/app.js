@@ -9428,10 +9428,14 @@ async function connectToLiveKitRoom(callSession) {
         leaveLiveKitRoom({ updateStatus: false });
     });
 
-    const tokenFn = httpsCallable(functions, 'createLiveKitToken');
+    const tokenFn = httpsCallable(getFunctions(app, 'us-central1'), 'livekitCreateToken');
     const response = await tokenFn({
         roomName: callSession.roomName,
-        kind: callKind
+        identity: currentUser?.uid || '',
+        metadata: JSON.stringify({
+            conversationId: callSession.conversationId,
+            kind: callKind
+        })
     });
     const tokenPayload = response?.data || {};
     if (!tokenPayload?.token || !tokenPayload?.url) {
