@@ -1,7 +1,7 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
@@ -31,7 +31,10 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+const db = isSafari
+    ? initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false })
+    : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
 const messaging = getMessaging(app);
@@ -126,6 +129,7 @@ let inboxNotificationsUnsubscribe = null;
 let inboxNotifications = [];
 let contentNotificationsUnsubscribe = null;
 let contentNotifications = [];
+let contentNotificationsLegacyFetched = false;
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -605,7 +609,7 @@ function normalizeUsername(value = '') {
 }
 
 function resolveDisplayName(userLike = {}) {
-    return userLike.name || userLike.displayName || userLike.fullName || userLike.nickname || '';
+    return userLike.displayName || userLike.name || userLike.fullName || userLike.nickname || '';
 }
 
 function resolveAvatarInitial(userLike = {}) {
@@ -1114,6 +1118,9 @@ async function syncPublicProfile(uid, profile = {}, options = {}) {
         // Public profiles are written only for the signed-in user on first login/sign-up
         // or explicit settings saves to avoid permission-denied writes per Firestore rules.
         if (viewerUid && uid !== viewerUid) return { ok: false, permissionDenied: false };
+        if (auth.currentUser) {
+            await auth.currentUser.getIdToken();
+        }
         return await guardFirebaseCall('profiles:write', function () {
             return setDoc(doc(db, 'profiles', uid), buildPublicProfilePayload(uid, profile), { merge: true });
         }, { onPermissionDenied: options.onPermissionDenied });
@@ -1673,7 +1680,10 @@ function initApp(onReady) {
                 await loadFeedData({ showSplashDuringLoad: true });
                 startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
                 loadInboxModeFromStorage();
+                const storedInboxMode = inboxMode || 'content';
+                setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
+                initConversations(storedInboxMode === 'messages');
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
                     syncStoredPushToken(user.uid);
@@ -2339,7 +2349,7 @@ async function fetchMissingProfiles(posts) {
                 const fallbackDocs = await Promise.all(missingProfiles.map(function (uid) { return getDoc(doc(db, "users", uid)); }));
                 fallbackDocs.forEach(function (docSnap) {
                     if (docSnap.exists()) {
-                        storeUserInCache(docSnap.id, docSnap.data());
+                        storeUserInCache(docSnap.id, mapUserDocToProfile(docSnap.data()));
                     } else {
                         logMissingProfileOnce(docSnap.id);
                         storeUserInCache(docSnap.id, { name: "Unknown User", username: "unknown" });
@@ -2361,7 +2371,23 @@ async function fetchMissingProfiles(posts) {
     } catch (e) {
         if (e?.code === 'permission-denied') {
             logPermissionDeniedOnce('profiles:read:fetchMissingProfiles');
-            Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            try {
+                const fallbackDocs = await Promise.all(Array.from(missingIds).map(function (uid) { return getDoc(doc(db, "users", uid)); }));
+                fallbackDocs.forEach(function (docSnap) {
+                    if (docSnap.exists()) {
+                        storeUserInCache(docSnap.id, mapUserDocToProfile(docSnap.data()));
+                    } else {
+                        buildUnknownUserProfile(docSnap.id);
+                    }
+                });
+            } catch (fallbackError) {
+                if (fallbackError?.code === 'permission-denied') {
+                    logPermissionDeniedOnce('users:read:fetchMissingProfiles');
+                } else {
+                    console.warn('Fallback profile read failed', fallbackError?.message || fallbackError);
+                }
+                Array.from(missingIds).forEach(function (uid) { buildUnknownUserProfile(uid); });
+            }
             return;
         }
         console.error("Error fetching profiles:", e);
@@ -2547,7 +2573,7 @@ async function loadVideoCategories(force = false) {
     videoDestinationLoading = true;
     videoDestinationError = '';
     try {
-        const snap = await getDocs(query(collection(db, 'Categories'), orderBy('name')));
+        const snap = await getDocs(query(collection(db, 'categories'), orderBy('name')));
         videoCategories = snap.docs.map(function (docSnap) {
             const data = docSnap.data() || {};
             return { id: docSnap.id, slug: docSnap.id, ...data };
@@ -2569,7 +2595,7 @@ async function getCategoryMetaBySlug(slug) {
     const cached = videoCategoryIndex.get(slug);
     if (cached) return cached;
     try {
-        const snap = await getDoc(doc(db, 'Categories', slug));
+        const snap = await getDoc(doc(db, 'categories', slug));
         if (!snap.exists()) return null;
         const data = { id: snap.id, slug: snap.id, ...snap.data() };
         videoCategoryIndex.set(slug, data);
@@ -7926,6 +7952,33 @@ function buildUnknownUserProfile(uid) {
     });
 }
 
+function mapUserDocToProfile(data = {}) {
+    const displayName = data.displayName || data.username || 'User';
+    const profile = {
+        displayName,
+        name: displayName,
+        username: data.username || '',
+        photoURL: data.photoURL || data.avatar || '',
+        bio: data.bio || ''
+    };
+    if (data.followersCount != null) {
+        profile.followersCount = data.followersCount;
+    } else if (Array.isArray(data.followers)) {
+        profile.followersCount = data.followers.length;
+    }
+    if (data.followingCount != null) {
+        profile.followingCount = data.followingCount;
+    } else if (Array.isArray(data.following)) {
+        profile.followingCount = data.following.length;
+    }
+    if (data.postsCount != null) {
+        profile.postsCount = data.postsCount;
+    } else if (data.postCount != null) {
+        profile.postsCount = data.postCount;
+    }
+    return profile;
+}
+
 async function resolveUserProfile(uid, options = {}) {
     if (!uid) return buildUnknownUserProfile('user');
     const force = options.force === true;
@@ -7946,22 +7999,27 @@ async function resolveUserProfile(uid, options = {}) {
             if (snap.exists()) {
                 return storeUserInCache(uid, snap.data());
             }
-            try {
-                const fallbackSnap = await getDoc(doc(db, 'users', uid));
-                if (fallbackSnap.exists()) {
-                    return storeUserInCache(uid, fallbackSnap.data());
-                }
-                logMissingProfileOnce(uid);
-            } catch (fallbackError) {
-                if (fallbackError?.code === 'permission-denied') {
-                    logPermissionDeniedOnce(`users:read:${uid}`);
-                } else {
-                    console.warn('User fallback fetch failed', uid, fallbackError?.message || fallbackError);
-                }
+            const fallbackSnap = await getDoc(doc(db, 'users', uid));
+            if (fallbackSnap.exists()) {
+                return storeUserInCache(uid, mapUserDocToProfile(fallbackSnap.data()));
             }
+            logMissingProfileOnce(uid);
         } catch (e) {
             if (e?.code === 'permission-denied') {
                 logPermissionDeniedOnce(`profiles:read:${uid}`);
+                try {
+                    const fallbackSnap = await getDoc(doc(db, 'users', uid));
+                    if (fallbackSnap.exists()) {
+                        return storeUserInCache(uid, mapUserDocToProfile(fallbackSnap.data()));
+                    }
+                    logMissingProfileOnce(uid);
+                } catch (fallbackError) {
+                    if (fallbackError?.code === 'permission-denied') {
+                        logPermissionDeniedOnce(`users:read:${uid}`);
+                    } else {
+                        console.warn('User fallback fetch failed', uid, fallbackError?.message || fallbackError);
+                    }
+                }
             } else {
                 console.warn('User fetch failed', uid, e?.message || e);
             }
@@ -8445,6 +8503,27 @@ function updateInboxNavBadge() {
     updateInboxTabBadges();
 }
 
+function updateNavBadge(key, count) {
+    if (key !== 'inbox') return;
+    const badge = document.querySelector('#nav-inbox-badge');
+    if (!badge) return;
+    if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.style.display = 'inline-flex';
+    } else {
+        badge.textContent = '';
+        badge.style.display = 'none';
+    }
+}
+
+function safeUpdateNavBadge(key, count) {
+    try {
+        updateNavBadge(key, count);
+    } catch (e) {
+        console.warn('[Badges] Failed updating nav badge:', key, e);
+    }
+}
+
 function updateInboxNotificationCounts() {
     let unreadPosts = 0;
     let unreadVideos = 0;
@@ -8473,7 +8552,13 @@ function updateInboxNotificationCounts() {
     };
 
     updateInboxTabBadges();
-    updateNavBadge(unreadAccount + unreadPosts + unreadVideos + unreadLivestreams);
+    const unreadContent = unreadPosts + unreadVideos + unreadLivestreams;
+    const unreadMessages = computeUnreadMessageTotal();
+    const totalUnread = unreadAccount + unreadContent + unreadMessages;
+    safeUpdateNavBadge('inbox', totalUnread);
+    safeUpdateNavBadge('content', unreadContent);
+    safeUpdateNavBadge('account', unreadAccount);
+    safeUpdateNavBadge('messages', unreadMessages);
 }
 
 function syncInboxContentFilters() {
@@ -8504,6 +8589,7 @@ function toggleInboxContentFilter(mode) {
     }
     syncInboxContentFilters();
     renderContentNotificationList(mode);
+    void markAllContentNotificationsRead(mode);
     try {
         window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
         window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
@@ -8533,9 +8619,44 @@ function markContentNotificationRead(notifId, notif) {
     }
     updateInboxNotificationCounts();
     const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notifId);
-    updateDoc(notifRef, { isRead: true }).catch(function (err) {
+    updateDoc(notifRef, { isRead: true, read: true }).catch(function (err) {
         console.warn('Failed to mark content notification read', err?.message || err);
     });
+}
+
+async function markAllContentNotificationsRead(optionalBucket) {
+    if (!currentUser) return;
+    const bucket = optionalBucket || null;
+    const pending = contentNotifications.filter(function (notif) {
+        if (!notif || !notif.id || notifIsRead(notif)) return false;
+        if (!bucket) return true;
+        return getContentNotificationBucket(notif) === bucket;
+    });
+    if (!pending.length) return;
+    pending.forEach(function (notif) {
+        notif.read = true;
+        notif.isRead = true;
+        notif.readAt = new Date();
+    });
+    updateInboxNotificationCounts();
+    const updates = pending.slice();
+    for (let i = 0; i < updates.length; i += 450) {
+        const batch = writeBatch(db);
+        updates.slice(i, i + 450).forEach(function (notif) {
+            const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
+            batch.update(notifRef, {
+                read: true,
+                isRead: true,
+                readAt: serverTimestamp()
+            });
+        });
+        try {
+            await batch.commit();
+        } catch (err) {
+            console.warn('Failed to mark content notifications read', err?.message || err);
+        }
+    }
+    updateInboxNotificationCounts();
 }
 
 function renderContentNotificationList(mode = 'posts') {
@@ -8555,7 +8676,26 @@ function renderContentNotificationList(mode = 'posts') {
         return;
     }
     if (emptyEl) emptyEl.style.display = 'none';
+    let lastTimestamp = null;
+    let lastDateDivider = null;
+    const fragment = document.createDocumentFragment();
     bucketed.slice(0, 50).forEach(function (notif) {
+        const createdDate = toDateSafe(notif.createdAt) || new Date();
+        const isNewDay = !lastDateDivider || !isSameDay(lastDateDivider, createdDate);
+        if (isNewDay) {
+            const dateDivider = document.createElement('div');
+            dateDivider.className = 'message-date-divider';
+            dateDivider.textContent = formatChatDateLabel(createdDate);
+            fragment.appendChild(dateDivider);
+            lastDateDivider = createdDate;
+        } else if (needsTimeGapDivider(createdDate, lastTimestamp)) {
+            const divider = document.createElement('div');
+            divider.className = 'message-time-divider';
+            divider.textContent = formatTimeGapDivider(createdDate);
+            fragment.appendChild(divider);
+        }
+        lastTimestamp = createdDate;
+        const actorId = notif.actorId || notif.actorUid || '';
         const actorName = notif.actorName || 'Someone';
         const description = buildContentNotificationDescription(notif);
         const meta = formatMessageHoverTimestamp(notif.createdAt) || '';
@@ -8563,21 +8703,7 @@ function renderContentNotificationList(mode = 'posts') {
         const thumb = (notif.contentThumbnailUrl || '').trim();
         const row = document.createElement('div');
         row.className = 'inbox-notification-item inbox-notification-item--content';
-        row.innerHTML = `
-            <div class="conversation-avatar-slot">${renderAvatar({
-                uid: notif.actorId || 'actor',
-                username: actorName,
-                displayName: actorName,
-                photoURL: notif.actorPhotoUrl || '',
-                avatarColor: computeAvatarColor(actorName)
-            }, { size: 42 })}</div>
-            <div class="inbox-notification-text">
-                <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(description)}</div>
-                ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
-            </div>
-            ${(thumb || title) ? `<div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>` : ''}
-        `;
-        row.onclick = function () {
+        const openContentTarget = function () {
             markContentNotificationRead(notif.id, notif);
             const contentType = (notif.contentType || '').toLowerCase();
             if ((contentType === 'post' || contentType === 'posts') && notif.contentId) {
@@ -8588,8 +8714,51 @@ function renderContentNotificationList(mode = 'posts') {
                 window.openLiveSession(notif.contentId);
             }
         };
-        listEl.appendChild(row);
+        row.innerHTML = `
+            <div class="inbox-notification-actor">
+                <div class="conversation-avatar-slot">${renderAvatar({
+                    uid: actorId || 'actor',
+                    username: actorName,
+                    displayName: actorName,
+                    photoURL: notif.actorPhotoUrl || '',
+                    avatarColor: computeAvatarColor(actorName)
+                }, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(actorName)}</strong> ${escapeHtml(description)}</div>
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            </div>
+            ${(thumb || title) ? `<div class="inbox-notification-preview" role="button" tabindex="0">
+                <div class="inbox-notification-media">${thumb ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(title || 'Content preview')}" loading="lazy" />` : `<div class="inbox-notification-title">${escapeHtml(title || 'View content')}</div>`}</div>
+            </div>` : ''}
+        `;
+        row.onclick = openContentTarget;
+        const actorEl = row.querySelector('.inbox-notification-actor');
+        if (actorEl) {
+            actorEl.onclick = function (event) {
+                event.stopPropagation();
+                if (actorId && typeof window.openUserProfile === 'function') {
+                    window.openUserProfile(actorId, event);
+                }
+            };
+        }
+        const previewEl = row.querySelector('.inbox-notification-preview');
+        if (previewEl) {
+            previewEl.onclick = function (event) {
+                event.stopPropagation();
+                openContentTarget();
+            };
+            previewEl.onkeydown = function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openContentTarget();
+                }
+            };
+        }
+        fragment.appendChild(row);
     });
+    listEl.appendChild(fragment);
 }
 
 function renderInboxNotifications(mode = 'posts') {
@@ -8682,6 +8851,7 @@ function setInboxMode(mode = 'messages', options = {}) {
     const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const contentModes = ['posts', 'videos', 'livestreams'];
     const allowed = ['content', 'messages', 'account'].concat(contentModes);
+    const previousMode = inboxMode;
     if (!allowed.includes(mode)) mode = 'messages';
     if (contentModes.includes(mode)) {
         inboxMode = 'content';
@@ -8712,6 +8882,11 @@ function setInboxMode(mode = 'messages', options = {}) {
             renderContentNotificationList(contentMode);
         });
         syncInboxContentFilters();
+        if (previousMode !== 'content') {
+            void markAllContentNotificationsRead();
+        } else if (contentModes.includes(mode)) {
+            void markAllContentNotificationsRead(mode);
+        }
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
@@ -9363,19 +9538,54 @@ function initContentNotifications(userId) {
         contentNotificationsUnsubscribe = null;
     }
     if (!userId) return;
+    contentNotificationsLegacyFetched = false;
     const DEBUG_NOTIFS = (location.hostname === 'localhost')
         || window.localStorage?.getItem('debugNotifs') === '1';
-    const notifRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
-    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
-        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
-        contentNotifications = snap.docs
-            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'content'),
+        orderBy('createdAt', 'desc'),
+        limit(200)
+    );
+    if (DEBUG_NOTIFS) console.debug('[Notifs] content listener: typed');
+    const applyContentNotifications = function (nextNotifications = []) {
+        contentNotifications = nextNotifications;
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            const preferred = inboxContentPreferred || 'posts';
-            renderContentNotificationList(preferred);
+            renderContentNotificationList('posts');
+            renderContentNotificationList('videos');
+            renderContentNotificationList('livestreams');
             syncInboxContentFilters();
         }
+    };
+    contentNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content snapshot', snap.size);
+        const typedNotifications = snap.docs
+            .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        applyContentNotifications(typedNotifications);
+        if (!snap.empty || contentNotificationsLegacyFetched) return;
+        contentNotificationsLegacyFetched = true;
+        if (DEBUG_NOTIFS) console.debug('[Notifs] content fallback: legacy getDocs');
+        const legacyRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
+        getDocs(legacyRef).then(function (legacySnap) {
+            if (contentNotifications.length) return;
+            const existingIds = new Set(typedNotifications.map(function (notif) { return notif.id; }));
+            const legacyNotifications = legacySnap.docs
+                .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+                .filter(function (notif) {
+                    if ((notif.type || '').toLowerCase() === 'dm') return false;
+                    return !!getContentNotificationBucket(notif);
+                })
+                .filter(function (notif) { return !existingIds.has(notif.id); });
+            const merged = typedNotifications.concat(legacyNotifications).sort(function (a, b) {
+                const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+                const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+                return bTs - aTs;
+            });
+            applyContentNotifications(merged);
+        }).catch(function (err) {
+            if (DEBUG_NOTIFS) console.warn('[Notifs] content fallback error', err);
+        });
     }, function (err) {
         if (DEBUG_NOTIFS) console.warn('[Notifs] content snapshot error', err);
         handleSnapshotError('Content notifications', err);
