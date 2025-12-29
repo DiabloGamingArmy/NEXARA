@@ -3697,6 +3697,17 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 8px;
 }
 
+.message-header-actions .dm-call-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+}
+
+.message-header-actions .dm-call-btn i {
+    font-size: 1rem;
+}
+
 .message-avatar-stack {
     display: flex;
     align-items: center;
