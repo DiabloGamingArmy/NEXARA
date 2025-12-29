@@ -41,7 +41,12 @@ const functions = getFunctions(app);
 const messaging = getMessaging(app);
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 const LIVEKIT_URL = window.NEXERA_LIVEKIT_URL || '';
-const LIVEKIT_ENABLED = !!LIVEKIT_URL;
+const LIVEKIT_ENABLED = !!LIVEKIT_URL && !!window.LivekitClient;
+const LivekitClient = window.LivekitClient;
+const LivekitRoom = LivekitClient?.Room;
+const LivekitRoomEvent = LivekitClient?.RoomEvent;
+const createLivekitAudioTrack = LivekitClient?.createLocalAudioTrack;
+const createLivekitVideoTrack = LivekitClient?.createLocalVideoTrack;
 
 // --- Global State & Cache ---
 let currentUser = null;
@@ -9291,7 +9296,10 @@ async function connectToLiveKitRoom(callSession) {
     }
 
     const elements = getCallOverlayElements();
-    const room = new Room();
+    if (!LivekitRoom || !createLivekitAudioTrack) {
+        throw new Error('LiveKit client unavailable.');
+    }
+    const room = new LivekitRoom();
     livekitRoom = room;
     if (elements.toggleMic) {
         elements.toggleMic.disabled = false;
@@ -9302,7 +9310,7 @@ async function connectToLiveKitRoom(callSession) {
         elements.toggleCamera.textContent = callSession.type === 'video' ? 'Camera off' : 'Camera off';
     }
 
-    room.on(RoomEvent.TrackSubscribed, function (track, publication, participant) {
+    room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
             attachRemoteTrack(track, participant);
         } else if (track.kind === 'audio') {
@@ -9311,13 +9319,13 @@ async function connectToLiveKitRoom(callSession) {
             document.body.appendChild(audioEl);
         }
     });
-    room.on(RoomEvent.TrackUnsubscribed, function (track, publication, participant) {
+    room.on(LivekitRoomEvent.TrackUnsubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
             detachRemoteTrack(track, participant);
         }
         track.detach().forEach(function (el) { el.remove(); });
     });
-    room.on(RoomEvent.Disconnected, function () {
+    room.on(LivekitRoomEvent.Disconnected, function () {
         leaveLiveKitRoom({ updateStatus: false });
     });
 
@@ -9332,11 +9340,14 @@ async function connectToLiveKitRoom(callSession) {
     }
     await room.connect(tokenPayload.url, tokenPayload.token);
 
-    livekitLocalAudioTrack = await createLocalAudioTrack();
+    livekitLocalAudioTrack = await createLivekitAudioTrack();
     await room.localParticipant.publishTrack(livekitLocalAudioTrack);
 
     if (callSession.type === 'video') {
-        livekitLocalVideoTrack = await createLocalVideoTrack();
+        if (!createLivekitVideoTrack) {
+            throw new Error('LiveKit video unavailable.');
+        }
+        livekitLocalVideoTrack = await createLivekitVideoTrack();
         await room.localParticipant.publishTrack(livekitLocalVideoTrack);
         if (elements.localVideo) {
             elements.localVideo.style.display = 'block';
