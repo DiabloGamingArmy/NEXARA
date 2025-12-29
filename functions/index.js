@@ -486,46 +486,39 @@ exports.notifyMention = onCallV2(async (request) => {
   return {ok: true};
 });
 
-exports.livekitCreateToken = onCallV2({secrets: [LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL]}, async (request) => {
-  const auth = request.auth;
-  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const conversationId = (data.conversationId || "").toString();
-  const roomName = (data.roomName || "").toString();
-  if (!conversationId || !roomName) {
-    throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
-  }
+exports.createLiveKitToken = onCallV2(
+  {secrets: [LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET]},
+  async (request) => {
+    const auth = request.auth;
+    if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+    const roomName = String(request.data?.roomName || "").trim();
+    if (!roomName) {
+      throw new HttpsError("invalid-argument", "roomName required.");
+    }
 
-  const apiKey = LIVEKIT_API_KEY.value();
-  const apiSecret = LIVEKIT_API_SECRET.value();
-  const livekitUrl = LIVEKIT_URL.value();
-  if (!apiKey || !apiSecret || !livekitUrl) {
-    throw new HttpsError("failed-precondition", "LiveKit is not configured.");
-  }
+    const apiKey = LIVEKIT_API_KEY.value();
+    const apiSecret = LIVEKIT_API_SECRET.value();
+    const livekitUrl = LIVEKIT_URL.value();
+    if (!apiKey || !apiSecret || !livekitUrl) {
+      throw new HttpsError("failed-precondition", "LiveKit is not configured.");
+    }
 
-  const convoSnap = await db.collection("conversations").doc(conversationId).get();
-  if (!convoSnap.exists) throw new HttpsError("not-found", "Conversation not found.");
-  const convoData = convoSnap.data() || {};
-  const participants = Array.isArray(convoData.participants) ? convoData.participants : [];
-  if (!participants.includes(auth.uid)) {
-    throw new HttpsError("permission-denied", "Not a participant in this conversation.");
-  }
+    let displayName = auth.token?.name || auth.token?.displayName || "";
+    if (!displayName) {
+      const userSnap = await db.collection("users").doc(auth.uid).get();
+      const userData = userSnap.exists ? userSnap.data() : {};
+      displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
+    }
 
-  let displayName = auth.token?.name || auth.token?.displayName || "";
-  if (!displayName) {
-    const userSnap = await db.collection("users").doc(auth.uid).get();
-    const userData = userSnap.exists ? userSnap.data() : {};
-    displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
-  }
+    const token = new AccessToken(apiKey, apiSecret, {
+      identity: auth.uid,
+      name: displayName,
+    });
+    token.addGrant({room: roomName, roomJoin: true, canPublish: true, canSubscribe: true});
 
-  const token = new AccessToken(apiKey, apiSecret, {
-    identity: auth.uid,
-    name: displayName,
-  });
-  token.addGrant({roomJoin: true, room: roomName});
-
-  return {
-    token: token.toJwt(),
-    url: livekitUrl,
-  };
-});
+    return {
+      token: await token.toJwt(),
+      url: livekitUrl,
+    };
+  },
+);
