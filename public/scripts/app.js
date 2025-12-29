@@ -10563,6 +10563,95 @@ async function openConversation(conversationId) {
     refreshInboxLayout();
 }
 
+async function startDmCall(kind) {
+    if (!activeConversationId || !requireAuth()) return;
+    if (!['audio', 'video'].includes(kind)) return;
+    if (activeCallSession) {
+        toast('You already have a call in progress.', 'info');
+        return;
+    }
+    try {
+        const createCall = httpsCallable(functions, 'createCallSession');
+        const response = await createCall({ conversationId: activeConversationId, kind });
+        const payload = response?.data || {};
+        if (!payload.callId) throw new Error('Missing callId');
+        // SFU integration point: store joinUrl/token from the provider payload later.
+        setActiveCallSession({
+            conversationId: activeConversationId,
+            callId: payload.callId,
+            kind,
+            status: 'ringing',
+            direction: 'outgoing',
+            providerInfo: payload
+        });
+        await renderCallOverlay(activeCallSession);
+        listenToCallDoc(activeConversationId, payload.callId);
+        await updateCallMemberState(activeConversationId, payload.callId, 'joined');
+    } catch (e) {
+        toast('Unable to start call', 'error');
+        console.warn('Start call failed', e?.message || e);
+    }
+}
+
+async function handleIncomingCallSnapshot(snap) {
+    if (!currentUser) return;
+    const invites = [];
+    for (const docSnap of snap.docs) {
+        const data = docSnap.data() || {};
+        if (data.createdBy === currentUser.uid) continue;
+        const conversationId = docSnap.ref.parent.parent?.id;
+        if (!conversationId) continue;
+        const memberSnap = await getDoc(doc(db, 'conversations', conversationId, 'calls', docSnap.id, 'members', currentUser.uid));
+        if (!memberSnap.exists()) continue;
+        if (memberSnap.data().state !== 'invited') continue;
+        invites.push({
+            conversationId,
+            callId: docSnap.id,
+            kind: data.kind || 'audio',
+            status: data.status || 'ringing'
+        });
+    }
+
+    if (!invites.length) {
+        if (activeCallSession?.direction === 'incoming' && activeCallSession?.status === 'ringing') {
+            concludeCallSession();
+        }
+        return;
+    }
+
+    const invite = invites[0];
+    if (activeCallSession) {
+        if (activeCallSession.callId === invite.callId) {
+            activeCallSession = { ...activeCallSession, status: invite.status };
+            await renderCallOverlay(activeCallSession);
+        }
+        return;
+    }
+    await startIncomingCallSession(invite);
+}
+
+function initCallInviteListener() {
+    if (callInviteUnsubscribe) {
+        callInviteUnsubscribe();
+        callInviteUnsubscribe = null;
+    }
+    if (!currentUser) return;
+    const callQuery = query(
+        collectionGroup(db, 'calls'),
+        where('participants', 'array-contains', currentUser.uid),
+        where('status', '==', 'ringing')
+    );
+    callInviteUnsubscribe = ListenerRegistry.register('calls:incoming', onSnapshot(callQuery, function (snap) {
+        handleIncomingCallSnapshot(snap).catch(function (err) {
+            console.warn('Incoming call handler failed', err?.message || err);
+        });
+    }, function (err) {
+        handleSnapshotError('Incoming calls', err);
+    }));
+}
+
+window.startDmCall = startDmCall;
+
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
     bindMobileMessageGestures();
