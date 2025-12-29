@@ -2133,8 +2133,12 @@ async function ensureUserDocument(user) {
         return await getDoc(ref);
     }
 
+    const existingData = snap.data() || {};
+    if (!existingData.displayName && existingData.name) {
+        await setDoc(ref, { displayName: existingData.name }, { merge: true });
+    }
     await setDoc(ref, { updatedAt: now }, { merge: true });
-    await syncPublicProfile(user.uid, snap.data() || {});
+    await syncPublicProfile(user.uid, existingData);
     return await getDoc(ref);
 }
 
@@ -5360,7 +5364,7 @@ window.saveSettings = async function () {
         photoPath = '';
     }
 
-    const updates = { name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
+    const updates = { displayName: name, name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
     userProfile = { ...userProfile, ...updates };
     storeUserInCache(currentUser.uid, userProfile);
 
