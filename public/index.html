@@ -956,7 +956,7 @@
                         <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
                     </div>
                 </div>
-                <div id="inbox-panel-account" class="inbox-panel">
+    <div id="inbox-panel-account" class="inbox-panel">
                     <div id="inbox-list-account" class="inbox-notification-list"></div>
                     <div id="inbox-empty-account" class="empty-state">No account notifications yet.</div>
                 </div>
@@ -1721,6 +1721,33 @@
         </div>
     </div>
 
+    <!-- Call overlay -->
+    <div id="call-overlay" aria-hidden="true">
+        <div id="call-card" role="dialog" aria-modal="true" aria-label="Call controls">
+            <div class="call-card-header">
+                <div>
+                    <div id="call-overlay-name" class="call-name">Conversation</div>
+                    <div id="call-overlay-status" class="call-status">Connecting...</div>
+                </div>
+                <button id="call-overlay-close" class="icon-pill" type="button" aria-label="Close call overlay">
+                    <i class="ph ph-x"></i>
+                </button>
+            </div>
+            <div class="call-media-grid">
+                <div class="call-video-tile">
+                    <video id="call-local-video" autoplay muted playsinline></video>
+                    <div class="call-video-label">You</div>
+                </div>
+                <div id="call-remote-grid" class="call-remote-grid"></div>
+            </div>
+            <div class="call-actions">
+                <button id="call-toggle-mic" class="call-action-btn" type="button">Mute</button>
+                <button id="call-toggle-camera" class="call-action-btn" type="button">Camera off</button>
+                <button id="call-hangup" class="call-action-btn end" type="button">Hang up</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Splash Screen -->
     <div id="nexera-splash" aria-hidden="true">
         <div class="nexera-splash-center">
@@ -1743,6 +1770,7 @@
     <script src="/assets/js/bootstrap.js"></script>
     <script>
         window.NEXERA_FCM_VAPID_KEY = "REPLACE_WITH_YOUR_FIREBASE_CONSOLE_WEB_PUSH_CERTIFICATE_KEY";
+        window.NEXERA_LIVEKIT_URL = "";
     </script>
     <script type="module" src="/main.js"></script>
     <script type="module" src="/assets/js/router.js"></script>
