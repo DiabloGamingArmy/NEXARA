@@ -5,7 +5,6 @@ import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, quer
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
-// import { Room, RoomEvent, createLocalAudioTrack, createLocalVideoTrack } from "https://cdn.jsdelivr.net/npm/livekit-client@2.5.1/dist/livekit-client.esm.min.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -40,13 +39,12 @@ const storage = getStorage(app);
 const functions = getFunctions(app);
 const messaging = getMessaging(app);
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
-const LIVEKIT_URL = window.NEXERA_LIVEKIT_URL || '';
-const LIVEKIT_ENABLED = !!LIVEKIT_URL;
 let LivekitRoom = null;
 let LivekitRoomEvent = null;
 let livekitCreateLocalAudioTrack = null;
 let livekitCreateLocalVideoTrack = null;
 let livekitCreateLocalScreenTracks = null;
+let livekitLoadStatus = 'idle';
 
 const LIVEKIT_CLIENT_VERSION = "2.5.1";
 const LIVEKIT_CDN_URLS = [
@@ -61,6 +59,7 @@ async function ensureLiveKitLoaded() {
 
   _livekitModulePromise = (async () => {
     let lastErr = null;
+    livekitLoadStatus = 'loading';
 
     for (const url of LIVEKIT_CDN_URLS) {
       try {
@@ -78,6 +77,8 @@ async function ensureLiveKitLoaded() {
         }
 
         console.log("[LiveKit] livekit-client loaded from:", url);
+        livekitLoadStatus = 'ready';
+        refreshDmCallButtons();
         return mod;
       } catch (e) {
         lastErr = e;
@@ -92,6 +93,8 @@ async function ensureLiveKitLoaded() {
     livekitCreateLocalAudioTrack = null;
     livekitCreateLocalVideoTrack = null;
     livekitCreateLocalScreenTracks = null;
+    livekitLoadStatus = 'failed';
+    refreshDmCallButtons();
     return null;
   })();
 
@@ -151,10 +154,12 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
         ensurePushSettingsUI();
         initMessagingForegroundListener();
+        initCallUi();
     });
 } else {
     ensurePushSettingsUI();
     initMessagingForegroundListener();
+    initCallUi();
 }
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
@@ -897,6 +902,9 @@ let callUiInitialized = false;
 let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
+let livekitLocalScreenTracks = [];
+let incomingCallUnsubscribe = null;
+let incomingPromptCallId = null;
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -1748,9 +1756,8 @@ function initApp(onReady) {
                 setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
                 initConversations(storedInboxMode === 'messages');
-                if (LIVEKIT_ENABLED) {
-                    initCallUi();
-                }
+                startListeningForIncomingCalls();
+                refreshDmCallButtons();
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
                     syncStoredPushToken(user.uid);
@@ -9175,6 +9182,47 @@ function renderPinnedMessages(convo = {}, msgs = []) {
     });
 }
 
+function getLiveKitCallTooltip({ canCall, isReady }) {
+    if (!canCall) return 'Select a conversation to call.';
+    if (!isReady) {
+        return livekitLoadStatus === 'failed'
+            ? 'Call system unavailable.'
+            : 'Loading call system…';
+    }
+    return '';
+}
+
+function refreshDmCallButtons() {
+    const audioBtn = document.getElementById('dm-call-audio-btn');
+    const videoBtn = document.getElementById('dm-call-video-btn');
+    if (!audioBtn && !videoBtn) return;
+    const canCall = !!activeConversationId && !!currentUser?.uid;
+    const isReady = livekitLoadStatus === 'ready';
+    const disabled = !canCall || !isReady;
+    const tooltip = getLiveKitCallTooltip({ canCall, isReady });
+
+    [audioBtn, videoBtn].forEach(function (btn) {
+        if (!btn) return;
+        if (disabled) {
+            btn.setAttribute('aria-disabled', 'true');
+            if (tooltip) {
+                btn.setAttribute('title', tooltip);
+            }
+            btn.disabled = true;
+        } else {
+            btn.removeAttribute('aria-disabled');
+            btn.removeAttribute('title');
+            btn.disabled = false;
+        }
+    });
+}
+
+function primeLiveKitLoading() {
+    if (livekitLoadStatus === 'idle') {
+        ensureLiveKitLoaded().catch(function () {});
+    }
+}
+
 function renderMessageHeader(convo = {}) {
     const header = document.getElementById('message-header');
     if (!header) return;
@@ -9224,12 +9272,13 @@ function renderMessageHeader(convo = {}) {
         : 'class="message-thread-profile-btn" type="button" disabled';
 
     const optionsDisabledAttr = cid ? '' : ' disabled aria-disabled="true"';
-    const canCall = LIVEKIT_ENABLED && !!cid && participants.length > 0 && !!currentUser?.uid;
-    const callDisabledAttr = canCall ? '' : ' disabled aria-disabled="true"';
-    const callButtons = LIVEKIT_ENABLED
-        ? `<button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}><i class="ph ph-phone"></i></button>
-           <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}><i class="ph ph-video-camera"></i></button>`
-        : '';
+    const canCall = !!cid && participants.length > 0 && !!currentUser?.uid;
+    const isReady = livekitLoadStatus === 'ready';
+    const callDisabledAttr = canCall && isReady ? '' : ' disabled aria-disabled="true"';
+    const tooltip = getLiveKitCallTooltip({ canCall, isReady });
+    const tooltipAttr = tooltip ? ` title="${tooltip}"` : '';
+    const callButtons = `<button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-phone"></i></button>
+           <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-video-camera"></i></button>`;
 
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
@@ -9244,6 +9293,8 @@ function renderMessageHeader(convo = {}) {
             <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"${optionsDisabledAttr}><i class="ph ph-dots-three-outline"></i></button>
         </div>
     </div>`;
+    refreshDmCallButtons();
+    primeLiveKitLoading();
 }
 
 function getCallOverlayElements() {
@@ -9254,9 +9305,15 @@ function getCallOverlayElements() {
         localVideo: document.getElementById('call-local-video'),
         remoteGrid: document.getElementById('call-remote-grid'),
         toggleMic: document.getElementById('call-toggle-mic'),
-        toggleCamera: document.getElementById('call-toggle-camera'),
-        hangup: document.getElementById('call-hangup'),
-        close: document.getElementById('call-overlay-close')
+        toggleCam: document.getElementById('call-toggle-cam'),
+        toggleShare: document.getElementById('call-toggle-share'),
+        hangupBtn: document.getElementById('call-hangup'),
+        closeBtn: document.getElementById('call-overlay-close'),
+        incomingPrompt: document.getElementById('call-incoming-prompt'),
+        incomingName: document.getElementById('call-incoming-name'),
+        incomingType: document.getElementById('call-incoming-type'),
+        incomingAccept: document.getElementById('call-incoming-accept'),
+        incomingDecline: document.getElementById('call-incoming-decline')
     };
 }
 
@@ -9265,6 +9322,26 @@ function setCallOverlayVisible(visible) {
     if (!overlay) return;
     overlay.classList.toggle('is-visible', visible);
     overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+}
+
+function setIncomingPromptVisible(visible) {
+    const { incomingPrompt } = getCallOverlayElements();
+    if (!incomingPrompt) return;
+    incomingPrompt.style.display = visible ? 'flex' : 'none';
+}
+
+function hideIncomingCallPrompt() {
+    incomingPromptCallId = null;
+    setIncomingPromptVisible(false);
+}
+
+function renderIncomingCallPrompt(callData = {}, callerProfile = {}) {
+    const elements = getCallOverlayElements();
+    if (!elements.incomingPrompt) return;
+    const displayName = callerProfile.displayName || callerProfile.name || callerProfile.username || 'Incoming call';
+    if (elements.incomingName) elements.incomingName.textContent = displayName;
+    if (elements.incomingType) elements.incomingType.textContent = (callData.type || 'audio') === 'video' ? 'Video call' : 'Audio call';
+    setIncomingPromptVisible(true);
 }
 
 function resetCallOverlayMedia() {
@@ -9305,6 +9382,7 @@ function clearCallSession() {
     activeCallSession = null;
     resetCallOverlayMedia();
     setCallOverlayVisible(false);
+    hideIncomingCallPrompt();
 }
 
 function attachRemoteTrack(track, participant) {
@@ -9336,16 +9414,8 @@ function detachRemoteTrack(track, participant) {
 }
 
 async function connectToLiveKitRoom(callSession) {
-    if (!LIVEKIT_ENABLED) {
-        toast('LiveKit is not configured for this environment.', 'info');
-        return;
-    }
     if (!callSession) return;
-    const lk = await ensureLiveKitLoaded();
-    if (!lk) {
-        toast('LiveKit could not be loaded.', 'error');
-        return;
-    }
+    const callKind = callSession.kind || callSession.type || 'audio';
     if (livekitRoom) {
         await leaveLiveKitRoom({ updateStatus: false });
     }
@@ -9354,16 +9424,11 @@ async function connectToLiveKitRoom(callSession) {
     if (!LivekitRoom || !livekitCreateLocalAudioTrack) {
         throw new Error('LiveKit client unavailable.');
     }
-    const room = new LivekitRoom();
+    const room = new LivekitRoom({ adaptiveStream: true, dynacast: true });
     livekitRoom = room;
-    if (elements.toggleMic) {
-        elements.toggleMic.disabled = false;
-        elements.toggleMic.textContent = 'Mute';
-    }
-    if (elements.toggleCamera) {
-        elements.toggleCamera.disabled = callSession.type !== 'video';
-        elements.toggleCamera.textContent = callSession.type === 'video' ? 'Camera off' : 'Camera off';
-    }
+    if (elements.toggleMic) elements.toggleMic.disabled = false;
+    if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
+    if (elements.toggleShare) elements.toggleShare.disabled = false;
 
     room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
@@ -9384,10 +9449,15 @@ async function connectToLiveKitRoom(callSession) {
         leaveLiveKitRoom({ updateStatus: false });
     });
 
-    const tokenFn = httpsCallable(functions, 'livekitCreateToken');
+    const tokenFn = httpsCallable(getFunctions(app, 'us-central1'), 'livekitCreateToken');
     const response = await tokenFn({
+        roomName: callSession.roomName,
         conversationId: callSession.conversationId,
-        roomName: callSession.roomName
+        identity: currentUser?.uid || '',
+        metadata: JSON.stringify({
+            conversationId: callSession.conversationId,
+            kind: callKind
+        })
     });
     const tokenPayload = response?.data || {};
     if (!tokenPayload?.token || !tokenPayload?.url) {
@@ -9398,7 +9468,12 @@ async function connectToLiveKitRoom(callSession) {
     livekitLocalAudioTrack = await livekitCreateLocalAudioTrack();
     await room.localParticipant.publishTrack(livekitLocalAudioTrack);
 
-    if (callSession.type === 'video') {
+    if (elements.toggleMic) {
+        elements.toggleMic.classList.add('active');
+        elements.toggleMic.setAttribute('aria-pressed', 'true');
+    }
+
+    if (callKind === 'video') {
         if (!livekitCreateLocalVideoTrack) {
             throw new Error('LiveKit video unavailable.');
         }
@@ -9408,21 +9483,42 @@ async function connectToLiveKitRoom(callSession) {
             elements.localVideo.style.display = 'block';
             livekitLocalVideoTrack.attach(elements.localVideo);
         }
+        if (elements.toggleCam) {
+            elements.toggleCam.classList.add('active');
+            elements.toggleCam.setAttribute('aria-pressed', 'true');
+        }
     } else if (elements.localVideo) {
         elements.localVideo.style.display = 'none';
+        if (elements.toggleCam) {
+            elements.toggleCam.classList.remove('active');
+            elements.toggleCam.setAttribute('aria-pressed', 'false');
+        }
     }
 
-    await updateDoc(doc(db, 'calls', callSession.callId), {
-        status: 'active',
-        startedAt: serverTimestamp()
-    });
+    if (elements.toggleShare) {
+        elements.toggleShare.classList.remove('active');
+        elements.toggleShare.setAttribute('aria-pressed', 'false');
+    }
+
+    if (callSession.callId) {
+        await updateDoc(doc(db, 'calls', callSession.callId), {
+            status: 'active',
+            startedAt: serverTimestamp()
+        }).catch(function (err) {
+            console.warn('Unable to update call status', err?.message || err);
+        });
+    }
+    if (activeCallSession && activeCallSession.callId === callSession.callId) {
+        activeCallSession = { ...activeCallSession, status: 'active' };
+    }
     await renderCallOverlayStatus(callSession.conversationId, 'Live');
 }
 
 async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     const elements = getCallOverlayElements();
     if (elements.toggleMic) elements.toggleMic.disabled = true;
-    if (elements.toggleCamera) elements.toggleCamera.disabled = true;
+    if (elements.toggleCam) elements.toggleCam.disabled = true;
+    if (elements.toggleShare) elements.toggleShare.disabled = true;
     if (livekitLocalAudioTrack) {
         livekitLocalAudioTrack.stop();
         livekitLocalAudioTrack = null;
@@ -9431,13 +9527,23 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         livekitLocalVideoTrack.stop();
         livekitLocalVideoTrack = null;
     }
+    if (livekitLocalScreenTracks.length) {
+        livekitLocalScreenTracks.forEach(function (track) {
+            if (livekitRoom) {
+                livekitRoom.localParticipant.unpublishTrack(track);
+            }
+            track.stop();
+        });
+        livekitLocalScreenTracks = [];
+    }
     if (livekitRoom) {
         livekitRoom.disconnect();
         livekitRoom = null;
     }
     if (updateStatus && activeCallSession?.callId) {
+        const nextStatus = 'ended';
         await updateDoc(doc(db, 'calls', activeCallSession.callId), {
-            status: 'ended',
+            status: nextStatus,
             endedAt: serverTimestamp()
         }).catch(function (err) {
             console.warn('Unable to update call status', err?.message || err);
@@ -9447,41 +9553,51 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
 }
 
 async function initCallUi() {
-    if (callUiInitialized) return;
-    callUiInitialized = true;
-    const elements = getCallOverlayElements();
-    if (elements.toggleMic) elements.toggleMic.disabled = true;
-    if (elements.toggleCamera) elements.toggleCamera.disabled = true;
-    if (elements.toggleMic) {
-        elements.toggleMic.onclick = function () {
-            if (!livekitLocalAudioTrack) return;
-            const enabled = livekitLocalAudioTrack.isEnabled;
-            livekitLocalAudioTrack.setEnabled(!enabled);
-            elements.toggleMic.textContent = enabled ? 'Unmute' : 'Mute';
-        };
-    }
-    if (elements.toggleCamera) {
-        elements.toggleCamera.onclick = function () {
-            if (!livekitLocalVideoTrack) return;
-            const enabled = livekitLocalVideoTrack.isEnabled;
-            livekitLocalVideoTrack.setEnabled(!enabled);
-            elements.toggleCamera.textContent = enabled ? 'Camera on' : 'Camera off';
-        };
-    }
-    if (elements.hangup) {
-        elements.hangup.onclick = function () {
-            leaveLiveKitRoom({ updateStatus: true }).catch(function (err) {
-                console.warn('Hangup failed', err?.message || err);
-            });
-        };
-    }
-    if (elements.close) {
-        elements.close.onclick = function () {
-            leaveLiveKitRoom({ updateStatus: true }).catch(function (err) {
-                console.warn('Close call failed', err?.message || err);
-            });
-        };
-    }
+    const els = getCallOverlayElements();
+    if (!els.closeBtn || !els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
+
+    // Avoid double-binding
+    if (els.hangupBtn.dataset.bound === '1') return;
+    els.hangupBtn.dataset.bound = '1';
+
+    const setActive = (btn, on) => {
+        if (!btn) return;
+        btn.classList.toggle('active', !!on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+
+    let micOn = true;
+    let camOn = false;
+    let shareOn = false;
+
+    els.closeBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
+    els.hangupBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
+
+    els.toggleMic.onclick = async () => {
+        if (!livekitRoom) return;
+        micOn = !micOn;
+        await livekitRoom.localParticipant.setMicrophoneEnabled(micOn);
+        setActive(els.toggleMic, micOn);
+    };
+
+    els.toggleCam.onclick = async () => {
+        if (!livekitRoom) return;
+        camOn = !camOn;
+        await livekitRoom.localParticipant.setCameraEnabled(camOn);
+        setActive(els.toggleCam, camOn);
+    };
+
+    els.toggleShare.onclick = async () => {
+        if (!livekitRoom) return;
+        shareOn = !shareOn;
+        await livekitRoom.localParticipant.setScreenShareEnabled(shareOn);
+        setActive(els.toggleShare, shareOn);
+    };
+
+    // default states
+    setActive(els.toggleMic, micOn);
+    setActive(els.toggleCam, camOn);
+    setActive(els.toggleShare, shareOn);
 }
 
 function listenToCallStatus(callId, conversationId) {
@@ -9489,13 +9605,23 @@ function listenToCallStatus(callId, conversationId) {
     const callRef = doc(db, 'calls', callId);
     callDocUnsubscribe = ListenerRegistry.register(`call:${callId}`, onSnapshot(callRef, function (snap) {
         if (!snap.exists()) {
+            hideIncomingCallPrompt();
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
         }
         const data = snap.data() || {};
+        if (activeCallSession && activeCallSession.callId === callId) {
+            activeCallSession = { ...activeCallSession, status: data.status || activeCallSession.status };
+        }
         if (data.status === 'ended' || data.status === 'missed') {
+            hideIncomingCallPrompt();
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
+        }
+        if (data.status === 'active' && activeCallSession?.callId === callId && !livekitRoom) {
+            connectToLiveKitRoom(activeCallSession).catch(function (error) {
+                console.warn('Call connect failed', error?.message || error);
+            });
         }
         renderCallOverlayStatus(conversationId, data.status === 'active' ? 'Live' : 'Ringing');
     }, function (err) {
@@ -9503,65 +9629,146 @@ function listenToCallStatus(callId, conversationId) {
     }));
 }
 
-async function startLivekitDmCall(type) {
-    if (!LIVEKIT_ENABLED) return;
-    if (!activeConversationId || !requireAuth()) return;
-    if (!['audio', 'video'].includes(type)) return;
-    const lk = await ensureLiveKitLoaded();
-    if (!lk) {
-        toast('LiveKit could not be loaded.', 'error');
-        return;
-    }
-    if (activeCallSession) {
-        toast('You already have a call in progress.', 'info');
-        return;
-    }
-    const conversationId = activeConversationId;
-    const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
-    const participants = convo?.participants || [];
-    if (!participants.length) return;
-    const callRef = doc(collection(db, 'calls'));
-    const callId = callRef.id;
-    const roomName = `dm_${conversationId}`;
-    const callPayload = {
-        conversationId,
-        roomName,
-        createdBy: currentUser.uid,
-        participants,
-        status: 'ringing',
-        type,
-        createdAt: serverTimestamp(),
-        startedAt: null,
-        endedAt: null
-    };
-    const messageRef = doc(collection(db, 'conversations', conversationId, 'messages'));
-    const messagePayload = {
-        type: 'call_invite',
-        callId,
-        callType: type,
-        createdAt: serverTimestamp(),
-        senderId: currentUser.uid
-    };
-    const batch = writeBatch(db);
-    batch.set(callRef, callPayload);
-    batch.set(messageRef, messagePayload);
-    await batch.commit();
+// Returns all call docs for a conversation (single-field query to avoid composite index needs)
+async function getCallsForConversation(conversationId) {
+    const q = query(collection(db, 'calls'), where('conversationId', '==', conversationId));
+    const snap = await getDocs(q);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
 
-    activeCallSession = { callId, conversationId, roomName, type };
-    await renderCallOverlayStatus(conversationId, 'Calling...');
-    listenToCallStatus(callId, conversationId);
+async function endCallDoc(callId) {
     try {
-        await connectToLiveKitRoom(activeCallSession);
-    } catch (error) {
-        await updateDoc(callRef, { status: 'missed', endedAt: serverTimestamp() }).catch(function () {});
-        clearCallSession();
-        toast('Unable to start call.', 'error');
-        console.warn('Call connect failed', error?.message || error);
+        await updateDoc(doc(db, 'calls', callId), { status: 'ended', endedAt: serverTimestamp() });
+    } catch (e) {
+        // ignore
     }
 }
 
+async function acceptIncomingCall(callId, callData, conversationId) {
+    const livekitModule = await ensureLiveKitLoaded();
+    if (!livekitModule) {
+        toast('LiveKit could not be loaded.', 'error');
+        return;
+    }
+    await updateDoc(doc(db, 'calls', callId), {
+        status: 'active',
+        startedAt: serverTimestamp()
+    });
+    hideIncomingCallPrompt();
+    activeCallSession = {
+        callId,
+        conversationId,
+        type: callData.type || 'audio',
+        status: 'active',
+        direction: 'incoming',
+        roomName: `call_${callId}`
+    };
+    await connectToLiveKitRoom(activeCallSession);
+}
+
+function startListeningForIncomingCalls() {
+    if (incomingCallUnsubscribe) {
+        incomingCallUnsubscribe();
+        incomingCallUnsubscribe = null;
+    }
+    if (!currentUser?.uid) return;
+
+    const callQuery = query(
+        collection(db, 'calls'),
+        where('status', '==', 'ringing'),
+        where('participants', 'array-contains', currentUser.uid)
+    );
+
+    incomingCallUnsubscribe = ListenerRegistry.register('calls:incoming', onSnapshot(callQuery, function (snap) {
+        const ringingCalls = snap.docs.map(function (docSnap) {
+            return { id: docSnap.id, ...docSnap.data() };
+        }).filter(function (data) {
+            return data.status === 'ringing'
+                && Array.isArray(data.participants)
+                && data.participants.includes(currentUser.uid);
+        });
+
+        if (!ringingCalls.length) {
+            hideIncomingCallPrompt();
+            return;
+        }
+
+        const callsByConversation = new Map();
+        ringingCalls.forEach(function (call) {
+            if (!call.conversationId) return;
+            const existing = callsByConversation.get(call.conversationId) || [];
+            existing.push(call);
+            callsByConversation.set(call.conversationId, existing);
+        });
+
+        for (const [conversationId, calls] of callsByConversation.entries()) {
+            if (calls.length > 1) {
+                const sorted = calls.slice().sort(function (a, b) { return a.id.localeCompare(b.id); });
+                const canonical = sorted[0];
+                if (activeCallSession?.status === 'ringing'
+                    && activeCallSession?.conversationId === conversationId
+                    && activeCallSession?.callId !== canonical.id) {
+                    endCallDoc(activeCallSession.callId);
+                    clearCallSession();
+                    acceptIncomingCall(canonical.id, canonical, conversationId).catch(function () {});
+                    return;
+                }
+                if (activeCallSession?.callId === canonical.id) {
+                    sorted.slice(1).forEach(function (call) {
+                        endCallDoc(call.id);
+                    });
+                }
+            }
+        }
+
+        const incoming = ringingCalls.find(function (call) {
+            const callerId = call.initiatorId || call.createdBy;
+            return callerId && callerId !== currentUser.uid;
+        });
+
+        if (!incoming) {
+            hideIncomingCallPrompt();
+            return;
+        }
+
+        if (activeCallSession && activeCallSession.conversationId !== incoming.conversationId) {
+            hideIncomingCallPrompt();
+            return;
+        }
+
+        if (incomingPromptCallId === incoming.id) return;
+        incomingPromptCallId = incoming.id;
+
+        resolveUserProfile(incoming.initiatorId || incoming.createdBy).then(function (profile) {
+            renderIncomingCallPrompt(incoming, profile || {});
+        }).catch(function () {
+            renderIncomingCallPrompt(incoming, {});
+        });
+
+        const elements = getCallOverlayElements();
+        if (elements.incomingAccept) {
+            elements.incomingAccept.onclick = async function () {
+                if (activeCallSession) return;
+                await acceptIncomingCall(incoming.id, incoming, incoming.conversationId);
+            };
+        }
+        if (elements.incomingDecline) {
+            elements.incomingDecline.onclick = async function () {
+                await updateDoc(doc(db, 'calls', incoming.id), {
+                    status: 'ended',
+                    endedAt: serverTimestamp()
+                });
+                hideIncomingCallPrompt();
+            };
+        }
+    }, function (err) {
+        handleSnapshotError('Incoming calls', err);
+    }));
+}
+
 async function joinCallInvite(conversationId, callId) {
-    if (!LIVEKIT_ENABLED) return;
     if (!conversationId || !callId || !requireAuth()) return;
     const lk = await ensureLiveKitLoaded();
     if (!lk) {
@@ -9589,7 +9796,7 @@ async function joinCallInvite(conversationId, callId) {
     activeCallSession = {
         callId,
         conversationId,
-        roomName: callData.roomName || `dm_${conversationId}`,
+        roomName: `call_${callId}`,
         type: callData.type || 'audio'
     };
     await renderCallOverlayStatus(conversationId, 'Connecting...');
@@ -9603,7 +9810,6 @@ async function joinCallInvite(conversationId, callId) {
     }
 }
 
-window.startDmCall = startLivekitDmCall;
 window.joinCallInvite = joinCallInvite;
 
 function renderMessages(msgs = [], convo = {}) {
@@ -9696,8 +9902,10 @@ function renderMessages(msgs = [], convo = {}) {
         }
         if (msg.type === 'call_invite') {
             const callType = msg.callType === 'video' ? 'video' : 'audio';
-            const joinBtn = (LIVEKIT_ENABLED && msg.callId)
-                ? `<button class="call-join-btn" onclick="window.joinCallInvite('${convo.id || activeConversationId}', '${msg.callId}')">Join call</button>`
+            const canJoin = livekitLoadStatus === 'ready';
+            const joinDisabledAttr = canJoin ? '' : ' disabled aria-disabled="true" title="Loading call system…"';
+            const joinBtn = msg.callId
+                ? `<button class="call-join-btn" onclick="window.joinCallInvite('${convo.id || activeConversationId}', '${msg.callId}')"${joinDisabledAttr}>Join call</button>`
                 : '';
             content = `<div class="message-call-invite">
                 <div class="call-invite-title">${escapeHtml(callType.charAt(0).toUpperCase() + callType.slice(1))} call invite</div>
@@ -10642,30 +10850,69 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
-    if (activeCallSession) {
-        toast('You already have a call in progress.', 'info');
+    const livekitModule = await ensureLiveKitLoaded();
+    if (!livekitModule) {
+        toast('LiveKit could not be loaded.', 'error');
         return;
     }
     try {
-        const createCall = httpsCallable(functions, 'createCallSession');
-        const response = await createCall({ conversationId: activeConversationId, kind });
-        const payload = response?.data || {};
-        if (!payload.callId) throw new Error('Missing callId');
-        // SFU integration point: store joinUrl/token from the provider payload later.
-        setActiveCallSession({
-            conversationId: activeConversationId,
-            callId: payload.callId,
-            kind,
+        const conversationId = activeConversationId;
+        const callType = kind === 'video' ? 'video' : 'audio';
+        const calls = await getCallsForConversation(conversationId);
+        const incoming = calls.find(function (call) {
+            const callerId = call.initiatorId || call.createdBy;
+            return call.status === 'ringing'
+                && callerId !== currentUser.uid
+                && Array.isArray(call.participants)
+                && call.participants.includes(currentUser.uid)
+                && (!call.type || call.type === callType);
+        });
+        if (incoming) {
+            if (activeCallSession?.status === 'ringing' && activeCallSession?.conversationId === conversationId) {
+                await endCallDoc(activeCallSession.callId);
+                clearCallSession();
+            }
+            await acceptIncomingCall(incoming.id, incoming, conversationId);
+            return;
+        }
+        const existingRinging = calls.find(function (call) {
+            return call.status === 'ringing';
+        });
+        if (existingRinging) {
+            return;
+        }
+        if (activeCallSession) {
+            if (activeCallSession.conversationId === conversationId) return;
+            toast('You already have a call in progress.', 'info');
+            return;
+        }
+        const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
+        const participants = convo?.participants || [];
+        if (!participants.length) return;
+        const callRef = await addDoc(collection(db, 'calls'), {
+            createdBy: currentUser.uid,
+            initiatorId: currentUser.uid,
+            conversationId,
+            type: callType,
+            status: 'ringing',
+            participants,
+            createdAt: serverTimestamp()
+        });
+        const callId = callRef.id;
+        activeCallSession = {
+            callId,
+            conversationId,
+            type: callType,
             status: 'ringing',
             direction: 'outgoing',
-            providerInfo: payload
-        });
-        await renderCallOverlay(activeCallSession);
-        listenToCallDoc(activeConversationId, payload.callId);
-        await updateCallMemberState(activeConversationId, payload.callId, 'joined');
+            roomName: `call_${callId}`
+        };
+        await renderCallOverlayStatus(conversationId, 'Calling…');
+        listenToCallStatus(callId, conversationId);
     } catch (e) {
         toast('Unable to start call', 'error');
         console.warn('Start call failed', e?.message || e);
+        await leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
     }
 }
 
@@ -10674,16 +10921,14 @@ async function handleIncomingCallSnapshot(snap) {
     const invites = [];
     for (const docSnap of snap.docs) {
         const data = docSnap.data() || {};
-        if (data.createdBy === currentUser.uid) continue;
-        const conversationId = docSnap.ref.parent.parent?.id;
+        const callerId = data.initiatorId || data.createdBy;
+        if (callerId === currentUser.uid) continue;
+        const conversationId = data.conversationId;
         if (!conversationId) continue;
-        const memberSnap = await getDoc(doc(db, 'conversations', conversationId, 'calls', docSnap.id, 'members', currentUser.uid));
-        if (!memberSnap.exists()) continue;
-        if (memberSnap.data().state !== 'invited') continue;
         invites.push({
             conversationId,
             callId: docSnap.id,
-            kind: data.kind || 'audio',
+            kind: data.type || 'audio',
             status: data.status || 'ringing'
         });
     }
@@ -10713,7 +10958,7 @@ function initCallInviteListener() {
     }
     if (!currentUser) return;
     const callQuery = query(
-        collectionGroup(db, 'calls'),
+        collection(db, 'calls'),
         where('participants', 'array-contains', currentUser.uid),
         where('status', '==', 'ringing')
     );

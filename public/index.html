@@ -12,8 +12,6 @@
     <link rel="stylesheet" href="/assets/tailwind.css">
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.5.0/livekit-client.umd.min.js"></script>
-
     <!-- MOD: Sanitizer (use in script.js to safely render user content) -->
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
 
@@ -910,11 +908,13 @@
                                     <div class="message-thread-title-row">Select a conversation</div>
                                     <div class="message-header-actions">
                                         <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
-                                            onclick="window.startDmCall('audio')" aria-label="Start audio call" disabled>
+                                            onclick="window.startDmCall('audio')" aria-label="Start audio call"
+                                            title="Loading call system…" aria-disabled="true" disabled>
                                             <i class="ph ph-phone"></i>
                                         </button>
                                         <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
-                                            onclick="window.startDmCall('video')" aria-label="Start video call" disabled>
+                                            onclick="window.startDmCall('video')" aria-label="Start video call"
+                                            title="Loading call system…" aria-disabled="true" disabled>
                                             <i class="ph ph-video-camera"></i>
                                         </button>
                                         <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
@@ -1760,8 +1760,19 @@
             </div>
             <div class="call-actions">
                 <button id="call-toggle-mic" class="call-action-btn" type="button">Mute</button>
-                <button id="call-toggle-camera" class="call-action-btn" type="button">Camera off</button>
+                <button id="call-toggle-cam" class="call-action-btn" type="button">Camera</button>
+                <button id="call-toggle-share" class="call-action-btn" type="button">Share screen</button>
                 <button id="call-hangup" class="call-action-btn end" type="button">Hang up</button>
+            </div>
+        </div>
+    </div>
+    <div id="call-incoming-prompt" class="call-incoming-prompt" style="display:none;">
+        <div class="call-incoming-card" role="dialog" aria-modal="true" aria-live="polite">
+            <div id="call-incoming-name" class="call-incoming-name">Incoming call</div>
+            <div id="call-incoming-type" class="call-incoming-type">Audio call</div>
+            <div class="call-incoming-actions">
+                <button id="call-incoming-accept" class="call-incoming-btn accept" type="button">Accept</button>
+                <button id="call-incoming-decline" class="call-incoming-btn decline" type="button">Decline</button>
             </div>
         </div>
     </div>

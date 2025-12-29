@@ -3853,6 +3853,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     transition: 0.2s ease;
 }
 
+.call-action-btn.active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(80, 210, 255, 0.2);
+}
+
 .call-action-btn.end {
     border-color: rgba(255, 82, 82, 0.6);
     color: #ffb1b1;
@@ -3891,6 +3896,67 @@ body.light-mode .category-pill.active .topic-verified-icon {
     padding: 6px 14px;
     font-weight: 700;
     cursor: pointer;
+}
+
+.call-incoming-prompt {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1250;
+    background: rgba(5, 10, 14, 0.6);
+}
+
+.call-incoming-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: min(360px, 90vw);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.32);
+    text-align: center;
+}
+
+.call-incoming-name {
+    font-weight: 800;
+    font-size: 1.05rem;
+}
+
+.call-incoming-type {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.call-incoming-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.call-incoming-btn {
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    padding: 8px 18px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.call-incoming-btn.accept {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #001016;
+}
+
+.call-incoming-btn.decline {
+    border-color: rgba(255, 82, 82, 0.6);
+    color: #ffb1b1;
+    background: rgba(255, 82, 82, 0.18);
 }
 
 .message-header-actions .dm-call-btn {
