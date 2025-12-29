@@ -5,6 +5,7 @@ import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, quer
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
+import { Room, RoomEvent, createLocalAudioTrack, createLocalVideoTrack } from "https://cdn.jsdelivr.net/npm/livekit-client@2.5.1/dist/livekit-client.esm.min.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -39,6 +40,8 @@ const storage = getStorage(app);
 const functions = getFunctions(app);
 const messaging = getMessaging(app);
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
+const LIVEKIT_URL = window.NEXERA_LIVEKIT_URL || '';
+const LIVEKIT_ENABLED = !!LIVEKIT_URL;
 
 // --- Global State & Cache ---
 let currentUser = null;
@@ -835,8 +838,10 @@ let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 let activeCallSession = null;
 let callDocUnsubscribe = null;
-let callInviteUnsubscribe = null;
 let callUiInitialized = false;
+let livekitRoom = null;
+let livekitLocalAudioTrack = null;
+let livekitLocalVideoTrack = null;
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -1688,8 +1693,9 @@ function initApp(onReady) {
                 setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
                 initConversations(storedInboxMode === 'messages');
-                initCallUi();
-                initCallInviteListener();
+                if (LIVEKIT_ENABLED) {
+                    initCallUi();
+                }
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
                     syncStoredPushToken(user.uid);
@@ -8054,6 +8060,7 @@ function formatMessagePreview(payload = {}) {
     if (payload.type === 'image') return '[image]';
     if (payload.type === 'video') return '[video]';
     if (payload.type === 'post_ref') return '[post]';
+    if (payload.type === 'call_invite') return '[call invite]';
     const text = (payload.text || '').trim();
     if (!text) return '[message]';
     return text.length > 80 ? text.substring(0, 77) + '…' : text;
@@ -9161,9 +9168,13 @@ function renderMessageHeader(convo = {}) {
         ? `class="message-thread-profile-btn" type="button" onclick="window.openUserProfile('${targetProfileId}', event)"`
         : 'class="message-thread-profile-btn" type="button" disabled';
 
-    const canCall = !!cid && participants.length > 0 && !!currentUser?.uid;
-    const callDisabledAttr = canCall ? '' : ' disabled aria-disabled="true"';
     const optionsDisabledAttr = cid ? '' : ' disabled aria-disabled="true"';
+    const canCall = LIVEKIT_ENABLED && !!cid && participants.length > 0 && !!currentUser?.uid;
+    const callDisabledAttr = canCall ? '' : ' disabled aria-disabled="true"';
+    const callButtons = LIVEKIT_ENABLED
+        ? `<button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}><i class="ph ph-phone"></i></button>
+           <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}><i class="ph ph-video-camera"></i></button>`
+        : '';
 
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
@@ -9174,8 +9185,7 @@ function renderMessageHeader(convo = {}) {
             </div>
         </button>
         <div class="message-header-actions">
-            <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}><i class="ph ph-phone"></i></button>
-            <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}><i class="ph ph-video-camera"></i></button>
+            ${callButtons}
             <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"${optionsDisabledAttr}><i class="ph ph-dots-three-outline"></i></button>
         </div>
     </div>`;
@@ -9184,12 +9194,14 @@ function renderMessageHeader(convo = {}) {
 function getCallOverlayElements() {
     return {
         overlay: document.getElementById('call-overlay'),
-        avatar: document.getElementById('call-overlay-avatar'),
         name: document.getElementById('call-overlay-name'),
         status: document.getElementById('call-overlay-status'),
-        acceptBtn: document.getElementById('call-accept-btn'),
-        declineBtn: document.getElementById('call-decline-btn'),
-        endBtn: document.getElementById('call-end-btn')
+        localVideo: document.getElementById('call-local-video'),
+        remoteGrid: document.getElementById('call-remote-grid'),
+        toggleMic: document.getElementById('call-toggle-mic'),
+        toggleCamera: document.getElementById('call-toggle-camera'),
+        hangup: document.getElementById('call-hangup'),
+        close: document.getElementById('call-overlay-close')
     };
 }
 
@@ -9200,78 +9212,30 @@ function setCallOverlayVisible(visible) {
     overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
-function buildCallOverlayMeta(convo = {}) {
-    const participants = convo.participants || [];
-    const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
-    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
-    const cid = convo.id || activeConversationId;
-    const primaryOtherId = participants.length === 2 ? participants.find(function (uid) { return uid !== currentUser?.uid; }) : null;
-    const fallbackAvatar = meta.avatars?.[0] || '';
-    let avatarUser = {
-        uid: cid || primaryOtherId || 'conversation',
-        username: label,
-        displayName: label,
-        photoURL: getConversationAvatarUrl(convo, fallbackAvatar),
-        avatarColor: convo.avatarColor || computeAvatarColor(label)
-    };
-
-    if (primaryOtherId && !getConversationAvatarUrl(convo)) {
-        const otherMeta = resolveParticipantDisplay(convo, primaryOtherId);
-        avatarUser = {
-            ...otherMeta.profile,
-            uid: primaryOtherId,
-            username: otherMeta.username || label,
-            displayName: otherMeta.displayName || label,
-            photoURL: normalizeImageUrl(otherMeta.avatar),
-            avatarColor: otherMeta.avatarColor
-        };
-    }
-
-    return { label, avatarUser };
-}
-
-function formatCallStatusLabel(session) {
-    const kindLabel = session.kind === 'video' ? 'video' : 'audio';
-    if (session.status === 'ringing') {
-        return session.direction === 'incoming'
-            ? `Incoming ${kindLabel} call...`
-            : `Calling (${kindLabel})...`;
-    }
-    if (session.status === 'active') {
-        return `${kindLabel.charAt(0).toUpperCase() + kindLabel.slice(1)} call active`;
-    }
-    return 'Call ended';
-}
-
-async function renderCallOverlay(session) {
+function resetCallOverlayMedia() {
     const elements = getCallOverlayElements();
-    if (!elements.overlay) return;
-    const convo = conversationDetailsCache[session.conversationId]
-        || (await fetchConversation(session.conversationId).catch(function () { return { id: session.conversationId }; }));
-    const meta = buildCallOverlayMeta(convo || {});
-    elements.name.textContent = meta.label;
-    elements.avatar.innerHTML = renderAvatar(meta.avatarUser, { size: 64 });
-    elements.status.textContent = formatCallStatusLabel(session);
-
-    const showAccept = session.direction === 'incoming' && session.status === 'ringing';
-    const showDecline = session.direction === 'incoming' && session.status === 'ringing';
-    const showEnd = session.status === 'active' || session.direction === 'outgoing';
-    if (elements.acceptBtn) elements.acceptBtn.style.display = showAccept ? 'inline-flex' : 'none';
-    if (elements.declineBtn) elements.declineBtn.style.display = showDecline ? 'inline-flex' : 'none';
-    if (elements.endBtn) {
-        elements.endBtn.style.display = showEnd ? 'inline-flex' : 'none';
-        elements.endBtn.textContent = session.status === 'ringing' && session.direction === 'outgoing' ? 'Cancel' : 'End';
+    if (elements.localVideo) {
+        elements.localVideo.srcObject = null;
+        elements.localVideo.style.display = 'block';
     }
+    if (elements.remoteGrid) {
+        elements.remoteGrid.innerHTML = '';
+    }
+}
 
+function updateCallOverlayMeta(convo = {}, statusText = 'Connecting...') {
+    const elements = getCallOverlayElements();
+    if (!elements.name || !elements.status) return;
+    const label = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    elements.name.textContent = label;
+    elements.status.textContent = statusText;
+}
+
+async function renderCallOverlayStatus(conversationId, statusText) {
+    const convo = conversationDetailsCache[conversationId]
+        || (await fetchConversation(conversationId).catch(function () { return { id: conversationId }; }));
+    updateCallOverlayMeta(convo || {}, statusText);
     setCallOverlayVisible(true);
-}
-
-function clearCallOverlay() {
-    setCallOverlayVisible(false);
-}
-
-function setActiveCallSession(session) {
-    activeCallSession = session ? { ...session } : null;
 }
 
 function stopCallDocListener() {
@@ -9281,121 +9245,290 @@ function stopCallDocListener() {
     }
 }
 
-function concludeCallSession() {
+function clearCallSession() {
     stopCallDocListener();
-    setActiveCallSession(null);
-    clearCallOverlay();
+    activeCallSession = null;
+    resetCallOverlayMedia();
+    setCallOverlayVisible(false);
 }
 
-function listenToCallDoc(conversationId, callId) {
-    stopCallDocListener();
-    const callRef = doc(db, 'conversations', conversationId, 'calls', callId);
-    callDocUnsubscribe = ListenerRegistry.register(`calls:doc:${conversationId}:${callId}`, onSnapshot(callRef, function (snap) {
-        if (!snap.exists()) {
-            concludeCallSession();
-            return;
+function attachRemoteTrack(track, participant) {
+    const elements = getCallOverlayElements();
+    if (!elements.remoteGrid) return;
+    const tileId = `remote-${participant.sid}-${track.sid}`;
+    if (elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`)) return;
+    const tile = document.createElement('div');
+    tile.className = 'call-remote-tile';
+    tile.dataset.trackId = tileId;
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    const label = document.createElement('div');
+    label.className = 'call-remote-name';
+    label.textContent = participant.name || participant.identity || 'Participant';
+    tile.appendChild(video);
+    tile.appendChild(label);
+    elements.remoteGrid.appendChild(tile);
+    track.attach(video);
+}
+
+function detachRemoteTrack(track, participant) {
+    const elements = getCallOverlayElements();
+    if (!elements.remoteGrid) return;
+    const tileId = `remote-${participant.sid}-${track.sid}`;
+    const tile = elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`);
+    if (tile) tile.remove();
+}
+
+async function connectToLiveKitRoom(callSession) {
+    if (!LIVEKIT_ENABLED) {
+        toast('LiveKit is not configured for this environment.', 'info');
+        return;
+    }
+    if (!callSession) return;
+    if (livekitRoom) {
+        await leaveLiveKitRoom({ updateStatus: false });
+    }
+
+    const elements = getCallOverlayElements();
+    const room = new Room();
+    livekitRoom = room;
+    if (elements.toggleMic) {
+        elements.toggleMic.disabled = false;
+        elements.toggleMic.textContent = 'Mute';
+    }
+    if (elements.toggleCamera) {
+        elements.toggleCamera.disabled = callSession.type !== 'video';
+        elements.toggleCamera.textContent = callSession.type === 'video' ? 'Camera off' : 'Camera off';
+    }
+
+    room.on(RoomEvent.TrackSubscribed, function (track, publication, participant) {
+        if (track.kind === 'video') {
+            attachRemoteTrack(track, participant);
+        } else if (track.kind === 'audio') {
+            const audioEl = track.attach();
+            audioEl.style.display = 'none';
+            document.body.appendChild(audioEl);
         }
-        const data = snap.data() || {};
-        if (!activeCallSession || activeCallSession.callId !== callId) return;
-        activeCallSession = {
-            ...activeCallSession,
-            kind: data.kind || activeCallSession.kind,
-            status: data.status || activeCallSession.status
-        };
-        if (activeCallSession.status === 'ended') {
-            concludeCallSession();
-            return;
-        }
-        renderCallOverlay(activeCallSession);
-    }, function (err) {
-        handleSnapshotError('Call session', err);
-    }));
-}
-
-async function updateCallMemberState(conversationId, callId, state) {
-    if (!conversationId || !callId || !currentUser?.uid) return;
-    const memberRef = doc(db, 'conversations', conversationId, 'calls', callId, 'members', currentUser.uid);
-    await setDoc(memberRef, { state, updatedAt: serverTimestamp() }, { merge: true });
-}
-
-async function endCallIfAllDeclined(conversationId, callId) {
-    const membersSnap = await getDocs(collection(db, 'conversations', conversationId, 'calls', callId, 'members'));
-    if (!membersSnap.size) return;
-    const allDeclined = membersSnap.docs.every(function (docSnap) {
-        const state = docSnap.data().state;
-        return state === 'declined' || state === 'left';
     });
-    if (allDeclined) {
-        await updateDoc(doc(db, 'conversations', conversationId, 'calls', callId), {
+    room.on(RoomEvent.TrackUnsubscribed, function (track, publication, participant) {
+        if (track.kind === 'video') {
+            detachRemoteTrack(track, participant);
+        }
+        track.detach().forEach(function (el) { el.remove(); });
+    });
+    room.on(RoomEvent.Disconnected, function () {
+        leaveLiveKitRoom({ updateStatus: false });
+    });
+
+    const tokenFn = httpsCallable(functions, 'livekitCreateToken');
+    const response = await tokenFn({
+        conversationId: callSession.conversationId,
+        roomName: callSession.roomName
+    });
+    const tokenPayload = response?.data || {};
+    if (!tokenPayload?.token || !tokenPayload?.url) {
+        throw new Error('LiveKit token unavailable.');
+    }
+    await room.connect(tokenPayload.url, tokenPayload.token);
+
+    livekitLocalAudioTrack = await createLocalAudioTrack();
+    await room.localParticipant.publishTrack(livekitLocalAudioTrack);
+
+    if (callSession.type === 'video') {
+        livekitLocalVideoTrack = await createLocalVideoTrack();
+        await room.localParticipant.publishTrack(livekitLocalVideoTrack);
+        if (elements.localVideo) {
+            elements.localVideo.style.display = 'block';
+            livekitLocalVideoTrack.attach(elements.localVideo);
+        }
+    } else if (elements.localVideo) {
+        elements.localVideo.style.display = 'none';
+    }
+
+    await updateDoc(doc(db, 'calls', callSession.callId), {
+        status: 'active',
+        startedAt: serverTimestamp()
+    });
+    await renderCallOverlayStatus(callSession.conversationId, 'Live');
+}
+
+async function leaveLiveKitRoom({ updateStatus = true } = {}) {
+    const elements = getCallOverlayElements();
+    if (elements.toggleMic) elements.toggleMic.disabled = true;
+    if (elements.toggleCamera) elements.toggleCamera.disabled = true;
+    if (livekitLocalAudioTrack) {
+        livekitLocalAudioTrack.stop();
+        livekitLocalAudioTrack = null;
+    }
+    if (livekitLocalVideoTrack) {
+        livekitLocalVideoTrack.stop();
+        livekitLocalVideoTrack = null;
+    }
+    if (livekitRoom) {
+        livekitRoom.disconnect();
+        livekitRoom = null;
+    }
+    if (updateStatus && activeCallSession?.callId) {
+        await updateDoc(doc(db, 'calls', activeCallSession.callId), {
             status: 'ended',
-            updatedAt: serverTimestamp()
+            endedAt: serverTimestamp()
+        }).catch(function (err) {
+            console.warn('Unable to update call status', err?.message || err);
         });
     }
-}
-
-async function startIncomingCallSession(callData) {
-    setActiveCallSession({ ...callData, direction: 'incoming' });
-    await renderCallOverlay(activeCallSession);
-    listenToCallDoc(callData.conversationId, callData.callId);
+    clearCallSession();
 }
 
 async function initCallUi() {
     if (callUiInitialized) return;
     callUiInitialized = true;
     const elements = getCallOverlayElements();
-    if (elements.acceptBtn) {
-        elements.acceptBtn.onclick = async function () {
-            if (!activeCallSession) return;
-            try {
-                const joinCall = httpsCallable(functions, 'joinCallSession');
-                const response = await joinCall({
-                    conversationId: activeCallSession.conversationId,
-                    callId: activeCallSession.callId
-                });
-                // SFU integration point: joinUrl/token will be consumed here later.
-                activeCallSession = {
-                    ...activeCallSession,
-                    status: 'active',
-                    providerInfo: response?.data || null
-                };
-                await updateCallMemberState(activeCallSession.conversationId, activeCallSession.callId, 'joined');
-                await renderCallOverlay(activeCallSession);
-            } catch (e) {
-                toast('Unable to join call', 'error');
-                console.warn('Join call failed', e?.message || e);
-            }
+    if (elements.toggleMic) elements.toggleMic.disabled = true;
+    if (elements.toggleCamera) elements.toggleCamera.disabled = true;
+    if (elements.toggleMic) {
+        elements.toggleMic.onclick = function () {
+            if (!livekitLocalAudioTrack) return;
+            const enabled = livekitLocalAudioTrack.isEnabled;
+            livekitLocalAudioTrack.setEnabled(!enabled);
+            elements.toggleMic.textContent = enabled ? 'Unmute' : 'Mute';
         };
     }
-    if (elements.declineBtn) {
-        elements.declineBtn.onclick = async function () {
-            if (!activeCallSession) return;
-            try {
-                await updateCallMemberState(activeCallSession.conversationId, activeCallSession.callId, 'declined');
-                await endCallIfAllDeclined(activeCallSession.conversationId, activeCallSession.callId);
-                concludeCallSession();
-            } catch (e) {
-                toast('Unable to decline call', 'error');
-                console.warn('Decline call failed', e?.message || e);
-            }
+    if (elements.toggleCamera) {
+        elements.toggleCamera.onclick = function () {
+            if (!livekitLocalVideoTrack) return;
+            const enabled = livekitLocalVideoTrack.isEnabled;
+            livekitLocalVideoTrack.setEnabled(!enabled);
+            elements.toggleCamera.textContent = enabled ? 'Camera on' : 'Camera off';
         };
     }
-    if (elements.endBtn) {
-        elements.endBtn.onclick = async function () {
-            if (!activeCallSession) return;
-            try {
-                await updateCallMemberState(activeCallSession.conversationId, activeCallSession.callId, 'left');
-                await updateDoc(doc(db, 'conversations', activeCallSession.conversationId, 'calls', activeCallSession.callId), {
-                    status: 'ended',
-                    updatedAt: serverTimestamp()
-                });
-                concludeCallSession();
-            } catch (e) {
-                toast('Unable to end call', 'error');
-                console.warn('End call failed', e?.message || e);
-            }
+    if (elements.hangup) {
+        elements.hangup.onclick = function () {
+            leaveLiveKitRoom({ updateStatus: true }).catch(function (err) {
+                console.warn('Hangup failed', err?.message || err);
+            });
+        };
+    }
+    if (elements.close) {
+        elements.close.onclick = function () {
+            leaveLiveKitRoom({ updateStatus: true }).catch(function (err) {
+                console.warn('Close call failed', err?.message || err);
+            });
         };
     }
 }
+
+function listenToCallStatus(callId, conversationId) {
+    stopCallDocListener();
+    const callRef = doc(db, 'calls', callId);
+    callDocUnsubscribe = ListenerRegistry.register(`call:${callId}`, onSnapshot(callRef, function (snap) {
+        if (!snap.exists()) {
+            leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
+            return;
+        }
+        const data = snap.data() || {};
+        if (data.status === 'ended' || data.status === 'missed') {
+            leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
+            return;
+        }
+        renderCallOverlayStatus(conversationId, data.status === 'active' ? 'Live' : 'Ringing');
+    }, function (err) {
+        handleSnapshotError('Call status', err);
+    }));
+}
+
+async function startDmCall(type) {
+    if (!LIVEKIT_ENABLED) return;
+    if (!activeConversationId || !requireAuth()) return;
+    if (!['audio', 'video'].includes(type)) return;
+    if (activeCallSession) {
+        toast('You already have a call in progress.', 'info');
+        return;
+    }
+    const conversationId = activeConversationId;
+    const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
+    const participants = convo?.participants || [];
+    if (!participants.length) return;
+    const callRef = doc(collection(db, 'calls'));
+    const callId = callRef.id;
+    const roomName = `dm_${conversationId}`;
+    const callPayload = {
+        conversationId,
+        roomName,
+        createdBy: currentUser.uid,
+        participants,
+        status: 'ringing',
+        type,
+        createdAt: serverTimestamp(),
+        startedAt: null,
+        endedAt: null
+    };
+    const messageRef = doc(collection(db, 'conversations', conversationId, 'messages'));
+    const messagePayload = {
+        type: 'call_invite',
+        callId,
+        callType: type,
+        createdAt: serverTimestamp(),
+        senderId: currentUser.uid
+    };
+    const batch = writeBatch(db);
+    batch.set(callRef, callPayload);
+    batch.set(messageRef, messagePayload);
+    await batch.commit();
+
+    activeCallSession = { callId, conversationId, roomName, type };
+    await renderCallOverlayStatus(conversationId, 'Calling...');
+    listenToCallStatus(callId, conversationId);
+    try {
+        await connectToLiveKitRoom(activeCallSession);
+    } catch (error) {
+        await updateDoc(callRef, { status: 'missed', endedAt: serverTimestamp() }).catch(function () {});
+        clearCallSession();
+        toast('Unable to start call.', 'error');
+        console.warn('Call connect failed', error?.message || error);
+    }
+}
+
+async function joinCallInvite(conversationId, callId) {
+    if (!LIVEKIT_ENABLED) return;
+    if (!conversationId || !callId || !requireAuth()) return;
+    if (activeCallSession && activeCallSession.callId !== callId) {
+        toast('You already have a call in progress.', 'info');
+        return;
+    }
+    const callSnap = await getDoc(doc(db, 'calls', callId));
+    if (!callSnap.exists()) {
+        toast('Call is no longer available.', 'info');
+        return;
+    }
+    const callData = callSnap.data() || {};
+    if (callData.status === 'ended' || callData.status === 'missed') {
+        toast('Call has ended.', 'info');
+        return;
+    }
+    if (callData.conversationId && callData.conversationId !== conversationId) {
+        toast('Call does not match this conversation.', 'info');
+        return;
+    }
+    activeCallSession = {
+        callId,
+        conversationId,
+        roomName: callData.roomName || `dm_${conversationId}`,
+        type: callData.type || 'audio'
+    };
+    await renderCallOverlayStatus(conversationId, 'Connecting...');
+    listenToCallStatus(callId, conversationId);
+    try {
+        await connectToLiveKitRoom(activeCallSession);
+    } catch (error) {
+        toast('Unable to join call.', 'error');
+        console.warn('Join call failed', error?.message || error);
+        clearCallSession();
+    }
+}
+
+window.startDmCall = startDmCall;
+window.joinCallInvite = joinCallInvite;
 
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
@@ -9484,6 +9617,17 @@ function renderMessages(msgs = [], convo = {}) {
         if (msg.type === 'post_ref') {
             const refBtn = msg.postId ? `<button class="icon-pill" style="margin-top:6px;" onclick="window.openThread('${msg.postId}')"><i class="ph ph-arrow-square-out"></i> View post</button>` : '';
             content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${textMarkup}</div>${refBtn}</div>`;
+        }
+        if (msg.type === 'call_invite') {
+            const callType = msg.callType === 'video' ? 'video' : 'audio';
+            const joinBtn = (LIVEKIT_ENABLED && msg.callId)
+                ? `<button class="call-join-btn" onclick="window.joinCallInvite('${convo.id || activeConversationId}', '${msg.callId}')">Join call</button>`
+                : '';
+            content = `<div class="message-call-invite">
+                <div class="call-invite-title">${escapeHtml(callType.charAt(0).toUpperCase() + callType.slice(1))} call invite</div>
+                <div style="color:var(--text-muted); font-size:0.85rem;">Tap to join when ready.</div>
+                <div class="call-invite-actions">${joinBtn}</div>
+            </div>`;
         }
 
         const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];

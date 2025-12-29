@@ -8,11 +8,13 @@
  */
 
 const {setGlobalOptions} = require("firebase-functions");
+const {defineSecret} = require("firebase-functions/params");
 const {onCall: onCallV2, HttpsError} = require("firebase-functions/v2/https");
 const {onCall, onRequest} = require("firebase-functions/https");
 const {onDocumentCreated, onDocumentDeleted, onDocumentUpdated} = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
+const {AccessToken} = require("livekit-server-sdk");
 
 // For cost control, you can set the maximum number of containers that can be
 // running at the same time. This helps mitigate the impact of unexpected
@@ -47,6 +49,9 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 const {FieldValue} = admin.firestore;
+const LIVEKIT_API_KEY = defineSecret("LIVEKIT_API_KEY");
+const LIVEKIT_API_SECRET = defineSecret("LIVEKIT_API_SECRET");
+const LIVEKIT_URL = defineSecret("LIVEKIT_URL");
 
 async function resolveActorProfile(actorId) {
   if (!actorId) return {actorName: "Someone", actorPhotoUrl: ""};
@@ -481,18 +486,24 @@ exports.notifyMention = onCallV2(async (request) => {
   return {ok: true};
 });
 
-exports.createCallSession = onCallV2(async (request) => {
+exports.livekitCreateToken = onCallV2({secrets: [LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL]}, async (request) => {
   const auth = request.auth;
   if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
   const conversationId = (data.conversationId || "").toString();
-  const kind = (data.kind || "").toString();
-  if (!conversationId || !["audio", "video"].includes(kind)) {
-    throw new HttpsError("invalid-argument", "conversationId and kind are required.");
+  const roomName = (data.roomName || "").toString();
+  if (!conversationId || !roomName) {
+    throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
   }
 
-  const convoRef = db.collection("conversations").doc(conversationId);
-  const convoSnap = await convoRef.get();
+  const apiKey = LIVEKIT_API_KEY.value();
+  const apiSecret = LIVEKIT_API_SECRET.value();
+  const livekitUrl = LIVEKIT_URL.value();
+  if (!apiKey || !apiSecret || !livekitUrl) {
+    throw new HttpsError("failed-precondition", "LiveKit is not configured.");
+  }
+
+  const convoSnap = await db.collection("conversations").doc(conversationId).get();
   if (!convoSnap.exists) throw new HttpsError("not-found", "Conversation not found.");
   const convoData = convoSnap.data() || {};
   const participants = Array.isArray(convoData.participants) ? convoData.participants : [];
@@ -500,77 +511,21 @@ exports.createCallSession = onCallV2(async (request) => {
     throw new HttpsError("permission-denied", "Not a participant in this conversation.");
   }
 
-  const callRef = convoRef.collection("calls").doc();
-  const callId = callRef.id;
-  const payload = {
-    kind,
-    status: "ringing",
-    createdBy: auth.uid,
-    participants,
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  };
+  let displayName = auth.token?.name || auth.token?.displayName || "";
+  if (!displayName) {
+    const userSnap = await db.collection("users").doc(auth.uid).get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+    displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
+  }
 
-  const batch = db.batch();
-  batch.set(callRef, payload);
-  participants.forEach((uid) => {
-    batch.set(callRef.collection("members").doc(uid), {
-      state: "invited",
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+  const token = new AccessToken(apiKey, apiSecret, {
+    identity: auth.uid,
+    name: displayName,
   });
-  await batch.commit();
+  token.addGrant({roomJoin: true, room: roomName});
 
-  // Placeholder provider info for a self-hosted SFU (token + URL will be added later).
   return {
-    callId,
-    provider: "selfhosted_sfu",
-    roomName: `dm_${conversationId}_${callId}`,
-    joinUrl: null,
-    token: null,
-  };
-});
-
-exports.joinCallSession = onCallV2(async (request) => {
-  const auth = request.auth;
-  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const conversationId = (data.conversationId || "").toString();
-  const callId = (data.callId || "").toString();
-  if (!conversationId || !callId) {
-    throw new HttpsError("invalid-argument", "conversationId and callId are required.");
-  }
-
-  const convoRef = db.collection("conversations").doc(conversationId);
-  const callRef = convoRef.collection("calls").doc(callId);
-  const [convoSnap, callSnap] = await Promise.all([convoRef.get(), callRef.get()]);
-  if (!convoSnap.exists) throw new HttpsError("not-found", "Conversation not found.");
-  if (!callSnap.exists) throw new HttpsError("not-found", "Call not found.");
-
-  const convoData = convoSnap.data() || {};
-  const participants = Array.isArray(convoData.participants) ? convoData.participants : [];
-  if (!participants.includes(auth.uid)) {
-    throw new HttpsError("permission-denied", "Not a participant in this conversation.");
-  }
-  const callData = callSnap.data() || {};
-  if (callData.status === "ended") {
-    throw new HttpsError("failed-precondition", "Call has ended.");
-  }
-
-  const batch = db.batch();
-  batch.set(callRef.collection("members").doc(auth.uid), {
-    state: "joined",
-    updatedAt: FieldValue.serverTimestamp(),
-  }, {merge: true});
-  batch.update(callRef, {status: "active", updatedAt: FieldValue.serverTimestamp()});
-  await batch.commit();
-
-  // Placeholder provider info for a self-hosted SFU (token + URL will be added later).
-  return {
-    callId,
-    provider: "selfhosted_sfu",
-    roomName: `dm_${conversationId}_${callId}`,
-    joinUrl: null,
-    token: null,
+    token: token.toJwt(),
+    url: livekitUrl,
   };
 });
