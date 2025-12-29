@@ -487,7 +487,7 @@ exports.notifyMention = onCallV2(async (request) => {
 });
 
 exports.createLiveKitToken = onCallV2(
-  {secrets: [LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET]},
+  {secrets: ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"], cors: true},
   async (request) => {
     const auth = request.auth;
     if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
