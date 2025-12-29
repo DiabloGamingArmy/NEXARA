@@ -9431,6 +9431,7 @@ async function connectToLiveKitRoom(callSession) {
     const tokenFn = httpsCallable(getFunctions(app, 'us-central1'), 'livekitCreateToken');
     const response = await tokenFn({
         roomName: callSession.roomName,
+        conversationId: callSession.conversationId,
         identity: currentUser?.uid || '',
         metadata: JSON.stringify({
             conversationId: callSession.conversationId,

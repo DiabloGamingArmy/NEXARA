@@ -488,7 +488,7 @@ exports.notifyMention = onCallV2(async (request) => {
 
 // DEV NOTE: Gen2 functions require the underlying Cloud Run service to be publicly invokable
 // (allUsers roles/run.invoker) or the browser will fail with CORS before reaching the function.
-exports.createLiveKitToken = onCallV2(
+exports.livekitCreateToken = onCallV2(
   {
     secrets: ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"],
     cors: [
@@ -499,9 +499,17 @@ exports.createLiveKitToken = onCallV2(
   async (request) => {
     const auth = request.auth;
     if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-    const roomName = String(request.data?.roomName || "").trim();
-    if (!roomName) {
-      throw new HttpsError("invalid-argument", "roomName required.");
+    const data = request.data || {};
+    const roomName = String(data?.roomName || "").trim();
+    let conversationId = String(data?.conversationId || "").trim();
+    if (!conversationId && data?.metadata) {
+      try {
+        const parsed = JSON.parse(data.metadata);
+        conversationId = String(parsed?.conversationId || "").trim();
+      } catch (error) {}
+    }
+    if (!roomName || !conversationId) {
+      throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
     }
 
     const apiKey = LIVEKIT_API_KEY.value();
@@ -525,8 +533,10 @@ exports.createLiveKitToken = onCallV2(
     token.addGrant({room: roomName, roomJoin: true, canPublish: true, canSubscribe: true});
 
     return {
-      token: await token.toJwt(),
       url: livekitUrl,
+      token: await token.toJwt(),
+      roomName,
+      conversationId,
     };
   },
 );
