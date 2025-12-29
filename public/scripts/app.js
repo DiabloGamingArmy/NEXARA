@@ -609,7 +609,7 @@ function normalizeUsername(value = '') {
 }
 
 function resolveDisplayName(userLike = {}) {
-    return userLike.name || userLike.displayName || userLike.fullName || userLike.nickname || '';
+    return userLike.displayName || userLike.name || userLike.fullName || userLike.nickname || '';
 }
 
 function resolveAvatarInitial(userLike = {}) {
@@ -1118,6 +1118,9 @@ async function syncPublicProfile(uid, profile = {}, options = {}) {
         // Public profiles are written only for the signed-in user on first login/sign-up
         // or explicit settings saves to avoid permission-denied writes per Firestore rules.
         if (viewerUid && uid !== viewerUid) return { ok: false, permissionDenied: false };
+        if (auth.currentUser) {
+            await auth.currentUser.getIdToken();
+        }
         return await guardFirebaseCall('profiles:write', function () {
             return setDoc(doc(db, 'profiles', uid), buildPublicProfilePayload(uid, profile), { merge: true });
         }, { onPermissionDenied: options.onPermissionDenied });

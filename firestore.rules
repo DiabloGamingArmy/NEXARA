@@ -169,6 +169,12 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
+    // App-wide UI config (banner, etc.)
+    match /app_config/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // -------------------------
     // Categories
     // -------------------------
