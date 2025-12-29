@@ -9631,9 +9631,16 @@ function listenToCallStatus(callId, conversationId) {
     }));
 }
 
-// Returns all call docs for a conversation (single-field query to avoid composite index needs)
+// Returns recent call docs for a conversation, limited to calls the current user can read.
 async function getCallsForConversation(conversationId) {
-    const q = query(collection(db, 'calls'), where('conversationId', '==', conversationId));
+    if (!conversationId || !currentUser?.uid) return [];
+    const q = query(
+        collection(db, 'calls'),
+        where('conversationId', '==', conversationId),
+        where('participants', 'array-contains', currentUser.uid),
+        orderBy('createdAt', 'desc'),
+        limit(10)
+    );
     const snap = await getDocs(q);
     return snap.docs.map(function (docSnap) {
         return { id: docSnap.id, ...docSnap.data() };
@@ -10870,6 +10877,9 @@ async function openConversation(conversationId) {
     setTypingState(conversationId, false);
     await listenToMessages(conversationId);
     refreshInboxLayout();
+    window.activeConversationId = activeConversationId;
+    window.__nexeraDebug = window.__nexeraDebug || {};
+    window.__nexeraDebug.getActiveConversationId = () => activeConversationId;
 }
 
 async function startDmCall(kind) {
@@ -10904,7 +10914,13 @@ async function startDmCall(kind) {
             return call.status === 'ringing';
         });
         if (existingRinging) {
-            return;
+            const ts = existingRinging.createdAt;
+            const createdMs = ts?.toMillis ? ts.toMillis() : ts?.seconds ? ts.seconds * 1000 : 0;
+            if (createdMs && Date.now() - createdMs > 90 * 1000) {
+                await endCallDoc(existingRinging.id);
+            } else {
+                return;
+            }
         }
         if (activeCallSession) {
             if (activeCallSession.conversationId === conversationId) return;
