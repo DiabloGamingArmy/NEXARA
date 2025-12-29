@@ -9543,7 +9543,7 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         livekitRoom = null;
     }
     if (updateStatus && activeCallSession?.callId) {
-        const nextStatus = activeCallSession?.status === 'ringing' ? 'missed' : 'ended';
+        const nextStatus = 'ended';
         await updateDoc(doc(db, 'calls', activeCallSession.callId), {
             status: nextStatus,
             endedAt: serverTimestamp()
@@ -9726,7 +9726,8 @@ function startListeningForIncomingCalls() {
         }
 
         const incoming = ringingCalls.find(function (call) {
-            return call.createdBy && call.createdBy !== currentUser.uid;
+            const callerId = call.initiatorId || call.createdBy;
+            return callerId && callerId !== currentUser.uid;
         });
 
         if (!incoming) {
@@ -9742,7 +9743,7 @@ function startListeningForIncomingCalls() {
         if (incomingPromptCallId === incoming.id) return;
         incomingPromptCallId = incoming.id;
 
-        resolveUserProfile(incoming.createdBy).then(function (profile) {
+        resolveUserProfile(incoming.initiatorId || incoming.createdBy).then(function (profile) {
             renderIncomingCallPrompt(incoming, profile || {});
         }).catch(function () {
             renderIncomingCallPrompt(incoming, {});
@@ -9758,7 +9759,7 @@ function startListeningForIncomingCalls() {
         if (elements.incomingDecline) {
             elements.incomingDecline.onclick = async function () {
                 await updateDoc(doc(db, 'calls', incoming.id), {
-                    status: 'missed',
+                    status: 'ended',
                     endedAt: serverTimestamp()
                 });
                 hideIncomingCallPrompt();
@@ -10851,8 +10852,8 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
-    const lk = await ensureLiveKitLoaded();
-    if (!lk) {
+    const livekitModule = await ensureLiveKitLoaded();
+    if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');
         return;
     }
@@ -10861,8 +10862,9 @@ async function startDmCall(kind) {
         const callType = kind === 'video' ? 'video' : 'audio';
         const calls = await getCallsForConversation(conversationId);
         const incoming = calls.find(function (call) {
+            const callerId = call.initiatorId || call.createdBy;
             return call.status === 'ringing'
-                && call.createdBy !== currentUser.uid
+                && callerId !== currentUser.uid
                 && Array.isArray(call.participants)
                 && call.participants.includes(currentUser.uid)
                 && (!call.type || call.type === callType);
@@ -10875,6 +10877,12 @@ async function startDmCall(kind) {
             await acceptIncomingCall(incoming.id, incoming, conversationId);
             return;
         }
+        const existingRinging = calls.find(function (call) {
+            return call.status === 'ringing';
+        });
+        if (existingRinging) {
+            return;
+        }
         if (activeCallSession) {
             if (activeCallSession.conversationId === conversationId) return;
             toast('You already have a call in progress.', 'info');
@@ -10885,6 +10893,7 @@ async function startDmCall(kind) {
         if (!participants.length) return;
         const callRef = await addDoc(collection(db, 'calls'), {
             createdBy: currentUser.uid,
+            initiatorId: currentUser.uid,
             conversationId,
             type: callType,
             status: 'ringing',
@@ -10914,16 +10923,14 @@ async function handleIncomingCallSnapshot(snap) {
     const invites = [];
     for (const docSnap of snap.docs) {
         const data = docSnap.data() || {};
-        if (data.createdBy === currentUser.uid) continue;
-        const conversationId = docSnap.ref.parent.parent?.id;
+        const callerId = data.initiatorId || data.createdBy;
+        if (callerId === currentUser.uid) continue;
+        const conversationId = data.conversationId;
         if (!conversationId) continue;
-        const memberSnap = await getDoc(doc(db, 'conversations', conversationId, 'calls', docSnap.id, 'members', currentUser.uid));
-        if (!memberSnap.exists()) continue;
-        if (memberSnap.data().state !== 'invited') continue;
         invites.push({
             conversationId,
             callId: docSnap.id,
-            kind: data.kind || 'audio',
+            kind: data.type || 'audio',
             status: data.status || 'ringing'
         });
     }
@@ -10953,7 +10960,7 @@ function initCallInviteListener() {
     }
     if (!currentUser) return;
     const callQuery = query(
-        collectionGroup(db, 'calls'),
+        collection(db, 'calls'),
         where('participants', 'array-contains', currentUser.uid),
         where('status', '==', 'ringing')
     );
