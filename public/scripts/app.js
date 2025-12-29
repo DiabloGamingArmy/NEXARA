@@ -153,11 +153,13 @@ const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
         ensurePushSettingsUI();
+        initCallUi();
         initMessagingForegroundListener();
         initCallUi();
     });
 } else {
     ensurePushSettingsUI();
+    initCallUi();
     initMessagingForegroundListener();
     initCallUi();
 }
@@ -10849,6 +10851,11 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
+    const lk = await ensureLiveKitLoaded();
+    if (!lk) {
+        toast('LiveKit could not be loaded.', 'error');
+        return;
+    }
     const lk = await ensureLiveKitLoaded();
     if (!lk) {
         toast('LiveKit could not be loaded.', 'error');
