@@ -9572,8 +9572,8 @@ async function initCallUi() {
     let camOn = false;
     let shareOn = false;
 
-    els.closeBtn.onclick = async () => { await leaveLiveKitRoom(true); };
-    els.hangupBtn.onclick = async () => { await leaveLiveKitRoom(true); };
+    els.closeBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
+    els.hangupBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
 
     els.toggleMic.onclick = async () => {
         if (!livekitRoom) return;
@@ -9631,6 +9631,45 @@ function listenToCallStatus(callId, conversationId) {
     }));
 }
 
+// Returns all call docs for a conversation (single-field query to avoid composite index needs)
+async function getCallsForConversation(conversationId) {
+    const q = query(collection(db, 'calls'), where('conversationId', '==', conversationId));
+    const snap = await getDocs(q);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function endCallDoc(callId) {
+    try {
+        await updateDoc(doc(db, 'calls', callId), { status: 'ended', endedAt: serverTimestamp() });
+    } catch (e) {
+        // ignore
+    }
+}
+
+async function acceptIncomingCall(callId, callData, conversationId) {
+    const lk = await ensureLiveKitLoaded();
+    if (!lk) {
+        toast('LiveKit could not be loaded.', 'error');
+        return;
+    }
+    await updateDoc(doc(db, 'calls', callId), {
+        status: 'active',
+        startedAt: serverTimestamp()
+    });
+    hideIncomingCallPrompt();
+    activeCallSession = {
+        callId,
+        conversationId,
+        type: callData.type || 'audio',
+        status: 'active',
+        direction: 'incoming',
+        roomName: `call_${callId}`
+    };
+    await connectToLiveKitRoom(activeCallSession);
+}
+
 function startListeningForIncomingCalls() {
     if (incomingCallUnsubscribe) {
         incomingCallUnsubscribe();
@@ -9645,54 +9684,80 @@ function startListeningForIncomingCalls() {
     );
 
     incomingCallUnsubscribe = ListenerRegistry.register('calls:incoming', onSnapshot(callQuery, function (snap) {
-        if (activeCallSession) {
-            hideIncomingCallPrompt();
-            return;
-        }
-        const incomingDoc = snap.docs.find(function (docSnap) {
-            const data = docSnap.data() || {};
-            return data.createdBy && data.createdBy !== currentUser.uid;
+        const ringingCalls = snap.docs.map(function (docSnap) {
+            return { id: docSnap.id, ...docSnap.data() };
+        }).filter(function (data) {
+            return data.status === 'ringing'
+                && Array.isArray(data.participants)
+                && data.participants.includes(currentUser.uid);
         });
 
-        if (!incomingDoc) {
+        if (!ringingCalls.length) {
             hideIncomingCallPrompt();
             return;
         }
 
-        const data = incomingDoc.data() || {};
-        const callId = incomingDoc.id;
-        if (incomingPromptCallId === callId) return;
-        incomingPromptCallId = callId;
+        const callsByConversation = new Map();
+        ringingCalls.forEach(function (call) {
+            if (!call.conversationId) return;
+            const existing = callsByConversation.get(call.conversationId) || [];
+            existing.push(call);
+            callsByConversation.set(call.conversationId, existing);
+        });
 
-        resolveUserProfile(data.createdBy).then(function (profile) {
-            renderIncomingCallPrompt(data, profile || {});
+        for (const [conversationId, calls] of callsByConversation.entries()) {
+            if (calls.length > 1) {
+                const sorted = calls.slice().sort(function (a, b) { return a.id.localeCompare(b.id); });
+                const canonical = sorted[0];
+                if (activeCallSession?.status === 'ringing'
+                    && activeCallSession?.conversationId === conversationId
+                    && activeCallSession?.callId !== canonical.id) {
+                    endCallDoc(activeCallSession.callId);
+                    clearCallSession();
+                    acceptIncomingCall(canonical.id, canonical, conversationId).catch(function () {});
+                    return;
+                }
+                if (activeCallSession?.callId === canonical.id) {
+                    sorted.slice(1).forEach(function (call) {
+                        endCallDoc(call.id);
+                    });
+                }
+            }
+        }
+
+        const incoming = ringingCalls.find(function (call) {
+            return call.createdBy && call.createdBy !== currentUser.uid;
+        });
+
+        if (!incoming) {
+            hideIncomingCallPrompt();
+            return;
+        }
+
+        if (activeCallSession && activeCallSession.conversationId !== incoming.conversationId) {
+            hideIncomingCallPrompt();
+            return;
+        }
+
+        if (incomingPromptCallId === incoming.id) return;
+        incomingPromptCallId = incoming.id;
+
+        resolveUserProfile(incoming.createdBy).then(function (profile) {
+            renderIncomingCallPrompt(incoming, profile || {});
         }).catch(function () {
-            renderIncomingCallPrompt(data, {});
+            renderIncomingCallPrompt(incoming, {});
         });
 
         const elements = getCallOverlayElements();
         if (elements.incomingAccept) {
             elements.incomingAccept.onclick = async function () {
                 if (activeCallSession) return;
-                await updateDoc(doc(db, 'calls', callId), {
-                    status: 'active',
-                    startedAt: serverTimestamp()
-                });
-                hideIncomingCallPrompt();
-                activeCallSession = {
-                    callId,
-                    conversationId: data.conversationId,
-                    type: data.type || 'audio',
-                    status: 'active',
-                    direction: 'incoming',
-                    roomName: `call_${callId}`
-                };
-                await connectToLiveKitRoom(activeCallSession);
+                await acceptIncomingCall(incoming.id, incoming, incoming.conversationId);
             };
         }
         if (elements.incomingDecline) {
             elements.incomingDecline.onclick = async function () {
-                await updateDoc(doc(db, 'calls', callId), {
+                await updateDoc(doc(db, 'calls', incoming.id), {
                     status: 'missed',
                     endedAt: serverTimestamp()
                 });
@@ -10786,8 +10851,9 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
-    if (activeCallSession) {
-        toast('You already have a call in progress.', 'info');
+    const lk = await ensureLiveKitLoaded();
+    if (!lk) {
+        toast('LiveKit could not be loaded.', 'error');
         return;
     }
     const lk = await ensureLiveKitLoaded();
@@ -10797,21 +10863,44 @@ async function startDmCall(kind) {
     }
     try {
         const conversationId = activeConversationId;
+        const callType = kind === 'video' ? 'video' : 'audio';
+        const calls = await getCallsForConversation(conversationId);
+        const incoming = calls.find(function (call) {
+            return call.status === 'ringing'
+                && call.createdBy !== currentUser.uid
+                && Array.isArray(call.participants)
+                && call.participants.includes(currentUser.uid)
+                && (!call.type || call.type === callType);
+        });
+        if (incoming) {
+            if (activeCallSession?.status === 'ringing' && activeCallSession?.conversationId === conversationId) {
+                await endCallDoc(activeCallSession.callId);
+                clearCallSession();
+            }
+            await acceptIncomingCall(incoming.id, incoming, conversationId);
+            return;
+        }
+        if (activeCallSession) {
+            if (activeCallSession.conversationId === conversationId) return;
+            toast('You already have a call in progress.', 'info');
+            return;
+        }
         const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
         const participants = convo?.participants || [];
         if (!participants.length) return;
         const callRef = await addDoc(collection(db, 'calls'), {
             createdBy: currentUser.uid,
             conversationId,
-            type: kind,
+            type: callType,
             status: 'ringing',
-            participants
+            participants,
+            createdAt: serverTimestamp()
         });
         const callId = callRef.id;
         activeCallSession = {
             callId,
             conversationId,
-            type: kind,
+            type: callType,
             status: 'ringing',
             direction: 'outgoing',
             roomName: `call_${callId}`
