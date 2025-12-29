@@ -486,8 +486,16 @@ exports.notifyMention = onCallV2(async (request) => {
   return {ok: true};
 });
 
+// DEV NOTE: Gen2 functions require the underlying Cloud Run service to be publicly invokable
+// (allUsers roles/run.invoker) or the browser will fail with CORS before reaching the function.
 exports.createLiveKitToken = onCallV2(
-  {secrets: ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"], cors: true},
+  {
+    secrets: ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"],
+    cors: [
+      "https://spike-streaming-service.web.app",
+      "https://spike-streaming-service.firebaseapp.com",
+    ],
+  },
   async (request) => {
     const auth = request.auth;
     if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
