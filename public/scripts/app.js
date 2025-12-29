@@ -41,12 +41,62 @@ const functions = getFunctions(app);
 const messaging = getMessaging(app);
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 const LIVEKIT_URL = window.NEXERA_LIVEKIT_URL || '';
-const LIVEKIT_ENABLED = !!LIVEKIT_URL && !!window.LivekitClient;
-const LivekitClient = window.LivekitClient;
-const LivekitRoom = LivekitClient?.Room;
-const LivekitRoomEvent = LivekitClient?.RoomEvent;
-const createLivekitAudioTrack = LivekitClient?.createLocalAudioTrack;
-const createLivekitVideoTrack = LivekitClient?.createLocalVideoTrack;
+const LIVEKIT_ENABLED = !!LIVEKIT_URL;
+let LivekitRoom = null;
+let LivekitRoomEvent = null;
+let createLocalAudioTrack = null;
+let createLocalVideoTrack = null;
+let createLocalScreenTracks = null;
+
+const LIVEKIT_CLIENT_VERSION = "2.5.1";
+const LIVEKIT_CDN_URLS = [
+  `https://cdn.jsdelivr.net/npm/livekit-client@${LIVEKIT_CLIENT_VERSION}/dist/livekit-client.esm.mjs`,
+  `https://unpkg.com/livekit-client@${LIVEKIT_CLIENT_VERSION}/dist/livekit-client.esm.mjs`,
+];
+
+let _livekitModulePromise = null;
+
+async function ensureLiveKitLoaded() {
+  if (_livekitModulePromise) return _livekitModulePromise;
+
+  _livekitModulePromise = (async () => {
+    let lastErr = null;
+
+    for (const url of LIVEKIT_CDN_URLS) {
+      try {
+        const mod = await import(url);
+        // Keep compatibility with the rest of app.js
+        window.LivekitClient = mod;
+
+        // Refresh the cached references used elsewhere
+        if (window.LivekitClient) {
+          LivekitRoom = window.LivekitClient.Room || null;
+          LivekitRoomEvent = window.LivekitClient.RoomEvent || null;
+          createLocalAudioTrack = window.LivekitClient.createLocalAudioTrack || null;
+          createLocalVideoTrack = window.LivekitClient.createLocalVideoTrack || null;
+          createLocalScreenTracks = window.LivekitClient.createLocalScreenTracks || null;
+        }
+
+        console.log("[LiveKit] livekit-client loaded from:", url);
+        return mod;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+
+    console.error("[LiveKit] Failed to load livekit-client from all CDNs.", lastErr);
+    // IMPORTANT: do not crash the app; return null so call UI can disable gracefully
+    window.LivekitClient = null;
+    LivekitRoom = null;
+    LivekitRoomEvent = null;
+    createLocalAudioTrack = null;
+    createLocalVideoTrack = null;
+    createLocalScreenTracks = null;
+    return null;
+  })();
+
+  return _livekitModulePromise;
+}
 
 // --- Global State & Cache ---
 let currentUser = null;
@@ -9291,12 +9341,17 @@ async function connectToLiveKitRoom(callSession) {
         return;
     }
     if (!callSession) return;
+    const lk = await ensureLiveKitLoaded();
+    if (!lk) {
+        toast('LiveKit could not be loaded.', 'error');
+        return;
+    }
     if (livekitRoom) {
         await leaveLiveKitRoom({ updateStatus: false });
     }
 
     const elements = getCallOverlayElements();
-    if (!LivekitRoom || !createLivekitAudioTrack) {
+    if (!LivekitRoom || !createLocalAudioTrack) {
         throw new Error('LiveKit client unavailable.');
     }
     const room = new LivekitRoom();
@@ -9340,14 +9395,14 @@ async function connectToLiveKitRoom(callSession) {
     }
     await room.connect(tokenPayload.url, tokenPayload.token);
 
-    livekitLocalAudioTrack = await createLivekitAudioTrack();
+    livekitLocalAudioTrack = await createLocalAudioTrack();
     await room.localParticipant.publishTrack(livekitLocalAudioTrack);
 
     if (callSession.type === 'video') {
-        if (!createLivekitVideoTrack) {
+        if (!createLocalVideoTrack) {
             throw new Error('LiveKit video unavailable.');
         }
-        livekitLocalVideoTrack = await createLivekitVideoTrack();
+        livekitLocalVideoTrack = await createLocalVideoTrack();
         await room.localParticipant.publishTrack(livekitLocalVideoTrack);
         if (elements.localVideo) {
             elements.localVideo.style.display = 'block';
@@ -9452,6 +9507,11 @@ async function startLivekitDmCall(type) {
     if (!LIVEKIT_ENABLED) return;
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(type)) return;
+    const lk = await ensureLiveKitLoaded();
+    if (!lk) {
+        toast('LiveKit could not be loaded.', 'error');
+        return;
+    }
     if (activeCallSession) {
         toast('You already have a call in progress.', 'info');
         return;
@@ -9503,6 +9563,11 @@ async function startLivekitDmCall(type) {
 async function joinCallInvite(conversationId, callId) {
     if (!LIVEKIT_ENABLED) return;
     if (!conversationId || !callId || !requireAuth()) return;
+    const lk = await ensureLiveKitLoaded();
+    if (!lk) {
+        toast('LiveKit could not be loaded.', 'error');
+        return;
+    }
     if (activeCallSession && activeCallSession.callId !== callId) {
         toast('You already have a call in progress.', 'info');
         return;
