@@ -147,13 +147,23 @@ service cloud.firestore {
     }
 
     match /users/{userId}/notifications/{notifId} {
-      allow read: if isSignedIn() && request.auth.uid == userId;
-      allow create: if false;
-      allow update: if isSignedIn() && request.auth.uid == userId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'read'])
-        && (request.resource.data.isRead == true || request.resource.data.read == true);
-      allow delete: if false;
-    }
+  allow read: if isSignedIn() && request.auth.uid == userId;
+  allow create: if false;
+
+  // Allow the signed-in owner to mark as read (and set readAt).
+  allow update: if isSignedIn() && request.auth.uid == userId
+    && request.resource.data.diff(resource.data).affectedKeys()
+      .hasOnly(['isRead', 'read', 'readAt'])
+    // must be transitioning to "read" (no un-reading)
+    && (
+      (('isRead' in request.resource.data) && request.resource.data.isRead == true)
+      || (('read' in request.resource.data) && request.resource.data.read == true)
+    )
+    // if readAt is being set, it must be a timestamp (serverTimestamp resolves to a timestamp)
+    && (!('readAt' in request.resource.data) || (request.resource.data.readAt is timestamp));
+
+  allow delete: if false;
+}
 
     match /users/{userId}/pushTokens/{tokenId} {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
