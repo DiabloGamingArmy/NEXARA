@@ -905,7 +905,24 @@
                                 style="display:none;">
                                 <i class="ph ph-arrow-left"></i> Back
                             </button>
-                            <div id="message-header" class="message-thread-header">Select a conversation</div>
+                            <div id="message-header" class="message-thread-header">
+                                <div class="message-header-shell">
+                                    <div class="message-thread-title-row">Select a conversation</div>
+                                    <div class="message-header-actions">
+                                        <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
+                                            onclick="window.startDmCall('audio')" aria-label="Start audio call" disabled>
+                                            <i class="ph ph-phone"></i>
+                                        </button>
+                                        <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
+                                            onclick="window.startDmCall('video')" aria-label="Start video call" disabled>
+                                            <i class="ph ph-video-camera"></i>
+                                        </button>
+                                        <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
+                                            <i class="ph ph-dots-three-outline"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                             <div class="message-header-tools">
                             <input id="conversation-search" class="form-input" placeholder="Search in conversation"
