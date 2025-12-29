@@ -8450,14 +8450,15 @@ function updateInboxNavBadge() {
 }
 
 function updateNavBadge(key, count) {
-    const el = document.querySelector(`[data-badge="${key}"]`);
-    if (!el) return;
+    if (key !== 'inbox') return;
+    const badge = document.querySelector('#nav-inbox-badge');
+    if (!badge) return;
     if (count > 0) {
-        el.textContent = String(count);
-        el.style.display = 'inline-flex';
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.style.display = 'inline-flex';
     } else {
-        el.textContent = '';
-        el.style.display = 'none';
+        badge.textContent = '';
+        badge.style.display = 'none';
     }
 }
 
