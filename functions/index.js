@@ -486,46 +486,57 @@ exports.notifyMention = onCallV2(async (request) => {
   return {ok: true};
 });
 
-exports.livekitCreateToken = onCallV2({secrets: [LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL]}, async (request) => {
-  const auth = request.auth;
-  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const conversationId = (data.conversationId || "").toString();
-  const roomName = (data.roomName || "").toString();
-  if (!conversationId || !roomName) {
-    throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
-  }
+// DEV NOTE: Gen2 functions require the underlying Cloud Run service to be publicly invokable
+// (allUsers roles/run.invoker) or the browser will fail with CORS before reaching the function.
+exports.livekitCreateToken = onCallV2(
+  {
+    secrets: ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"],
+    cors: [
+      "https://spike-streaming-service.web.app",
+      "https://spike-streaming-service.firebaseapp.com",
+    ],
+  },
+  async (request) => {
+    const auth = request.auth;
+    if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+    const data = request.data || {};
+    const roomName = String(data?.roomName || "").trim();
+    let conversationId = String(data?.conversationId || "").trim();
+    if (!conversationId && data?.metadata) {
+      try {
+        const parsed = JSON.parse(data.metadata);
+        conversationId = String(parsed?.conversationId || "").trim();
+      } catch (error) {}
+    }
+    if (!roomName || !conversationId) {
+      throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
+    }
 
-  const apiKey = LIVEKIT_API_KEY.value();
-  const apiSecret = LIVEKIT_API_SECRET.value();
-  const livekitUrl = LIVEKIT_URL.value();
-  if (!apiKey || !apiSecret || !livekitUrl) {
-    throw new HttpsError("failed-precondition", "LiveKit is not configured.");
-  }
+    const apiKey = LIVEKIT_API_KEY.value();
+    const apiSecret = LIVEKIT_API_SECRET.value();
+    const livekitUrl = LIVEKIT_URL.value();
+    if (!apiKey || !apiSecret || !livekitUrl) {
+      throw new HttpsError("failed-precondition", "LiveKit is not configured.");
+    }
 
-  const convoSnap = await db.collection("conversations").doc(conversationId).get();
-  if (!convoSnap.exists) throw new HttpsError("not-found", "Conversation not found.");
-  const convoData = convoSnap.data() || {};
-  const participants = Array.isArray(convoData.participants) ? convoData.participants : [];
-  if (!participants.includes(auth.uid)) {
-    throw new HttpsError("permission-denied", "Not a participant in this conversation.");
-  }
+    let displayName = auth.token?.name || auth.token?.displayName || "";
+    if (!displayName) {
+      const userSnap = await db.collection("users").doc(auth.uid).get();
+      const userData = userSnap.exists ? userSnap.data() : {};
+      displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
+    }
 
-  let displayName = auth.token?.name || auth.token?.displayName || "";
-  if (!displayName) {
-    const userSnap = await db.collection("users").doc(auth.uid).get();
-    const userData = userSnap.exists ? userSnap.data() : {};
-    displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
-  }
+    const token = new AccessToken(apiKey, apiSecret, {
+      identity: auth.uid,
+      name: displayName,
+    });
+    token.addGrant({room: roomName, roomJoin: true, canPublish: true, canSubscribe: true});
 
-  const token = new AccessToken(apiKey, apiSecret, {
-    identity: auth.uid,
-    name: displayName,
-  });
-  token.addGrant({roomJoin: true, room: roomName});
-
-  return {
-    token: token.toJwt(),
-    url: livekitUrl,
-  };
-});
+    return {
+      url: livekitUrl,
+      token: await token.toJwt(),
+      roomName,
+      conversationId,
+    };
+  },
+);
