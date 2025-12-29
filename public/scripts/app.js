@@ -9649,8 +9649,8 @@ async function endCallDoc(callId) {
 }
 
 async function acceptIncomingCall(callId, callData, conversationId) {
-    const lk = await ensureLiveKitLoaded();
-    if (!lk) {
+    const livekitModule = await ensureLiveKitLoaded();
+    if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');
         return;
     }
@@ -10851,11 +10851,6 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
-    const lk = await ensureLiveKitLoaded();
-    if (!lk) {
-        toast('LiveKit could not be loaded.', 'error');
-        return;
-    }
     const lk = await ensureLiveKitLoaded();
     if (!lk) {
         toast('LiveKit could not be loaded.', 'error');
