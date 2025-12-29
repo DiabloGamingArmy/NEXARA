@@ -3697,6 +3697,17 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 8px;
 }
 
+.message-header-actions .dm-call-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+}
+
+.message-header-actions .dm-call-btn i {
+    font-size: 1rem;
+}
+
 .message-avatar-stack {
     display: flex;
     align-items: center;
@@ -3717,6 +3728,96 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .message-header-tools .form-input {
     flex: 1;
+}
+
+#call-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(5, 10, 14, 0.72);
+    z-index: 1200;
+}
+
+#call-overlay.is-visible {
+    display: flex;
+}
+
+#call-card {
+    width: min(360px, 92vw);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    text-align: center;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+#call-card .call-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#call-card .call-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+#call-card .call-name {
+    font-weight: 800;
+    font-size: 1.1rem;
+}
+
+#call-card .call-status {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+#call-card .call-actions {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.call-action-btn {
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    padding: 10px 18px;
+    font-weight: 700;
+    cursor: pointer;
+    min-width: 96px;
+    transition: 0.2s ease;
+}
+
+.call-action-btn.accept {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #001016;
+}
+
+.call-action-btn.decline,
+.call-action-btn.end {
+    border-color: rgba(255, 82, 82, 0.6);
+    color: #ffb1b1;
+}
+
+.call-action-btn.end {
+    background: rgba(255, 82, 82, 0.18);
+}
+
+.call-action-btn:hover {
+    filter: brightness(1.08);
 }
 
 .search-nav {

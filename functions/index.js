@@ -8,7 +8,7 @@
  */
 
 const {setGlobalOptions} = require("firebase-functions");
-const {onCall: onCallV2} = require("firebase-functions/v2/https");
+const {onCall: onCallV2, HttpsError} = require("firebase-functions/v2/https");
 const {onCall, onRequest} = require("firebase-functions/https");
 const {onDocumentCreated, onDocumentDeleted, onDocumentUpdated} = require("firebase-functions/v2/firestore");
 const logger = require("firebase-functions/logger");
@@ -479,4 +479,98 @@ exports.notifyMention = onCallV2(async (request) => {
       }, {merge: false});
 
   return {ok: true};
+});
+
+exports.createCallSession = onCallV2(async (request) => {
+  const auth = request.auth;
+  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const conversationId = (data.conversationId || "").toString();
+  const kind = (data.kind || "").toString();
+  if (!conversationId || !["audio", "video"].includes(kind)) {
+    throw new HttpsError("invalid-argument", "conversationId and kind are required.");
+  }
+
+  const convoRef = db.collection("conversations").doc(conversationId);
+  const convoSnap = await convoRef.get();
+  if (!convoSnap.exists) throw new HttpsError("not-found", "Conversation not found.");
+  const convoData = convoSnap.data() || {};
+  const participants = Array.isArray(convoData.participants) ? convoData.participants : [];
+  if (!participants.includes(auth.uid)) {
+    throw new HttpsError("permission-denied", "Not a participant in this conversation.");
+  }
+
+  const callRef = convoRef.collection("calls").doc();
+  const callId = callRef.id;
+  const payload = {
+    kind,
+    status: "ringing",
+    createdBy: auth.uid,
+    participants,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  const batch = db.batch();
+  batch.set(callRef, payload);
+  participants.forEach((uid) => {
+    batch.set(callRef.collection("members").doc(uid), {
+      state: "invited",
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  });
+  await batch.commit();
+
+  // Placeholder provider info for a self-hosted SFU (token + URL will be added later).
+  return {
+    callId,
+    provider: "selfhosted_sfu",
+    roomName: `dm_${conversationId}_${callId}`,
+    joinUrl: null,
+    token: null,
+  };
+});
+
+exports.joinCallSession = onCallV2(async (request) => {
+  const auth = request.auth;
+  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const conversationId = (data.conversationId || "").toString();
+  const callId = (data.callId || "").toString();
+  if (!conversationId || !callId) {
+    throw new HttpsError("invalid-argument", "conversationId and callId are required.");
+  }
+
+  const convoRef = db.collection("conversations").doc(conversationId);
+  const callRef = convoRef.collection("calls").doc(callId);
+  const [convoSnap, callSnap] = await Promise.all([convoRef.get(), callRef.get()]);
+  if (!convoSnap.exists) throw new HttpsError("not-found", "Conversation not found.");
+  if (!callSnap.exists) throw new HttpsError("not-found", "Call not found.");
+
+  const convoData = convoSnap.data() || {};
+  const participants = Array.isArray(convoData.participants) ? convoData.participants : [];
+  if (!participants.includes(auth.uid)) {
+    throw new HttpsError("permission-denied", "Not a participant in this conversation.");
+  }
+  const callData = callSnap.data() || {};
+  if (callData.status === "ended") {
+    throw new HttpsError("failed-precondition", "Call has ended.");
+  }
+
+  const batch = db.batch();
+  batch.set(callRef.collection("members").doc(auth.uid), {
+    state: "joined",
+    updatedAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+  batch.update(callRef, {status: "active", updatedAt: FieldValue.serverTimestamp()});
+  await batch.commit();
+
+  // Placeholder provider info for a self-hosted SFU (token + URL will be added later).
+  return {
+    callId,
+    provider: "selfhosted_sfu",
+    roomName: `dm_${conversationId}_${callId}`,
+    joinUrl: null,
+    token: null,
+  };
 });
