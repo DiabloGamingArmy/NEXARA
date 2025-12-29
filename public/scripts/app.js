@@ -5,7 +5,7 @@ import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, quer
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
-import { Room, RoomEvent, createLocalAudioTrack, createLocalVideoTrack } from "https://cdn.jsdelivr.net/npm/livekit-client@2.5.1/dist/livekit-client.esm.min.js";
+// import { Room, RoomEvent, createLocalAudioTrack, createLocalVideoTrack } from "https://cdn.jsdelivr.net/npm/livekit-client@2.5.1/dist/livekit-client.esm.min.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
