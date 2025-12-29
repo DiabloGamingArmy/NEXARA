@@ -907,6 +907,11 @@ let livekitLocalVideoTrack = null;
 let livekitLocalScreenTracks = [];
 let incomingCallUnsubscribe = null;
 let incomingPromptCallId = null;
+let incomingListenerLogged = false;
+let __audioUnlocked = false;
+let __ringCtx = null;
+let __ringOsc = null;
+let __ringGain = null;
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -9335,6 +9340,67 @@ function setIncomingPromptVisible(visible) {
 function hideIncomingCallPrompt() {
     incomingPromptCallId = null;
     setIncomingPromptVisible(false);
+    stopRingtone();
+}
+
+function unlockCallAudioOnce() {
+    if (__audioUnlocked) return;
+    try {
+        __ringCtx = __ringCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (__ringCtx.state === 'suspended') __ringCtx.resume().catch(function () { });
+        const o = __ringCtx.createOscillator();
+        const g = __ringCtx.createGain();
+        g.gain.value = 0;
+        o.connect(g).connect(__ringCtx.destination);
+        o.start();
+        o.stop(__ringCtx.currentTime + 0.01);
+        __audioUnlocked = true;
+        console.log('[Calls] audio unlocked');
+    } catch (e) {
+        console.warn('[Calls] audio unlock failed', e);
+    }
+}
+
+window.addEventListener('pointerdown', unlockCallAudioOnce, { once: true });
+window.addEventListener('keydown', unlockCallAudioOnce, { once: true });
+
+function startRingtone() {
+    if (!__audioUnlocked || !__ringCtx) return;
+    stopRingtone();
+    try {
+        __ringOsc = __ringCtx.createOscillator();
+        __ringGain = __ringCtx.createGain();
+        __ringOsc.type = 'sine';
+        __ringOsc.frequency.value = 880;
+        __ringGain.gain.value = 0;
+        __ringOsc.connect(__ringGain).connect(__ringCtx.destination);
+        __ringOsc.start();
+
+        const now = __ringCtx.currentTime;
+        for (let i = 0; i < 12; i++) {
+            const t = now + i * 0.6;
+            __ringGain.gain.setValueAtTime(0.0, t);
+            __ringGain.gain.linearRampToValueAtTime(0.18, t + 0.02);
+            __ringGain.gain.setValueAtTime(0.18, t + 0.25);
+            __ringGain.gain.linearRampToValueAtTime(0.0, t + 0.30);
+        }
+    } catch (e) {
+        console.warn('[Calls] startRingtone failed', e);
+    }
+}
+
+function stopRingtone() {
+    try {
+        if (__ringOsc) {
+            __ringOsc.stop();
+            __ringOsc.disconnect();
+        }
+    } catch {}
+    try {
+        if (__ringGain) __ringGain.disconnect();
+    } catch {}
+    __ringOsc = null;
+    __ringGain = null;
 }
 
 function renderIncomingCallPrompt(callData = {}, callerProfile = {}) {
@@ -9344,6 +9410,7 @@ function renderIncomingCallPrompt(callData = {}, callerProfile = {}) {
     if (elements.incomingName) elements.incomingName.textContent = displayName;
     if (elements.incomingType) elements.incomingType.textContent = (callData.type || 'audio') === 'video' ? 'Video call' : 'Audio call';
     setIncomingPromptVisible(true);
+    startRingtone();
 }
 
 function resetCallOverlayMedia() {
@@ -9517,6 +9584,7 @@ async function connectToLiveKitRoom(callSession) {
 }
 
 async function leaveLiveKitRoom({ updateStatus = true } = {}) {
+    stopRingtone();
     const elements = getCallOverlayElements();
     if (elements.toggleMic) elements.toggleMic.disabled = true;
     if (elements.toggleCam) elements.toggleCam.disabled = true;
@@ -9706,6 +9774,10 @@ function startListeningForIncomingCalls() {
         incomingCallUnsubscribe = null;
     }
     if (!currentUser?.uid) return;
+    if (!incomingListenerLogged) {
+        console.log(`[Calls] Incoming listener started for uid=${currentUser.uid}`);
+        incomingListenerLogged = true;
+    }
 
     const callQuery = query(
         collection(db, 'calls'),
@@ -9783,11 +9855,13 @@ function startListeningForIncomingCalls() {
         if (elements.incomingAccept) {
             elements.incomingAccept.onclick = async function () {
                 if (activeCallSession) return;
+                stopRingtone();
                 await acceptIncomingCall(incoming.id, incoming, incoming.conversationId);
             };
         }
         if (elements.incomingDecline) {
             elements.incomingDecline.onclick = async function () {
+                stopRingtone();
                 await updateDoc(doc(db, 'calls', incoming.id), {
                     status: 'ended',
                     endedAt: serverTimestamp()
@@ -9796,7 +9870,7 @@ function startListeningForIncomingCalls() {
             };
         }
     }, function (err) {
-        handleSnapshotError('Incoming calls', err);
+        console.warn('[Calls] incoming listener error', err);
     }));
 }
 
