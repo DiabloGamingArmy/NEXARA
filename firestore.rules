@@ -97,6 +97,26 @@ service cloud.firestore {
       );
     }
 
+    // ============================================================
+    // ADDED FIXES (do not remove):
+    // - Allow app_config reads (banner.js reads app_config/ui)
+    // - Allow profiles reads/writes for public profile caching
+    // ============================================================
+
+    // App-wide UI config (banner, etc.)
+    match /app_config/{docId} {
+      // If you want banners visible before login, change to: allow read: if true;
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Public profile cache used by UI to render other users
+    match /profiles/{uid} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+
     // -------------------------
     // Users
     // -------------------------
