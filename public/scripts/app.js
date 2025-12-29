@@ -9640,6 +9640,29 @@ async function getCallsForConversation(conversationId) {
     });
 }
 
+async function ensureConversationDoc(conversationId, participants) {
+    if (!conversationId || !Array.isArray(participants) || participants.length < 2) return;
+    const unique = Array.from(new Set(participants)).sort();
+    const convoRef = doc(db, 'conversations', conversationId);
+    const snap = await getDoc(convoRef);
+
+    const payload = {
+        participants: unique,
+        updatedAt: serverTimestamp(),
+    };
+
+    if (!snap.exists()) {
+        payload.createdAt = serverTimestamp();
+    } else {
+        const data = snap.data() || {};
+        if (!Array.isArray(data.participants) || data.participants.length < 2) {
+            payload.participants = unique;
+        }
+    }
+
+    await setDoc(convoRef, payload, { merge: true });
+}
+
 async function endCallDoc(callId) {
     try {
         await updateDoc(doc(db, 'calls', callId), { status: 'ended', endedAt: serverTimestamp() });
@@ -10889,8 +10912,21 @@ async function startDmCall(kind) {
             return;
         }
         const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
-        const participants = convo?.participants || [];
+        let participants = convo?.participants || [];
+        if (!Array.isArray(participants) || participants.length < 2) {
+            if (conversationId.startsWith('dm_')) {
+                const parts = conversationId.split('_').slice(1).filter(Boolean);
+                if (parts.length >= 2) {
+                    participants = parts.slice(0, 2);
+                }
+            }
+        }
         if (!participants.length) return;
+        if (!Array.isArray(participants) || participants.length < 2) {
+            console.warn('Unable to start call: missing participants for conversation', conversationId);
+            return;
+        }
+        await ensureConversationDoc(conversationId, participants);
         const callRef = await addDoc(collection(db, 'calls'), {
             createdBy: currentUser.uid,
             initiatorId: currentUser.uid,
@@ -10898,7 +10934,8 @@ async function startDmCall(kind) {
             type: callType,
             status: 'ringing',
             participants,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
         });
         const callId = callRef.id;
         activeCallSession = {
