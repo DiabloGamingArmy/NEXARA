@@ -907,20 +907,24 @@
                                 <div class="message-header-shell">
                                     <div class="message-thread-title-row">Select a conversation</div>
                                     <div class="message-header-actions">
-                                        <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
-                                            onclick="window.startDmCall('audio')" aria-label="Start audio call"
-                                            title="Loading call system…" aria-disabled="true" disabled>
-                                            <i class="ph ph-phone"></i>
-                                        </button>
-                                        <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
-                                            onclick="window.startDmCall('video')" aria-label="Start video call"
-                                            title="Loading call system…" aria-disabled="true" disabled>
-                                            <i class="ph ph-video-camera"></i>
-                                        </button>
-                                        <span id="call-status-pill" class="call-status-pill is-hidden">Live</span>
-                                        <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
-                                            <i class="ph ph-dots-three-outline"></i>
-                                        </button>
+                                        <div class="message-header-actions-left">
+                                            <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
+                                                onclick="window.startDmCall('audio')" aria-label="Start audio call"
+                                                title="Loading call system…" aria-disabled="true" disabled>
+                                                <i class="ph ph-phone"></i>
+                                            </button>
+                                            <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
+                                                onclick="window.startDmCall('video')" aria-label="Start video call"
+                                                title="Loading call system…" aria-disabled="true" disabled>
+                                                <i class="ph ph-video-camera"></i>
+                                            </button>
+                                            <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
+                                                <i class="ph ph-dots-three-outline"></i>
+                                            </button>
+                                        </div>
+                                        <div class="message-header-actions-right">
+                                            <span id="call-status-pill" class="call-status-pill is-hidden">Live</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1758,7 +1762,7 @@
                 <div id="call-default-layout" class="call-default-layout">
                 <div id="call-local-tile" class="call-video-tile">
                     <video id="call-local-video" autoplay muted playsinline></video>
-                    <div class="call-video-label">You</div>
+                    <div class="call-video-label call-tile-label">You</div>
                 </div>
                 <div id="call-remote-grid" class="call-remote-grid"></div>
                 </div>
@@ -1781,6 +1785,18 @@
                 <button id="call-toggle-share" class="call-action-btn" type="button" aria-label="Share screen">
                     <i class="ph ph-monitor"></i>
                     <span>Share</span>
+                </button>
+                <button id="call-soundboard" class="call-action-btn" type="button" aria-label="Soundboard">
+                    <i class="ph ph-speaker-high"></i>
+                    <span>Soundboard</span>
+                </button>
+                <button id="call-watch-together" class="call-action-btn" type="button" aria-label="Watch together">
+                    <i class="ph ph-film-strip"></i>
+                    <span>Watch</span>
+                </button>
+                <button id="call-effects" class="call-action-btn" type="button" aria-label="Effects">
+                    <i class="ph ph-sparkle"></i>
+                    <span>Effects</span>
                 </button>
                 <button id="call-minimize" class="call-action-btn" type="button" aria-label="Minimize call">
                     <i class="ph ph-arrow-left"></i>

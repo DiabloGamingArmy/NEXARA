@@ -3922,7 +3922,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .call-video-tile,
-.call-remote-grid {
+.call-remote-tile {
     background: var(--bg-body);
     border: 1px solid var(--border);
     border-radius: 16px;
@@ -3936,26 +3936,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     overflow: hidden;
 }
 
-.call-video-tile video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    border-radius: 12px;
-    background: #000;
-}
-
-.call-video-label {
-    position: absolute;
-    left: 12px;
-    bottom: 10px;
-    background: rgba(0, 0, 0, 0.55);
-    color: #fff;
-    padding: 4px 8px;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-}
-
 .call-remote-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -3965,22 +3945,42 @@ body.light-mode .category-pill.active .topic-verified-icon {
     height: 100%;
 }
 
-.call-remote-tile {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 12px;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-height: 0;
+.call-tile video,
+.call-video-tile video {
+    width: 100%;
     height: 100%;
-    position: relative;
-    overflow: hidden;
+    object-fit: cover;
+    border-radius: 12px;
+    background: #000;
+}
+
+.call-video-label {
+    position: absolute;
+    left: 10px;
+    bottom: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.call-remote-tile {
+    gap: 6px;
 }
 
 .call-tile {
     position: relative;
     cursor: pointer;
+}
+
+.call-tile.is-screenshare video {
+    object-fit: contain;
+    background: #000;
 }
 
 .call-tile-overlay {
@@ -4029,15 +4029,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: inline-flex;
 }
 
-.call-remote-tile video {
-    width: 100%;
-    height: 100%;
-    border-radius: 8px;
-    object-fit: contain;
-    background: #000;
-}
-
-.call-remote-name {
+.call-tile-label {
     position: absolute;
     left: 10px;
     bottom: 8px;
@@ -4047,11 +4039,26 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-radius: 999px;
     font-size: 0.78rem;
     font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
-.call-remote-name {
-    font-size: 0.8rem;
-    color: var(--text-muted);
+.call-tile-chip {
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: rgba(0, 242, 234, 0.2);
+    border: 1px solid rgba(0, 242, 234, 0.5);
+    color: #bffbff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.call-tile.is-speaking {
+    outline: 2px solid rgba(0, 255, 128, 0.55);
+    box-shadow: 0 0 0 1px rgba(0, 255, 128, 0.15);
 }
 
 .call-actions {
@@ -4259,9 +4266,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
     justify-content: center;
     padding: 6px 12px;
     border-radius: 999px;
-    background: rgba(34, 197, 94, 0.18);
-    color: #b7f5cf;
-    border: 1px solid rgba(34, 197, 94, 0.5);
+    background: rgba(0, 242, 234, 0.2);
+    color: #bffbff;
+    border: 1px solid rgba(0, 242, 234, 0.5);
     font-weight: 700;
     font-size: 0.8rem;
 }
@@ -4569,8 +4576,23 @@ body.light-mode .category-pill.active .topic-verified-icon {
     padding: 0 12px;
 }
 
-.message-header-actions .icon-pill {
+.message-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+}
+
+.message-header-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message-header-actions-right {
     margin-left: auto;
+    display: flex;
+    align-items: center;
 }
 
 .message-composer,
@@ -4598,9 +4620,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     }
 }
 
-.message-header-actions .icon-pill {
-    margin-left: auto;
-}
 
 .conversation-item {
     padding: 10px;
@@ -4616,6 +4635,23 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .conversation-item.active {
     border-color: var(--primary);
     background: rgba(0, 242, 234, 0.05);
+}
+
+.conversation-item.in-call-related {
+    border-color: rgba(0, 255, 128, 0.55);
+}
+
+.conversation-item.in-call-current {
+    border-color: rgba(0, 255, 128, 0.75);
+}
+
+.conversation-item.in-call-open {
+    background: rgba(0, 255, 128, 0.08);
+}
+
+.conversation-item.active.in-call-current,
+.conversation-item.active.in-call-related {
+    border-color: var(--primary);
 }
 
 .conversation-avatar-slot {
