@@ -1,6 +1,6 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
@@ -56,6 +56,15 @@ function showBootErrorOverlay(message) {
     }
 }
 
+function hideLoadingOverlay() {
+    try {
+        const overlay = document.getElementById('loading-overlay');
+        if (overlay) overlay.style.display = 'none';
+    } catch (err) {
+        // swallow
+    }
+}
+
 function forceHideSplash(reason) {
     try {
         if (typeof hideSplash === 'function') {
@@ -80,6 +89,7 @@ window.addEventListener('error', function (event) {
     try {
         const err = event?.error;
         console.error('Boot error', err || event?.message || event);
+        hideLoadingOverlay();
         forceHideSplash('boot-error');
         const message = err?.message || event?.message || 'A script error prevented Nexera from starting.';
         showBootErrorOverlay(message);
@@ -92,6 +102,7 @@ window.addEventListener('unhandledrejection', function (event) {
     try {
         const reason = event?.reason;
         console.error('Boot unhandled rejection', reason);
+        hideLoadingOverlay();
         forceHideSplash('boot-error');
         const message = reason?.message || 'A background task failed while starting Nexera.';
         showBootErrorOverlay(message);
@@ -113,6 +124,22 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+window.Nexera = window.Nexera || {};
+window.Nexera.authResolved = window.Nexera.authResolved || false;
+window.Nexera.pendingIncomingCall = window.Nexera.pendingIncomingCall || null;
+
+(async function () {
+    try {
+        await setPersistence(auth, browserLocalPersistence);
+    } catch (err) {
+        console.warn('[Auth] Persistence fallback to memory', err?.message || err);
+        try {
+            await setPersistence(auth, inMemoryPersistence);
+        } catch (innerErr) {
+            console.warn('[Auth] Persistence fallback failed', innerErr?.message || innerErr);
+        }
+    }
+})();
 const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 const db = isSafari
     ? initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false })
@@ -995,6 +1022,9 @@ let livekitConnectingCallId = null;
 let livekitConnectNonce = 0;
 let connectedCallId = null;
 let livekitConnectPromise = null;
+let livekitConnectedAt = 0;
+let lastManualHangupAt = 0;
+let lastDisconnectToastAt = 0;
 let incomingCallUnsubscribe = null;
 let lastIncomingPromptCallId = null;
 let incomingListenerLogged = false;
@@ -1008,9 +1038,11 @@ let activeCallDocId = null;
 let activeCallConversationId = null;
 const CALL_DEBUG_FLAG = '__DEBUG_CALLS';
 window.__DEBUG_CALLS = window.__DEBUG_CALLS || false;
+let activeCallsUnsubscribe = null;
+const activeCallsByConversationId = new Map();
 
 function debugCallLog(...args) {
-    if (window[CALL_DEBUG_FLAG]) {
+    if (window.__DEBUG_CALLS) {
         console.log('[Calls]', ...args);
     }
 }
@@ -1786,7 +1818,10 @@ function initApp(onReady) {
         const loadingOverlay = document.getElementById('loading-overlay');
         const authScreen = document.getElementById('auth-screen');
         const appLayout = document.getElementById('app-layout');
-        window.Nexera.authResolved = true;
+        if (!window.Nexera.authResolved) {
+            window.Nexera.authResolved = true;
+            window.__NEXERA_BOOT_STAGE = 'auth-resolved';
+        }
         if (user?.uid !== lastAuthUid) {
             userCache = {};
             userFetchPromises = {};
@@ -1854,6 +1889,8 @@ function initApp(onReady) {
                 if (authScreen) authScreen.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'flex';
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
+                initCallInviteListener();
+                startActiveCallTracker();
                 markReady();
 
                 const signedInUserId = user.uid;
@@ -1870,7 +1907,6 @@ function initApp(onReady) {
                         setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                         initContentNotifications(signedInUserId);
                         initConversations(storedInboxMode === 'messages');
-                        initCallInviteListener();
                         refreshDmCallButtons();
                         if ('Notification' in window && Notification.permission === 'granted') {
                             registerMessagingServiceWorker();
@@ -1896,6 +1932,8 @@ function initApp(onReady) {
                 currentUser = null;
                 updateAuthClaims({});
                 ListenerRegistry.clearAll(); // Cleanup listeners on logout to prevent permission errors.
+                stopListeningForIncomingCalls();
+                stopActiveCallTracker();
                 if (previousUserId) removePushTokenForUser(previousUserId);
                 if (followedTopicsUnsubscribe) {
                     try { followedTopicsUnsubscribe(); } catch (err) { }
@@ -1948,8 +1986,10 @@ async function initializeNexeraApp() {
     window.__NEXERA_BOOT_STAGE = 'init-start';
     const bootTimeout = setTimeout(function () {
         if (window.Nexera?.authResolved) return;
-        forceHideSplash('boot-timeout');
-        showBootErrorOverlay('Auth is taking longer than expected. Check network and retry.');
+        hideLoadingOverlay();
+        const authScreen = document.getElementById('auth-screen');
+        if (authScreen) authScreen.style.display = 'flex';
+        showBootErrorOverlay('Nexera couldn’t finish initializing in this environment. This can happen in iOS WebView if storage/persistence fails or network resources are blocked. Please reload.');
     }, 12000);
     try {
         refreshBrandLogos();
@@ -9141,13 +9181,12 @@ function getActiveCallHighlightData() {
     };
 }
 
-function applyCallConversationIndicators(item, mapping, details, highlightData) {
+function applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation) {
     if (!item) return;
     item.classList.remove('in-call-current', 'in-call-related', 'in-call-open', 'call-host-active');
-    if (!highlightData.callConversationId) return;
+    if (!highlightData.callConversationId && !isCallHostConversation) return;
     const participants = details.participants || mapping.otherParticipantIds || [];
     const isOpen = activeConversationId === mapping.id;
-    const isCallHostConversation = highlightData.callConversationId === mapping.id;
     const intersectsCallMembers = participants.some(function (uid) {
         return highlightData.callMemberIds.has(uid);
     });
@@ -9280,7 +9319,8 @@ function renderConversationList() {
         const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
         const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
         const highlightData = getActiveCallHighlightData();
-        const isCallHostConversation = highlightData.callConversationId === mapping.id;
+        const activeCallEntry = getActiveCallForConversation(mapping.id);
+        const isCallHostConversation = !!activeCallEntry;
         const previewMarkup = isCallHostConversation
             ? `<span class="active-call-pill">Active Call</span>`
             : previewText;
@@ -9294,11 +9334,21 @@ function renderConversationList() {
                 </div>
                 <div class="conversation-preview">${previewMarkup}</div>
             </div>`;
-        applyCallConversationIndicators(item, mapping, details, highlightData);
+        applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
         item.onclick = function () {
             openConversation(mapping.id);
-            if (activeCallSession?.status === 'active' && activeCallConversationId === mapping.id && !isCallViewOpen) {
-                openCallView();
+            const hostCall = getActiveCallForConversation(mapping.id);
+            if (hostCall && !isCallViewOpen) {
+                if (activeCallSession?.status === 'active' && activeCallSession.callId !== hostCall.id) {
+                    return;
+                }
+                if (activeCallSession?.callId === hostCall.id) {
+                    openCallView();
+                } else {
+                    joinExistingCall({ id: hostCall.id, ...hostCall }, mapping.id).catch(function (err) {
+                        console.warn('Unable to join active call', err?.message || err);
+                    });
+                }
             }
         };
         targetEl.appendChild(item);
@@ -9825,11 +9875,35 @@ function setCallOverlayVisible(visible) {
 }
 
 function ensureIncomingPromptRoot() {
-    const { incomingPrompt, incomingBackdrop } = getCallOverlayElements();
-    if (incomingBackdrop && incomingBackdrop.parentElement !== document.body) {
+    let { incomingPrompt, incomingBackdrop } = getCallOverlayElements();
+    if (!incomingBackdrop) {
+        incomingBackdrop = document.createElement('div');
+        incomingBackdrop.id = 'call-incoming-backdrop';
+        incomingBackdrop.className = 'call-incoming-backdrop is-hidden';
+        incomingBackdrop.setAttribute('aria-hidden', 'true');
+    }
+    if (!incomingPrompt) {
+        incomingPrompt = document.createElement('div');
+        incomingPrompt.id = 'call-incoming-prompt';
+        incomingPrompt.className = 'call-incoming-prompt is-hidden';
+        incomingPrompt.innerHTML = `
+            <div class="call-incoming-card" role="dialog" aria-modal="true" aria-live="polite">
+                <img id="call-incoming-avatar" class="call-incoming-avatar" alt="Caller avatar">
+                <div id="call-incoming-name" class="call-incoming-name">Incoming call</div>
+                <div id="call-incoming-username" class="call-incoming-username is-hidden"></div>
+                <div class="call-incoming-text">is calling you…</div>
+                <div id="call-incoming-type" class="call-incoming-type">Audio call</div>
+                <div class="call-incoming-actions">
+                    <button id="call-incoming-accept" class="call-incoming-btn accept" type="button">Answer</button>
+                    <button id="call-incoming-decline" class="call-incoming-btn decline" type="button">Decline</button>
+                </div>
+            </div>
+        `;
+    }
+    if (incomingBackdrop.parentElement !== document.body) {
         document.body.appendChild(incomingBackdrop);
     }
-    if (incomingPrompt && incomingPrompt.parentElement !== document.body) {
+    if (incomingPrompt.parentElement !== document.body) {
         document.body.appendChild(incomingPrompt);
     }
 }
@@ -9844,6 +9918,7 @@ function setIncomingPromptVisible(visible) {
         incomingBackdrop.classList.toggle('is-hidden', !visible);
         incomingBackdrop.setAttribute('aria-hidden', visible ? 'false' : 'true');
     }
+    debugCallLog('Incoming prompt visibility', visible);
     if (visible && navigator.vibrate) {
         navigator.vibrate([200, 100, 200, 100, 200]);
     }
@@ -9968,6 +10043,16 @@ function resetCallOverlayMedia() {
     }
     if (elements.remoteGrid) {
         elements.remoteGrid.innerHTML = '';
+        if (elements.localTile) {
+            elements.remoteGrid.appendChild(elements.localTile);
+        }
+        updateCallTileLayout();
+    }
+    if (elements.focusArea) {
+        elements.focusArea.innerHTML = '';
+    }
+    if (elements.strip) {
+        elements.strip.innerHTML = '';
     }
     if (elements.focusArea) {
         elements.focusArea.innerHTML = '';
@@ -10205,6 +10290,13 @@ async function connectToLiveKitRoom(callSession) {
         updateActiveSpeakerTiles(speakers);
     });
     room.on(LivekitRoomEvent.Disconnected, function () {
+        const now = Date.now();
+        const recentlyConnected = livekitConnectedAt && now - livekitConnectedAt < 2000;
+        const manuallyEnded = lastManualHangupAt && now - lastManualHangupAt < 2000;
+        if (recentlyConnected && !manuallyEnded && now - lastDisconnectToastAt > 10000) {
+            lastDisconnectToastAt = now;
+            toast('Disconnected. This can happen if the same account joins the call from another device/browser.', 'info');
+        }
         leaveLiveKitRoom({ updateStatus: false });
     });
 
@@ -10228,6 +10320,8 @@ async function connectToLiveKitRoom(callSession) {
         if (livekitRoom === room) livekitRoom = null;
         return false;
     }
+    livekitConnectedAt = Date.now();
+    debugCallLog('LiveKit connected', { uid: currentUser?.uid, roomName: callSession.roomName });
     if (elements.localTile && room.localParticipant?.sid) {
         elements.localTile.dataset.participantSid = room.localParticipant.sid;
     }
@@ -10305,6 +10399,9 @@ async function connectToLiveKitRoom(callSession) {
 
 async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     stopRingtone();
+    if (updateStatus) {
+        lastManualHangupAt = Date.now();
+    }
     const elements = getCallOverlayElements();
     if (elements.toggleMic) elements.toggleMic.disabled = true;
     if (elements.toggleCam) elements.toggleCam.disabled = true;
@@ -10630,6 +10727,31 @@ async function getCallsForConversation(conversationId) {
     });
 }
 
+async function findActiveCallForConversation(conversationId) {
+    if (!conversationId || !currentUser?.uid) return null;
+    const q = query(
+        collection(db, 'calls'),
+        where('participants', 'array-contains', currentUser.uid),
+        limit(10)
+    );
+    const snap = await getDocs(q);
+    const matches = snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    }).filter(function (call) {
+        return call.conversationId === conversationId && call.status !== 'ended' && call.status !== 'missed';
+    });
+    if (!matches.length) return null;
+    matches.sort(function (a, b) {
+        const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        if (aMs && bMs) return bMs - aMs;
+        if (aMs) return -1;
+        if (bMs) return 1;
+        return b.id.localeCompare(a.id);
+    });
+    return matches[0] || null;
+}
+
 async function ensureConversationDoc(conversationId, participants) {
     if (!conversationId || !Array.isArray(participants) || participants.length < 2) return;
     const unique = Array.from(new Set(participants)).sort();
@@ -10854,6 +10976,15 @@ function startListeningForIncomingCalls() {
         where('participants', 'array-contains', currentUser.uid)
     );
 
+    const shouldRingForCall = function (callData) {
+        if (!callData || !currentUser?.uid) return false;
+        const ringTargets = callData.ringTargets || [];
+        const userStatus = callData.userStatus || {};
+        return userStatus[currentUser.uid] === 'ringing'
+            || ringTargets.includes(currentUser.uid)
+            || callData.status === 'ringing';
+    };
+
     const applyIncomingSnapshot = function (snap) {
         const ringingCalls = snap.docs.map(function (docSnap) {
             const data = docSnap.data() || {};
@@ -10871,12 +11002,16 @@ function startListeningForIncomingCalls() {
         });
 
         debugCallLog('Incoming snapshot', { count: ringingCalls.length });
-        if (!ringingCalls.length) {
+        const ringingCandidates = ringingCalls.filter(function (data) {
+            return shouldRingForCall(data);
+        });
+        debugCallLog('Incoming snapshot', { count: ringingCalls.length, ringing: ringingCandidates.length });
+        if (!ringingCandidates.length) {
             handleIncomingCallSnapshot(null);
             return;
         }
 
-        const newest = ringingCalls.slice().sort(function (a, b) {
+        const newest = ringingCandidates.slice().sort(function (a, b) {
             const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
             const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
             if (aMs && bMs) return bMs - aMs;
@@ -10909,6 +11044,49 @@ function startListeningForIncomingCalls() {
         }
         console.warn('[Calls] incoming listener error', err);
     }));
+}
+
+function stopListeningForIncomingCalls() {
+    if (incomingCallUnsubscribe) {
+        incomingCallUnsubscribe();
+        incomingCallUnsubscribe = null;
+    }
+}
+
+function stopActiveCallTracker() {
+    if (activeCallsUnsubscribe) {
+        activeCallsUnsubscribe();
+        activeCallsUnsubscribe = null;
+    }
+    activeCallsByConversationId.clear();
+}
+
+function startActiveCallTracker() {
+    stopActiveCallTracker();
+    if (!currentUser?.uid) return;
+    const callQuery = query(
+        collection(db, 'calls'),
+        where('participants', 'array-contains', currentUser.uid)
+    );
+    activeCallsUnsubscribe = ListenerRegistry.register('calls:active', onSnapshot(callQuery, function (snap) {
+        activeCallsByConversationId.clear();
+        snap.docs.forEach(function (docSnap) {
+            const data = docSnap.data() || {};
+            if (!data.conversationId) return;
+            if (data.status === 'ended' || data.status === 'missed') return;
+            activeCallsByConversationId.set(data.conversationId, { id: docSnap.id, ...data });
+        });
+        if (currentViewId === 'messages') {
+            renderConversationList();
+        }
+    }, function (err) {
+        console.warn('[Calls] active call tracker error', err?.message || err);
+    }));
+}
+
+function getActiveCallForConversation(conversationId) {
+    if (!conversationId) return null;
+    return activeCallsByConversationId.get(conversationId) || null;
 }
 
 async function joinCallInvite(conversationId, callId) {
@@ -11989,6 +12167,18 @@ async function openConversation(conversationId) {
 
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
+    const activeCall = getActiveCallForConversation(conversationId);
+    if (activeCall) {
+        if (activeCallSession?.status === 'active' && activeCallSession.callId !== activeCall.id) {
+            // already in another call
+        } else if (activeCallSession?.callId === activeCall.id) {
+            openCallView();
+        } else {
+            joinExistingCall({ id: activeCall.id, ...activeCall }, conversationId).catch(function (err) {
+                console.warn('Unable to join active call', err?.message || err);
+            });
+        }
+    }
     renderTypingIndicator(convo);
     listenToConversationDetails(conversationId);
     attachMessageInputHandlers(conversationId);
@@ -12003,6 +12193,13 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
+    if (window.Nexera?.pendingIncomingCall && window.Nexera.pendingIncomingCall.conversationId === activeConversationId) {
+        const pending = window.Nexera.pendingIncomingCall;
+        window.Nexera.pendingIncomingCall = null;
+        await acceptIncomingCall(pending.callId, pending.callData, pending.conversationId);
+        openCallView();
+        return;
+    }
     if (activeCallSession && ['ringing', 'active'].includes(activeCallSession.status || '')) {
         const ok = confirm('You’re already in a call. End it to start a new one?');
         if (!ok) return;
@@ -12018,12 +12215,21 @@ async function startDmCall(kind) {
     try {
         const conversationId = activeConversationId;
         const callType = kind === 'video' ? 'video' : 'audio';
-        const calls = await getCallsForConversation(conversationId);
-        const existingCall = calls.find(function (call) {
-            return call.status !== 'ended';
-        });
+        let existingCall = null;
+        try {
+            const calls = await getCallsForConversation(conversationId);
+            existingCall = calls.find(function (call) {
+                return call.status !== 'ended' && call.status !== 'missed';
+            }) || null;
+        } catch (err) {
+            existingCall = null;
+        }
+        if (!existingCall) {
+            existingCall = await findActiveCallForConversation(conversationId);
+        }
         if (existingCall) {
             await joinExistingCall(existingCall, conversationId);
+            openCallView();
             return;
         }
         const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
@@ -12092,6 +12298,7 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     if (!currentUser) return;
     if (!incomingCall) {
         debugCallLog('No incoming call for snapshot');
+        window.Nexera.pendingIncomingCall = null;
         hideIncomingCallPrompt();
         if (activeCallSession?.direction === 'incoming' && activeCallSession?.status === 'ringing') {
             clearCallSession();
@@ -12126,6 +12333,7 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     const fallbackRinging = incomingCall.status === 'ringing' && (incomingCall.initiatorId || incomingCall.createdBy) !== currentUser.uid;
     const shouldRing = userStatus[currentUser.uid] === 'ringing'
         || ringTargets.includes(currentUser.uid)
+        || incomingCall.status === 'ringing'
         || fallbackRinging;
     const ringExpiresAtMs = incomingCall.ringExpiresAtMs || 0;
     debugCallLog('Incoming call ring evaluation', {
@@ -12148,11 +12356,17 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
         return;
     }
     if (!shouldRing) {
+        window.Nexera.pendingIncomingCall = null;
         debugCallLog('Incoming call not ringing for user', incomingCall.id);
         hideIncomingCallPrompt();
         return;
     }
 
+    window.Nexera.pendingIncomingCall = {
+        callId: incomingCall.id,
+        callData: incomingCall,
+        conversationId: incomingCall.conversationId
+    };
     renderIncomingCallPrompt(incomingCall);
 
         if (elements.incomingAccept) {
@@ -12160,6 +12374,7 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
                 if (activeCallSession) return;
                 stopRingtone();
                 debugCallLog('Incoming call accepted', incomingCall.id);
+                window.Nexera.pendingIncomingCall = null;
                 await acceptIncomingCall(incomingCall.id, incomingCall, incomingCall.conversationId);
             };
         }
@@ -12168,6 +12383,7 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
                 stopRingtone();
                 debugCallLog('Incoming call declined', incomingCall.id);
                 await declineIncomingCall(incomingCall.id, incomingCall.conversationId);
+                window.Nexera.pendingIncomingCall = null;
                 hideIncomingCallPrompt();
             };
         }

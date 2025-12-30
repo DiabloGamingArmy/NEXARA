@@ -4298,7 +4298,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     inset: 0;
     backdrop-filter: blur(14px);
     background: rgba(0, 0, 0, 0.35);
-    z-index: 1240;
+    z-index: 2000;
 }
 
 body.has-incoming-call-modal {
@@ -4320,7 +4320,7 @@ body.has-incoming-call-modal #app-layout {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1250;
+    z-index: 2005;
     background: transparent;
 }
 
@@ -4608,18 +4608,6 @@ body.has-incoming-call-modal #app-layout {
     gap: 12px;
     flex: 1;
     justify-content: space-between;
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-}
-
-.message-header-actions-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.message-header-actions-right {
     margin-left: auto;
     display: flex;
     align-items: center;
