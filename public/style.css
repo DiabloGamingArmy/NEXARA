@@ -4598,6 +4598,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex: 1;
     justify-content: space-between;
     margin-left: auto;
+    display: flex;
+    align-items: center;
 }
 
 .message-header-actions-left {
