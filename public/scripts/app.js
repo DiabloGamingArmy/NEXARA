@@ -899,6 +899,8 @@ const videosPagination = {
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 let activeCallSession = null;
+let activeCallConversationId = null;
+let isCallViewOpen = false;
 let callDocUnsubscribe = null;
 let callUiInitialized = false;
 let livekitRoom = null;
@@ -906,12 +908,13 @@ let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
 let livekitLocalScreenTracks = [];
 let incomingCallUnsubscribe = null;
-let incomingPromptCallId = null;
+let lastIncomingPromptCallId = null;
 let incomingListenerLogged = false;
 let __audioUnlocked = false;
 let __ringCtx = null;
 let __ringOsc = null;
 let __ringGain = null;
+let callFocusState = { active: false, tileId: null };
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -1763,7 +1766,7 @@ function initApp(onReady) {
                 setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                 initContentNotifications(user.uid);
                 initConversations(storedInboxMode === 'messages');
-                startListeningForIncomingCalls();
+                initCallInviteListener();
                 refreshDmCallButtons();
                 if ('Notification' in window && Notification.permission === 'granted') {
                     registerMessagingServiceWorker();
@@ -9284,7 +9287,8 @@ function renderMessageHeader(convo = {}) {
     const callDisabledAttr = canCall && isReady ? '' : ' disabled aria-disabled="true"';
     const tooltip = getLiveKitCallTooltip({ canCall, isReady });
     const tooltipAttr = tooltip ? ` title="${tooltip}"` : '';
-    const callButtons = `<button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-phone"></i></button>
+    const openCallBtn = `<button id="open-active-call-btn" class="open-call-btn is-hidden" type="button" onclick="window.openActiveCallView()"></button>`;
+    const callButtons = `${openCallBtn}<button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-phone"></i></button>
            <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-video-camera"></i></button>`;
 
     header.innerHTML = `<div class="message-header-shell">
@@ -9301,6 +9305,7 @@ function renderMessageHeader(convo = {}) {
         </div>
     </div>`;
     refreshDmCallButtons();
+    updateActiveCallButton();
     primeLiveKitLoading();
 }
 
@@ -9309,36 +9314,252 @@ function getCallOverlayElements() {
         overlay: document.getElementById('call-overlay'),
         name: document.getElementById('call-overlay-name'),
         status: document.getElementById('call-overlay-status'),
+        mediaGrid: document.querySelector('#call-overlay .call-media-grid'),
+        focusArea: document.getElementById('call-focus-area'),
+        strip: document.getElementById('call-strip'),
+        defaultLayout: document.getElementById('call-default-layout'),
+        localTile: document.getElementById('call-local-tile'),
         localVideo: document.getElementById('call-local-video'),
         remoteGrid: document.getElementById('call-remote-grid'),
         toggleMic: document.getElementById('call-toggle-mic'),
         toggleCam: document.getElementById('call-toggle-cam'),
         toggleShare: document.getElementById('call-toggle-share'),
+        minimizeBtn: document.getElementById('call-minimize'),
+        micDeviceBtn: document.getElementById('call-mic-device'),
+        camDeviceBtn: document.getElementById('call-cam-device'),
+        micMenu: document.getElementById('call-mic-menu'),
+        camMenu: document.getElementById('call-cam-menu'),
         hangupBtn: document.getElementById('call-hangup'),
-        closeBtn: document.getElementById('call-overlay-close'),
         incomingPrompt: document.getElementById('call-incoming-prompt'),
+        incomingBackdrop: document.getElementById('call-incoming-backdrop'),
+        incomingAvatar: document.getElementById('call-incoming-avatar'),
         incomingName: document.getElementById('call-incoming-name'),
+        incomingUsername: document.getElementById('call-incoming-username'),
         incomingType: document.getElementById('call-incoming-type'),
         incomingAccept: document.getElementById('call-incoming-accept'),
         incomingDecline: document.getElementById('call-incoming-decline')
     };
 }
 
+function setCallButtonContent(btn, icon, label) {
+    if (!btn) return;
+    btn.innerHTML = `<i class="ph ${icon}"></i><span>${label}</span>`;
+}
+
+function updateCallControlIcons() {
+    const els = getCallOverlayElements();
+    if (!els.toggleMic || !els.toggleCam || !els.toggleShare || !els.hangupBtn) return;
+    const micOn = els.toggleMic.classList.contains('active');
+    const camOn = els.toggleCam.classList.contains('active');
+    const shareOn = els.toggleShare.classList.contains('active');
+
+    els.toggleMic.classList.toggle('is-off', !micOn);
+    els.toggleCam.classList.toggle('is-off', !camOn);
+
+    setCallButtonContent(els.toggleMic, micOn ? 'ph-microphone' : 'ph-microphone-slash', micOn ? 'Mute' : 'Unmute');
+    setCallButtonContent(els.toggleCam, camOn ? 'ph-video-camera' : 'ph-video-camera-slash', camOn ? 'Camera' : 'Camera off');
+    setCallButtonContent(els.toggleShare, 'ph-monitor', shareOn ? 'Sharing' : 'Share');
+    setCallButtonContent(els.hangupBtn, 'ph-phone-disconnect', 'Hang up');
+
+    const micGroup = els.toggleMic.closest('.call-action-group');
+    const camGroup = els.toggleCam.closest('.call-action-group');
+    if (micGroup) micGroup.classList.toggle('is-active', micOn);
+    if (camGroup) camGroup.classList.toggle('is-active', camOn);
+}
+
+function addTileOverlay(tile) {
+    if (!tile || tile.querySelector('.call-tile-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'call-tile-overlay';
+    overlay.textContent = 'View';
+    tile.appendChild(overlay);
+}
+
+function ensureFullscreenButton(tile) {
+    if (!tile || tile.querySelector('.call-fullscreen-btn')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'call-fullscreen-btn';
+    btn.innerHTML = '<i class="ph ph-arrows-out"></i>';
+    btn.onclick = function (event) {
+        event.stopPropagation();
+        if (!document.fullscreenElement) {
+            tile.requestFullscreen?.().catch(function () {});
+            btn.innerHTML = '<i class="ph ph-arrows-in"></i>';
+        } else {
+            document.exitFullscreen?.().catch(function () {});
+            btn.innerHTML = '<i class="ph ph-arrows-out"></i>';
+        }
+    };
+    tile.appendChild(btn);
+}
+
+function enhanceCallTile(tile) {
+    if (!tile || tile.dataset.callTileEnhanced === '1') return;
+    tile.dataset.callTileEnhanced = '1';
+    tile.classList.add('call-tile');
+    addTileOverlay(tile);
+    tile.addEventListener('click', function (event) {
+        const target = event.target;
+        if (target && (target.closest('.call-fullscreen-btn') || target.closest('.call-action-btn') || target.closest('.call-device-btn'))) {
+            return;
+        }
+        toggleCallFocus(tile);
+    });
+}
+
+function getCallTiles() {
+    const els = getCallOverlayElements();
+    const tiles = [];
+    if (els.localTile) tiles.push(els.localTile);
+    if (els.remoteGrid) {
+        tiles.push(...els.remoteGrid.querySelectorAll('.call-remote-tile'));
+    }
+    return tiles;
+}
+
+function enterCallFocus(tile) {
+    const els = getCallOverlayElements();
+    if (!els.mediaGrid || !els.focusArea || !els.strip || !els.defaultLayout) return;
+    const tiles = getCallTiles();
+    tiles.forEach(function (node) {
+        if (!node.dataset.originalParentId) {
+            node.dataset.originalParentId = node.parentElement?.id || '';
+        }
+    });
+    els.mediaGrid.classList.add('is-focused');
+    els.focusArea.classList.remove('is-hidden');
+    els.strip.classList.remove('is-hidden');
+    els.defaultLayout.classList.add('is-hidden');
+    if (tile) {
+        els.focusArea.appendChild(tile);
+        ensureFullscreenButton(tile);
+    }
+    tiles.forEach(function (node) {
+        if (node === tile) return;
+        els.strip.appendChild(node);
+    });
+    callFocusState = { active: true, tileId: tile?.dataset.callTileId || null };
+}
+
+function exitCallFocus() {
+    const els = getCallOverlayElements();
+    if (!els.mediaGrid || !els.defaultLayout) return;
+    const tiles = [];
+    if (els.focusArea) tiles.push(...els.focusArea.querySelectorAll('.call-tile'));
+    if (els.strip) tiles.push(...els.strip.querySelectorAll('.call-tile'));
+    tiles.forEach(function (node) {
+        const parentId = node.dataset.originalParentId;
+        const parent = parentId ? document.getElementById(parentId) : null;
+        if (parent) {
+            parent.appendChild(node);
+        }
+    });
+    if (els.focusArea) els.focusArea.classList.add('is-hidden');
+    if (els.strip) els.strip.classList.add('is-hidden');
+    els.defaultLayout.classList.remove('is-hidden');
+    els.mediaGrid.classList.remove('is-focused');
+    callFocusState = { active: false, tileId: null };
+}
+
+function toggleCallFocus(tile) {
+    if (!tile) return;
+    if (callFocusState.active && callFocusState.tileId === tile.dataset.callTileId) {
+        exitCallFocus();
+        return;
+    }
+    if (callFocusState.active) {
+        exitCallFocus();
+    }
+    enterCallFocus(tile);
+}
+
+function getInboxCallHost() {
+    return document.getElementById('inbox-call-host');
+}
+
+function getInboxThreadContainer() {
+    return document.querySelector('.inbox-thread');
+}
+
+function updateActiveCallButton() {
+    const btn = document.getElementById('open-active-call-btn');
+    if (!btn) return;
+    const shouldShow = !!activeCallSession
+        && activeCallSession.status === 'active'
+        && activeCallSession.conversationId === activeConversationId
+        && !isCallViewOpen;
+    if (!shouldShow) {
+        btn.classList.add('is-hidden');
+        btn.textContent = '';
+        return;
+    }
+    const convo = conversationDetailsCache[activeConversationId] || {};
+    const participants = convo.participants || [];
+    btn.textContent = participants.length > 2 ? 'Join call' : 'Open call';
+    btn.classList.remove('is-hidden');
+}
+
+function mountCallOverlayInThread() {
+    const elements = getCallOverlayElements();
+    const host = getInboxCallHost();
+    if (!elements.overlay || !host) return;
+    if (elements.overlay.parentElement !== host) {
+        host.appendChild(elements.overlay);
+    }
+    elements.overlay.classList.add('in-thread');
+}
+
+function openCallView() {
+    const host = getInboxCallHost();
+    const thread = getInboxThreadContainer();
+    const { overlay } = getCallOverlayElements();
+    if (!host || !overlay) return;
+    mountCallOverlayInThread();
+    overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    host.classList.remove('is-hidden');
+    if (thread) thread.classList.add('in-call-view');
+    isCallViewOpen = true;
+    updateActiveCallButton();
+}
+
+function closeCallView() {
+    const host = getInboxCallHost();
+    const thread = getInboxThreadContainer();
+    if (host) host.classList.add('is-hidden');
+    if (thread) thread.classList.remove('in-call-view');
+    isCallViewOpen = false;
+    updateActiveCallButton();
+}
+
+window.openActiveCallView = function () {
+    if (!activeCallSession || activeCallSession.status !== 'active') return;
+    openCallView();
+};
+
 function setCallOverlayVisible(visible) {
     const { overlay } = getCallOverlayElements();
     if (!overlay) return;
     overlay.classList.toggle('is-visible', visible);
     overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    if (visible) {
+        mountCallOverlayInThread();
+    }
 }
 
 function setIncomingPromptVisible(visible) {
-    const { incomingPrompt } = getCallOverlayElements();
+    const { incomingPrompt, incomingBackdrop } = getCallOverlayElements();
     if (!incomingPrompt) return;
-    incomingPrompt.style.display = visible ? 'flex' : 'none';
+    incomingPrompt.classList.toggle('is-hidden', !visible);
+    if (incomingBackdrop) {
+        incomingBackdrop.classList.toggle('is-hidden', !visible);
+        incomingBackdrop.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    }
 }
 
 function hideIncomingCallPrompt() {
-    incomingPromptCallId = null;
+    lastIncomingPromptCallId = null;
     setIncomingPromptVisible(false);
     stopRingtone();
 }
@@ -9403,11 +9624,44 @@ function stopRingtone() {
     __ringGain = null;
 }
 
-function renderIncomingCallPrompt(callData = {}, callerProfile = {}) {
+function buildFallbackAvatarUrl(label = '') {
+    const initial = (label || '?').trim().charAt(0).toUpperCase() || '?';
+    const color = computeAvatarColor(label || 'user');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">
+        <rect width="72" height="72" rx="36" fill="${color}"></rect>
+        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="28" fill="${AVATAR_TEXT_COLOR}">${initial}</text>
+    </svg>`;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+async function renderIncomingCallPrompt(callData = {}) {
     const elements = getCallOverlayElements();
     if (!elements.incomingPrompt) return;
-    const displayName = callerProfile.displayName || callerProfile.name || callerProfile.username || 'Incoming call';
+    if (activeCallSession?.status === 'active' || livekitRoom) return;
+    const participants = Array.isArray(callData.participants) ? callData.participants : [];
+    const callerId = callData.createdBy
+        || callData.initiatorId
+        || participants.find(function (uid) { return uid !== currentUser?.uid; });
+    let callerProfile = callerId ? (getCachedUser(callerId, { allowStale: true }) || null) : null;
+    if (!callerProfile && callerId) {
+        try {
+            callerProfile = await resolveUserProfile(callerId);
+        } catch (e) {
+            callerProfile = null;
+        }
+    }
+    const displayName = callerProfile?.displayName || callerProfile?.name || callerProfile?.username || 'Unknown';
+    const username = callerProfile?.username ? `@${callerProfile.username}` : '';
+    const avatarUrl = normalizeImageUrl(callerProfile?.photoURL || '') || buildFallbackAvatarUrl(displayName);
+    if (elements.incomingAvatar) {
+        elements.incomingAvatar.src = avatarUrl;
+        elements.incomingAvatar.alt = displayName;
+    }
     if (elements.incomingName) elements.incomingName.textContent = displayName;
+    if (elements.incomingUsername) {
+        elements.incomingUsername.textContent = username;
+        elements.incomingUsername.classList.toggle('is-hidden', !username);
+    }
     if (elements.incomingType) elements.incomingType.textContent = (callData.type || 'audio') === 'video' ? 'Video call' : 'Audio call';
     setIncomingPromptVisible(true);
     startRingtone();
@@ -9421,6 +9675,12 @@ function resetCallOverlayMedia() {
     }
     if (elements.remoteGrid) {
         elements.remoteGrid.innerHTML = '';
+    }
+    if (elements.focusArea) {
+        elements.focusArea.innerHTML = '';
+    }
+    if (elements.strip) {
+        elements.strip.innerHTML = '';
     }
 }
 
@@ -9449,8 +9709,11 @@ function stopCallDocListener() {
 function clearCallSession() {
     stopCallDocListener();
     activeCallSession = null;
+    activeCallConversationId = null;
+    exitCallFocus();
     resetCallOverlayMedia();
     setCallOverlayVisible(false);
+    closeCallView();
     hideIncomingCallPrompt();
 }
 
@@ -9462,6 +9725,10 @@ function attachRemoteTrack(track, participant) {
     const tile = document.createElement('div');
     tile.className = 'call-remote-tile';
     tile.dataset.trackId = tileId;
+    tile.dataset.callTileId = tileId;
+    if (elements.remoteGrid) {
+        tile.dataset.originalParentId = elements.remoteGrid.id;
+    }
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
@@ -9472,14 +9739,22 @@ function attachRemoteTrack(track, participant) {
     tile.appendChild(label);
     elements.remoteGrid.appendChild(tile);
     track.attach(video);
+    enhanceCallTile(tile);
+    if (callFocusState.active) {
+        const { strip } = getCallOverlayElements();
+        if (strip) strip.appendChild(tile);
+    }
 }
 
 function detachRemoteTrack(track, participant) {
     const elements = getCallOverlayElements();
-    if (!elements.remoteGrid) return;
     const tileId = `remote-${participant.sid}-${track.sid}`;
-    const tile = elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`);
+    const tile = (elements.remoteGrid && elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`))
+        || document.querySelector(`[data-track-id="${tileId}"]`);
     if (tile) tile.remove();
+    if (callFocusState.active && callFocusState.tileId === tileId) {
+        exitCallFocus();
+    }
 }
 
 async function connectToLiveKitRoom(callSession) {
@@ -9498,6 +9773,8 @@ async function connectToLiveKitRoom(callSession) {
     if (elements.toggleMic) elements.toggleMic.disabled = false;
     if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
     if (elements.toggleShare) elements.toggleShare.disabled = false;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = false;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = callKind !== 'video';
 
     room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
@@ -9569,6 +9846,8 @@ async function connectToLiveKitRoom(callSession) {
         elements.toggleShare.setAttribute('aria-pressed', 'false');
     }
 
+    updateCallControlIcons();
+
     if (callSession.callId) {
         await updateDoc(doc(db, 'calls', callSession.callId), {
             status: 'active',
@@ -9581,6 +9860,7 @@ async function connectToLiveKitRoom(callSession) {
         activeCallSession = { ...activeCallSession, status: 'active' };
     }
     await renderCallOverlayStatus(callSession.conversationId, 'Live');
+    updateActiveCallButton();
 }
 
 async function leaveLiveKitRoom({ updateStatus = true } = {}) {
@@ -9589,6 +9869,8 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     if (elements.toggleMic) elements.toggleMic.disabled = true;
     if (elements.toggleCam) elements.toggleCam.disabled = true;
     if (elements.toggleShare) elements.toggleShare.disabled = true;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = true;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = true;
     if (livekitLocalAudioTrack) {
         livekitLocalAudioTrack.stop();
         livekitLocalAudioTrack = null;
@@ -9618,13 +9900,16 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         }).catch(function (err) {
             console.warn('Unable to update call status', err?.message || err);
         });
+        if (activeCallSession?.conversationId) {
+            await addCallSystemMessage(activeCallSession.conversationId, activeCallSession.callId, 'ended', '📞 Call ended');
+        }
     }
     clearCallSession();
 }
 
 async function initCallUi() {
     const els = getCallOverlayElements();
-    if (!els.closeBtn || !els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
+    if (!els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
 
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
@@ -9640,34 +9925,151 @@ async function initCallUi() {
     let camOn = false;
     let shareOn = false;
 
-    els.closeBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
+    const closeDeviceMenus = () => {
+        if (els.micMenu) els.micMenu.classList.add('is-hidden');
+        if (els.camMenu) els.camMenu.classList.add('is-hidden');
+    };
+
+    const buildDeviceMenu = (menuEl, devices, onSelect) => {
+        if (!menuEl) return;
+        menuEl.innerHTML = '';
+        if (!devices.length) {
+            const empty = document.createElement('button');
+            empty.type = 'button';
+            empty.textContent = 'No devices found';
+            empty.disabled = true;
+            menuEl.appendChild(empty);
+            return;
+        }
+        devices.forEach(function (device) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = device.label || 'Unknown device';
+            btn.onclick = async function (event) {
+                event.stopPropagation();
+                await onSelect(device.deviceId);
+                closeDeviceMenus();
+            };
+            menuEl.appendChild(btn);
+        });
+    };
+
+    const openDeviceMenu = async (menuEl, kind, onSelect) => {
+        if (!menuEl) return;
+        if (!navigator.mediaDevices?.enumerateDevices) {
+            toast('Device selection unavailable.', 'info');
+            return;
+        }
+        if (!menuEl.classList.contains('is-hidden')) {
+            menuEl.classList.add('is-hidden');
+            return;
+        }
+        closeDeviceMenus();
+        const devices = (await navigator.mediaDevices.enumerateDevices()).filter(function (device) {
+            return device.kind === kind;
+        });
+        buildDeviceMenu(menuEl, devices, onSelect);
+        menuEl.classList.remove('is-hidden');
+        const onDocClick = function () {
+            closeDeviceMenus();
+            document.removeEventListener('click', onDocClick);
+        };
+        setTimeout(function () {
+            document.addEventListener('click', onDocClick);
+        }, 0);
+    };
+
+    const switchAudioDevice = async (deviceId) => {
+        if (!livekitRoom) return;
+        if (typeof livekitRoom.switchActiveDevice === 'function') {
+            await livekitRoom.switchActiveDevice('audioinput', deviceId);
+            return;
+        }
+        if (!livekitCreateLocalAudioTrack) return;
+        const newTrack = await livekitCreateLocalAudioTrack({ deviceId });
+        if (livekitLocalAudioTrack) {
+            livekitRoom.localParticipant.unpublishTrack(livekitLocalAudioTrack);
+            livekitLocalAudioTrack.stop();
+        }
+        livekitLocalAudioTrack = newTrack;
+        await livekitRoom.localParticipant.publishTrack(newTrack);
+    };
+
+    const switchVideoDevice = async (deviceId) => {
+        if (!livekitRoom) return;
+        if (typeof livekitRoom.switchActiveDevice === 'function') {
+            await livekitRoom.switchActiveDevice('videoinput', deviceId);
+            return;
+        }
+        if (!livekitCreateLocalVideoTrack) return;
+        const newTrack = await livekitCreateLocalVideoTrack({ deviceId });
+        if (livekitLocalVideoTrack) {
+            livekitRoom.localParticipant.unpublishTrack(livekitLocalVideoTrack);
+            livekitLocalVideoTrack.stop();
+        }
+        livekitLocalVideoTrack = newTrack;
+        await livekitRoom.localParticipant.publishTrack(newTrack);
+        if (els.localVideo) {
+            els.localVideo.style.display = 'block';
+            livekitLocalVideoTrack.attach(els.localVideo);
+        }
+    };
+
     els.hangupBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
+    if (els.minimizeBtn) {
+        els.minimizeBtn.onclick = function () {
+            closeCallView();
+        };
+    }
 
     els.toggleMic.onclick = async () => {
         if (!livekitRoom) return;
-        micOn = !micOn;
+        micOn = !els.toggleMic.classList.contains('active');
         await livekitRoom.localParticipant.setMicrophoneEnabled(micOn);
         setActive(els.toggleMic, micOn);
+        updateCallControlIcons();
     };
 
     els.toggleCam.onclick = async () => {
         if (!livekitRoom) return;
-        camOn = !camOn;
+        camOn = !els.toggleCam.classList.contains('active');
         await livekitRoom.localParticipant.setCameraEnabled(camOn);
         setActive(els.toggleCam, camOn);
+        updateCallControlIcons();
     };
 
     els.toggleShare.onclick = async () => {
         if (!livekitRoom) return;
-        shareOn = !shareOn;
+        shareOn = !els.toggleShare.classList.contains('active');
         await livekitRoom.localParticipant.setScreenShareEnabled(shareOn);
         setActive(els.toggleShare, shareOn);
+        updateCallControlIcons();
     };
+
+    if (els.micDeviceBtn) {
+        els.micDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.micMenu, 'audioinput', switchAudioDevice);
+        };
+    }
+
+    if (els.camDeviceBtn) {
+        els.camDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.camMenu, 'videoinput', switchVideoDevice);
+        };
+    }
 
     // default states
     setActive(els.toggleMic, micOn);
     setActive(els.toggleCam, camOn);
     setActive(els.toggleShare, shareOn);
+    updateCallControlIcons();
+    if (els.localTile) {
+        els.localTile.dataset.callTileId = 'local';
+        els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
+        enhanceCallTile(els.localTile);
+    }
 }
 
 function listenToCallStatus(callId, conversationId) {
@@ -9706,12 +10108,18 @@ async function getCallsForConversation(conversationId) {
         collection(db, 'calls'),
         where('conversationId', '==', conversationId),
         where('participants', 'array-contains', currentUser.uid),
-        orderBy('createdAt', 'desc'),
         limit(10)
     );
     const snap = await getDocs(q);
     return snap.docs.map(function (docSnap) {
         return { id: docSnap.id, ...docSnap.data() };
+    }).sort(function (a, b) {
+        const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        if (aMs && bMs) return bMs - aMs;
+        if (aMs) return -1;
+        if (bMs) return 1;
+        return b.id.localeCompare(a.id);
     });
 }
 
@@ -9746,16 +10154,57 @@ async function endCallDoc(callId) {
     }
 }
 
+async function addCallSystemMessage(conversationId, callId, action, text) {
+    if (!conversationId || !requireAuth()) return;
+    if (!callId || !action) return;
+    const existing = messageThreadCache[conversationId] || [];
+    const alreadyLogged = existing.some(function (msg) {
+        return msg.isSystem
+            && msg.systemPayload?.callId === callId
+            && msg.systemPayload?.action === action;
+    });
+    if (alreadyLogged) return;
+    try {
+        await sendChatPayload(conversationId, {
+            text,
+            type: 'system',
+            isSystem: true,
+            systemPayload: {
+                kind: 'call',
+                action,
+                callId
+            }
+        });
+    } catch (e) {
+        console.warn('Unable to add system message', e?.message || e);
+    }
+}
+
 async function acceptIncomingCall(callId, callData, conversationId) {
     const livekitModule = await ensureLiveKitLoaded();
     if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');
         return;
     }
+    if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Your browser does not support microphone access.');
+        return;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: (callData.type || 'audio') === 'video'
+        });
+        stream.getTracks().forEach(function (track) { track.stop(); });
+    } catch (err) {
+        alert('Please allow microphone/camera access to answer the call.');
+        return;
+    }
     await updateDoc(doc(db, 'calls', callId), {
         status: 'active',
         startedAt: serverTimestamp()
     });
+    await addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
     hideIncomingCallPrompt();
     activeCallSession = {
         callId,
@@ -9765,6 +10214,15 @@ async function acceptIncomingCall(callId, callData, conversationId) {
         direction: 'incoming',
         roomName: `call_${callId}`
     };
+    activeCallConversationId = conversationId;
+    if (currentViewId !== 'messages') {
+        window.navigateTo('messages');
+    }
+    setInboxMode('messages', { skipRouteUpdate: true });
+    if (activeConversationId !== conversationId) {
+        await openConversation(conversationId);
+    }
+    openCallView();
     await connectToLiveKitRoom(activeCallSession);
 }
 
@@ -9781,7 +10239,6 @@ function startListeningForIncomingCalls() {
 
     const callQuery = query(
         collection(db, 'calls'),
-        where('status', '==', 'ringing'),
         where('participants', 'array-contains', currentUser.uid)
     );
 
@@ -9789,86 +10246,30 @@ function startListeningForIncomingCalls() {
         const ringingCalls = snap.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         }).filter(function (data) {
+            const callerId = data.initiatorId || data.createdBy;
             return data.status === 'ringing'
+                && callerId !== currentUser.uid
                 && Array.isArray(data.participants)
                 && data.participants.includes(currentUser.uid);
         });
 
         if (!ringingCalls.length) {
-            hideIncomingCallPrompt();
+            handleIncomingCallSnapshot(null);
             return;
         }
 
-        const callsByConversation = new Map();
-        ringingCalls.forEach(function (call) {
-            if (!call.conversationId) return;
-            const existing = callsByConversation.get(call.conversationId) || [];
-            existing.push(call);
-            callsByConversation.set(call.conversationId, existing);
+        const newest = ringingCalls.slice().sort(function (a, b) {
+            const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+            const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+            if (aMs && bMs) return bMs - aMs;
+            if (aMs) return -1;
+            if (bMs) return 1;
+            return b.id.localeCompare(a.id);
+        })[0];
+
+        handleIncomingCallSnapshot(newest, ringingCalls).catch(function (err) {
+            console.warn('Incoming call handler failed', err?.message || err);
         });
-
-        for (const [conversationId, calls] of callsByConversation.entries()) {
-            if (calls.length > 1) {
-                const sorted = calls.slice().sort(function (a, b) { return a.id.localeCompare(b.id); });
-                const canonical = sorted[0];
-                if (activeCallSession?.status === 'ringing'
-                    && activeCallSession?.conversationId === conversationId
-                    && activeCallSession?.callId !== canonical.id) {
-                    endCallDoc(activeCallSession.callId);
-                    clearCallSession();
-                    acceptIncomingCall(canonical.id, canonical, conversationId).catch(function () {});
-                    return;
-                }
-                if (activeCallSession?.callId === canonical.id) {
-                    sorted.slice(1).forEach(function (call) {
-                        endCallDoc(call.id);
-                    });
-                }
-            }
-        }
-
-        const incoming = ringingCalls.find(function (call) {
-            const callerId = call.initiatorId || call.createdBy;
-            return callerId && callerId !== currentUser.uid;
-        });
-
-        if (!incoming) {
-            hideIncomingCallPrompt();
-            return;
-        }
-
-        if (activeCallSession && activeCallSession.conversationId !== incoming.conversationId) {
-            hideIncomingCallPrompt();
-            return;
-        }
-
-        if (incomingPromptCallId === incoming.id) return;
-        incomingPromptCallId = incoming.id;
-
-        resolveUserProfile(incoming.initiatorId || incoming.createdBy).then(function (profile) {
-            renderIncomingCallPrompt(incoming, profile || {});
-        }).catch(function () {
-            renderIncomingCallPrompt(incoming, {});
-        });
-
-        const elements = getCallOverlayElements();
-        if (elements.incomingAccept) {
-            elements.incomingAccept.onclick = async function () {
-                if (activeCallSession) return;
-                stopRingtone();
-                await acceptIncomingCall(incoming.id, incoming, incoming.conversationId);
-            };
-        }
-        if (elements.incomingDecline) {
-            elements.incomingDecline.onclick = async function () {
-                stopRingtone();
-                await updateDoc(doc(db, 'calls', incoming.id), {
-                    status: 'ended',
-                    endedAt: serverTimestamp()
-                });
-                hideIncomingCallPrompt();
-            };
-        }
     }, function (err) {
         console.warn('[Calls] incoming listener error', err);
     }));
@@ -9905,7 +10306,9 @@ async function joinCallInvite(conversationId, callId) {
         roomName: `call_${callId}`,
         type: callData.type || 'audio'
     };
+    activeCallConversationId = conversationId;
     await renderCallOverlayStatus(conversationId, 'Connecting...');
+    openCallView();
     listenToCallStatus(callId, conversationId);
     try {
         await connectToLiveKitRoom(activeCallSession);
@@ -9953,6 +10356,19 @@ function renderMessages(msgs = [], convo = {}) {
             fragment.appendChild(divider);
         }
         lastTimestamp = createdDate;
+
+        if (msg.isSystem || msg.type === 'system') {
+            const row = document.createElement('div');
+            row.className = 'message-row system';
+            row.dataset.messageId = msg.id;
+            const systemBubble = document.createElement('div');
+            systemBubble.className = 'message-system';
+            systemBubble.textContent = msg.text || '';
+            row.appendChild(systemBubble);
+            fragment.appendChild(row);
+            lastSenderId = null;
+            return;
+        }
 
         const nextMsg = msgs[idx + 1];
         const nextDate = nextMsg ? (toDateSafe(nextMsg.createdAt) || new Date()) : null;
@@ -10908,6 +11324,9 @@ async function openConversation(conversationId) {
         setTypingState(activeConversationId, false);
     }
     activeConversationId = conversationId;
+    if (activeCallSession && activeCallSession.conversationId !== conversationId && isCallViewOpen) {
+        closeCallView();
+    }
     if (window.location.pathname.startsWith('/inbox')) {
         const nextPath = buildMessagesUrl({ conversationId });
         if (window.location.pathname + window.location.search !== nextPath) {
@@ -10959,6 +11378,25 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
+    if (activeCallSession && ['ringing', 'active'].includes(activeCallSession.status || '')) {
+        const ok = confirm('You’re already in a call. End it to start a new one?');
+        if (!ok) return;
+        await leaveLiveKitRoom({ updateStatus: true });
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Your browser does not support microphone access.');
+        return;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: kind === 'video'
+        });
+        stream.getTracks().forEach(function (track) { track.stop(); });
+    } catch (err) {
+        alert('Please allow microphone/camera access to place a call.');
+        return;
+    }
     const livekitModule = await ensureLiveKitLoaded();
     if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');
@@ -11036,7 +11474,9 @@ async function startDmCall(kind) {
             direction: 'outgoing',
             roomName: `call_${callId}`
         };
+        activeCallConversationId = conversationId;
         await renderCallOverlayStatus(conversationId, 'Calling…');
+        openCallView();
         listenToCallStatus(callId, conversationId);
     } catch (e) {
         toast('Unable to start call', 'error');
@@ -11045,59 +11485,55 @@ async function startDmCall(kind) {
     }
 }
 
-async function handleIncomingCallSnapshot(snap) {
+async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     if (!currentUser) return;
-    const invites = [];
-    for (const docSnap of snap.docs) {
-        const data = docSnap.data() || {};
-        const callerId = data.initiatorId || data.createdBy;
-        if (callerId === currentUser.uid) continue;
-        const conversationId = data.conversationId;
-        if (!conversationId) continue;
-        invites.push({
-            conversationId,
-            callId: docSnap.id,
-            kind: data.type || 'audio',
-            status: data.status || 'ringing'
-        });
-    }
-
-    if (!invites.length) {
+    if (!incomingCall) {
+        hideIncomingCallPrompt();
         if (activeCallSession?.direction === 'incoming' && activeCallSession?.status === 'ringing') {
-            concludeCallSession();
+            clearCallSession();
         }
         return;
     }
 
-    const invite = invites[0];
-    if (activeCallSession) {
-        if (activeCallSession.callId === invite.callId) {
-            activeCallSession = { ...activeCallSession, status: invite.status };
-            await renderCallOverlay(activeCallSession);
-        }
+    if (activeCallSession && activeCallSession.conversationId !== incomingCall.conversationId) {
+        hideIncomingCallPrompt();
         return;
     }
-    await startIncomingCallSession(invite);
+
+    if (activeCallSession?.status === 'active' || livekitRoom) {
+        hideIncomingCallPrompt();
+        return;
+    }
+
+    const elements = getCallOverlayElements();
+    const promptVisible = elements.incomingPrompt && !elements.incomingPrompt.classList.contains('is-hidden');
+    if (lastIncomingPromptCallId === incomingCall.id && promptVisible) return;
+    lastIncomingPromptCallId = incomingCall.id;
+
+    renderIncomingCallPrompt(incomingCall);
+
+    if (elements.incomingAccept) {
+        elements.incomingAccept.onclick = async function () {
+            if (activeCallSession) return;
+            stopRingtone();
+            await acceptIncomingCall(incomingCall.id, incomingCall, incomingCall.conversationId);
+        };
+    }
+    if (elements.incomingDecline) {
+        elements.incomingDecline.onclick = async function () {
+            stopRingtone();
+            await updateDoc(doc(db, 'calls', incomingCall.id), {
+                status: 'ended',
+                endedAt: serverTimestamp()
+            });
+            await addCallSystemMessage(incomingCall.conversationId, incomingCall.id, 'declined', '📞 Call declined');
+            hideIncomingCallPrompt();
+        };
+    }
 }
 
 function initCallInviteListener() {
-    if (callInviteUnsubscribe) {
-        callInviteUnsubscribe();
-        callInviteUnsubscribe = null;
-    }
-    if (!currentUser) return;
-    const callQuery = query(
-        collection(db, 'calls'),
-        where('participants', 'array-contains', currentUser.uid),
-        where('status', '==', 'ringing')
-    );
-    callInviteUnsubscribe = ListenerRegistry.register('calls:incoming', onSnapshot(callQuery, function (snap) {
-        handleIncomingCallSnapshot(snap).catch(function (err) {
-            console.warn('Incoming call handler failed', err?.message || err);
-        });
-    }, function (err) {
-        handleSnapshotError('Incoming calls', err);
-    }));
+    startListeningForIncomingCalls();
 }
 
 window.startDmCall = startDmCall;
@@ -11916,6 +12352,7 @@ async function sendChatPayload(conversationId, payload = {}) {
         readBy: [currentUser.uid],
         reported: false,
         reportCount: 0,
+        isSystem: !!payload.isSystem,
         systemPayload: payload.systemPayload || null,
         status: payload.status || 'sent'
     };
