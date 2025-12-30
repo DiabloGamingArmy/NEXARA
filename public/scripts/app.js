@@ -922,6 +922,13 @@ let callFocusState = { active: false, tileId: null };
 const callStatusCache = new Map();
 let activeCallDocId = null;
 let activeCallConversationId = null;
+const CALL_DEBUG_FLAG = '__DEBUG_CALLS';
+
+function debugCallLog(...args) {
+    if (window[CALL_DEBUG_FLAG]) {
+        console.log('[Calls]', ...args);
+    }
+}
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -9326,6 +9333,7 @@ function renderMessageHeader(convo = {}) {
         : 'class="message-thread-profile-btn" type="button" disabled';
 
     const optionsDisabledAttr = cid ? '' : ' disabled aria-disabled="true"';
+    const infoDisabledAttr = cid ? '' : ' disabled aria-disabled="true"';
     const canCall = !!cid && participants.length > 0 && !!currentUser?.uid;
     const isReady = livekitLoadStatus === 'ready';
     const callDisabledAttr = canCall && isReady ? '' : ' disabled aria-disabled="true"';
@@ -9334,6 +9342,7 @@ function renderMessageHeader(convo = {}) {
     const openCallBtn = `<button id="open-active-call-btn" class="open-call-btn is-hidden" type="button" onclick="window.openActiveCallView()"></button>`;
     const callButtons = `${openCallBtn}<button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('audio')" aria-label="Start audio call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-phone"></i></button>
            <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button" onclick="window.startDmCall('video')" aria-label="Start video call"${callDisabledAttr}${tooltipAttr}><i class="ph ph-video-camera"></i></button>`;
+    const infoButton = `<button class="icon-pill message-info-toggle" type="button" onclick="window.toggleConversationInfoPanel?.()" aria-label="Toggle info panel"${infoDisabledAttr}><i class="ph ph-info"></i></button>`;
 
     header.innerHTML = `<div class="message-header-shell">
         <button ${profileBtnAttrs}>
@@ -9347,6 +9356,7 @@ function renderMessageHeader(convo = {}) {
             <div class="message-header-actions-left">
                 ${callButtons}
                 <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"${optionsDisabledAttr}><i class="ph ph-dots-three-outline"></i></button>
+                ${infoButton}
             </div>
             <div class="message-header-actions-right">
                 <span id="call-status-pill" class="call-status-pill is-hidden">Live</span>
@@ -9689,9 +9699,20 @@ function setCallOverlayVisible(visible) {
     }
 }
 
+function ensureIncomingPromptRoot() {
+    const { incomingPrompt, incomingBackdrop } = getCallOverlayElements();
+    if (incomingBackdrop && incomingBackdrop.parentElement !== document.body) {
+        document.body.appendChild(incomingBackdrop);
+    }
+    if (incomingPrompt && incomingPrompt.parentElement !== document.body) {
+        document.body.appendChild(incomingPrompt);
+    }
+}
+
 function setIncomingPromptVisible(visible) {
     const { incomingPrompt, incomingBackdrop } = getCallOverlayElements();
     if (!incomingPrompt) return;
+    ensureIncomingPromptRoot();
     incomingPrompt.classList.toggle('is-hidden', !visible);
     if (incomingBackdrop) {
         incomingBackdrop.classList.toggle('is-hidden', !visible);
@@ -9781,6 +9802,7 @@ function buildFallbackAvatarUrl(label = '') {
 async function renderIncomingCallPrompt(callData = {}) {
     const elements = getCallOverlayElements();
     if (!elements.incomingPrompt) return;
+    ensureIncomingPromptRoot();
     if (activeCallSession?.status === 'active' || livekitRoom) return;
     const participants = Array.isArray(callData.participants) ? callData.participants : [];
     const callerId = callData.createdBy
@@ -9807,6 +9829,7 @@ async function renderIncomingCallPrompt(callData = {}) {
         elements.incomingUsername.classList.toggle('is-hidden', !username);
     }
     if (elements.incomingType) elements.incomingType.textContent = (callData.type || 'audio') === 'video' ? 'Video call' : 'Audio call';
+    debugCallLog('Render incoming call prompt', { callId: callData.id, conversationId: callData.conversationId });
     setIncomingPromptVisible(true);
     startRingtone();
 }
@@ -10717,6 +10740,7 @@ function startListeningForIncomingCalls() {
                 && data.participants.includes(currentUser.uid);
         });
 
+        debugCallLog('Incoming snapshot', { count: ringingCalls.length });
         if (!ringingCalls.length) {
             handleIncomingCallSnapshot(null);
             return;
@@ -10731,6 +10755,7 @@ function startListeningForIncomingCalls() {
             return b.id.localeCompare(a.id);
         })[0];
 
+        debugCallLog('Incoming call candidate', { callId: newest.id, status: newest.status, conversationId: newest.conversationId });
         handleIncomingCallSnapshot(newest, ringingCalls).catch(function (err) {
             console.warn('Incoming call handler failed', err?.message || err);
         });
@@ -11936,6 +11961,7 @@ async function startDmCall(kind) {
 async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     if (!currentUser) return;
     if (!incomingCall) {
+        debugCallLog('No incoming call for snapshot');
         hideIncomingCallPrompt();
         if (activeCallSession?.direction === 'incoming' && activeCallSession?.status === 'ringing') {
             clearCallSession();
@@ -11944,11 +11970,13 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     }
 
     if (activeCallSession && activeCallSession.conversationId !== incomingCall.conversationId) {
+        debugCallLog('Incoming call ignored (different conversation)', incomingCall.id);
         hideIncomingCallPrompt();
         return;
     }
 
-    if (activeCallSession?.status === 'active' || livekitRoom || isCallViewOpen) {
+    if (activeCallSession?.status === 'active' || livekitRoom) {
+        debugCallLog('Incoming call ignored (already in call)', incomingCall.id);
         hideIncomingCallPrompt();
         return;
     }
@@ -11959,6 +11987,7 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     lastIncomingPromptCallId = incomingCall.id;
 
     if (!['active', 'ringing'].includes(incomingCall.status || 'active')) {
+        debugCallLog('Incoming call ignored (status)', incomingCall.status);
         hideIncomingCallPrompt();
         return;
     }
@@ -11969,6 +11998,13 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
         || ringTargets.includes(currentUser.uid)
         || fallbackRinging;
     const ringExpiresAtMs = incomingCall.ringExpiresAtMs || 0;
+    debugCallLog('Incoming call ring evaluation', {
+        callId: incomingCall.id,
+        shouldRing,
+        ringExpiresAtMs,
+        userStatus: userStatus[currentUser.uid],
+        ringTargetsCount: ringTargets.length
+    });
     if (shouldRing && ringExpiresAtMs && Date.now() > ringExpiresAtMs) {
         const callRef = doc(db, 'calls', incomingCall.id);
         const statusKey = `userStatus.${currentUser.uid}`;
@@ -11982,6 +12018,7 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
         return;
     }
     if (!shouldRing) {
+        debugCallLog('Incoming call not ringing for user', incomingCall.id);
         hideIncomingCallPrompt();
         return;
     }
@@ -11992,12 +12029,14 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
             elements.incomingAccept.onclick = async function () {
                 if (activeCallSession) return;
                 stopRingtone();
+                debugCallLog('Incoming call accepted', incomingCall.id);
                 await acceptIncomingCall(incomingCall.id, incomingCall, incomingCall.conversationId);
             };
         }
         if (elements.incomingDecline) {
             elements.incomingDecline.onclick = async function () {
                 stopRingtone();
+                debugCallLog('Incoming call declined', incomingCall.id);
                 await declineIncomingCall(incomingCall.id, incomingCall.conversationId);
                 hideIncomingCallPrompt();
             };

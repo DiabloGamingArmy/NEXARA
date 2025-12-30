@@ -49,9 +49,9 @@ export function enhanceInboxLayout() {
     }
 
     const headerTools = document.querySelector('.message-thread-header-row');
-    if (headerTools && !headerTools.querySelector('.message-info-toggle')) {
-        const infoBtn = ensureButton('', 'ph ph-info', function () { window.toggleConversationInfoPanel?.(); }, { ariaLabel: 'Toggle info panel', className: 'icon-pill message-info-toggle' });
-        headerTools.appendChild(infoBtn);
+    if (headerTools) {
+        const existingInfo = headerTools.querySelector('.message-info-toggle');
+        if (existingInfo) existingInfo.remove();
     }
 
     const compose = document.querySelector('.message-compose');

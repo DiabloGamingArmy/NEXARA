@@ -3684,6 +3684,18 @@ body.light-mode .category-pill.active .topic-verified-icon {
     gap: 10px;
     cursor: pointer;
     color: inherit;
+    flex-shrink: 0;
+}
+
+.message-thread-header .message-thread-profile-btn .avatar {
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+}
+
+.message-thread-header .message-thread-profile-btn .avatar img {
+    width: 100%;
+    height: 100%;
 }
 
 .message-thread-header .message-thread-profile-btn:disabled {
@@ -3700,7 +3712,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .message-thread-header .message-thread-subtitle {
     color: var(--text-muted);
-    font-size: 0.9rem;
+    font-size: 0.85rem;
+    line-height: 1.2;
+    margin-top: 2px;
 }
 
 .message-header-shell {
@@ -3715,7 +3729,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
+    flex: 1;
+    justify-content: space-between;
 }
 
 .message-header-actions .dm-call-btn {
@@ -4057,8 +4073,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .call-tile.is-speaking {
-    outline: 2px solid rgba(0, 255, 128, 0.55);
-    box-shadow: 0 0 0 1px rgba(0, 255, 128, 0.15);
+    box-shadow: 0 0 0 2px rgba(0, 255, 128, 0.55), 0 0 0 4px rgba(0, 255, 128, 0.12);
 }
 
 .call-actions {
@@ -4580,7 +4595,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     align-items: center;
     gap: 12px;
-    width: 100%;
+    flex: 1;
+    justify-content: space-between;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
 }
 
 .message-header-actions-left {
@@ -4630,6 +4649,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     align-items: flex-start;
     border: 1px solid var(--border);
     margin-bottom: 8px;
+    min-height: 64px;
 }
 
 .conversation-item.active {
