@@ -9265,6 +9265,7 @@ function renderConversationList() {
         searchActive: !!search
     });
 
+    const highlightData = getActiveCallHighlightData();
     const renderRow = function (mapping, targetEl) {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
@@ -10250,6 +10251,8 @@ async function connectToLiveKitRoom(callSession) {
     if (elements.toggleMic) elements.toggleMic.disabled = false;
     if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
     if (elements.toggleShare) elements.toggleShare.disabled = false;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = false;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = callKind !== 'video';
 
     room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
@@ -10400,6 +10403,8 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     if (elements.toggleMic) elements.toggleMic.disabled = true;
     if (elements.toggleCam) elements.toggleCam.disabled = true;
     if (elements.toggleShare) elements.toggleShare.disabled = true;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = true;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = true;
     if (livekitLocalAudioTrack) {
         livekitLocalAudioTrack.stop();
         livekitLocalAudioTrack = null;
@@ -10616,6 +10621,20 @@ async function initCallUi() {
         updateCallControlIcons();
     };
 
+    if (els.micDeviceBtn) {
+        els.micDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.micMenu, 'audioinput', switchAudioDevice);
+        };
+    }
+
+    if (els.camDeviceBtn) {
+        els.camDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.camMenu, 'videoinput', switchVideoDevice);
+        };
+    }
+
     // default states
     setActive(els.toggleMic, micOn);
     setActive(els.toggleCam, camOn);
@@ -10703,6 +10722,7 @@ async function getCallsForConversation(conversationId) {
         if (bMs) return 1;
         return b.id.localeCompare(a.id);
     });
+    return matches[0] || null;
 }
 
 async function findActiveCallForConversation(conversationId) {
@@ -12239,7 +12259,7 @@ async function startDmCall(kind) {
             initiatorId: currentUser.uid,
             conversationId,
             type: callType,
-            status: 'ringing',
+            status: 'active',
             participants,
             activeParticipants: [currentUser.uid],
             ringTargets,
