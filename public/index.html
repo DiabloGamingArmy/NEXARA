@@ -917,6 +917,7 @@
                                             title="Loading call system…" aria-disabled="true" disabled>
                                             <i class="ph ph-video-camera"></i>
                                         </button>
+                                        <span id="call-status-pill" class="call-status-pill is-hidden">Live</span>
                                         <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
                                             <i class="ph ph-dots-three-outline"></i>
                                         </button>
@@ -1750,8 +1751,10 @@
                 </div>
             </div>
             <div class="call-media-grid">
-                <div id="call-focus-area" class="call-focus-area is-hidden"></div>
-                <div id="call-strip" class="call-strip is-hidden"></div>
+                <div id="call-focus-layout" class="call-focus-layout">
+                    <div id="call-focus-area" class="call-focus-area"></div>
+                    <div id="call-strip" class="call-strip"></div>
+                </div>
                 <div id="call-default-layout" class="call-default-layout">
                 <div id="call-local-tile" class="call-video-tile">
                     <video id="call-local-video" autoplay muted playsinline></video>
@@ -1762,22 +1765,16 @@
             </div>
             <div class="call-actions">
                 <div class="call-action-group">
-                    <button id="call-toggle-mic" class="call-action-btn" type="button" aria-label="Mute microphone">
-                        <i class="ph ph-microphone"></i>
-                        <span>Mute</span>
-                    </button>
-                    <button id="call-mic-device" class="call-device-btn" type="button" aria-label="Select microphone">
-                        <i class="ph ph-caret-down"></i>
+                    <button id="call-toggle-mic" class="call-action-btn call-action-split" type="button" aria-label="Mute microphone">
+                        <span class="call-action-main"><i class="ph ph-microphone"></i><span>Mute</span></span>
+                        <span class="call-action-caret" data-caret="mic"><i class="ph ph-caret-down"></i></span>
                     </button>
                     <div id="call-mic-menu" class="call-device-menu is-hidden"></div>
                 </div>
                 <div class="call-action-group">
-                    <button id="call-toggle-cam" class="call-action-btn" type="button" aria-label="Toggle camera">
-                        <i class="ph ph-video-camera"></i>
-                        <span>Camera</span>
-                    </button>
-                    <button id="call-cam-device" class="call-device-btn" type="button" aria-label="Select camera">
-                        <i class="ph ph-caret-down"></i>
+                    <button id="call-toggle-cam" class="call-action-btn call-action-split" type="button" aria-label="Toggle camera">
+                        <span class="call-action-main"><i class="ph ph-video-camera"></i><span>Camera</span></span>
+                        <span class="call-action-caret" data-caret="cam"><i class="ph ph-caret-down"></i></span>
                     </button>
                     <div id="call-cam-menu" class="call-device-menu is-hidden"></div>
                 </div>
@@ -1802,7 +1799,7 @@
             <img id="call-incoming-avatar" class="call-incoming-avatar" alt="Caller avatar">
             <div id="call-incoming-name" class="call-incoming-name">Incoming call</div>
             <div id="call-incoming-username" class="call-incoming-username is-hidden"></div>
-            <div class="call-incoming-text">is calling you</div>
+            <div class="call-incoming-text">is calling you…</div>
             <div id="call-incoming-type" class="call-incoming-type">Audio call</div>
             <div class="call-incoming-actions">
                 <button id="call-incoming-accept" class="call-incoming-btn accept" type="button">Accept</button>
