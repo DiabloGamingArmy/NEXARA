@@ -899,7 +899,6 @@ const videosPagination = {
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 let activeCallSession = null;
-let activeCallConversationId = null;
 let isCallViewOpen = false;
 let callDocUnsubscribe = null;
 let callUiInitialized = false;
@@ -921,6 +920,8 @@ let __ringOsc = null;
 let __ringGain = null;
 let callFocusState = { active: false, tileId: null };
 const callStatusCache = new Map();
+let activeCallDocId = null;
+let activeCallConversationId = null;
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -10391,6 +10392,7 @@ async function joinExistingCall(callData, conversationId) {
     };
     callStatusCache.set(callId, 'active');
     activeCallConversationId = conversationId;
+    activeCallDocId = callId;
     livekitConnecting = true;
     livekitConnectingCallId = callId;
     await renderCallOverlayStatus(conversationId, activeCallSession.callData);
@@ -10500,6 +10502,7 @@ async function acceptIncomingCall(callId, callData, conversationId) {
     };
     callStatusCache.set(callId, 'active');
     activeCallConversationId = conversationId;
+    activeCallDocId = callId;
     livekitConnecting = true;
     livekitConnectingCallId = callId;
     if (currentViewId !== 'messages') {
