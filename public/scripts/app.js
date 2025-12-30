@@ -914,6 +914,7 @@ let __audioUnlocked = false;
 let __ringCtx = null;
 let __ringOsc = null;
 let __ringGain = null;
+let callFocusState = { active: false, tileId: null };
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -9313,17 +9314,22 @@ function getCallOverlayElements() {
         overlay: document.getElementById('call-overlay'),
         name: document.getElementById('call-overlay-name'),
         status: document.getElementById('call-overlay-status'),
+        mediaGrid: document.querySelector('#call-overlay .call-media-grid'),
+        focusArea: document.getElementById('call-focus-area'),
+        strip: document.getElementById('call-strip'),
+        defaultLayout: document.getElementById('call-default-layout'),
+        localTile: document.getElementById('call-local-tile'),
         localVideo: document.getElementById('call-local-video'),
         remoteGrid: document.getElementById('call-remote-grid'),
         toggleMic: document.getElementById('call-toggle-mic'),
         toggleCam: document.getElementById('call-toggle-cam'),
         toggleShare: document.getElementById('call-toggle-share'),
+        minimizeBtn: document.getElementById('call-minimize'),
         micDeviceBtn: document.getElementById('call-mic-device'),
         camDeviceBtn: document.getElementById('call-cam-device'),
         micMenu: document.getElementById('call-mic-menu'),
         camMenu: document.getElementById('call-cam-menu'),
         hangupBtn: document.getElementById('call-hangup'),
-        closeBtn: document.getElementById('call-overlay-close'),
         incomingPrompt: document.getElementById('call-incoming-prompt'),
         incomingBackdrop: document.getElementById('call-incoming-backdrop'),
         incomingAvatar: document.getElementById('call-incoming-avatar'),
@@ -9354,6 +9360,118 @@ function updateCallControlIcons() {
     setCallButtonContent(els.toggleCam, camOn ? 'ph-video-camera' : 'ph-video-camera-slash', camOn ? 'Camera' : 'Camera off');
     setCallButtonContent(els.toggleShare, 'ph-monitor', shareOn ? 'Sharing' : 'Share');
     setCallButtonContent(els.hangupBtn, 'ph-phone-disconnect', 'Hang up');
+
+    const micGroup = els.toggleMic.closest('.call-action-group');
+    const camGroup = els.toggleCam.closest('.call-action-group');
+    if (micGroup) micGroup.classList.toggle('is-active', micOn);
+    if (camGroup) camGroup.classList.toggle('is-active', camOn);
+}
+
+function addTileOverlay(tile) {
+    if (!tile || tile.querySelector('.call-tile-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'call-tile-overlay';
+    overlay.textContent = 'View';
+    tile.appendChild(overlay);
+}
+
+function ensureFullscreenButton(tile) {
+    if (!tile || tile.querySelector('.call-fullscreen-btn')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'call-fullscreen-btn';
+    btn.innerHTML = '<i class="ph ph-arrows-out"></i>';
+    btn.onclick = function (event) {
+        event.stopPropagation();
+        if (!document.fullscreenElement) {
+            tile.requestFullscreen?.().catch(function () {});
+            btn.innerHTML = '<i class="ph ph-arrows-in"></i>';
+        } else {
+            document.exitFullscreen?.().catch(function () {});
+            btn.innerHTML = '<i class="ph ph-arrows-out"></i>';
+        }
+    };
+    tile.appendChild(btn);
+}
+
+function enhanceCallTile(tile) {
+    if (!tile || tile.dataset.callTileEnhanced === '1') return;
+    tile.dataset.callTileEnhanced = '1';
+    tile.classList.add('call-tile');
+    addTileOverlay(tile);
+    tile.addEventListener('click', function (event) {
+        const target = event.target;
+        if (target && (target.closest('.call-fullscreen-btn') || target.closest('.call-action-btn') || target.closest('.call-device-btn'))) {
+            return;
+        }
+        toggleCallFocus(tile);
+    });
+}
+
+function getCallTiles() {
+    const els = getCallOverlayElements();
+    const tiles = [];
+    if (els.localTile) tiles.push(els.localTile);
+    if (els.remoteGrid) {
+        tiles.push(...els.remoteGrid.querySelectorAll('.call-remote-tile'));
+    }
+    return tiles;
+}
+
+function enterCallFocus(tile) {
+    const els = getCallOverlayElements();
+    if (!els.mediaGrid || !els.focusArea || !els.strip || !els.defaultLayout) return;
+    const tiles = getCallTiles();
+    tiles.forEach(function (node) {
+        if (!node.dataset.originalParentId) {
+            node.dataset.originalParentId = node.parentElement?.id || '';
+        }
+    });
+    els.mediaGrid.classList.add('is-focused');
+    els.focusArea.classList.remove('is-hidden');
+    els.strip.classList.remove('is-hidden');
+    els.defaultLayout.classList.add('is-hidden');
+    if (tile) {
+        els.focusArea.appendChild(tile);
+        ensureFullscreenButton(tile);
+    }
+    tiles.forEach(function (node) {
+        if (node === tile) return;
+        els.strip.appendChild(node);
+    });
+    callFocusState = { active: true, tileId: tile?.dataset.callTileId || null };
+}
+
+function exitCallFocus() {
+    const els = getCallOverlayElements();
+    if (!els.mediaGrid || !els.defaultLayout) return;
+    const tiles = [];
+    if (els.focusArea) tiles.push(...els.focusArea.querySelectorAll('.call-tile'));
+    if (els.strip) tiles.push(...els.strip.querySelectorAll('.call-tile'));
+    tiles.forEach(function (node) {
+        const parentId = node.dataset.originalParentId;
+        const parent = parentId ? document.getElementById(parentId) : null;
+        if (parent) {
+            parent.appendChild(node);
+        }
+    });
+    if (els.focusArea) els.focusArea.classList.add('is-hidden');
+    if (els.strip) els.strip.classList.add('is-hidden');
+    els.defaultLayout.classList.remove('is-hidden');
+    els.mediaGrid.classList.remove('is-focused');
+    callFocusState = { active: false, tileId: null };
+}
+
+function toggleCallFocus(tile) {
+    if (!tile) return;
+    if (callFocusState.active && callFocusState.tileId === tile.dataset.callTileId) {
+        exitCallFocus();
+        return;
+    }
+    if (callFocusState.active) {
+        exitCallFocus();
+    }
+    enterCallFocus(tile);
 }
 
 function getInboxCallHost() {
@@ -9558,6 +9676,12 @@ function resetCallOverlayMedia() {
     if (elements.remoteGrid) {
         elements.remoteGrid.innerHTML = '';
     }
+    if (elements.focusArea) {
+        elements.focusArea.innerHTML = '';
+    }
+    if (elements.strip) {
+        elements.strip.innerHTML = '';
+    }
 }
 
 function updateCallOverlayMeta(convo = {}, statusText = 'Connecting...') {
@@ -9586,6 +9710,7 @@ function clearCallSession() {
     stopCallDocListener();
     activeCallSession = null;
     activeCallConversationId = null;
+    exitCallFocus();
     resetCallOverlayMedia();
     setCallOverlayVisible(false);
     closeCallView();
@@ -9600,6 +9725,10 @@ function attachRemoteTrack(track, participant) {
     const tile = document.createElement('div');
     tile.className = 'call-remote-tile';
     tile.dataset.trackId = tileId;
+    tile.dataset.callTileId = tileId;
+    if (elements.remoteGrid) {
+        tile.dataset.originalParentId = elements.remoteGrid.id;
+    }
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
@@ -9610,14 +9739,22 @@ function attachRemoteTrack(track, participant) {
     tile.appendChild(label);
     elements.remoteGrid.appendChild(tile);
     track.attach(video);
+    enhanceCallTile(tile);
+    if (callFocusState.active) {
+        const { strip } = getCallOverlayElements();
+        if (strip) strip.appendChild(tile);
+    }
 }
 
 function detachRemoteTrack(track, participant) {
     const elements = getCallOverlayElements();
-    if (!elements.remoteGrid) return;
     const tileId = `remote-${participant.sid}-${track.sid}`;
-    const tile = elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`);
+    const tile = (elements.remoteGrid && elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`))
+        || document.querySelector(`[data-track-id="${tileId}"]`);
     if (tile) tile.remove();
+    if (callFocusState.active && callFocusState.tileId === tileId) {
+        exitCallFocus();
+    }
 }
 
 async function connectToLiveKitRoom(callSession) {
@@ -9764,7 +9901,7 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
             console.warn('Unable to update call status', err?.message || err);
         });
         if (activeCallSession?.conversationId) {
-            await addSystemMessage(activeCallSession.conversationId, '📞 Call ended');
+            await addCallSystemMessage(activeCallSession.conversationId, activeCallSession.callId, 'ended', '📞 Call ended');
         }
     }
     clearCallSession();
@@ -9772,7 +9909,7 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
 
 async function initCallUi() {
     const els = getCallOverlayElements();
-    if (!els.closeBtn || !els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
+    if (!els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
 
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
@@ -9878,8 +10015,12 @@ async function initCallUi() {
         }
     };
 
-    els.closeBtn.onclick = () => { closeCallView(); };
     els.hangupBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
+    if (els.minimizeBtn) {
+        els.minimizeBtn.onclick = function () {
+            closeCallView();
+        };
+    }
 
     els.toggleMic.onclick = async () => {
         if (!livekitRoom) return;
@@ -9924,6 +10065,11 @@ async function initCallUi() {
     setActive(els.toggleCam, camOn);
     setActive(els.toggleShare, shareOn);
     updateCallControlIcons();
+    if (els.localTile) {
+        els.localTile.dataset.callTileId = 'local';
+        els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
+        enhanceCallTile(els.localTile);
+    }
 }
 
 function listenToCallStatus(callId, conversationId) {
@@ -10008,13 +10154,26 @@ async function endCallDoc(callId) {
     }
 }
 
-async function addSystemMessage(conversationId, text) {
+async function addCallSystemMessage(conversationId, callId, action, text) {
     if (!conversationId || !requireAuth()) return;
+    if (!callId || !action) return;
+    const existing = messageThreadCache[conversationId] || [];
+    const alreadyLogged = existing.some(function (msg) {
+        return msg.isSystem
+            && msg.systemPayload?.callId === callId
+            && msg.systemPayload?.action === action;
+    });
+    if (alreadyLogged) return;
     try {
         await sendChatPayload(conversationId, {
             text,
             type: 'system',
-            isSystem: true
+            isSystem: true,
+            systemPayload: {
+                kind: 'call',
+                action,
+                callId
+            }
         });
     } catch (e) {
         console.warn('Unable to add system message', e?.message || e);
@@ -10027,11 +10186,25 @@ async function acceptIncomingCall(callId, callData, conversationId) {
         toast('LiveKit could not be loaded.', 'error');
         return;
     }
+    if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Your browser does not support microphone access.');
+        return;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: (callData.type || 'audio') === 'video'
+        });
+        stream.getTracks().forEach(function (track) { track.stop(); });
+    } catch (err) {
+        alert('Please allow microphone/camera access to answer the call.');
+        return;
+    }
     await updateDoc(doc(db, 'calls', callId), {
         status: 'active',
         startedAt: serverTimestamp()
     });
-    await addSystemMessage(conversationId, '📞 Call accepted');
+    await addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
     hideIncomingCallPrompt();
     activeCallSession = {
         callId,
@@ -10081,39 +10254,11 @@ function startListeningForIncomingCalls() {
         });
 
         if (!ringingCalls.length) {
-            hideIncomingCallPrompt();
+            handleIncomingCallSnapshot(null);
             return;
         }
 
-        const callsByConversation = new Map();
-        ringingCalls.forEach(function (call) {
-            if (!call.conversationId) return;
-            const existing = callsByConversation.get(call.conversationId) || [];
-            existing.push(call);
-            callsByConversation.set(call.conversationId, existing);
-        });
-
-        for (const [conversationId, calls] of callsByConversation.entries()) {
-            if (calls.length > 1) {
-                const sorted = calls.slice().sort(function (a, b) { return a.id.localeCompare(b.id); });
-                const canonical = sorted[0];
-                if (activeCallSession?.status === 'ringing'
-                    && activeCallSession?.conversationId === conversationId
-                    && activeCallSession?.callId !== canonical.id) {
-                    endCallDoc(activeCallSession.callId);
-                    clearCallSession();
-                    acceptIncomingCall(canonical.id, canonical, conversationId).catch(function () {});
-                    return;
-                }
-                if (activeCallSession?.callId === canonical.id) {
-                    sorted.slice(1).forEach(function (call) {
-                        endCallDoc(call.id);
-                    });
-                }
-            }
-        }
-
-        const incoming = ringingCalls.slice().sort(function (a, b) {
+        const newest = ringingCalls.slice().sort(function (a, b) {
             const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
             const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
             if (aMs && bMs) return bMs - aMs;
@@ -10122,46 +10267,9 @@ function startListeningForIncomingCalls() {
             return b.id.localeCompare(a.id);
         })[0];
 
-        if (!incoming) {
-            hideIncomingCallPrompt();
-            return;
-        }
-
-        if (activeCallSession && activeCallSession.conversationId !== incoming.conversationId) {
-            hideIncomingCallPrompt();
-            return;
-        }
-
-        if (activeCallSession?.status === 'active' || livekitRoom) {
-            hideIncomingCallPrompt();
-            return;
-        }
-
-        const elements = getCallOverlayElements();
-        const promptVisible = elements.incomingPrompt && !elements.incomingPrompt.classList.contains('is-hidden');
-        if (lastIncomingPromptCallId === incoming.id && promptVisible) return;
-        lastIncomingPromptCallId = incoming.id;
-
-        renderIncomingCallPrompt(incoming);
-
-        if (elements.incomingAccept) {
-            elements.incomingAccept.onclick = async function () {
-                if (activeCallSession) return;
-                stopRingtone();
-                await acceptIncomingCall(incoming.id, incoming, incoming.conversationId);
-            };
-        }
-        if (elements.incomingDecline) {
-            elements.incomingDecline.onclick = async function () {
-                stopRingtone();
-                await updateDoc(doc(db, 'calls', incoming.id), {
-                    status: 'ended',
-                    endedAt: serverTimestamp()
-                });
-                await addSystemMessage(incoming.conversationId, '📞 Call declined');
-                hideIncomingCallPrompt();
-            };
-        }
+        handleIncomingCallSnapshot(newest, ringingCalls).catch(function (err) {
+            console.warn('Incoming call handler failed', err?.message || err);
+        });
     }, function (err) {
         console.warn('[Calls] incoming listener error', err);
     }));
@@ -11377,39 +11485,51 @@ async function startDmCall(kind) {
     }
 }
 
-async function handleIncomingCallSnapshot(snap) {
+async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     if (!currentUser) return;
-    const invites = [];
-    for (const docSnap of snap.docs) {
-        const data = docSnap.data() || {};
-        const callerId = data.initiatorId || data.createdBy;
-        if (callerId === currentUser.uid) continue;
-        const conversationId = data.conversationId;
-        if (!conversationId) continue;
-        invites.push({
-            conversationId,
-            callId: docSnap.id,
-            kind: data.type || 'audio',
-            status: data.status || 'ringing'
-        });
-    }
-
-    if (!invites.length) {
+    if (!incomingCall) {
+        hideIncomingCallPrompt();
         if (activeCallSession?.direction === 'incoming' && activeCallSession?.status === 'ringing') {
-            concludeCallSession();
+            clearCallSession();
         }
         return;
     }
 
-    const invite = invites[0];
-    if (activeCallSession) {
-        if (activeCallSession.callId === invite.callId) {
-            activeCallSession = { ...activeCallSession, status: invite.status };
-            await renderCallOverlay(activeCallSession);
-        }
+    if (activeCallSession && activeCallSession.conversationId !== incomingCall.conversationId) {
+        hideIncomingCallPrompt();
         return;
     }
-    await startIncomingCallSession(invite);
+
+    if (activeCallSession?.status === 'active' || livekitRoom) {
+        hideIncomingCallPrompt();
+        return;
+    }
+
+    const elements = getCallOverlayElements();
+    const promptVisible = elements.incomingPrompt && !elements.incomingPrompt.classList.contains('is-hidden');
+    if (lastIncomingPromptCallId === incomingCall.id && promptVisible) return;
+    lastIncomingPromptCallId = incomingCall.id;
+
+    renderIncomingCallPrompt(incomingCall);
+
+    if (elements.incomingAccept) {
+        elements.incomingAccept.onclick = async function () {
+            if (activeCallSession) return;
+            stopRingtone();
+            await acceptIncomingCall(incomingCall.id, incomingCall, incomingCall.conversationId);
+        };
+    }
+    if (elements.incomingDecline) {
+        elements.incomingDecline.onclick = async function () {
+            stopRingtone();
+            await updateDoc(doc(db, 'calls', incomingCall.id), {
+                status: 'ended',
+                endedAt: serverTimestamp()
+            });
+            await addCallSystemMessage(incomingCall.conversationId, incomingCall.id, 'declined', '📞 Call declined');
+            hideIncomingCallPrompt();
+        };
+    }
 }
 
 function initCallInviteListener() {

@@ -1748,16 +1748,17 @@
                     <div id="call-overlay-name" class="call-name">Conversation</div>
                     <div id="call-overlay-status" class="call-status">Connecting...</div>
                 </div>
-                <button id="call-overlay-close" class="icon-pill" type="button" aria-label="Close call overlay">
-                    <i class="ph ph-x"></i>
-                </button>
             </div>
             <div class="call-media-grid">
-                <div class="call-video-tile">
+                <div id="call-focus-area" class="call-focus-area is-hidden"></div>
+                <div id="call-strip" class="call-strip is-hidden"></div>
+                <div id="call-default-layout" class="call-default-layout">
+                <div id="call-local-tile" class="call-video-tile">
                     <video id="call-local-video" autoplay muted playsinline></video>
                     <div class="call-video-label">You</div>
                 </div>
                 <div id="call-remote-grid" class="call-remote-grid"></div>
+                </div>
             </div>
             <div class="call-actions">
                 <div class="call-action-group">
@@ -1783,6 +1784,10 @@
                 <button id="call-toggle-share" class="call-action-btn" type="button" aria-label="Share screen">
                     <i class="ph ph-monitor"></i>
                     <span>Share</span>
+                </button>
+                <button id="call-minimize" class="call-action-btn" type="button" aria-label="Minimize call">
+                    <i class="ph ph-arrow-left"></i>
+                    <span>Minimize</span>
                 </button>
                 <button id="call-hangup" class="call-action-btn end" type="button" aria-label="Hang up">
                     <i class="ph ph-phone-disconnect"></i>

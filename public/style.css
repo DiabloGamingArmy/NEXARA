@@ -3773,6 +3773,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
     background: transparent;
     z-index: auto;
     padding: 0;
+    align-items: stretch;
+    justify-content: flex-start;
+    flex-direction: column;
 }
 
 #call-card {
@@ -3795,6 +3798,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     border-radius: 0;
     padding: 0;
     box-shadow: none;
+    display: contents;
 }
 
 .call-card-header {
@@ -3815,10 +3819,55 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .call-media-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    flex: 1;
+}
+
+.call-default-layout {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
-    min-height: 280px;
+    min-height: 0;
+    flex: 1;
+}
+
+.call-default-layout.is-hidden {
+    display: none;
+}
+
+.call-focus-area {
+    flex: 1;
+    min-height: 0;
+}
+
+.call-strip {
+    gap: 10px;
+    min-height: 0;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    height: 140px;
+}
+
+.call-strip .call-tile {
+    flex: 0 0 180px;
+    height: 100%;
+}
+
+.call-media-grid.is-focused .call-default-layout {
+    display: none;
+}
+
+.call-media-grid.is-focused .call-focus-area,
+.call-media-grid.is-focused .call-strip {
+    display: flex;
+}
+
+.call-media-grid:not(.is-focused) .call-focus-area,
+.call-media-grid:not(.is-focused) .call-strip {
+    display: none;
 }
 
 .call-video-tile,
@@ -3830,11 +3879,13 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-height: 0;
+    height: 100%;
 }
 
 .call-video-tile video {
     width: 100%;
-    height: 220px;
+    height: 100%;
     object-fit: contain;
     border-radius: 12px;
     background: #000;
@@ -3850,6 +3901,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     align-content: start;
     gap: 10px;
+    min-height: 0;
+    height: 100%;
 }
 
 .call-remote-tile {
@@ -3859,12 +3912,65 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    min-height: 140px;
+    min-height: 0;
+    height: 100%;
+    position: relative;
+}
+
+.call-tile {
+    position: relative;
+    cursor: pointer;
+}
+
+.call-tile-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    border-radius: inherit;
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+
+.call-tile:hover .call-tile-overlay {
+    opacity: 1;
+}
+
+.call-fullscreen-btn {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    border-radius: 999px;
+    padding: 6px 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.call-fullscreen-btn i {
+    font-size: 1rem;
+}
+
+.call-media-grid .call-fullscreen-btn {
+    display: none;
+}
+
+.call-media-grid.is-focused .call-focus-area .call-fullscreen-btn {
+    display: inline-flex;
 }
 
 .call-remote-tile video {
     width: 100%;
-    height: 110px;
+    height: 100%;
     border-radius: 8px;
     object-fit: contain;
     background: #000;
@@ -3886,7 +3992,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 0;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    overflow: hidden;
 }
 
 .call-action-btn {
@@ -3930,9 +4040,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .call-device-btn {
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--bg-hover);
+    border-radius: 0;
+    border: none;
+    background: transparent;
     color: var(--text-main);
     width: 36px;
     height: 36px;
@@ -3945,6 +4055,26 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .call-device-btn:hover {
     filter: brightness(1.08);
+}
+
+.call-action-group .call-action-btn {
+    border: none;
+    background: transparent;
+    border-radius: 0;
+}
+
+.call-action-group .call-action-btn:hover,
+.call-action-group .call-device-btn:hover {
+    background: rgba(0, 242, 234, 0.08);
+}
+
+.call-action-group .call-device-btn {
+    border-left: 1px solid var(--border);
+}
+
+.call-action-group.is-active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(80, 210, 255, 0.25);
 }
 
 .call-device-btn:disabled,
