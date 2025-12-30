@@ -3954,18 +3954,34 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .call-remote-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     align-content: start;
     gap: 10px;
     min-height: 0;
     height: 100%;
 }
 
+.call-remote-grid.call-grid-1 {
+    grid-template-columns: 1fr;
+}
+
+.call-remote-grid.call-grid-2 {
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
+}
+
+.call-remote-grid.call-grid-4 {
+    grid-template-columns: repeat(2, minmax(200px, 1fr));
+}
+
+.call-remote-grid.call-grid-6 {
+    grid-template-columns: repeat(3, minmax(160px, 1fr));
+}
+
 .call-tile video,
 .call-video-tile video {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 12px;
     background: #000;
 }
@@ -3992,6 +4008,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .call-tile {
     position: relative;
     cursor: pointer;
+    aspect-ratio: 16 / 9;
+    width: 100%;
 }
 
 .call-tile.is-screenshare video {
@@ -4073,7 +4091,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .call-tile.is-speaking {
-    box-shadow: 0 0 0 2px rgba(0, 255, 128, 0.55), 0 0 0 4px rgba(0, 255, 128, 0.12);
+    box-shadow: 0 0 0 2px rgba(0, 255, 128, 0.65) inset;
 }
 
 .call-actions {
@@ -4275,28 +4293,21 @@ body.light-mode .category-pill.active .topic-verified-icon {
     filter: brightness(1.08);
 }
 
-.call-status-pill {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 6px 12px;
-    border-radius: 999px;
-    background: rgba(0, 242, 234, 0.2);
-    color: #bffbff;
-    border: 1px solid rgba(0, 242, 234, 0.5);
-    font-weight: 700;
-    font-size: 0.8rem;
-}
-
-.call-status-pill.is-hidden {
-    display: none;
-}
 .call-incoming-backdrop {
     position: fixed;
     inset: 0;
     backdrop-filter: blur(14px);
     background: rgba(0, 0, 0, 0.35);
     z-index: 1240;
+}
+
+body.has-incoming-call-modal {
+    overflow: hidden;
+}
+
+body.has-incoming-call-modal #app-layout {
+    filter: blur(6px);
+    pointer-events: none;
 }
 
 .call-incoming-backdrop.is-hidden {
@@ -4638,6 +4649,18 @@ body.light-mode .category-pill.active .topic-verified-icon {
     align-items: center;
 }
 
+.message-header-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message-header-actions-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+}
+
 .message-composer,
 .message-input-bar,
 .messages-composer,
@@ -4691,6 +4714,40 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .conversation-item.in-call-open {
     background: rgba(0, 255, 128, 0.08);
+}
+
+.conversation-item.call-host-active {
+    background: rgba(0, 255, 128, 0.5);
+    animation: callHostPulse 3s ease-in-out infinite;
+}
+
+.conversation-item.active.call-host-active {
+    background: rgba(0, 255, 128, 0.5);
+}
+
+@keyframes callHostPulse {
+    0% {
+        background-color: rgba(0, 255, 128, 0.4);
+    }
+    50% {
+        background-color: rgba(0, 255, 128, 0.7);
+    }
+    100% {
+        background-color: rgba(0, 255, 128, 0.4);
+    }
+}
+
+.active-call-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(34, 197, 94, 0.6);
+    background: rgba(34, 197, 94, 0.18);
+    color: #b7f5cf;
+    font-weight: 700;
+    font-size: 0.8rem;
 }
 
 .conversation-item.active.in-call-current,

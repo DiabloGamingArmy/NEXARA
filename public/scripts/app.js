@@ -1007,6 +1007,7 @@ const callStatusCache = new Map();
 let activeCallDocId = null;
 let activeCallConversationId = null;
 const CALL_DEBUG_FLAG = '__DEBUG_CALLS';
+window.__DEBUG_CALLS = window.__DEBUG_CALLS || false;
 
 function debugCallLog(...args) {
     if (window[CALL_DEBUG_FLAG]) {
@@ -9142,7 +9143,7 @@ function getActiveCallHighlightData() {
 
 function applyCallConversationIndicators(item, mapping, details, highlightData) {
     if (!item) return;
-    item.classList.remove('in-call-current', 'in-call-related', 'in-call-open');
+    item.classList.remove('in-call-current', 'in-call-related', 'in-call-open', 'call-host-active');
     if (!highlightData.callConversationId) return;
     const participants = details.participants || mapping.otherParticipantIds || [];
     const isOpen = activeConversationId === mapping.id;
@@ -9153,6 +9154,7 @@ function applyCallConversationIndicators(item, mapping, details, highlightData) 
     if (isCallHostConversation) {
         item.classList.add('in-call-current');
         if (isOpen) item.classList.add('in-call-open');
+        item.classList.add('call-host-active');
     } else if (intersectsCallMembers) {
         item.classList.add('in-call-related');
     }
@@ -9277,6 +9279,11 @@ function renderConversationList() {
         const unreadLabel = unread > 10 ? '10+' : `${unread}`;
         const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
         const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
+        const highlightData = getActiveCallHighlightData();
+        const isCallHostConversation = highlightData.callConversationId === mapping.id;
+        const previewMarkup = isCallHostConversation
+            ? `<span class="active-call-pill">Active Call</span>`
+            : previewText;
         const tsSource = mapping.lastMessageAt || mapping.createdAt;
         const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
         item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
@@ -9285,10 +9292,15 @@ function renderConversationList() {
                     <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
                     ${flagHtml}
                 </div>
-                <div class="conversation-preview">${previewText}</div>
+                <div class="conversation-preview">${previewMarkup}</div>
             </div>`;
         applyCallConversationIndicators(item, mapping, details, highlightData);
-        item.onclick = function () { openConversation(mapping.id); };
+        item.onclick = function () {
+            openConversation(mapping.id);
+            if (activeCallSession?.status === 'active' && activeCallConversationId === mapping.id && !isCallViewOpen) {
+                openCallView();
+            }
+        };
         targetEl.appendChild(item);
     };
 
@@ -9461,9 +9473,7 @@ function renderMessageHeader(convo = {}) {
                 <button class="icon-pill" onclick="window.openConversationSettings('${cid || ''}')" aria-label="Conversation options"${optionsDisabledAttr}><i class="ph ph-dots-three-outline"></i></button>
                 ${infoButton}
             </div>
-            <div class="message-header-actions-right">
-                <span id="call-status-pill" class="call-status-pill is-hidden">Live</span>
-            </div>
+            <div class="message-header-actions-right"></div>
         </div>
     </div>`;
     refreshDmCallButtons();
@@ -9651,6 +9661,29 @@ function updateActiveSpeakerTiles(speakers) {
     });
 }
 
+function ensureLocalTilePlacement() {
+    const elements = getCallOverlayElements();
+    if (!elements.remoteGrid || !elements.localTile) return;
+    if (elements.localTile.parentElement !== elements.remoteGrid) {
+        elements.remoteGrid.insertBefore(elements.localTile, elements.remoteGrid.firstChild);
+    } else if (elements.remoteGrid.firstChild !== elements.localTile) {
+        elements.remoteGrid.insertBefore(elements.localTile, elements.remoteGrid.firstChild);
+    }
+}
+
+function updateCallTileLayout() {
+    const elements = getCallOverlayElements();
+    if (!elements.remoteGrid) return;
+    ensureLocalTilePlacement();
+    const tiles = elements.remoteGrid.querySelectorAll('.call-tile');
+    const count = tiles.length || 1;
+    elements.remoteGrid.classList.remove('call-grid-1', 'call-grid-2', 'call-grid-4', 'call-grid-6');
+    if (count <= 1) elements.remoteGrid.classList.add('call-grid-1');
+    else if (count === 2) elements.remoteGrid.classList.add('call-grid-2');
+    else if (count <= 4) elements.remoteGrid.classList.add('call-grid-4');
+    else elements.remoteGrid.classList.add('call-grid-6');
+}
+
 function enterCallFocus(tile) {
     const els = getCallOverlayElements();
     if (!els.mediaGrid || !els.focusLayout || !els.focusArea || !els.strip || !els.defaultLayout) return;
@@ -9727,23 +9760,12 @@ function updateActiveCallButton() {
     if (!shouldShow) {
         btn.classList.add('is-hidden');
         btn.textContent = '';
-        updateCallStatusPill(isActiveCall);
         return;
     }
     const convo = conversationDetailsCache[activeConversationId] || {};
     const participants = convo.participants || [];
     btn.textContent = participants.length > 2 ? 'Join call' : 'Open call';
     btn.classList.remove('is-hidden');
-    updateCallStatusPill(isActiveCall);
-}
-
-function updateCallStatusPill(isActive) {
-    const pill = document.getElementById('call-status-pill');
-    if (!pill) return;
-    const shouldShow = isActive
-        && activeCallSession?.status === 'active'
-        && activeCallSession?.conversationId === activeConversationId;
-    pill.classList.toggle('is-hidden', !shouldShow);
 }
 
 function mountCallOverlayInThread() {
@@ -9816,6 +9838,7 @@ function setIncomingPromptVisible(visible) {
     const { incomingPrompt, incomingBackdrop } = getCallOverlayElements();
     if (!incomingPrompt) return;
     ensureIncomingPromptRoot();
+    document.body.classList.toggle('has-incoming-call-modal', visible);
     incomingPrompt.classList.toggle('is-hidden', !visible);
     if (incomingBackdrop) {
         incomingBackdrop.classList.toggle('is-hidden', !visible);
@@ -10057,6 +10080,7 @@ function clearCallSession() {
 function attachRemoteTrack(track, participant, publication) {
     const elements = getCallOverlayElements();
     if (!elements.remoteGrid) return;
+    ensureLocalTilePlacement();
     const tileId = `remote-${participant.sid}-${track.sid}`;
     if (elements.remoteGrid.querySelector(`[data-track-id="${tileId}"]`)) return;
     const isScreenShare = isScreenSharePublication(publication);
@@ -10080,12 +10104,14 @@ function attachRemoteTrack(track, participant, publication) {
     enhanceCallTile(tile);
     if (isScreenShare) {
         focusScreenShareTile(tile);
+        updateCallTileLayout();
         return;
     }
     if (callFocusState.active) {
         const { strip } = getCallOverlayElements();
         if (strip) strip.appendChild(tile);
     }
+    updateCallTileLayout();
 }
 
 function detachRemoteTrack(track, participant) {
@@ -10098,11 +10124,13 @@ function detachRemoteTrack(track, participant) {
     if (tile) tile.remove();
     if (wasFocused && wasScreenShare) {
         ensureScreenShareFocusFallback();
+        updateCallTileLayout();
         return;
     }
     if (wasFocused) {
         exitCallFocus();
     }
+    updateCallTileLayout();
 }
 
 async function connectToLiveKitRoom(callSession) {
@@ -10245,7 +10273,6 @@ async function connectToLiveKitRoom(callSession) {
     }
 
     updateCallControlIcons();
-    updateCallStatusPill(false);
 
     if (callSession.callId) {
         await updateDoc(doc(db, 'calls', callSession.callId), {
@@ -10261,7 +10288,6 @@ async function connectToLiveKitRoom(callSession) {
     connectedCallId = callSession.callId;
     await renderCallOverlayStatus(callSession.conversationId, callSession.callData || {});
     updateActiveCallButton();
-    updateCallStatusPill(true);
     console.log('[Calls] LiveKit connected', callSession.callId);
     return true;
     })();
@@ -10525,6 +10551,8 @@ async function initCallUi() {
         els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
         els.localTile.classList.add('is-camera');
         enhanceCallTile(els.localTile);
+        ensureLocalTilePlacement();
+        updateCallTileLayout();
     }
 }
 
@@ -10572,7 +10600,6 @@ function listenToCallStatus(callId, conversationId) {
             activeCallSession.callData = { id: callId, ...data };
         }
         renderCallOverlayStatus(conversationId, data);
-        updateCallStatusPill(data.status === 'active');
         if (currentViewId === 'messages') {
             renderConversationList();
         }
