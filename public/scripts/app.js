@@ -908,7 +908,7 @@ let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
 let livekitLocalScreenTracks = [];
 let incomingCallUnsubscribe = null;
-let incomingPromptCallId = null;
+let lastIncomingPromptCallId = null;
 let incomingListenerLogged = false;
 let __audioUnlocked = false;
 let __ringCtx = null;
@@ -9318,6 +9318,10 @@ function getCallOverlayElements() {
         toggleMic: document.getElementById('call-toggle-mic'),
         toggleCam: document.getElementById('call-toggle-cam'),
         toggleShare: document.getElementById('call-toggle-share'),
+        micDeviceBtn: document.getElementById('call-mic-device'),
+        camDeviceBtn: document.getElementById('call-cam-device'),
+        micMenu: document.getElementById('call-mic-menu'),
+        camMenu: document.getElementById('call-cam-menu'),
         hangupBtn: document.getElementById('call-hangup'),
         closeBtn: document.getElementById('call-overlay-close'),
         incomingPrompt: document.getElementById('call-incoming-prompt'),
@@ -9329,6 +9333,27 @@ function getCallOverlayElements() {
         incomingAccept: document.getElementById('call-incoming-accept'),
         incomingDecline: document.getElementById('call-incoming-decline')
     };
+}
+
+function setCallButtonContent(btn, icon, label) {
+    if (!btn) return;
+    btn.innerHTML = `<i class="ph ${icon}"></i><span>${label}</span>`;
+}
+
+function updateCallControlIcons() {
+    const els = getCallOverlayElements();
+    if (!els.toggleMic || !els.toggleCam || !els.toggleShare || !els.hangupBtn) return;
+    const micOn = els.toggleMic.classList.contains('active');
+    const camOn = els.toggleCam.classList.contains('active');
+    const shareOn = els.toggleShare.classList.contains('active');
+
+    els.toggleMic.classList.toggle('is-off', !micOn);
+    els.toggleCam.classList.toggle('is-off', !camOn);
+
+    setCallButtonContent(els.toggleMic, micOn ? 'ph-microphone' : 'ph-microphone-slash', micOn ? 'Mute' : 'Unmute');
+    setCallButtonContent(els.toggleCam, camOn ? 'ph-video-camera' : 'ph-video-camera-slash', camOn ? 'Camera' : 'Camera off');
+    setCallButtonContent(els.toggleShare, 'ph-monitor', shareOn ? 'Sharing' : 'Share');
+    setCallButtonContent(els.hangupBtn, 'ph-phone-disconnect', 'Hang up');
 }
 
 function getInboxCallHost() {
@@ -9416,7 +9441,7 @@ function setIncomingPromptVisible(visible) {
 }
 
 function hideIncomingCallPrompt() {
-    incomingPromptCallId = null;
+    lastIncomingPromptCallId = null;
     setIncomingPromptVisible(false);
     stopRingtone();
 }
@@ -9611,6 +9636,8 @@ async function connectToLiveKitRoom(callSession) {
     if (elements.toggleMic) elements.toggleMic.disabled = false;
     if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
     if (elements.toggleShare) elements.toggleShare.disabled = false;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = false;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = callKind !== 'video';
 
     room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
@@ -9682,6 +9709,8 @@ async function connectToLiveKitRoom(callSession) {
         elements.toggleShare.setAttribute('aria-pressed', 'false');
     }
 
+    updateCallControlIcons();
+
     if (callSession.callId) {
         await updateDoc(doc(db, 'calls', callSession.callId), {
             status: 'active',
@@ -9703,6 +9732,8 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     if (elements.toggleMic) elements.toggleMic.disabled = true;
     if (elements.toggleCam) elements.toggleCam.disabled = true;
     if (elements.toggleShare) elements.toggleShare.disabled = true;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = true;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = true;
     if (livekitLocalAudioTrack) {
         livekitLocalAudioTrack.stop();
         livekitLocalAudioTrack = null;
@@ -9757,34 +9788,142 @@ async function initCallUi() {
     let camOn = false;
     let shareOn = false;
 
+    const closeDeviceMenus = () => {
+        if (els.micMenu) els.micMenu.classList.add('is-hidden');
+        if (els.camMenu) els.camMenu.classList.add('is-hidden');
+    };
+
+    const buildDeviceMenu = (menuEl, devices, onSelect) => {
+        if (!menuEl) return;
+        menuEl.innerHTML = '';
+        if (!devices.length) {
+            const empty = document.createElement('button');
+            empty.type = 'button';
+            empty.textContent = 'No devices found';
+            empty.disabled = true;
+            menuEl.appendChild(empty);
+            return;
+        }
+        devices.forEach(function (device) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = device.label || 'Unknown device';
+            btn.onclick = async function (event) {
+                event.stopPropagation();
+                await onSelect(device.deviceId);
+                closeDeviceMenus();
+            };
+            menuEl.appendChild(btn);
+        });
+    };
+
+    const openDeviceMenu = async (menuEl, kind, onSelect) => {
+        if (!menuEl) return;
+        if (!navigator.mediaDevices?.enumerateDevices) {
+            toast('Device selection unavailable.', 'info');
+            return;
+        }
+        if (!menuEl.classList.contains('is-hidden')) {
+            menuEl.classList.add('is-hidden');
+            return;
+        }
+        closeDeviceMenus();
+        const devices = (await navigator.mediaDevices.enumerateDevices()).filter(function (device) {
+            return device.kind === kind;
+        });
+        buildDeviceMenu(menuEl, devices, onSelect);
+        menuEl.classList.remove('is-hidden');
+        const onDocClick = function () {
+            closeDeviceMenus();
+            document.removeEventListener('click', onDocClick);
+        };
+        setTimeout(function () {
+            document.addEventListener('click', onDocClick);
+        }, 0);
+    };
+
+    const switchAudioDevice = async (deviceId) => {
+        if (!livekitRoom) return;
+        if (typeof livekitRoom.switchActiveDevice === 'function') {
+            await livekitRoom.switchActiveDevice('audioinput', deviceId);
+            return;
+        }
+        if (!livekitCreateLocalAudioTrack) return;
+        const newTrack = await livekitCreateLocalAudioTrack({ deviceId });
+        if (livekitLocalAudioTrack) {
+            livekitRoom.localParticipant.unpublishTrack(livekitLocalAudioTrack);
+            livekitLocalAudioTrack.stop();
+        }
+        livekitLocalAudioTrack = newTrack;
+        await livekitRoom.localParticipant.publishTrack(newTrack);
+    };
+
+    const switchVideoDevice = async (deviceId) => {
+        if (!livekitRoom) return;
+        if (typeof livekitRoom.switchActiveDevice === 'function') {
+            await livekitRoom.switchActiveDevice('videoinput', deviceId);
+            return;
+        }
+        if (!livekitCreateLocalVideoTrack) return;
+        const newTrack = await livekitCreateLocalVideoTrack({ deviceId });
+        if (livekitLocalVideoTrack) {
+            livekitRoom.localParticipant.unpublishTrack(livekitLocalVideoTrack);
+            livekitLocalVideoTrack.stop();
+        }
+        livekitLocalVideoTrack = newTrack;
+        await livekitRoom.localParticipant.publishTrack(newTrack);
+        if (els.localVideo) {
+            els.localVideo.style.display = 'block';
+            livekitLocalVideoTrack.attach(els.localVideo);
+        }
+    };
+
     els.closeBtn.onclick = () => { closeCallView(); };
     els.hangupBtn.onclick = async () => { await leaveLiveKitRoom({ updateStatus: true }); };
 
     els.toggleMic.onclick = async () => {
         if (!livekitRoom) return;
-        micOn = !micOn;
+        micOn = !els.toggleMic.classList.contains('active');
         await livekitRoom.localParticipant.setMicrophoneEnabled(micOn);
         setActive(els.toggleMic, micOn);
+        updateCallControlIcons();
     };
 
     els.toggleCam.onclick = async () => {
         if (!livekitRoom) return;
-        camOn = !camOn;
+        camOn = !els.toggleCam.classList.contains('active');
         await livekitRoom.localParticipant.setCameraEnabled(camOn);
         setActive(els.toggleCam, camOn);
+        updateCallControlIcons();
     };
 
     els.toggleShare.onclick = async () => {
         if (!livekitRoom) return;
-        shareOn = !shareOn;
+        shareOn = !els.toggleShare.classList.contains('active');
         await livekitRoom.localParticipant.setScreenShareEnabled(shareOn);
         setActive(els.toggleShare, shareOn);
+        updateCallControlIcons();
     };
+
+    if (els.micDeviceBtn) {
+        els.micDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.micMenu, 'audioinput', switchAudioDevice);
+        };
+    }
+
+    if (els.camDeviceBtn) {
+        els.camDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.camMenu, 'videoinput', switchVideoDevice);
+        };
+    }
 
     // default states
     setActive(els.toggleMic, micOn);
     setActive(els.toggleCam, camOn);
     setActive(els.toggleShare, shareOn);
+    updateCallControlIcons();
 }
 
 function listenToCallStatus(callId, conversationId) {
@@ -9823,12 +9962,18 @@ async function getCallsForConversation(conversationId) {
         collection(db, 'calls'),
         where('conversationId', '==', conversationId),
         where('participants', 'array-contains', currentUser.uid),
-        orderBy('createdAt', 'desc'),
         limit(10)
     );
     const snap = await getDocs(q);
     return snap.docs.map(function (docSnap) {
         return { id: docSnap.id, ...docSnap.data() };
+    }).sort(function (a, b) {
+        const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+        const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+        if (aMs && bMs) return bMs - aMs;
+        if (aMs) return -1;
+        if (bMs) return 1;
+        return b.id.localeCompare(a.id);
     });
 }
 
@@ -9921,7 +10066,6 @@ function startListeningForIncomingCalls() {
 
     const callQuery = query(
         collection(db, 'calls'),
-        where('status', '==', 'ringing'),
         where('participants', 'array-contains', currentUser.uid)
     );
 
@@ -9929,7 +10073,9 @@ function startListeningForIncomingCalls() {
         const ringingCalls = snap.docs.map(function (docSnap) {
             return { id: docSnap.id, ...docSnap.data() };
         }).filter(function (data) {
+            const callerId = data.initiatorId || data.createdBy;
             return data.status === 'ringing'
+                && callerId !== currentUser.uid
                 && Array.isArray(data.participants)
                 && data.participants.includes(currentUser.uid);
         });
@@ -9967,10 +10113,14 @@ function startListeningForIncomingCalls() {
             }
         }
 
-        const incoming = ringingCalls.find(function (call) {
-            const callerId = call.initiatorId || call.createdBy;
-            return callerId && callerId !== currentUser.uid;
-        });
+        const incoming = ringingCalls.slice().sort(function (a, b) {
+            const aMs = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+            const bMs = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+            if (aMs && bMs) return bMs - aMs;
+            if (aMs) return -1;
+            if (bMs) return 1;
+            return b.id.localeCompare(a.id);
+        })[0];
 
         if (!incoming) {
             hideIncomingCallPrompt();
@@ -9987,12 +10137,13 @@ function startListeningForIncomingCalls() {
             return;
         }
 
-        if (incomingPromptCallId === incoming.id) return;
-        incomingPromptCallId = incoming.id;
+        const elements = getCallOverlayElements();
+        const promptVisible = elements.incomingPrompt && !elements.incomingPrompt.classList.contains('is-hidden');
+        if (lastIncomingPromptCallId === incoming.id && promptVisible) return;
+        lastIncomingPromptCallId = incoming.id;
 
         renderIncomingCallPrompt(incoming);
 
-        const elements = getCallOverlayElements();
         if (elements.incomingAccept) {
             elements.incomingAccept.onclick = async function () {
                 if (activeCallSession) return;
@@ -11119,6 +11270,25 @@ async function openConversation(conversationId) {
 async function startDmCall(kind) {
     if (!activeConversationId || !requireAuth()) return;
     if (!['audio', 'video'].includes(kind)) return;
+    if (activeCallSession && ['ringing', 'active'].includes(activeCallSession.status || '')) {
+        const ok = confirm('You’re already in a call. End it to start a new one?');
+        if (!ok) return;
+        await leaveLiveKitRoom({ updateStatus: true });
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Your browser does not support microphone access.');
+        return;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: kind === 'video'
+        });
+        stream.getTracks().forEach(function (track) { track.stop(); });
+    } catch (err) {
+        alert('Please allow microphone/camera access to place a call.');
+        return;
+    }
     const livekitModule = await ensureLiveKitLoaded();
     if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');

@@ -1760,10 +1760,34 @@
                 <div id="call-remote-grid" class="call-remote-grid"></div>
             </div>
             <div class="call-actions">
-                <button id="call-toggle-mic" class="call-action-btn" type="button">Mute</button>
-                <button id="call-toggle-cam" class="call-action-btn" type="button">Camera</button>
-                <button id="call-toggle-share" class="call-action-btn" type="button">Share screen</button>
-                <button id="call-hangup" class="call-action-btn end" type="button">Hang up</button>
+                <div class="call-action-group">
+                    <button id="call-toggle-mic" class="call-action-btn" type="button" aria-label="Mute microphone">
+                        <i class="ph ph-microphone"></i>
+                        <span>Mute</span>
+                    </button>
+                    <button id="call-mic-device" class="call-device-btn" type="button" aria-label="Select microphone">
+                        <i class="ph ph-caret-down"></i>
+                    </button>
+                    <div id="call-mic-menu" class="call-device-menu is-hidden"></div>
+                </div>
+                <div class="call-action-group">
+                    <button id="call-toggle-cam" class="call-action-btn" type="button" aria-label="Toggle camera">
+                        <i class="ph ph-video-camera"></i>
+                        <span>Camera</span>
+                    </button>
+                    <button id="call-cam-device" class="call-device-btn" type="button" aria-label="Select camera">
+                        <i class="ph ph-caret-down"></i>
+                    </button>
+                    <div id="call-cam-menu" class="call-device-menu is-hidden"></div>
+                </div>
+                <button id="call-toggle-share" class="call-action-btn" type="button" aria-label="Share screen">
+                    <i class="ph ph-monitor"></i>
+                    <span>Share</span>
+                </button>
+                <button id="call-hangup" class="call-action-btn end" type="button" aria-label="Hang up">
+                    <i class="ph ph-phone-disconnect"></i>
+                    <span>Hang up</span>
+                </button>
             </div>
         </div>
     </div>

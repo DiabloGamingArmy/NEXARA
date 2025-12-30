@@ -3772,6 +3772,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     height: 100%;
     background: transparent;
     z-index: auto;
+    padding: 0;
 }
 
 #call-card {
@@ -3789,6 +3790,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .inbox-call-host #call-card {
     width: 100%;
     max-width: none;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
 }
 
 .call-card-header {
@@ -3829,9 +3835,9 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .call-video-tile video {
     width: 100%;
     height: 220px;
-    object-fit: cover;
+    object-fit: contain;
     border-radius: 12px;
-    background: #0b0f14;
+    background: #000;
 }
 
 .call-video-label {
@@ -3860,8 +3866,8 @@ body.light-mode .category-pill.active .topic-verified-icon {
     width: 100%;
     height: 110px;
     border-radius: 8px;
-    object-fit: cover;
-    background: #0b0f14;
+    object-fit: contain;
+    background: #000;
 }
 
 .call-remote-name {
@@ -3876,21 +3882,37 @@ body.light-mode .category-pill.active .topic-verified-icon {
     justify-content: center;
 }
 
+.call-action-group {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .call-action-btn {
     border-radius: 999px;
     border: 1px solid var(--border);
     background: var(--bg-hover);
     color: var(--text-main);
-    padding: 10px 18px;
+    padding: 10px 16px;
     font-weight: 700;
     cursor: pointer;
     min-width: 110px;
     transition: 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .call-action-btn.active {
     border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgba(80, 210, 255, 0.2);
+    box-shadow: 0 0 0 2px rgba(80, 210, 255, 0.35);
+}
+
+.call-action-btn.is-off {
+    opacity: 0.75;
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.2);
 }
 
 .call-action-btn.end {
@@ -3901,6 +3923,69 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .call-action-btn:hover {
     filter: brightness(1.08);
+}
+
+.call-action-btn i {
+    font-size: 1rem;
+}
+
+.call-device-btn {
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-main);
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.call-device-btn:hover {
+    filter: brightness(1.08);
+}
+
+.call-device-btn:disabled,
+.call-action-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.call-device-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    min-width: 200px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.3);
+    z-index: 5;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.call-device-menu.is-hidden {
+    display: none;
+}
+
+.call-device-menu button {
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    padding: 8px 10px;
+    text-align: left;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.call-device-menu button:hover {
+    background: rgba(0, 242, 234, 0.12);
 }
 
 .message-call-invite {
