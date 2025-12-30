@@ -1853,34 +1853,43 @@ function initApp(onReady) {
                 if (authScreen) authScreen.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'flex';
                 if (loadingOverlay) loadingOverlay.style.display = 'none';
+                markReady();
 
-                // Start Logic
-                await ensureOfficialCategories();
-                startCategoryStreams(user.uid);
-                await loadFeedData({ showSplashDuringLoad: true });
-                startUserReviewListener(user.uid); // PATCH: Listen for USER reviews globally on load
-                loadInboxModeFromStorage();
-                const storedInboxMode = inboxMode || 'content';
-                setInboxMode(storedInboxMode, { skipRouteUpdate: true });
-                initContentNotifications(user.uid);
-                initConversations(storedInboxMode === 'messages');
-                initCallInviteListener();
-                refreshDmCallButtons();
-                if ('Notification' in window && Notification.permission === 'granted') {
-                    registerMessagingServiceWorker();
-                    syncStoredPushToken(user.uid);
-                }
-                updateTimeCapsule();
-                const path = window.location.pathname || '/';
-                if (path === '/' || path === '/home') {
-                    window.navigateTo('feed', false);
-                }
-                renderProfile(); // Pre-render profile
-                if (!uploadManager) {
-                    uploadManager = createUploadManager({ storage, onStateChange: setUploadTasks });
-                }
-                ensureVideoTaskViewerBindings();
-                uploadManager.restorePendingUploads(currentUser.uid);
+                const signedInUserId = user.uid;
+                (async function () {
+                    try {
+                        await ensureOfficialCategories();
+                        if (currentUser?.uid !== signedInUserId) return;
+                        startCategoryStreams(signedInUserId);
+                        await loadFeedData({ showSplashDuringLoad: true });
+                        if (currentUser?.uid !== signedInUserId) return;
+                        startUserReviewListener(signedInUserId); // PATCH: Listen for USER reviews globally on load
+                        loadInboxModeFromStorage();
+                        const storedInboxMode = inboxMode || 'content';
+                        setInboxMode(storedInboxMode, { skipRouteUpdate: true });
+                        initContentNotifications(signedInUserId);
+                        initConversations(storedInboxMode === 'messages');
+                        initCallInviteListener();
+                        refreshDmCallButtons();
+                        if ('Notification' in window && Notification.permission === 'granted') {
+                            registerMessagingServiceWorker();
+                            syncStoredPushToken(signedInUserId);
+                        }
+                        updateTimeCapsule();
+                        const path = window.location.pathname || '/';
+                        if (path === '/' || path === '/home') {
+                            window.navigateTo('feed', false);
+                        }
+                        renderProfile(); // Pre-render profile
+                        if (!uploadManager) {
+                            uploadManager = createUploadManager({ storage, onStateChange: setUploadTasks });
+                        }
+                        ensureVideoTaskViewerBindings();
+                        uploadManager.restorePendingUploads(signedInUserId);
+                    } catch (err) {
+                        console.error('Post-auth init error', err);
+                    }
+                })();
             } else {
                 const previousUserId = currentUser?.uid;
                 currentUser = null;
@@ -1921,6 +1930,7 @@ function initApp(onReady) {
                 if (authScreen) authScreen.style.display = 'flex';
                 setUploadTasks([]);
                 closeVideoTaskViewer();
+                markReady();
             }
         } catch (err) {
             console.error('Initialization error', err);
@@ -1935,23 +1945,18 @@ function initApp(onReady) {
 async function initializeNexeraApp() {
     showSplash();
     window.__NEXERA_BOOT_STAGE = 'init-start';
-    let bootResolved = false;
     const bootTimeout = setTimeout(function () {
-        if (bootResolved) return;
+        if (window.Nexera?.authResolved) return;
         forceHideSplash('boot-timeout');
-        const authScreen = document.getElementById('auth-screen');
-        if (authScreen) authScreen.style.display = 'flex';
-        showBootErrorOverlay('Startup is taking longer than expected. Please retry.');
-    }, 6000);
+        showBootErrorOverlay('Auth is taking longer than expected. Check network and retry.');
+    }, 12000);
     try {
         refreshBrandLogos();
         await initApp(hideSplash);
-        bootResolved = true;
         clearTimeout(bootTimeout);
         window.__NEXERA_BOOT_STAGE = 'ready';
     } catch (err) {
         console.error('Failed to initialize Nexera', err);
-        bootResolved = true;
         clearTimeout(bootTimeout);
         hideSplash();
     }
