@@ -9339,6 +9339,9 @@ function renderConversationList() {
             openConversation(mapping.id);
             const hostCall = getActiveCallForConversation(mapping.id);
             if (hostCall && !isCallViewOpen) {
+                if (hostCall.status !== 'active') {
+                    return;
+                }
                 if (activeCallSession?.status === 'active' && activeCallSession.callId !== hostCall.id) {
                     return;
                 }
@@ -10054,12 +10057,6 @@ function resetCallOverlayMedia() {
     if (elements.strip) {
         elements.strip.innerHTML = '';
     }
-    if (elements.focusArea) {
-        elements.focusArea.innerHTML = '';
-    }
-    if (elements.strip) {
-        elements.strip.innerHTML = '';
-    }
 }
 
 function updateCallOverlayMeta(convo = {}, statusText = 'Connecting...') {
@@ -10725,6 +10722,7 @@ async function getCallsForConversation(conversationId) {
         if (bMs) return 1;
         return b.id.localeCompare(a.id);
     });
+    return matches[0] || null;
 }
 
 async function findActiveCallForConversation(conversationId) {
@@ -12169,7 +12167,9 @@ async function openConversation(conversationId) {
     renderMessageHeader(convo);
     const activeCall = getActiveCallForConversation(conversationId);
     if (activeCall) {
-        if (activeCallSession?.status === 'active' && activeCallSession.callId !== activeCall.id) {
+        if (activeCall.status !== 'active') {
+            // do not auto-join ringing calls; prompt handles it
+        } else if (activeCallSession?.status === 'active' && activeCallSession.callId !== activeCall.id) {
             // already in another call
         } else if (activeCallSession?.callId === activeCall.id) {
             openCallView();
