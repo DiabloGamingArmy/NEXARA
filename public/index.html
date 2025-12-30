@@ -934,6 +934,7 @@
                                         class="ph ph-caret-down"></i></button>
                             </div>
                         </div>
+                            <div id="inbox-call-host" class="inbox-call-host is-hidden"></div>
                             <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
                             <div class="message-scroll-region">
                                 <div id="message-thread" class="message-thread-body"></div>
@@ -1766,9 +1767,13 @@
             </div>
         </div>
     </div>
-    <div id="call-incoming-prompt" class="call-incoming-prompt" style="display:none;">
+    <div id="call-incoming-backdrop" class="call-incoming-backdrop is-hidden" aria-hidden="true"></div>
+    <div id="call-incoming-prompt" class="call-incoming-prompt is-hidden">
         <div class="call-incoming-card" role="dialog" aria-modal="true" aria-live="polite">
+            <img id="call-incoming-avatar" class="call-incoming-avatar" alt="Caller avatar">
             <div id="call-incoming-name" class="call-incoming-name">Incoming call</div>
+            <div id="call-incoming-username" class="call-incoming-username is-hidden"></div>
+            <div class="call-incoming-text">is calling you</div>
             <div id="call-incoming-type" class="call-incoming-type">Audio call</div>
             <div class="call-incoming-actions">
                 <button id="call-incoming-accept" class="call-incoming-btn accept" type="button">Accept</button>

@@ -3268,6 +3268,27 @@ body.light-mode .category-pill.active .topic-verified-icon {
     position: relative;
 }
 
+.inbox-thread.in-call-view .message-scroll-region,
+.inbox-thread.in-call-view .message-compose,
+.inbox-thread.in-call-view .message-header-tools,
+.inbox-thread.in-call-view #pinned-messages,
+.inbox-thread.in-call-view #message-reply-preview,
+.inbox-thread.in-call-view #message-attachment-preview,
+.inbox-thread.in-call-view #typing-indicator {
+    display: none !important;
+}
+
+.inbox-call-host {
+    display: flex;
+    flex: 1 1 auto;
+    padding: 0 1rem 1rem;
+    min-height: 0;
+}
+
+.inbox-call-host.is-hidden {
+    display: none;
+}
+
 .inbox-header {
     display: flex;
     align-items: center;
@@ -3744,6 +3765,15 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: flex;
 }
 
+#call-overlay.in-thread {
+    position: static;
+    inset: auto;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    z-index: auto;
+}
+
 #call-card {
     width: min(860px, 94vw);
     background: var(--bg-card);
@@ -3754,6 +3784,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     gap: 16px;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.inbox-call-host #call-card {
+    width: 100%;
+    max-width: none;
 }
 
 .call-card-header {
@@ -3898,6 +3933,50 @@ body.light-mode .category-pill.active .topic-verified-icon {
     cursor: pointer;
 }
 
+.message-row.system {
+    justify-content: center;
+}
+
+.message-system {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid var(--border);
+}
+
+.open-call-btn {
+    border-radius: 999px;
+    border: 1px solid rgba(34, 197, 94, 0.6);
+    background: rgba(34, 197, 94, 0.18);
+    color: #b7f5cf;
+    padding: 6px 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.open-call-btn.is-hidden {
+    display: none;
+}
+
+.open-call-btn:hover {
+    filter: brightness(1.08);
+}
+
+.call-incoming-backdrop {
+    position: fixed;
+    inset: 0;
+    backdrop-filter: blur(10px);
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 1240;
+}
+
+.call-incoming-backdrop.is-hidden {
+    display: none;
+}
+
 .call-incoming-prompt {
     position: fixed;
     inset: 0;
@@ -3905,7 +3984,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     align-items: center;
     justify-content: center;
     z-index: 1250;
-    background: rgba(5, 10, 14, 0.6);
+    background: transparent;
+}
+
+.call-incoming-prompt.is-hidden {
+    display: none;
 }
 
 .call-incoming-card {
@@ -3921,14 +4004,32 @@ body.light-mode .category-pill.active .topic-verified-icon {
     text-align: center;
 }
 
+.call-incoming-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    object-fit: cover;
+    margin: 0 auto 4px;
+}
+
 .call-incoming-name {
     font-weight: 800;
     font-size: 1.05rem;
 }
 
+.call-incoming-username {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
 .call-incoming-type {
     color: var(--text-muted);
     font-size: 0.9rem;
+}
+
+.call-incoming-text {
+    font-size: 0.95rem;
 }
 
 .call-incoming-actions {
