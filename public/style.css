@@ -3788,6 +3788,19 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     gap: 16px;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+    min-height: 0;
+    flex: 1;
+}
+
+.inbox-call-host #call-card {
+    width: 100%;
+    max-width: none;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+    display: contents;
 }
 
 .inbox-call-host #call-card {
@@ -3818,12 +3831,50 @@ body.light-mode .category-pill.active .topic-verified-icon {
     font-size: 0.95rem;
 }
 
+.call-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 6px;
+}
+
+.call-status-local {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.call-status-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.call-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.call-status-chip .user-avatar {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+}
+
 .call-media-grid {
     display: flex;
     flex-direction: column;
     gap: 12px;
     min-height: 0;
     flex: 1;
+    overflow: hidden;
 }
 
 .call-default-layout {
@@ -3853,9 +3904,23 @@ body.light-mode .category-pill.active .topic-verified-icon {
 }
 
 .call-focus-area {
-    flex: 1;
+    flex: 0 0 320px;
+    height: 320px;
+    min-height: 260px;
+}
+
+.call-strip {
+    display: flex;
+    gap: 10px;
     min-height: 0;
-    min-height: 280px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    height: 140px;
+}
+
+.call-strip .call-tile {
+    flex: 0 0 180px;
+    height: 100%;
 }
 
 .call-strip {
@@ -3976,7 +4041,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: none;
 }
 
-.call-media-grid.is-focused .call-focus-area .call-fullscreen-btn {
+.call-media-grid.is-focused .call-focus-area .call-tile:hover .call-fullscreen-btn {
     display: inline-flex;
 }
 
@@ -4223,7 +4288,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .call-incoming-backdrop {
     position: fixed;
     inset: 0;
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(14px);
     background: rgba(0, 0, 0, 0.35);
     z-index: 1240;
 }

@@ -915,6 +915,7 @@ let __ringCtx = null;
 let __ringOsc = null;
 let __ringGain = null;
 let callFocusState = { active: false, tileId: null };
+const callStatusCache = new Map();
 
 function arrayShallowEqual(a = [], b = []) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
@@ -9537,8 +9538,7 @@ function openCallView() {
     const { overlay } = getCallOverlayElements();
     if (!host || !overlay) return;
     mountCallOverlayInThread();
-    overlay.classList.add('is-visible');
-    overlay.setAttribute('aria-hidden', 'false');
+    setCallOverlayVisible(true);
     host.classList.remove('is-hidden');
     if (thread) thread.classList.add('in-call-view');
     isCallViewOpen = true;
@@ -9550,6 +9550,7 @@ function closeCallView() {
     const thread = getInboxThreadContainer();
     if (host) host.classList.add('is-hidden');
     if (thread) thread.classList.remove('in-call-view');
+    setCallOverlayVisible(false);
     isCallViewOpen = false;
     updateActiveCallButton();
 }
@@ -9562,10 +9563,18 @@ window.openActiveCallView = function () {
 function setCallOverlayVisible(visible) {
     const { overlay } = getCallOverlayElements();
     if (!overlay) return;
+    if (!visible && overlay.contains(document.activeElement)) {
+        document.activeElement?.blur?.();
+    }
     overlay.classList.toggle('is-visible', visible);
     overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    overlay.inert = !visible;
     if (visible) {
         mountCallOverlayInThread();
+        setTimeout(function () {
+            const { hangupBtn } = getCallOverlayElements();
+            hangupBtn?.focus?.();
+        }, 0);
     }
 }
 
@@ -9716,11 +9725,67 @@ function updateCallOverlayMeta(convo = {}, statusText = 'Connecting...') {
     elements.status.textContent = statusText || '';
 }
 
-async function renderCallOverlayStatus(conversationId, statusText) {
+function getCallUserStatus(callData = {}, uid) {
+    if (!uid) return '';
+    const userStatus = callData.userStatus || {};
+    if (userStatus[uid]) return userStatus[uid];
+    const active = Array.isArray(callData.activeParticipants) ? callData.activeParticipants : [];
+    const ringTargets = Array.isArray(callData.ringTargets) ? callData.ringTargets : [];
+    if (active.includes(uid)) return 'joined';
+    if (ringTargets.includes(uid)) return 'ringing';
+    return '';
+}
+
+function getCallStatusTransitions(prevData = {}, nextData = {}) {
+    const prevStatuses = prevData.userStatus || {};
+    const nextStatuses = nextData.userStatus || {};
+    const uids = new Set(Object.keys(prevStatuses).concat(Object.keys(nextStatuses)));
+    const transitions = [];
+    uids.forEach(function (uid) {
+        const prev = prevStatuses[uid] || '';
+        const next = nextStatuses[uid] || '';
+        if (next && prev !== next) {
+            transitions.push({ uid, prev, next });
+        }
+    });
+    return transitions;
+}
+
+async function renderCallOverlayStatus(conversationId, callData = {}) {
     const convo = conversationDetailsCache[conversationId]
         || (await fetchConversation(conversationId).catch(function () { return { id: conversationId }; }));
-    const safeStatus = statusText === 'Live' ? '' : statusText;
-    updateCallOverlayMeta(convo || {}, safeStatus);
+    updateCallOverlayMeta(convo || {}, '');
+    const elements = getCallOverlayElements();
+    if (elements.status) {
+        const participants = convo?.participants || callData.participants || [];
+        const localStatus = getCallUserStatus(callData, currentUser?.uid);
+        const localLabel = localStatus === 'ringing'
+            ? 'Incoming call'
+            : localStatus === 'declined'
+                ? 'Declined'
+                : localStatus === 'left'
+                    ? 'Left'
+                    : localStatus === 'missed'
+                        ? 'Missed call'
+                        : 'In call';
+        const chips = participants
+            .filter(function (uid) { return uid && uid !== currentUser?.uid; })
+            .map(function (uid) {
+                const meta = resolveParticipantDisplay(convo || {}, uid);
+                const status = getCallUserStatus(callData, uid) || 'ringing';
+                const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+                const avatar = renderAvatar({
+                    uid,
+                    username: meta.username,
+                    displayName: meta.displayName,
+                    photoURL: meta.avatar,
+                    avatarColor: meta.avatarColor
+                }, { size: 20 });
+                return `<div class="call-status-chip">${avatar}<span>${escapeHtml(statusLabel)}</span></div>`;
+            })
+            .join('');
+        elements.status.innerHTML = `<div class="call-status-local">${escapeHtml(localLabel)}</div><div class="call-status-chips">${chips}</div>`;
+    }
     setCallOverlayVisible(true);
 }
 
@@ -9885,7 +9950,7 @@ async function connectToLiveKitRoom(callSession) {
     if (activeCallSession && activeCallSession.callId === callSession.callId) {
         activeCallSession = { ...activeCallSession, status: 'active' };
     }
-    await renderCallOverlayStatus(callSession.conversationId, 'Live');
+    await renderCallOverlayStatus(callSession.conversationId, callSession.callData || {});
     updateActiveCallButton();
     updateCallStatusPill(true);
 }
@@ -9920,15 +9985,42 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         livekitRoom = null;
     }
     if (updateStatus && activeCallSession?.callId) {
-        const nextStatus = 'ended';
-        await updateDoc(doc(db, 'calls', activeCallSession.callId), {
-            status: nextStatus,
-            endedAt: serverTimestamp()
+        const callId = activeCallSession.callId;
+        const conversationId = activeCallSession.conversationId;
+        const callRef = doc(db, 'calls', callId);
+        let didEnd = false;
+        await runTransaction(db, async function (tx) {
+            const snap = await tx.get(callRef);
+            if (!snap.exists()) return;
+            const data = snap.data() || {};
+            const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
+            const nextActive = active.filter(function (uid) { return uid !== currentUser?.uid; });
+            const userStatus = { ...(data.userStatus || {}) };
+            if (currentUser?.uid) userStatus[currentUser.uid] = 'left';
+            const ringTargets = Array.isArray(data.ringTargets) ? data.ringTargets.filter(function (uid) { return uid !== currentUser?.uid; }) : [];
+            const update = {
+                activeParticipants: nextActive,
+                ringTargets,
+                userStatus,
+                updatedAt: serverTimestamp()
+            };
+            if (nextActive.length === 0) {
+                update.status = 'ended';
+                update.endedAt = serverTimestamp();
+                const missedMap = { ...userStatus };
+                ringTargets.forEach(function (uid) {
+                    if (!missedMap[uid]) missedMap[uid] = 'missed';
+                });
+                update.userStatus = missedMap;
+                update.ringTargets = [];
+                didEnd = true;
+            }
+            tx.update(callRef, update);
         }).catch(function (err) {
             console.warn('Unable to update call status', err?.message || err);
         });
-        if (activeCallSession?.conversationId) {
-            await addCallSystemMessage(activeCallSession.conversationId, activeCallSession.callId, 'ended', '📞 Call ended');
+        if (didEnd && conversationId && activeCallSession?.callId) {
+            await addCallSystemMessage(conversationId, callId, 'ended', '📞 Call ended');
         }
     }
     clearCallSession();
@@ -10117,8 +10209,20 @@ function listenToCallStatus(callId, conversationId) {
             return;
         }
         const data = snap.data() || {};
+        callStatusCache.set(callId, data.status || 'active');
         if (activeCallSession && activeCallSession.callId === callId) {
-            activeCallSession = { ...activeCallSession, status: data.status || activeCallSession.status };
+            const prevData = activeCallSession.callData || {};
+            const transitions = getCallStatusTransitions(prevData, data);
+            transitions.forEach(function (change) {
+                if (change.next === 'joined') {
+                    addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
+                } else if (change.next === 'declined') {
+                    addCallSystemMessage(conversationId, callId, 'declined', '📞 Call declined');
+                } else if (change.next === 'missed') {
+                    addCallSystemMessage(conversationId, callId, 'missed', '📞 Missed call');
+                }
+            });
+            activeCallSession = { ...activeCallSession, status: data.status || activeCallSession.status, callData: { id: callId, ...data } };
         }
         if (data.status === 'ended' || data.status === 'missed') {
             if (data.status === 'missed' && activeCallSession?.conversationId) {
@@ -10135,7 +10239,10 @@ function listenToCallStatus(callId, conversationId) {
                 console.warn('Call connect failed', error?.message || error);
             });
         }
-        renderCallOverlayStatus(conversationId, data.status === 'active' ? 'Live' : 'Ringing');
+        if (activeCallSession && activeCallSession.callId === callId) {
+            activeCallSession.callData = { id: callId, ...data };
+        }
+        renderCallOverlayStatus(conversationId, data);
         updateCallStatusPill(data.status === 'active');
     }, function (err) {
         handleSnapshotError('Call status', err);
@@ -10195,6 +10302,45 @@ async function endCallDoc(callId) {
     }
 }
 
+async function joinExistingCall(callData, conversationId) {
+    if (!callData?.id || !conversationId) return;
+    const callId = callData.id;
+    const callRef = doc(db, 'calls', callId);
+    await runTransaction(db, async function (tx) {
+        const snap = await tx.get(callRef);
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        if (data.status === 'ended') return;
+        const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
+        if (!active.includes(currentUser.uid)) active.push(currentUser.uid);
+        const ringTargets = Array.isArray(data.ringTargets) ? data.ringTargets.filter(function (uid) { return uid !== currentUser.uid; }) : [];
+        const userStatus = { ...(data.userStatus || {}) };
+        userStatus[currentUser.uid] = 'joined';
+        tx.update(callRef, {
+            status: 'active',
+            activeParticipants: active,
+            ringTargets,
+            userStatus,
+            updatedAt: serverTimestamp()
+        });
+    });
+
+    activeCallSession = {
+        callId,
+        conversationId,
+        roomName: `call_${callId}`,
+        type: callData.type || 'audio',
+        status: 'active',
+        callData: { ...callData, status: 'active' }
+    };
+    callStatusCache.set(callId, 'active');
+    activeCallConversationId = conversationId;
+    await renderCallOverlayStatus(conversationId, activeCallSession.callData);
+    openCallView();
+    listenToCallStatus(callId, conversationId);
+    await connectToLiveKitRoom(activeCallSession);
+}
+
 async function addCallSystemMessage(conversationId, callId, action, text) {
     if (!conversationId || !requireAuth()) return;
     if (!callId || !action) return;
@@ -10218,6 +10364,7 @@ async function addCallSystemMessage(conversationId, callId, action, text) {
             text,
             type: 'system',
             isSystem: true,
+            systemType: 'call',
             systemPayload: {
                 kind: 'call',
                 action,
@@ -10229,29 +10376,51 @@ async function addCallSystemMessage(conversationId, callId, action, text) {
     }
 }
 
+async function requestCallPermissions(kind, actionLabel) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Your browser does not support microphone access.');
+        return false;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: kind === 'video'
+        });
+        stream.getTracks().forEach(function (track) { track.stop(); });
+        return true;
+    } catch (err) {
+        alert(`Please allow microphone/camera access to ${actionLabel}.`);
+        return false;
+    }
+}
+
 async function acceptIncomingCall(callId, callData, conversationId) {
     const livekitModule = await ensureLiveKitLoaded();
     if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');
         return;
     }
-    if (!navigator.mediaDevices?.getUserMedia) {
-        alert('Your browser does not support microphone access.');
-        return;
-    }
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: (callData.type || 'audio') === 'video'
+    const hasPermission = await requestCallPermissions(callData.type || 'audio', 'answer the call');
+    if (!hasPermission) return;
+    const callRef = doc(db, 'calls', callId);
+    await runTransaction(db, async function (tx) {
+        const snap = await tx.get(callRef);
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        if (data.status === 'ended') return;
+        const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
+        if (!active.includes(currentUser.uid)) active.push(currentUser.uid);
+        const ringTargets = Array.isArray(data.ringTargets) ? data.ringTargets.filter(function (uid) { return uid !== currentUser.uid; }) : [];
+        const userStatus = { ...(data.userStatus || {}) };
+        userStatus[currentUser.uid] = 'joined';
+        tx.update(callRef, {
+            status: 'active',
+            startedAt: data.startedAt || serverTimestamp(),
+            activeParticipants: active,
+            ringTargets,
+            userStatus,
+            updatedAt: serverTimestamp()
         });
-        stream.getTracks().forEach(function (track) { track.stop(); });
-    } catch (err) {
-        alert('Please allow microphone/camera access to answer the call.');
-        return;
-    }
-    await updateDoc(doc(db, 'calls', callId), {
-        status: 'active',
-        startedAt: serverTimestamp()
     });
     await addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
     hideIncomingCallPrompt();
@@ -10261,8 +10430,17 @@ async function acceptIncomingCall(callId, callData, conversationId) {
         type: callData.type || 'audio',
         status: 'active',
         direction: 'incoming',
-        roomName: `call_${callId}`
+        roomName: `call_${callId}`,
+        callData: {
+            ...callData,
+            status: 'active',
+            userStatus: {
+                ...(callData.userStatus || {}),
+                [currentUser.uid]: 'joined'
+            }
+        }
     };
+    callStatusCache.set(callId, 'active');
     activeCallConversationId = conversationId;
     if (currentViewId !== 'messages') {
         window.navigateTo('messages');
@@ -10273,6 +10451,26 @@ async function acceptIncomingCall(callId, callData, conversationId) {
     }
     openCallView();
     await connectToLiveKitRoom(activeCallSession);
+}
+
+async function declineIncomingCall(callId, conversationId) {
+    if (!callId || !conversationId || !currentUser) return;
+    const callRef = doc(db, 'calls', callId);
+    await runTransaction(db, async function (tx) {
+        const snap = await tx.get(callRef);
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        if (data.status === 'ended') return;
+        const ringTargets = Array.isArray(data.ringTargets) ? data.ringTargets.filter(function (uid) { return uid !== currentUser.uid; }) : [];
+        const userStatus = { ...(data.userStatus || {}) };
+        userStatus[currentUser.uid] = 'declined';
+        tx.update(callRef, {
+            ringTargets,
+            userStatus,
+            updatedAt: serverTimestamp()
+        });
+    });
+    await addCallSystemMessage(conversationId, callId, 'declined', '📞 Call declined');
 }
 
 function startListeningForIncomingCalls() {
@@ -10288,18 +10486,22 @@ function startListeningForIncomingCalls() {
 
     const callQuery = query(
         collection(db, 'calls'),
-        where('participants', 'array-contains', currentUser.uid),
-        where('status', '==', 'ringing')
+        where('participants', 'array-contains', currentUser.uid)
     );
 
     const applyIncomingSnapshot = function (snap) {
         const ringingCalls = snap.docs.map(function (docSnap) {
-            return { id: docSnap.id, ...docSnap.data() };
+            const data = docSnap.data() || {};
+            callStatusCache.set(docSnap.id, data.status || 'active');
+            if (data.status === 'ended' && data.userStatus?.[currentUser.uid] === 'missed') {
+                addCallSystemMessage(data.conversationId, docSnap.id, 'missed', '📞 Missed call');
+            }
+            return { id: docSnap.id, ...data };
         }).filter(function (data) {
+            if (!data || !Array.isArray(data.participants)) return false;
             const callerId = data.initiatorId || data.createdBy;
-            return data.status === 'ringing'
+            return data.status !== 'ended'
                 && callerId !== currentUser.uid
-                && Array.isArray(data.participants)
                 && data.participants.includes(currentUser.uid);
         });
 
@@ -10367,23 +10569,10 @@ async function joinCallInvite(conversationId, callId) {
         toast('Call does not match this conversation.', 'info');
         return;
     }
-    activeCallSession = {
-        callId,
-        conversationId,
-        roomName: `call_${callId}`,
-        type: callData.type || 'audio'
-    };
-    activeCallConversationId = conversationId;
-    await renderCallOverlayStatus(conversationId, 'Connecting...');
-    openCallView();
-    listenToCallStatus(callId, conversationId);
-    try {
-        await connectToLiveKitRoom(activeCallSession);
-    } catch (error) {
-        toast('Unable to join call.', 'error');
-        console.warn('Join call failed', error?.message || error);
-        clearCallSession();
-    }
+    const hasPermission = await requestCallPermissions(callData.type || 'audio', 'join the call');
+    if (!hasPermission) return;
+    await joinExistingCall({ id: callId, ...callData }, conversationId);
+    return;
 }
 
 window.joinCallInvite = joinCallInvite;
@@ -10492,8 +10681,10 @@ function renderMessages(msgs = [], convo = {}) {
         if (msg.type === 'call_invite') {
             const callType = msg.callType === 'video' ? 'video' : 'audio';
             const canJoin = livekitLoadStatus === 'ready';
-            const joinDisabledAttr = canJoin ? '' : ' disabled aria-disabled="true" title="Loading call system…"';
-            const joinBtn = msg.callId
+            const callStatus = msg.callId ? callStatusCache.get(msg.callId) : null;
+            const callEnded = callStatus === 'ended' || callStatus === 'missed';
+            const joinDisabledAttr = canJoin && !callEnded ? '' : ' disabled aria-disabled="true" title="Loading call system…"';
+            const joinBtn = msg.callId && !callEnded
                 ? `<button class="call-join-btn" onclick="window.joinCallInvite('${convo.id || activeConversationId}', '${msg.callId}')"${joinDisabledAttr}>Join call</button>`
                 : '';
             content = `<div class="message-call-invite">
@@ -11450,20 +11641,8 @@ async function startDmCall(kind) {
         if (!ok) return;
         await leaveLiveKitRoom({ updateStatus: true });
     }
-    if (!navigator.mediaDevices?.getUserMedia) {
-        alert('Your browser does not support microphone access.');
-        return;
-    }
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: kind === 'video'
-        });
-        stream.getTracks().forEach(function (track) { track.stop(); });
-    } catch (err) {
-        alert('Please allow microphone/camera access to place a call.');
-        return;
-    }
+    const hasPermission = await requestCallPermissions(kind, 'place a call');
+    if (!hasPermission) return;
     const livekitModule = await ensureLiveKitLoaded();
     if (!livekitModule) {
         toast('LiveKit could not be loaded.', 'error');
@@ -11473,37 +11652,11 @@ async function startDmCall(kind) {
         const conversationId = activeConversationId;
         const callType = kind === 'video' ? 'video' : 'audio';
         const calls = await getCallsForConversation(conversationId);
-        const incoming = calls.find(function (call) {
-            const callerId = call.initiatorId || call.createdBy;
-            return call.status === 'ringing'
-                && callerId !== currentUser.uid
-                && Array.isArray(call.participants)
-                && call.participants.includes(currentUser.uid)
-                && (!call.type || call.type === callType);
+        const existingCall = calls.find(function (call) {
+            return call.status !== 'ended';
         });
-        if (incoming) {
-            if (activeCallSession?.status === 'ringing' && activeCallSession?.conversationId === conversationId) {
-                await endCallDoc(activeCallSession.callId);
-                clearCallSession();
-            }
-            await acceptIncomingCall(incoming.id, incoming, conversationId);
-            return;
-        }
-        const existingRinging = calls.find(function (call) {
-            return call.status === 'ringing';
-        });
-        if (existingRinging) {
-            const ts = existingRinging.createdAt;
-            const createdMs = ts?.toMillis ? ts.toMillis() : ts?.seconds ? ts.seconds * 1000 : 0;
-            if (createdMs && Date.now() - createdMs > 90 * 1000) {
-                await endCallDoc(existingRinging.id);
-            } else {
-                return;
-            }
-        }
-        if (activeCallSession) {
-            if (activeCallSession.conversationId === conversationId) return;
-            toast('You already have a call in progress.', 'info');
+        if (existingCall) {
+            await joinExistingCall(existingCall, conversationId);
             return;
         }
         const convo = conversationDetailsCache[conversationId] || (await fetchConversation(conversationId));
@@ -11522,29 +11675,42 @@ async function startDmCall(kind) {
             return;
         }
         await ensureConversationDoc(conversationId, participants);
-        const callRef = await addDoc(collection(db, 'calls'), {
+        const ringTargets = participants.filter(function (uid) { return uid !== currentUser.uid; });
+        const userStatus = participants.reduce(function (acc, uid) {
+            acc[uid] = uid === currentUser.uid ? 'joined' : 'ringing';
+            return acc;
+        }, {});
+        // Per-user call state model: activeParticipants, ringTargets, userStatus.
+        const callPayload = {
             createdBy: currentUser.uid,
             initiatorId: currentUser.uid,
             conversationId,
             type: callType,
-            status: 'ringing',
+            status: 'active',
             participants,
+            activeParticipants: [currentUser.uid],
+            ringTargets,
+            userStatus,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
-        });
+        };
+        const callRef = await addDoc(collection(db, 'calls'), callPayload);
         const callId = callRef.id;
+        callStatusCache.set(callId, 'active');
         activeCallSession = {
             callId,
             conversationId,
             type: callType,
-            status: 'ringing',
+            status: 'active',
             direction: 'outgoing',
-            roomName: `call_${callId}`
+            roomName: `call_${callId}`,
+            callData: { id: callId, ...callPayload }
         };
         activeCallConversationId = conversationId;
-        await renderCallOverlayStatus(conversationId, 'Calling…');
+        await renderCallOverlayStatus(conversationId, activeCallSession.callData || {});
         openCallView();
         listenToCallStatus(callId, conversationId);
+        await connectToLiveKitRoom(activeCallSession);
     } catch (e) {
         toast('Unable to start call', 'error');
         console.warn('Start call failed', e?.message || e);
@@ -11577,6 +11743,17 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     if (lastIncomingPromptCallId === incomingCall.id && promptVisible) return;
     lastIncomingPromptCallId = incomingCall.id;
 
+    const userStatus = incomingCall.userStatus || {};
+    const ringTargets = incomingCall.ringTargets || [];
+    const fallbackRinging = incomingCall.status === 'ringing' && (incomingCall.initiatorId || incomingCall.createdBy) !== currentUser.uid;
+    const shouldRing = userStatus[currentUser.uid] === 'ringing'
+        || ringTargets.includes(currentUser.uid)
+        || fallbackRinging;
+    if (!shouldRing) {
+        hideIncomingCallPrompt();
+        return;
+    }
+
     renderIncomingCallPrompt(incomingCall);
 
         if (elements.incomingAccept) {
@@ -11586,17 +11763,13 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
                 await acceptIncomingCall(incomingCall.id, incomingCall, incomingCall.conversationId);
             };
         }
-    if (elements.incomingDecline) {
-        elements.incomingDecline.onclick = async function () {
-            stopRingtone();
-            await updateDoc(doc(db, 'calls', incomingCall.id), {
-                status: 'ended',
-                endedAt: serverTimestamp()
-            });
-            await addCallSystemMessage(incomingCall.conversationId, incomingCall.id, 'declined', '📞 Call declined');
-            hideIncomingCallPrompt();
-        };
-    }
+        if (elements.incomingDecline) {
+            elements.incomingDecline.onclick = async function () {
+                stopRingtone();
+                await declineIncomingCall(incomingCall.id, incomingCall.conversationId);
+                hideIncomingCallPrompt();
+            };
+        }
 }
 
 function initCallInviteListener() {
@@ -12420,6 +12593,7 @@ async function sendChatPayload(conversationId, payload = {}) {
         reported: false,
         reportCount: 0,
         isSystem: !!payload.isSystem,
+        systemType: payload.systemType || null,
         systemPayload: payload.systemPayload || null,
         status: payload.status || 'sent'
     };
