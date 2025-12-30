@@ -907,19 +907,25 @@
                                 <div class="message-header-shell">
                                     <div class="message-thread-title-row">Select a conversation</div>
                                     <div class="message-header-actions">
-                                        <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
-                                            onclick="window.startDmCall('audio')" aria-label="Start audio call"
-                                            title="Loading call system…" aria-disabled="true" disabled>
-                                            <i class="ph ph-phone"></i>
-                                        </button>
-                                        <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
-                                            onclick="window.startDmCall('video')" aria-label="Start video call"
-                                            title="Loading call system…" aria-disabled="true" disabled>
-                                            <i class="ph ph-video-camera"></i>
-                                        </button>
-                                        <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
-                                            <i class="ph ph-dots-three-outline"></i>
-                                        </button>
+                                        <div class="message-header-actions-left">
+                                            <button id="dm-call-audio-btn" class="icon-pill dm-call-btn" type="button"
+                                                onclick="window.startDmCall('audio')" aria-label="Start audio call"
+                                                title="Loading call system…" aria-disabled="true" disabled>
+                                                <i class="ph ph-phone"></i>
+                                            </button>
+                                            <button id="dm-call-video-btn" class="icon-pill dm-call-btn" type="button"
+                                                onclick="window.startDmCall('video')" aria-label="Start video call"
+                                                title="Loading call system…" aria-disabled="true" disabled>
+                                                <i class="ph ph-video-camera"></i>
+                                            </button>
+                                            <button class="icon-pill" type="button" aria-label="Conversation options" disabled>
+                                                <i class="ph ph-dots-three-outline"></i>
+                                            </button>
+                                            <button class="icon-pill message-info-toggle" type="button" aria-label="Toggle info panel" disabled>
+                                                <i class="ph ph-info"></i>
+                                            </button>
+                                        </div>
+                                        <div class="message-header-actions-right"></div>
                                     </div>
                                 </div>
                             </div>
@@ -934,6 +940,7 @@
                                         class="ph ph-caret-down"></i></button>
                             </div>
                         </div>
+                            <div id="inbox-call-host" class="inbox-call-host is-hidden"></div>
                             <div id="pinned-messages" class="pinned-messages" style="display:none;"></div>
                             <div class="message-scroll-region">
                                 <div id="message-thread" class="message-thread-body"></div>
@@ -1745,30 +1752,71 @@
             <div class="call-card-header">
                 <div>
                     <div id="call-overlay-name" class="call-name">Conversation</div>
-                    <div id="call-overlay-status" class="call-status">Connecting...</div>
+                    <div id="call-overlay-status" class="call-status call-status-row"></div>
                 </div>
-                <button id="call-overlay-close" class="icon-pill" type="button" aria-label="Close call overlay">
-                    <i class="ph ph-x"></i>
-                </button>
             </div>
             <div class="call-media-grid">
-                <div class="call-video-tile">
+                <div id="call-focus-layout" class="call-focus-layout">
+                    <div id="call-focus-area" class="call-focus-area"></div>
+                    <div id="call-strip" class="call-strip"></div>
+                </div>
+                <div id="call-default-layout" class="call-default-layout">
+                <div id="call-local-tile" class="call-video-tile">
                     <video id="call-local-video" autoplay muted playsinline></video>
-                    <div class="call-video-label">You</div>
+                    <div class="call-video-label call-tile-label">You</div>
                 </div>
                 <div id="call-remote-grid" class="call-remote-grid"></div>
+                </div>
             </div>
             <div class="call-actions">
-                <button id="call-toggle-mic" class="call-action-btn" type="button">Mute</button>
-                <button id="call-toggle-cam" class="call-action-btn" type="button">Camera</button>
-                <button id="call-toggle-share" class="call-action-btn" type="button">Share screen</button>
-                <button id="call-hangup" class="call-action-btn end" type="button">Hang up</button>
+                <div class="call-action-group">
+                    <button id="call-toggle-mic" class="call-action-btn call-action-split" type="button" aria-label="Mute microphone">
+                        <span class="call-action-main"><i class="ph ph-microphone"></i><span>Mute</span></span>
+                        <span class="call-action-caret" data-caret="mic"><i class="ph ph-caret-down"></i></span>
+                    </button>
+                    <div id="call-mic-menu" class="call-device-menu is-hidden"></div>
+                </div>
+                <div class="call-action-group">
+                    <button id="call-toggle-cam" class="call-action-btn call-action-split" type="button" aria-label="Toggle camera">
+                        <span class="call-action-main"><i class="ph ph-video-camera"></i><span>Camera</span></span>
+                        <span class="call-action-caret" data-caret="cam"><i class="ph ph-caret-down"></i></span>
+                    </button>
+                    <div id="call-cam-menu" class="call-device-menu is-hidden"></div>
+                </div>
+                <button id="call-toggle-share" class="call-action-btn" type="button" aria-label="Share screen">
+                    <i class="ph ph-monitor"></i>
+                    <span>Share</span>
+                </button>
+                <button id="call-soundboard" class="call-action-btn" type="button" aria-label="Soundboard">
+                    <i class="ph ph-speaker-high"></i>
+                    <span>Soundboard</span>
+                </button>
+                <button id="call-watch-together" class="call-action-btn" type="button" aria-label="Watch together">
+                    <i class="ph ph-film-strip"></i>
+                    <span>Watch</span>
+                </button>
+                <button id="call-effects" class="call-action-btn" type="button" aria-label="Effects">
+                    <i class="ph ph-sparkle"></i>
+                    <span>Effects</span>
+                </button>
+                <button id="call-minimize" class="call-action-btn" type="button" aria-label="Minimize call">
+                    <i class="ph ph-arrow-left"></i>
+                    <span>Minimize</span>
+                </button>
+                <button id="call-hangup" class="call-action-btn end" type="button" aria-label="Hang up">
+                    <i class="ph ph-phone-disconnect"></i>
+                    <span>Hang up</span>
+                </button>
             </div>
         </div>
     </div>
-    <div id="call-incoming-prompt" class="call-incoming-prompt" style="display:none;">
+    <div id="call-incoming-backdrop" class="call-incoming-backdrop is-hidden" aria-hidden="true"></div>
+    <div id="call-incoming-prompt" class="call-incoming-prompt is-hidden">
         <div class="call-incoming-card" role="dialog" aria-modal="true" aria-live="polite">
+            <img id="call-incoming-avatar" class="call-incoming-avatar" alt="Caller avatar">
             <div id="call-incoming-name" class="call-incoming-name">Incoming call</div>
+            <div id="call-incoming-username" class="call-incoming-username is-hidden"></div>
+            <div class="call-incoming-text">is calling you…</div>
             <div id="call-incoming-type" class="call-incoming-type">Audio call</div>
             <div class="call-incoming-actions">
                 <button id="call-incoming-accept" class="call-incoming-btn accept" type="button">Accept</button>
@@ -1800,6 +1848,39 @@
     <script>
         window.NEXERA_FCM_VAPID_KEY = "REPLACE_WITH_YOUR_FIREBASE_CONSOLE_WEB_PUSH_CERTIFICATE_KEY";
         window.NEXERA_LIVEKIT_URL = "";
+    </script>
+    <script>
+        window.__NEXERA_BOOT_STAGE = 'html';
+        (function () {
+            const BOOT_TIMEOUT_MS = 9000;
+            const triggerBootError = function () {
+                const stage = window.__NEXERA_BOOT_STAGE;
+                if (stage !== 'html' && stage !== 'module-loading') return;
+                console.error('BOOT WATCHDOG TRIGGERED', window.location.href, navigator.userAgent);
+                const splash = document.getElementById('nexera-splash');
+                const center = splash ? splash.querySelector('.nexera-splash-center') : null;
+                if (!center) return;
+                center.innerHTML = `
+                    <div style="max-width:520px; text-align:center;">
+                        <div style="font-weight:800; font-size:1.1rem; margin-bottom:8px;">Nexera failed to start.</div>
+                        <div style="color:#c7d2de; font-size:0.95rem; margin-bottom:16px;">
+                            Nexera failed to start. This usually means the JavaScript bundle or a required network resource failed to load in this environment.
+                        </div>
+                        <button id="nexera-boot-retry" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Retry</button>
+                    </div>
+                `;
+                const retryBtn = document.getElementById('nexera-boot-retry');
+                if (retryBtn) {
+                    retryBtn.addEventListener('click', function () {
+                        window.location.reload();
+                    });
+                }
+            };
+            setTimeout(triggerBootError, BOOT_TIMEOUT_MS);
+        })();
+    </script>
+    <script>
+        window.__NEXERA_BOOT_STAGE = 'module-loading';
     </script>
     <script type="module" src="/main.js"></script>
     <script type="module" src="/assets/js/router.js"></script>
