@@ -9265,6 +9265,7 @@ function renderConversationList() {
         searchActive: !!search
     });
 
+    const highlightData = getActiveCallHighlightData();
     const renderRow = function (mapping, targetEl) {
         const details = conversationDetailsCache[mapping.id] || {};
         const participants = details.participants || mapping.otherParticipantIds || [];
@@ -10053,6 +10054,12 @@ function resetCallOverlayMedia() {
     if (elements.strip) {
         elements.strip.innerHTML = '';
     }
+    if (elements.focusArea) {
+        elements.focusArea.innerHTML = '';
+    }
+    if (elements.strip) {
+        elements.strip.innerHTML = '';
+    }
 }
 
 function updateCallOverlayMeta(convo = {}, statusText = 'Connecting...') {
@@ -10247,6 +10254,8 @@ async function connectToLiveKitRoom(callSession) {
     if (elements.toggleMic) elements.toggleMic.disabled = false;
     if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
     if (elements.toggleShare) elements.toggleShare.disabled = false;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = false;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = callKind !== 'video';
 
     room.on(LivekitRoomEvent.TrackSubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
@@ -10397,6 +10406,8 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
     if (elements.toggleMic) elements.toggleMic.disabled = true;
     if (elements.toggleCam) elements.toggleCam.disabled = true;
     if (elements.toggleShare) elements.toggleShare.disabled = true;
+    if (elements.micDeviceBtn) elements.micDeviceBtn.disabled = true;
+    if (elements.camDeviceBtn) elements.camDeviceBtn.disabled = true;
     if (livekitLocalAudioTrack) {
         livekitLocalAudioTrack.stop();
         livekitLocalAudioTrack = null;
@@ -10612,6 +10623,20 @@ async function initCallUi() {
         setActive(els.toggleShare, shareOn);
         updateCallControlIcons();
     };
+
+    if (els.micDeviceBtn) {
+        els.micDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.micMenu, 'audioinput', switchAudioDevice);
+        };
+    }
+
+    if (els.camDeviceBtn) {
+        els.camDeviceBtn.onclick = function (event) {
+            event.stopPropagation();
+            openDeviceMenu(els.camMenu, 'videoinput', switchVideoDevice);
+        };
+    }
 
     // default states
     setActive(els.toggleMic, micOn);
