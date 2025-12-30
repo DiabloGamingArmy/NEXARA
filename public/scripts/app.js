@@ -18,6 +18,88 @@ import { enhanceInboxLayout } from "/scripts/ui/InboxEnhancements.js";
 import { buildVideoCardElement } from "/scripts/ui/VideoCard.js";
 import { renderStoriesAndLiveBar } from "/scripts/ui/StoriesAndLiveBar.js";
 
+window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
+window.__NEXERA_BOOT_TS = Date.now();
+
+function showBootErrorOverlay(message) {
+    try {
+        const existing = document.getElementById('nexera-boot-error');
+        if (existing) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'nexera-boot-error';
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.zIndex = '2000';
+        overlay.style.display = 'flex';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.background = 'rgba(5, 10, 14, 0.85)';
+        overlay.style.color = '#fff';
+        overlay.style.padding = '24px';
+        overlay.innerHTML = `
+            <div style="max-width:520px; background:#0f141a; border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:20px; text-align:center;">
+                <div style="font-weight:800; font-size:1.1rem; margin-bottom:8px;">Nexera failed to start</div>
+                <div style="color:#c7d2de; font-size:0.95rem; margin-bottom:16px;">${message || 'An unexpected error occurred while starting the app.'}</div>
+                <button id="nexera-boot-reload" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Reload</button>
+            </div>
+        `;
+        const target = document.body || document.documentElement;
+        target.appendChild(overlay);
+        const reloadBtn = document.getElementById('nexera-boot-reload');
+        if (reloadBtn) {
+            reloadBtn.addEventListener('click', function () {
+                window.location.reload();
+            });
+        }
+    } catch (err) {
+        // swallow
+    }
+}
+
+function forceHideSplash(reason) {
+    try {
+        if (typeof hideSplash === 'function') {
+            hideSplash({ force: true, reason: reason || 'boot-error' });
+            return;
+        }
+        const splash = document.getElementById('nexera-splash');
+        if (!splash) return;
+        splash.classList.add('nexera-splash-hidden');
+        splash.style.pointerEvents = 'none';
+        splash.setAttribute('aria-hidden', 'true');
+        setTimeout(function () {
+            splash.style.visibility = 'hidden';
+            splash.style.display = 'none';
+        }, 520);
+    } catch (err) {
+        // swallow
+    }
+}
+
+window.addEventListener('error', function (event) {
+    try {
+        const err = event?.error;
+        console.error('Boot error', err || event?.message || event);
+        forceHideSplash('boot-error');
+        const message = err?.message || event?.message || 'A script error prevented Nexera from starting.';
+        showBootErrorOverlay(message);
+    } catch (err) {
+        // swallow
+    }
+});
+
+window.addEventListener('unhandledrejection', function (event) {
+    try {
+        const reason = event?.reason;
+        console.error('Boot unhandled rejection', reason);
+        forceHideSplash('boot-error');
+        const message = reason?.message || 'A background task failed while starting Nexera.';
+        showBootErrorOverlay(message);
+    } catch (err) {
+        // swallow
+    }
+});
+
 // --- Firebase Configuration --- 
 const firebaseConfig = {
     apiKey: "AIzaSyDg9Duz3xicI3pvvOtLCrV1DJRWDI0NtYA",
@@ -152,12 +234,14 @@ const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
+        window.__NEXERA_BOOT_STAGE = 'dom-ready';
         ensurePushSettingsUI();
         initCallUi();
         initMessagingForegroundListener();
         initCallUi();
     });
 } else {
+    window.__NEXERA_BOOT_STAGE = 'dom-ready';
     ensurePushSettingsUI();
     initCallUi();
     initMessagingForegroundListener();
@@ -1850,11 +1934,25 @@ function initApp(onReady) {
 
 async function initializeNexeraApp() {
     showSplash();
+    window.__NEXERA_BOOT_STAGE = 'init-start';
+    let bootResolved = false;
+    const bootTimeout = setTimeout(function () {
+        if (bootResolved) return;
+        forceHideSplash('boot-timeout');
+        const authScreen = document.getElementById('auth-screen');
+        if (authScreen) authScreen.style.display = 'flex';
+        showBootErrorOverlay('Startup is taking longer than expected. Please retry.');
+    }, 6000);
     try {
         refreshBrandLogos();
         await initApp(hideSplash);
+        bootResolved = true;
+        clearTimeout(bootTimeout);
+        window.__NEXERA_BOOT_STAGE = 'ready';
     } catch (err) {
         console.error('Failed to initialize Nexera', err);
+        bootResolved = true;
+        clearTimeout(bootTimeout);
         hideSplash();
     }
 }
@@ -18332,6 +18430,7 @@ function syncSidebarHomeState() {
 window.syncSidebarHomeState = syncSidebarHomeState;
 
 document.addEventListener('DOMContentLoaded', function () {
+    window.__NEXERA_BOOT_STAGE = 'dom-ready';
     bindMobileNav();
     bindMobileScrollHelper();
     updateInboxTabsHeight();

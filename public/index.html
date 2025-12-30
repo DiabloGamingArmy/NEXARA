@@ -1851,6 +1851,39 @@
         window.NEXERA_FCM_VAPID_KEY = "REPLACE_WITH_YOUR_FIREBASE_CONSOLE_WEB_PUSH_CERTIFICATE_KEY";
         window.NEXERA_LIVEKIT_URL = "";
     </script>
+    <script>
+        window.__NEXERA_BOOT_STAGE = 'html';
+        (function () {
+            const BOOT_TIMEOUT_MS = 9000;
+            const triggerBootError = function () {
+                const stage = window.__NEXERA_BOOT_STAGE;
+                if (stage !== 'html' && stage !== 'module-loading') return;
+                console.error('BOOT WATCHDOG TRIGGERED', window.location.href, navigator.userAgent);
+                const splash = document.getElementById('nexera-splash');
+                const center = splash ? splash.querySelector('.nexera-splash-center') : null;
+                if (!center) return;
+                center.innerHTML = `
+                    <div style="max-width:520px; text-align:center;">
+                        <div style="font-weight:800; font-size:1.1rem; margin-bottom:8px;">Nexera failed to start.</div>
+                        <div style="color:#c7d2de; font-size:0.95rem; margin-bottom:16px;">
+                            Nexera failed to start. This usually means the JavaScript bundle or a required network resource failed to load in this environment.
+                        </div>
+                        <button id="nexera-boot-retry" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Retry</button>
+                    </div>
+                `;
+                const retryBtn = document.getElementById('nexera-boot-retry');
+                if (retryBtn) {
+                    retryBtn.addEventListener('click', function () {
+                        window.location.reload();
+                    });
+                }
+            };
+            setTimeout(triggerBootError, BOOT_TIMEOUT_MS);
+        })();
+    </script>
+    <script>
+        window.__NEXERA_BOOT_STAGE = 'module-loading';
+    </script>
     <script type="module" src="/main.js"></script>
     <script type="module" src="/assets/js/router.js"></script>
 
