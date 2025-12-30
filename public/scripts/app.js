@@ -907,6 +907,11 @@ let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
 let livekitLocalScreenTracks = [];
+let livekitConnecting = false;
+let livekitConnectingCallId = null;
+let livekitConnectNonce = 0;
+let connectedCallId = null;
+let livekitConnectPromise = null;
 let incomingCallUnsubscribe = null;
 let lastIncomingPromptCallId = null;
 let incomingListenerLogged = false;
@@ -9759,21 +9764,27 @@ async function renderCallOverlayStatus(conversationId, callData = {}) {
     if (elements.status) {
         const participants = convo?.participants || callData.participants || [];
         const localStatus = getCallUserStatus(callData, currentUser?.uid);
-        const localLabel = localStatus === 'ringing'
-            ? 'Incoming call'
-            : localStatus === 'declined'
-                ? 'Declined'
-                : localStatus === 'left'
-                    ? 'Left'
-                    : localStatus === 'missed'
-                        ? 'Missed call'
-                        : 'In call';
+        const active = Array.isArray(callData.activeParticipants) ? callData.activeParticipants : [];
+        const ringTargets = Array.isArray(callData.ringTargets) ? callData.ringTargets : [];
+        const waitingForOthers = active.length === 1 && active.includes(currentUser?.uid) && ringTargets.length === 0;
+        const localLabel = waitingForOthers
+            ? 'Waiting for others…'
+            : localStatus === 'ringing'
+                ? 'Incoming call'
+                : localStatus === 'declined'
+                    ? 'Declined'
+                    : localStatus === 'left'
+                        ? 'Left'
+                        : localStatus === 'missed'
+                            ? 'Missed call'
+                            : 'In call';
         const chips = participants
             .filter(function (uid) { return uid && uid !== currentUser?.uid; })
             .map(function (uid) {
                 const meta = resolveParticipantDisplay(convo || {}, uid);
-                const status = getCallUserStatus(callData, uid) || 'ringing';
+                const status = getCallUserStatus(callData, uid) || (ringTargets.includes(uid) ? 'ringing' : 'joined');
                 const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+                const name = meta.displayName || meta.username || 'User';
                 const avatar = renderAvatar({
                     uid,
                     username: meta.username,
@@ -9781,7 +9792,7 @@ async function renderCallOverlayStatus(conversationId, callData = {}) {
                     photoURL: meta.avatar,
                     avatarColor: meta.avatarColor
                 }, { size: 20 });
-                return `<div class="call-status-chip">${avatar}<span>${escapeHtml(statusLabel)}</span></div>`;
+                return `<div class="call-status-chip">${avatar}<span class="call-status-name">${escapeHtml(name)}</span><span class="call-status-tag">${escapeHtml(statusLabel)}</span></div>`;
             })
             .join('');
         elements.status.innerHTML = `<div class="call-status-local">${escapeHtml(localLabel)}</div><div class="call-status-chips">${chips}</div>`;
@@ -9850,6 +9861,21 @@ function detachRemoteTrack(track, participant) {
 async function connectToLiveKitRoom(callSession) {
     if (!callSession) return;
     const callKind = callSession.kind || callSession.type || 'audio';
+    if (!callSession.callId || !callSession.roomName) {
+        console.warn('[Calls] Missing callId/roomName for LiveKit connect', callSession?.callId);
+        return false;
+    }
+    if (connectedCallId === callSession.callId && livekitRoom) {
+        return true;
+    }
+    if (livekitConnecting && livekitConnectingCallId === callSession.callId && livekitConnectPromise) {
+        return livekitConnectPromise;
+    }
+    const myNonce = ++livekitConnectNonce;
+    livekitConnecting = true;
+    livekitConnectingCallId = callSession.callId;
+    console.log('[Calls] LiveKit connect start', callSession.callId);
+    const attemptPromise = (async function () {
     if (livekitRoom) {
         await leaveLiveKitRoom({ updateStatus: false });
     }
@@ -9860,6 +9886,11 @@ async function connectToLiveKitRoom(callSession) {
     }
     const room = new LivekitRoom({ adaptiveStream: true, dynacast: true });
     livekitRoom = room;
+    if (myNonce !== livekitConnectNonce || activeCallSession?.callId !== callSession.callId) {
+        room.disconnect();
+        if (livekitRoom === room) livekitRoom = null;
+        return false;
+    }
     if (elements.toggleMic) elements.toggleMic.disabled = false;
     if (elements.toggleCam) elements.toggleCam.disabled = callKind !== 'video';
     if (elements.toggleShare) elements.toggleShare.disabled = false;
@@ -9900,9 +9931,19 @@ async function connectToLiveKitRoom(callSession) {
         throw new Error('LiveKit token unavailable.');
     }
     await room.connect(tokenPayload.url, tokenPayload.token);
+    if (myNonce !== livekitConnectNonce || activeCallSession?.callId !== callSession.callId) {
+        room.disconnect();
+        if (livekitRoom === room) livekitRoom = null;
+        return false;
+    }
 
     livekitLocalAudioTrack = await livekitCreateLocalAudioTrack();
     await room.localParticipant.publishTrack(livekitLocalAudioTrack);
+    if (myNonce !== livekitConnectNonce || activeCallSession?.callId !== callSession.callId) {
+        room.disconnect();
+        if (livekitRoom === room) livekitRoom = null;
+        return false;
+    }
 
     if (elements.toggleMic) {
         elements.toggleMic.classList.add('active');
@@ -9950,9 +9991,23 @@ async function connectToLiveKitRoom(callSession) {
     if (activeCallSession && activeCallSession.callId === callSession.callId) {
         activeCallSession = { ...activeCallSession, status: 'active' };
     }
+    connectedCallId = callSession.callId;
     await renderCallOverlayStatus(callSession.conversationId, callSession.callData || {});
     updateActiveCallButton();
     updateCallStatusPill(true);
+    console.log('[Calls] LiveKit connected', callSession.callId);
+    return true;
+    })();
+    livekitConnectPromise = attemptPromise;
+    try {
+        return await attemptPromise;
+    } finally {
+        if (myNonce === livekitConnectNonce) {
+            livekitConnecting = false;
+            livekitConnectingCallId = null;
+            livekitConnectPromise = null;
+        }
+    }
 }
 
 async function leaveLiveKitRoom({ updateStatus = true } = {}) {
@@ -9984,6 +10039,7 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         livekitRoom.disconnect();
         livekitRoom = null;
     }
+    connectedCallId = null;
     if (updateStatus && activeCallSession?.callId) {
         const callId = activeCallSession.callId;
         const conversationId = activeCallSession.conversationId;
@@ -10234,7 +10290,7 @@ function listenToCallStatus(callId, conversationId) {
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
         }
-        if (data.status === 'active' && activeCallSession?.callId === callId && !livekitRoom) {
+        if (data.status === 'active' && activeCallSession?.callId === callId && !livekitRoom && !livekitConnecting) {
             connectToLiveKitRoom(activeCallSession).catch(function (error) {
                 console.warn('Call connect failed', error?.message || error);
             });
@@ -10335,6 +10391,8 @@ async function joinExistingCall(callData, conversationId) {
     };
     callStatusCache.set(callId, 'active');
     activeCallConversationId = conversationId;
+    livekitConnecting = true;
+    livekitConnectingCallId = callId;
     await renderCallOverlayStatus(conversationId, activeCallSession.callData);
     openCallView();
     listenToCallStatus(callId, conversationId);
@@ -10442,6 +10500,8 @@ async function acceptIncomingCall(callId, callData, conversationId) {
     };
     callStatusCache.set(callId, 'active');
     activeCallConversationId = conversationId;
+    livekitConnecting = true;
+    livekitConnectingCallId = callId;
     if (currentViewId !== 'messages') {
         window.navigateTo('messages');
     }
@@ -11690,6 +11750,7 @@ async function startDmCall(kind) {
             participants,
             activeParticipants: [currentUser.uid],
             ringTargets,
+            ringExpiresAtMs: Date.now() + 45000,
             userStatus,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
@@ -11707,6 +11768,8 @@ async function startDmCall(kind) {
             callData: { id: callId, ...callPayload }
         };
         activeCallConversationId = conversationId;
+        livekitConnecting = true;
+        livekitConnectingCallId = callId;
         await renderCallOverlayStatus(conversationId, activeCallSession.callData || {});
         openCallView();
         listenToCallStatus(callId, conversationId);
@@ -11743,12 +11806,29 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
     if (lastIncomingPromptCallId === incomingCall.id && promptVisible) return;
     lastIncomingPromptCallId = incomingCall.id;
 
+    if (!['active', 'ringing'].includes(incomingCall.status || 'active')) {
+        hideIncomingCallPrompt();
+        return;
+    }
     const userStatus = incomingCall.userStatus || {};
     const ringTargets = incomingCall.ringTargets || [];
     const fallbackRinging = incomingCall.status === 'ringing' && (incomingCall.initiatorId || incomingCall.createdBy) !== currentUser.uid;
     const shouldRing = userStatus[currentUser.uid] === 'ringing'
         || ringTargets.includes(currentUser.uid)
         || fallbackRinging;
+    const ringExpiresAtMs = incomingCall.ringExpiresAtMs || 0;
+    if (shouldRing && ringExpiresAtMs && Date.now() > ringExpiresAtMs) {
+        const callRef = doc(db, 'calls', incomingCall.id);
+        const statusKey = `userStatus.${currentUser.uid}`;
+        await updateDoc(callRef, {
+            ringTargets: arrayRemove(currentUser.uid),
+            [statusKey]: 'missed',
+            updatedAt: serverTimestamp()
+        }).catch(function () {});
+        await addCallSystemMessage(incomingCall.conversationId, incomingCall.id, 'missed', '📞 Missed call');
+        hideIncomingCallPrompt();
+        return;
+    }
     if (!shouldRing) {
         hideIncomingCallPrompt();
         return;

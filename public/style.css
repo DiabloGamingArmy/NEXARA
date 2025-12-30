@@ -3803,17 +3803,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     display: contents;
 }
 
-.inbox-call-host #call-card {
-    width: 100%;
-    max-width: none;
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    padding: 0;
-    box-shadow: none;
-    display: contents;
-}
-
 .call-card-header {
     display: flex;
     align-items: center;
@@ -3868,6 +3857,15 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex: 0 0 20px;
 }
 
+.call-status-name {
+    color: var(--text-main);
+    font-weight: 600;
+}
+
+.call-status-tag {
+    color: var(--text-muted);
+}
+
 .call-media-grid {
     display: flex;
     flex-direction: column;
@@ -3907,20 +3905,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex: 0 0 320px;
     height: 320px;
     min-height: 260px;
-}
-
-.call-strip {
-    display: flex;
-    gap: 10px;
-    min-height: 0;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    height: 140px;
-}
-
-.call-strip .call-tile {
-    flex: 0 0 180px;
-    height: 100%;
 }
 
 .call-strip {
