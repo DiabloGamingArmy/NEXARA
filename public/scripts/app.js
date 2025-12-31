@@ -4,7 +4,7 @@ import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence, 
 import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
-import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
+import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -146,7 +146,9 @@ const db = isSafari
     : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
-const messaging = getMessaging(app);
+let messaging = null;
+let messagingSupportChecked = false;
+let messagingIsSupported = false;
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 let LivekitRoom = null;
 let LivekitRoomEvent = null;
@@ -258,6 +260,7 @@ let pendingVideoThumbnailBlob = null;
 let messagingRegistration = null;
 let messagingListenerReady = false;
 const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
+var callUiInitialized = false;
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
@@ -265,14 +268,12 @@ if (document.readyState === 'loading') {
         ensurePushSettingsUI();
         initCallUi();
         initMessagingForegroundListener();
-        initCallUi();
     });
 } else {
     window.__NEXERA_BOOT_STAGE = 'dom-ready';
     ensurePushSettingsUI();
     initCallUi();
     initMessagingForegroundListener();
-    initCallUi();
 }
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
@@ -486,6 +487,14 @@ function showSplash() {
     splash.style.visibility = 'visible';
     splash.setAttribute('aria-hidden', 'false');
     logSplashEvent('show');
+}
+
+function isSplashVisible() {
+    const splash = document.getElementById('nexera-splash');
+    if (!splash) return false;
+    if (splash.classList.contains('nexera-splash-hidden')) return false;
+    if (splash.style.display === 'none') return false;
+    return true;
 }
 
 function hideSplash(options = {}) {
@@ -1012,7 +1021,6 @@ let activeLiveSessionId = null;
 let activeCallSession = null;
 let isCallViewOpen = false;
 let callDocUnsubscribe = null;
-let callUiInitialized = false;
 let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
@@ -1888,7 +1896,6 @@ function initApp(onReady) {
                 // UI Transitions
                 if (authScreen) authScreen.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'flex';
-                if (loadingOverlay) loadingOverlay.style.display = 'none';
                 initCallInviteListener();
                 startActiveCallTracker();
                 markReady();
@@ -1900,6 +1907,7 @@ function initApp(onReady) {
                         if (currentUser?.uid !== signedInUserId) return;
                         startCategoryStreams(signedInUserId);
                         await loadFeedData({ showSplashDuringLoad: true });
+                        if (loadingOverlay) loadingOverlay.style.display = 'none';
                         if (currentUser?.uid !== signedInUserId) return;
                         startUserReviewListener(signedInUserId); // PATCH: Listen for USER reviews globally on load
                         loadInboxModeFromStorage();
@@ -2685,8 +2693,12 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     if (feedLoading && feedHydrationPromise) return feedHydrationPromise;
 
     feedLoading = true;
+    let didShowSplash = false;
     feedHydrationPromise = (async function () {
-        if (showSplashDuringLoad) showSplash();
+        if (showSplashDuringLoad && !isSplashVisible()) {
+            showSplash();
+            didShowSplash = true;
+        }
         feedPagination.lastDoc = null;
         feedPagination.done = false;
         const batch = await fetchFeedBatch({ reset: true });
@@ -2719,7 +2731,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         console.error('Feed load failed', error);
     }).finally(function () {
         feedLoading = false;
-        if (showSplashDuringLoad) hideSplash();
+        if (didShowSplash) hideSplash();
     });
 
     return feedHydrationPromise;
@@ -8471,8 +8483,38 @@ function getStoredPushToken() {
     return window.localStorage?.getItem(PUSH_TOKEN_STORAGE_KEY) || '';
 }
 
+async function ensureMessagingReady() {
+    if (messagingSupportChecked) return messagingIsSupported;
+    messagingSupportChecked = true;
+    try {
+        if (!window.isSecureContext && location.hostname !== 'localhost') {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('Notification' in window)) {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('serviceWorker' in navigator) || !navigator.serviceWorker) {
+            messagingIsSupported = false;
+            return false;
+        }
+        messagingIsSupported = await isMessagingSupported();
+        if (!messagingIsSupported) return false;
+        messaging = getMessaging(app);
+        return true;
+    } catch (err) {
+        console.warn('[Messaging] Unsupported or failed support check:', err?.message || err);
+        messagingIsSupported = false;
+        messaging = null;
+        return false;
+    }
+}
+
 async function registerMessagingServiceWorker() {
     if (!('serviceWorker' in navigator)) return null;
+    if (!navigator.serviceWorker?.register) return null;
+    if (!window.isSecureContext && location.hostname !== 'localhost') return null;
     if (messagingRegistration) return messagingRegistration;
     try {
         messagingRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
@@ -8511,6 +8553,8 @@ async function enablePushNotifications() {
     if (!currentUser) return toast('Please log in to enable notifications.', 'info');
     if (!('Notification' in window)) return toast('Notifications are not supported in this browser.', 'error');
     if (!FCM_VAPID_KEY) return toast('Push notifications are not configured yet.', 'error');
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return toast('Notifications are not supported in this browser.', 'error');
 
     const permission = await Notification.requestPermission();
     updatePushSettingsUI();
@@ -8543,7 +8587,9 @@ async function disablePushNotifications() {
         console.warn('Unable to remove push token doc', err?.message || err);
     }
     try {
-        await deleteFcmToken(messaging);
+        if (messaging) {
+            await deleteFcmToken(messaging);
+        }
     } catch (err) {
         console.warn('Unable to delete FCM token', err?.message || err);
     }
@@ -8589,6 +8635,17 @@ function updatePushSettingsUI() {
     }
 }
 
+async function refreshPushSupportUI() {
+    const statusEl = document.getElementById('push-notif-status');
+    const btn = document.getElementById('push-notif-enable-btn');
+    if (!statusEl && !btn) return;
+    const supported = await ensureMessagingReady();
+    if (!supported) {
+        if (statusEl) statusEl.textContent = 'Notifications are not supported in this browser.';
+        if (btn) btn.disabled = true;
+    }
+}
+
 function ensurePushSettingsUI() {
     const modalContent = document.querySelector('#settings-modal .modal-content');
     if (!modalContent || document.getElementById('push-notif-settings')) return;
@@ -8604,11 +8661,14 @@ function ensurePushSettingsUI() {
     const btn = section.querySelector('#push-notif-enable-btn');
     if (btn) btn.onclick = function () { enablePushNotifications(); };
     updatePushSettingsUI();
+    refreshPushSupportUI();
 }
 
-function initMessagingForegroundListener() {
+async function initMessagingForegroundListener() {
     if (messagingListenerReady) return;
     messagingListenerReady = true;
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return;
     onMessage(messaging, function (payload) {
         const data = payload?.data || {};
         if (data.kind !== 'dm') return;
@@ -9769,6 +9829,7 @@ function exitCallFocus() {
     });
     els.mediaGrid.classList.remove('is-focused');
     callFocusState = { active: false, tileId: null };
+    updateCallTileLayout();
 }
 
 function toggleCallFocus(tile) {
@@ -10036,6 +10097,8 @@ function resetCallOverlayMedia() {
         elements.remoteGrid.innerHTML = '';
         if (elements.localTile) {
             elements.remoteGrid.appendChild(elements.localTile);
+            enhanceCallTile(elements.localTile);
+            elements.localTile.dataset.originalParentId = elements.remoteGrid.id;
         }
         updateCallTileLayout();
     }
@@ -10467,6 +10530,16 @@ async function initCallUi() {
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
     els.hangupBtn.dataset.bound = '1';
+    if (!callUiInitialized) {
+        callUiInitialized = true;
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                updateCallTileLayout();
+            }, 150);
+        });
+    }
 
     const setActive = (btn, on) => {
         if (!btn) return;
@@ -10633,10 +10706,12 @@ async function initCallUi() {
     updateCallControlIcons();
     if (els.localTile) {
         els.localTile.dataset.callTileId = 'local';
-        els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
         els.localTile.classList.add('is-camera');
         enhanceCallTile(els.localTile);
         ensureLocalTilePlacement();
+        if (els.remoteGrid) {
+            els.localTile.dataset.originalParentId = els.remoteGrid.id;
+        }
         updateCallTileLayout();
     }
 }
