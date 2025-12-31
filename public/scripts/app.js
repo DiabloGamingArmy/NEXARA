@@ -4,7 +4,7 @@ import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence, 
 import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
-import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
+import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -146,7 +146,9 @@ const db = isSafari
     : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
-const messaging = getMessaging(app);
+let messaging = null;
+let messagingSupportChecked = false;
+let messagingIsSupported = false;
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 let LivekitRoom = null;
 let LivekitRoomEvent = null;
@@ -258,6 +260,7 @@ let pendingVideoThumbnailBlob = null;
 let messagingRegistration = null;
 let messagingListenerReady = false;
 const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
+var callUiInitialized = false;
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
@@ -265,14 +268,12 @@ if (document.readyState === 'loading') {
         ensurePushSettingsUI();
         initCallUi();
         initMessagingForegroundListener();
-        initCallUi();
     });
 } else {
     window.__NEXERA_BOOT_STAGE = 'dom-ready';
     ensurePushSettingsUI();
     initCallUi();
     initMessagingForegroundListener();
-    initCallUi();
 }
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
@@ -476,6 +477,10 @@ function shouldAnimateItem(key) {
     return true;
 }
 
+function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
 function showSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
@@ -486,6 +491,14 @@ function showSplash() {
     splash.style.visibility = 'visible';
     splash.setAttribute('aria-hidden', 'false');
     logSplashEvent('show');
+}
+
+function isSplashVisible() {
+    const splash = document.getElementById('nexera-splash');
+    if (!splash) return false;
+    if (splash.classList.contains('nexera-splash-hidden')) return false;
+    if (splash.style.display === 'none') return false;
+    return true;
 }
 
 function hideSplash(options = {}) {
@@ -514,6 +527,20 @@ function hideSplash(options = {}) {
             splash.style.display = 'none';
         }
     }, TRANSITION_BUFFER);
+}
+
+let __initialSplashReleased = false;
+
+function releaseInitialSplashOnce(reason = 'initial-ready') {
+    if (__initialSplashReleased) return;
+    __initialSplashReleased = true;
+    try {
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash(reason);
+            return;
+        }
+    } catch (e) {}
+    try { hideSplash({ force: true, reason }); } catch (e) {}
 }
 
 const SPLASH_FAILSAFE_TIMEOUT = 8000;
@@ -785,7 +812,8 @@ function normalizeUsername(value = '') {
 }
 
 function resolveDisplayName(userLike = {}) {
-    return userLike.displayName || userLike.name || userLike.fullName || userLike.nickname || '';
+    const u = (userLike && typeof userLike === 'object') ? userLike : {};
+    return (u.displayName || u.username || u.handle || u.uid || u.id || '').toString().trim();
 }
 
 function resolveAvatarInitial(userLike = {}) {
@@ -1012,7 +1040,6 @@ let activeLiveSessionId = null;
 let activeCallSession = null;
 let isCallViewOpen = false;
 let callDocUnsubscribe = null;
-let callUiInitialized = false;
 let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
@@ -1033,6 +1060,90 @@ let __ringCtx = null;
 let __ringOsc = null;
 let __ringGain = null;
 let callFocusState = { active: false, tileId: null };
+const CALL_FOCUS_HEIGHT_KEY = 'nexera_call_focus_height_ratio';
+let callFocusHeightRatio = null;
+
+try {
+    const raw = localStorage.getItem(CALL_FOCUS_HEIGHT_KEY);
+    const val = parseFloat(raw);
+    if (Number.isFinite(val)) callFocusHeightRatio = val;
+} catch (e) {}
+
+function clampFocusRatio(r) {
+    const n = Number.isFinite(r) ? r : 0.62;
+    return Math.min(0.85, Math.max(0.35, n));
+}
+
+function applyCallFocusHeight() {
+    if (!callFocusState?.active) return;
+    const els = getCallOverlayElements();
+    if (!els?.focusLayout || !els?.focusArea) return;
+
+    const rect = els.focusLayout.getBoundingClientRect();
+    if (!rect.height) return;
+
+    const ratio = clampFocusRatio(callFocusHeightRatio);
+    const px = Math.round(rect.height * ratio);
+
+    els.focusArea.style.flex = '0 0 auto';
+    els.focusArea.style.height = px + 'px';
+}
+
+function clearCallFocusHeightStyles() {
+    const els = getCallOverlayElements();
+    if (!els?.focusArea) return;
+    els.focusArea.style.removeProperty('height');
+    els.focusArea.style.removeProperty('flex');
+}
+
+function bindCallFocusResizeHandle() {
+    const els = getCallOverlayElements();
+    const handle = els?.focusResizeHandle;
+    if (!handle || handle.dataset.bound === 'true') return;
+    handle.dataset.bound = 'true';
+
+    let dragging = false;
+
+    function onDown(e) {
+        if (!callFocusState?.active) return;
+        dragging = true;
+        handle.classList.add('is-dragging');
+        try { handle.setPointerCapture?.(e.pointerId); } catch (err) {}
+        e.preventDefault();
+    }
+
+    function onMove(e) {
+        if (!dragging || !callFocusState?.active) return;
+        const elsNow = getCallOverlayElements();
+        const layout = elsNow?.focusLayout;
+        if (!layout) return;
+
+        const rect = layout.getBoundingClientRect();
+        if (!rect.height) return;
+
+        const y = e.clientY - rect.top;
+        const ratio = clampFocusRatio(y / rect.height);
+        callFocusHeightRatio = ratio;
+
+        try { localStorage.setItem(CALL_FOCUS_HEIGHT_KEY, String(ratio)); } catch (err) {}
+        applyCallFocusHeight();
+    }
+
+    function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('is-dragging');
+    }
+
+    handle.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+
+    window.addEventListener('resize', function () {
+        if (callFocusState?.active) applyCallFocusHeight();
+    });
+}
 const callStatusCache = new Map();
 let activeCallDocId = null;
 let activeCallConversationId = null;
@@ -1809,9 +1920,6 @@ function initApp(onReady) {
         if (typeof onReady === 'function') onReady();
         if (window.Nexera?.__resolveReady) window.Nexera.__resolveReady();
         if (readyResolver) readyResolver();
-        if (window.Nexera?.releaseSplash) {
-            window.Nexera.releaseSplash('auth-ready');
-        }
     };
 
     onAuthStateChanged(auth, async function (user) {
@@ -1888,7 +1996,6 @@ function initApp(onReady) {
                 // UI Transitions
                 if (authScreen) authScreen.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'flex';
-                if (loadingOverlay) loadingOverlay.style.display = 'none';
                 initCallInviteListener();
                 startActiveCallTracker();
                 markReady();
@@ -1900,6 +2007,7 @@ function initApp(onReady) {
                         if (currentUser?.uid !== signedInUserId) return;
                         startCategoryStreams(signedInUserId);
                         await loadFeedData({ showSplashDuringLoad: true });
+                        if (loadingOverlay) loadingOverlay.style.display = 'none';
                         if (currentUser?.uid !== signedInUserId) return;
                         startUserReviewListener(signedInUserId); // PATCH: Listen for USER reviews globally on load
                         loadInboxModeFromStorage();
@@ -2640,21 +2748,42 @@ async function fetchMissingProfiles(posts) {
     }
 }
 
-async function waitForFeedMedia(targetId = 'feed-content') {
+async function waitForFeedMedia(targetId = 'feed-content', options = {}) {
+    const { timeoutMs = 1500, maxNodes = 12 } = options || {};
     const container = document.getElementById(targetId);
     if (!container) return;
-    const nodes = Array.from(container.querySelectorAll('img, video'));
+    const nodes = Array.from(container.querySelectorAll('img, video')).slice(0, maxNodes);
     if (nodes.length === 0) return;
-    await Promise.all(nodes.map(function (node) {
-        if ((node.tagName === 'IMG' && node.complete) || (node.tagName === 'VIDEO' && node.readyState >= 3)) return Promise.resolve();
+    const waitOne = function (node) {
+        try {
+            if (node.tagName === 'IMG' && node.complete) return Promise.resolve();
+            if (node.tagName === 'VIDEO' && node.readyState >= 3) return Promise.resolve();
+        } catch (_) {}
         return new Promise(function (resolve) {
-            node.addEventListener('load', resolve, { once: true });
-            node.addEventListener('error', resolve, { once: true });
+            let done = false;
+            const finish = function () {
+                if (done) return;
+                done = true;
+                resolve();
+            };
+            const t = setTimeout(finish, timeoutMs);
+            const wrap = function () {
+                clearTimeout(t);
+                finish();
+            };
+            node.addEventListener('load', wrap, { once: true });
+            node.addEventListener('error', wrap, { once: true });
             if (node.tagName === 'VIDEO') {
-                node.addEventListener('loadeddata', resolve, { once: true });
+                node.addEventListener('loadeddata', wrap, { once: true });
+                node.addEventListener('stalled', wrap, { once: true });
+                node.addEventListener('abort', wrap, { once: true });
             }
         });
-    }));
+    };
+    await Promise.race([
+        Promise.all(nodes.map(waitOne)),
+        sleep(timeoutMs)
+    ]);
 }
 
 async function fetchFeedBatch({ reset = false } = {}) {
@@ -2685,8 +2814,12 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     if (feedLoading && feedHydrationPromise) return feedHydrationPromise;
 
     feedLoading = true;
+    let didShowSplash = false;
     feedHydrationPromise = (async function () {
-        if (showSplashDuringLoad) showSplash();
+        if (showSplashDuringLoad && !isSplashVisible()) {
+            showSplash();
+            didShowSplash = true;
+        }
         feedPagination.lastDoc = null;
         feedPagination.done = false;
         const batch = await fetchFeedBatch({ reset: true });
@@ -2709,17 +2842,23 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         renderFeed();
         if (isInitialLoad) {
             isInitialLoad = false;
-            if (window.Nexera?.releaseSplash) {
-                window.Nexera.releaseSplash('feed-initial-ready');
-            }
+            releaseInitialSplashOnce('feed-initial-ready');
         }
-        await waitForFeedMedia();
+        try {
+            await waitForFeedMedia('feed-content', { timeoutMs: 1500, maxNodes: 12 });
+        } catch (e) {
+            console.warn('[Feed] waitForFeedMedia skipped/failed', e?.message || e);
+        }
         postSnapshotCache = nextCache;
     })().catch(function (error) {
         console.error('Feed load failed', error);
     }).finally(function () {
         feedLoading = false;
-        if (showSplashDuringLoad) hideSplash();
+        if (didShowSplash) {
+            hideSplash({ reason: 'feed-load-finally' });
+        } else if (typeof isSplashVisible === 'function' && isSplashVisible()) {
+            hideSplash({ reason: 'feed-load-finally-visible' });
+        }
     });
 
     return feedHydrationPromise;
@@ -8471,8 +8610,38 @@ function getStoredPushToken() {
     return window.localStorage?.getItem(PUSH_TOKEN_STORAGE_KEY) || '';
 }
 
+async function ensureMessagingReady() {
+    if (messagingSupportChecked) return messagingIsSupported;
+    messagingSupportChecked = true;
+    try {
+        if (!window.isSecureContext && location.hostname !== 'localhost') {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('Notification' in window)) {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('serviceWorker' in navigator) || !navigator.serviceWorker) {
+            messagingIsSupported = false;
+            return false;
+        }
+        messagingIsSupported = await isMessagingSupported();
+        if (!messagingIsSupported) return false;
+        messaging = getMessaging(app);
+        return true;
+    } catch (err) {
+        console.warn('[Messaging] Unsupported or failed support check:', err?.message || err);
+        messagingIsSupported = false;
+        messaging = null;
+        return false;
+    }
+}
+
 async function registerMessagingServiceWorker() {
     if (!('serviceWorker' in navigator)) return null;
+    if (!navigator.serviceWorker?.register) return null;
+    if (!window.isSecureContext && location.hostname !== 'localhost') return null;
     if (messagingRegistration) return messagingRegistration;
     try {
         messagingRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
@@ -8511,6 +8680,8 @@ async function enablePushNotifications() {
     if (!currentUser) return toast('Please log in to enable notifications.', 'info');
     if (!('Notification' in window)) return toast('Notifications are not supported in this browser.', 'error');
     if (!FCM_VAPID_KEY) return toast('Push notifications are not configured yet.', 'error');
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return toast('Notifications are not supported in this browser.', 'error');
 
     const permission = await Notification.requestPermission();
     updatePushSettingsUI();
@@ -8543,7 +8714,9 @@ async function disablePushNotifications() {
         console.warn('Unable to remove push token doc', err?.message || err);
     }
     try {
-        await deleteFcmToken(messaging);
+        if (messaging) {
+            await deleteFcmToken(messaging);
+        }
     } catch (err) {
         console.warn('Unable to delete FCM token', err?.message || err);
     }
@@ -8589,6 +8762,17 @@ function updatePushSettingsUI() {
     }
 }
 
+async function refreshPushSupportUI() {
+    const statusEl = document.getElementById('push-notif-status');
+    const btn = document.getElementById('push-notif-enable-btn');
+    if (!statusEl && !btn) return;
+    const supported = await ensureMessagingReady();
+    if (!supported) {
+        if (statusEl) statusEl.textContent = 'Notifications are not supported in this browser.';
+        if (btn) btn.disabled = true;
+    }
+}
+
 function ensurePushSettingsUI() {
     const modalContent = document.querySelector('#settings-modal .modal-content');
     if (!modalContent || document.getElementById('push-notif-settings')) return;
@@ -8604,11 +8788,14 @@ function ensurePushSettingsUI() {
     const btn = section.querySelector('#push-notif-enable-btn');
     if (btn) btn.onclick = function () { enablePushNotifications(); };
     updatePushSettingsUI();
+    refreshPushSupportUI();
 }
 
-function initMessagingForegroundListener() {
+async function initMessagingForegroundListener() {
     if (messagingListenerReady) return;
     messagingListenerReady = true;
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return;
     onMessage(messaging, function (payload) {
         const data = payload?.data || {};
         if (data.kind !== 'dm') return;
@@ -9218,6 +9405,13 @@ function renderConversationList() {
             listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
         }
         updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
         return;
     }
     if (emptyEl) emptyEl.style.display = 'none';
@@ -9364,6 +9558,13 @@ function renderConversationList() {
             emptyEl.style.display = 'block';
         }
         updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
         return;
     }
 
@@ -9379,6 +9580,13 @@ function renderConversationList() {
         listEl.dataset.scrollBound = 'true';
     }
     updateInboxNavBadge();
+    try {
+        const path = (location.pathname || '').toLowerCase();
+        const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+        if (!isHome) {
+            releaseInitialSplashOnce('inbox-initial-ready');
+        }
+    } catch (e) {}
 }
 
 function renderPinnedMessages(convo = {}, msgs = []) {
@@ -9530,6 +9738,7 @@ function getCallOverlayElements() {
         mediaGrid: document.querySelector('#call-overlay .call-media-grid'),
         focusLayout: document.getElementById('call-focus-layout'),
         focusArea: document.getElementById('call-focus-area'),
+        focusResizeHandle: document.getElementById('call-focus-resize-handle'),
         strip: document.getElementById('call-strip'),
         defaultLayout: document.getElementById('call-default-layout'),
         localTile: document.getElementById('call-local-tile'),
@@ -9748,6 +9957,9 @@ function enterCallFocus(tile) {
         els.strip.appendChild(node);
     });
     callFocusState = { active: true, tileId: tile?.dataset.callTileId || null };
+    requestAnimationFrame(function () {
+        applyCallFocusHeight();
+    });
 }
 
 function exitCallFocus() {
@@ -9769,6 +9981,8 @@ function exitCallFocus() {
     });
     els.mediaGrid.classList.remove('is-focused');
     callFocusState = { active: false, tileId: null };
+    clearCallFocusHeightStyles();
+    updateCallTileLayout();
 }
 
 function toggleCallFocus(tile) {
@@ -10036,6 +10250,8 @@ function resetCallOverlayMedia() {
         elements.remoteGrid.innerHTML = '';
         if (elements.localTile) {
             elements.remoteGrid.appendChild(elements.localTile);
+            enhanceCallTile(elements.localTile);
+            elements.localTile.dataset.originalParentId = elements.remoteGrid.id;
         }
         updateCallTileLayout();
     }
@@ -10464,6 +10680,17 @@ async function initCallUi() {
     const els = getCallOverlayElements();
     if (!els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
 
+    if (!callUiInitialized) {
+        callUiInitialized = true;
+        bindCallFocusResizeHandle();
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                updateCallTileLayout();
+            }, 150);
+        });
+    }
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
     els.hangupBtn.dataset.bound = '1';
@@ -10633,10 +10860,12 @@ async function initCallUi() {
     updateCallControlIcons();
     if (els.localTile) {
         els.localTile.dataset.callTileId = 'local';
-        els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
         els.localTile.classList.add('is-camera');
         enhanceCallTile(els.localTile);
         ensureLocalTilePlacement();
+        if (els.remoteGrid) {
+            els.localTile.dataset.originalParentId = els.remoteGrid.id;
+        }
         updateCallTileLayout();
     }
 }
