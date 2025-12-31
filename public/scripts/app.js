@@ -4,7 +4,7 @@ import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence, 
 import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
-import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
+import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -146,7 +146,9 @@ const db = isSafari
     : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
-const messaging = getMessaging(app);
+let messaging = null;
+let messagingSupportChecked = false;
+let messagingIsSupported = false;
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 let LivekitRoom = null;
 let LivekitRoomEvent = null;
@@ -258,6 +260,7 @@ let pendingVideoThumbnailBlob = null;
 let messagingRegistration = null;
 let messagingListenerReady = false;
 const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
+var callUiInitialized = false;
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
@@ -265,14 +268,12 @@ if (document.readyState === 'loading') {
         ensurePushSettingsUI();
         initCallUi();
         initMessagingForegroundListener();
-        initCallUi();
     });
 } else {
     window.__NEXERA_BOOT_STAGE = 'dom-ready';
     ensurePushSettingsUI();
     initCallUi();
     initMessagingForegroundListener();
-    initCallUi();
 }
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
@@ -476,6 +477,10 @@ function shouldAnimateItem(key) {
     return true;
 }
 
+function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
 function showSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
@@ -486,6 +491,14 @@ function showSplash() {
     splash.style.visibility = 'visible';
     splash.setAttribute('aria-hidden', 'false');
     logSplashEvent('show');
+}
+
+function isSplashVisible() {
+    const splash = document.getElementById('nexera-splash');
+    if (!splash) return false;
+    if (splash.classList.contains('nexera-splash-hidden')) return false;
+    if (splash.style.display === 'none') return false;
+    return true;
 }
 
 function hideSplash(options = {}) {
@@ -514,6 +527,20 @@ function hideSplash(options = {}) {
             splash.style.display = 'none';
         }
     }, TRANSITION_BUFFER);
+}
+
+let __initialSplashReleased = false;
+
+function releaseInitialSplashOnce(reason = 'initial-ready') {
+    if (__initialSplashReleased) return;
+    __initialSplashReleased = true;
+    try {
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash(reason);
+            return;
+        }
+    } catch (e) {}
+    try { hideSplash({ force: true, reason }); } catch (e) {}
 }
 
 const SPLASH_FAILSAFE_TIMEOUT = 8000;
@@ -785,7 +812,8 @@ function normalizeUsername(value = '') {
 }
 
 function resolveDisplayName(userLike = {}) {
-    return userLike.displayName || userLike.name || userLike.fullName || userLike.nickname || '';
+    const u = (userLike && typeof userLike === 'object') ? userLike : {};
+    return (u.displayName || u.username || u.handle || u.uid || u.id || '').toString().trim();
 }
 
 function resolveAvatarInitial(userLike = {}) {
@@ -1012,7 +1040,6 @@ let activeLiveSessionId = null;
 let activeCallSession = null;
 let isCallViewOpen = false;
 let callDocUnsubscribe = null;
-let callUiInitialized = false;
 let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
@@ -1033,6 +1060,90 @@ let __ringCtx = null;
 let __ringOsc = null;
 let __ringGain = null;
 let callFocusState = { active: false, tileId: null };
+const CALL_FOCUS_HEIGHT_KEY = 'nexera_call_focus_height_ratio';
+let callFocusHeightRatio = null;
+
+try {
+    const raw = localStorage.getItem(CALL_FOCUS_HEIGHT_KEY);
+    const val = parseFloat(raw);
+    if (Number.isFinite(val)) callFocusHeightRatio = val;
+} catch (e) {}
+
+function clampFocusRatio(r) {
+    const n = Number.isFinite(r) ? r : 0.62;
+    return Math.min(0.85, Math.max(0.35, n));
+}
+
+function applyCallFocusHeight() {
+    if (!callFocusState?.active) return;
+    const els = getCallOverlayElements();
+    if (!els?.focusLayout || !els?.focusArea) return;
+
+    const rect = els.focusLayout.getBoundingClientRect();
+    if (!rect.height) return;
+
+    const ratio = clampFocusRatio(callFocusHeightRatio);
+    const px = Math.round(rect.height * ratio);
+
+    els.focusArea.style.flex = '0 0 auto';
+    els.focusArea.style.height = px + 'px';
+}
+
+function clearCallFocusHeightStyles() {
+    const els = getCallOverlayElements();
+    if (!els?.focusArea) return;
+    els.focusArea.style.removeProperty('height');
+    els.focusArea.style.removeProperty('flex');
+}
+
+function bindCallFocusResizeHandle() {
+    const els = getCallOverlayElements();
+    const handle = els?.focusResizeHandle;
+    if (!handle || handle.dataset.bound === 'true') return;
+    handle.dataset.bound = 'true';
+
+    let dragging = false;
+
+    function onDown(e) {
+        if (!callFocusState?.active) return;
+        dragging = true;
+        handle.classList.add('is-dragging');
+        try { handle.setPointerCapture?.(e.pointerId); } catch (err) {}
+        e.preventDefault();
+    }
+
+    function onMove(e) {
+        if (!dragging || !callFocusState?.active) return;
+        const elsNow = getCallOverlayElements();
+        const layout = elsNow?.focusLayout;
+        if (!layout) return;
+
+        const rect = layout.getBoundingClientRect();
+        if (!rect.height) return;
+
+        const y = e.clientY - rect.top;
+        const ratio = clampFocusRatio(y / rect.height);
+        callFocusHeightRatio = ratio;
+
+        try { localStorage.setItem(CALL_FOCUS_HEIGHT_KEY, String(ratio)); } catch (err) {}
+        applyCallFocusHeight();
+    }
+
+    function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('is-dragging');
+    }
+
+    handle.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+
+    window.addEventListener('resize', function () {
+        if (callFocusState?.active) applyCallFocusHeight();
+    });
+}
 const callStatusCache = new Map();
 let activeCallDocId = null;
 let activeCallConversationId = null;
@@ -1809,9 +1920,6 @@ function initApp(onReady) {
         if (typeof onReady === 'function') onReady();
         if (window.Nexera?.__resolveReady) window.Nexera.__resolveReady();
         if (readyResolver) readyResolver();
-        if (window.Nexera?.releaseSplash) {
-            window.Nexera.releaseSplash('auth-ready');
-        }
     };
 
     onAuthStateChanged(auth, async function (user) {
@@ -1888,7 +1996,6 @@ function initApp(onReady) {
                 // UI Transitions
                 if (authScreen) authScreen.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'flex';
-                if (loadingOverlay) loadingOverlay.style.display = 'none';
                 initCallInviteListener();
                 startActiveCallTracker();
                 markReady();
@@ -1900,6 +2007,7 @@ function initApp(onReady) {
                         if (currentUser?.uid !== signedInUserId) return;
                         startCategoryStreams(signedInUserId);
                         await loadFeedData({ showSplashDuringLoad: true });
+                        if (loadingOverlay) loadingOverlay.style.display = 'none';
                         if (currentUser?.uid !== signedInUserId) return;
                         startUserReviewListener(signedInUserId); // PATCH: Listen for USER reviews globally on load
                         loadInboxModeFromStorage();
@@ -2640,21 +2748,42 @@ async function fetchMissingProfiles(posts) {
     }
 }
 
-async function waitForFeedMedia(targetId = 'feed-content') {
+async function waitForFeedMedia(targetId = 'feed-content', options = {}) {
+    const { timeoutMs = 1500, maxNodes = 12 } = options || {};
     const container = document.getElementById(targetId);
     if (!container) return;
-    const nodes = Array.from(container.querySelectorAll('img, video'));
+    const nodes = Array.from(container.querySelectorAll('img, video')).slice(0, maxNodes);
     if (nodes.length === 0) return;
-    await Promise.all(nodes.map(function (node) {
-        if ((node.tagName === 'IMG' && node.complete) || (node.tagName === 'VIDEO' && node.readyState >= 3)) return Promise.resolve();
+    const waitOne = function (node) {
+        try {
+            if (node.tagName === 'IMG' && node.complete) return Promise.resolve();
+            if (node.tagName === 'VIDEO' && node.readyState >= 3) return Promise.resolve();
+        } catch (_) {}
         return new Promise(function (resolve) {
-            node.addEventListener('load', resolve, { once: true });
-            node.addEventListener('error', resolve, { once: true });
+            let done = false;
+            const finish = function () {
+                if (done) return;
+                done = true;
+                resolve();
+            };
+            const t = setTimeout(finish, timeoutMs);
+            const wrap = function () {
+                clearTimeout(t);
+                finish();
+            };
+            node.addEventListener('load', wrap, { once: true });
+            node.addEventListener('error', wrap, { once: true });
             if (node.tagName === 'VIDEO') {
-                node.addEventListener('loadeddata', resolve, { once: true });
+                node.addEventListener('loadeddata', wrap, { once: true });
+                node.addEventListener('stalled', wrap, { once: true });
+                node.addEventListener('abort', wrap, { once: true });
             }
         });
-    }));
+    };
+    await Promise.race([
+        Promise.all(nodes.map(waitOne)),
+        sleep(timeoutMs)
+    ]);
 }
 
 async function fetchFeedBatch({ reset = false } = {}) {
@@ -2685,8 +2814,12 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     if (feedLoading && feedHydrationPromise) return feedHydrationPromise;
 
     feedLoading = true;
+    let didShowSplash = false;
     feedHydrationPromise = (async function () {
-        if (showSplashDuringLoad) showSplash();
+        if (showSplashDuringLoad && !isSplashVisible()) {
+            showSplash();
+            didShowSplash = true;
+        }
         feedPagination.lastDoc = null;
         feedPagination.done = false;
         const batch = await fetchFeedBatch({ reset: true });
@@ -2709,17 +2842,23 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         renderFeed();
         if (isInitialLoad) {
             isInitialLoad = false;
-            if (window.Nexera?.releaseSplash) {
-                window.Nexera.releaseSplash('feed-initial-ready');
-            }
+            releaseInitialSplashOnce('feed-initial-ready');
         }
-        await waitForFeedMedia();
+        try {
+            await waitForFeedMedia('feed-content', { timeoutMs: 1500, maxNodes: 12 });
+        } catch (e) {
+            console.warn('[Feed] waitForFeedMedia skipped/failed', e?.message || e);
+        }
         postSnapshotCache = nextCache;
     })().catch(function (error) {
         console.error('Feed load failed', error);
     }).finally(function () {
         feedLoading = false;
-        if (showSplashDuringLoad) hideSplash();
+        if (didShowSplash) {
+            hideSplash({ reason: 'feed-load-finally' });
+        } else if (typeof isSplashVisible === 'function' && isSplashVisible()) {
+            hideSplash({ reason: 'feed-load-finally-visible' });
+        }
     });
 
     return feedHydrationPromise;
@@ -8471,8 +8610,38 @@ function getStoredPushToken() {
     return window.localStorage?.getItem(PUSH_TOKEN_STORAGE_KEY) || '';
 }
 
+async function ensureMessagingReady() {
+    if (messagingSupportChecked) return messagingIsSupported;
+    messagingSupportChecked = true;
+    try {
+        if (!window.isSecureContext && location.hostname !== 'localhost') {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('Notification' in window)) {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('serviceWorker' in navigator) || !navigator.serviceWorker) {
+            messagingIsSupported = false;
+            return false;
+        }
+        messagingIsSupported = await isMessagingSupported();
+        if (!messagingIsSupported) return false;
+        messaging = getMessaging(app);
+        return true;
+    } catch (err) {
+        console.warn('[Messaging] Unsupported or failed support check:', err?.message || err);
+        messagingIsSupported = false;
+        messaging = null;
+        return false;
+    }
+}
+
 async function registerMessagingServiceWorker() {
     if (!('serviceWorker' in navigator)) return null;
+    if (!navigator.serviceWorker?.register) return null;
+    if (!window.isSecureContext && location.hostname !== 'localhost') return null;
     if (messagingRegistration) return messagingRegistration;
     try {
         messagingRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
@@ -8511,6 +8680,8 @@ async function enablePushNotifications() {
     if (!currentUser) return toast('Please log in to enable notifications.', 'info');
     if (!('Notification' in window)) return toast('Notifications are not supported in this browser.', 'error');
     if (!FCM_VAPID_KEY) return toast('Push notifications are not configured yet.', 'error');
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return toast('Notifications are not supported in this browser.', 'error');
 
     const permission = await Notification.requestPermission();
     updatePushSettingsUI();
@@ -8543,7 +8714,9 @@ async function disablePushNotifications() {
         console.warn('Unable to remove push token doc', err?.message || err);
     }
     try {
-        await deleteFcmToken(messaging);
+        if (messaging) {
+            await deleteFcmToken(messaging);
+        }
     } catch (err) {
         console.warn('Unable to delete FCM token', err?.message || err);
     }
@@ -8589,6 +8762,17 @@ function updatePushSettingsUI() {
     }
 }
 
+async function refreshPushSupportUI() {
+    const statusEl = document.getElementById('push-notif-status');
+    const btn = document.getElementById('push-notif-enable-btn');
+    if (!statusEl && !btn) return;
+    const supported = await ensureMessagingReady();
+    if (!supported) {
+        if (statusEl) statusEl.textContent = 'Notifications are not supported in this browser.';
+        if (btn) btn.disabled = true;
+    }
+}
+
 function ensurePushSettingsUI() {
     const modalContent = document.querySelector('#settings-modal .modal-content');
     if (!modalContent || document.getElementById('push-notif-settings')) return;
@@ -8604,11 +8788,14 @@ function ensurePushSettingsUI() {
     const btn = section.querySelector('#push-notif-enable-btn');
     if (btn) btn.onclick = function () { enablePushNotifications(); };
     updatePushSettingsUI();
+    refreshPushSupportUI();
 }
 
-function initMessagingForegroundListener() {
+async function initMessagingForegroundListener() {
     if (messagingListenerReady) return;
     messagingListenerReady = true;
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return;
     onMessage(messaging, function (payload) {
         const data = payload?.data || {};
         if (data.kind !== 'dm') return;
@@ -9218,6 +9405,13 @@ function renderConversationList() {
             listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
         }
         updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
         return;
     }
     if (emptyEl) emptyEl.style.display = 'none';
@@ -9336,9 +9530,29 @@ function renderConversationList() {
             </div>`;
         applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
         item.onclick = function () {
-            openConversation(mapping.id);
-            const hostCall = getActiveCallForConversation(mapping.id);
-            if (hostCall && activeCallSession?.callId === hostCall.id && !isCallViewOpen) {
+            const convoId = mapping.id;
+            const wasActiveConversation = (activeConversationId === convoId);
+            const wasCallViewOpen = !!isCallViewOpen;
+
+            openConversation(convoId);
+
+            const hostCall = getActiveCallForConversation(convoId);
+            const isCurrentActiveCallThread = !!hostCall
+                && !!activeCallSession
+                && activeCallSession.status === 'active'
+                && activeCallSession.callId === hostCall.id
+                && activeCallSession.conversationId === convoId;
+
+            if (!isCurrentActiveCallThread) return;
+
+            if (!wasActiveConversation) {
+                openCallView();
+                return;
+            }
+
+            if (wasCallViewOpen) {
+                closeCallView();
+            } else {
                 openCallView();
             }
         };
@@ -9364,6 +9578,13 @@ function renderConversationList() {
             emptyEl.style.display = 'block';
         }
         updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
         return;
     }
 
@@ -9379,6 +9600,13 @@ function renderConversationList() {
         listEl.dataset.scrollBound = 'true';
     }
     updateInboxNavBadge();
+    try {
+        const path = (location.pathname || '').toLowerCase();
+        const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+        if (!isHome) {
+            releaseInitialSplashOnce('inbox-initial-ready');
+        }
+    } catch (e) {}
 }
 
 function renderPinnedMessages(convo = {}, msgs = []) {
@@ -9530,6 +9758,7 @@ function getCallOverlayElements() {
         mediaGrid: document.querySelector('#call-overlay .call-media-grid'),
         focusLayout: document.getElementById('call-focus-layout'),
         focusArea: document.getElementById('call-focus-area'),
+        focusResizeHandle: document.getElementById('call-focus-resize-handle'),
         strip: document.getElementById('call-strip'),
         defaultLayout: document.getElementById('call-default-layout'),
         localTile: document.getElementById('call-local-tile'),
@@ -9588,6 +9817,7 @@ function updateCallControlIcons() {
     const camGroup = els.toggleCam.closest('.call-action-group');
     if (micGroup) micGroup.classList.toggle('is-active', micOn);
     if (camGroup) camGroup.classList.toggle('is-active', camOn);
+    updateLocalTileMediaState();
 }
 
 function isScreenSharePublication(publication) {
@@ -9611,6 +9841,145 @@ function buildCallTileLabel(text, isScreenShare) {
         label.appendChild(chip);
     }
     return label;
+}
+
+function ensureTileCameraPlaceholder(tile) {
+    if (!tile || tile.querySelector('.call-camera-placeholder')) return;
+    const ph = document.createElement('div');
+    ph.className = 'call-camera-placeholder';
+    ph.setAttribute('aria-hidden', 'true');
+
+    const avatarWrap = document.createElement('div');
+    avatarWrap.className = 'call-camera-avatar';
+    ph.appendChild(avatarWrap);
+
+    tile.appendChild(ph);
+}
+
+function setTileAvatarFromUid(tile, uid, fallbackLabel) {
+    if (!tile) return;
+    const ph = tile.querySelector('.call-camera-placeholder');
+    const avatarWrap = ph?.querySelector('.call-camera-avatar');
+    if (!avatarWrap) return;
+
+    const user = uid ? (getCachedUser(uid) || (uid === currentUser?.uid ? currentUser : null)) : null;
+    const label = fallbackLabel || (user?.displayName || user?.username || uid || 'User');
+    const avatarUser = user
+        ? user
+        : {
+            uid: uid || 'unknown',
+            username: label,
+            displayName: label,
+            photoURL: '',
+            avatarColor: computeAvatarColor(label)
+        };
+
+    avatarWrap.innerHTML = renderAvatar(avatarUser, { size: 96, className: '', shape: 'circle' });
+
+    if (uid && !user) {
+        resolveUserProfile(uid).then(function () {
+            const u2 = getCachedUser(uid);
+            if (!u2) return;
+            const label2 = u2.displayName || u2.username || label;
+            avatarWrap.innerHTML = renderAvatar({ ...u2, uid }, { size: 96, shape: 'circle' });
+        }).catch(function () {});
+    }
+}
+
+function isParticipantCameraOn(participant) {
+    try {
+        if (typeof participant?.isCameraEnabled === 'boolean') return participant.isCameraEnabled;
+        const pubs = participant?.trackPublications
+            ? Array.from(participant.trackPublications.values())
+            : [];
+        const camPub = pubs.find(function (pub) {
+            return pub?.kind === 'video' && !isScreenSharePublication(pub);
+        });
+        if (camPub && typeof camPub.isMuted === 'boolean') return !camPub.isMuted;
+    } catch (e) {}
+    return true;
+}
+
+function ensureTileStatusPill(tile) {
+    if (!tile || tile.querySelector('.call-tile-status-pill')) return;
+    const pill = document.createElement('div');
+    pill.className = 'call-tile-status-pill';
+    pill.innerHTML = `
+        <span class="call-tile-status-icon" data-status="mic"><i class="ph ph-microphone"></i></span>
+        <span class="call-tile-status-icon" data-status="cam"><i class="ph ph-video-camera"></i></span>
+        <span class="call-tile-status-icon" data-status="share"><i class="ph ph-monitor"></i></span>
+    `;
+    tile.appendChild(pill);
+}
+
+function updateTileStatusPill(tile, { micOn = true, camOn = true, isSharing = false } = {}) {
+    if (!tile) return;
+    const pill = tile.querySelector('.call-tile-status-pill');
+    if (!pill) return;
+    const micIcon = pill.querySelector('[data-status="mic"]');
+    const camIcon = pill.querySelector('[data-status="cam"]');
+    const shareIcon = pill.querySelector('[data-status="share"]');
+    if (micIcon) micIcon.classList.toggle('is-off', !micOn);
+    if (camIcon) camIcon.classList.toggle('is-off', !camOn);
+    if (shareIcon) {
+        const showShare = tile.classList.contains('is-screenshare') || isSharing;
+        shareIcon.style.display = showShare ? 'inline-flex' : 'none';
+        shareIcon.classList.toggle('is-sharing', !!isSharing || tile.classList.contains('is-screenshare'));
+    }
+}
+
+function updateTileMediaState(tile, { micOn = true, camOn = true, isSharing = false, uid = '', label = '' } = {}) {
+    if (!tile) return;
+    ensureTileCameraPlaceholder(tile);
+    ensureTileStatusPill(tile);
+    if (tile.classList.contains('is-camera')) {
+        tile.classList.toggle('camera-off', !camOn);
+        if (!camOn) {
+            setTileAvatarFromUid(tile, uid, label);
+        }
+    } else {
+        tile.classList.remove('camera-off');
+    }
+    updateTileStatusPill(tile, { micOn, camOn, isSharing });
+}
+
+function getParticipantMediaState(participant) {
+    const pubs = participant?.trackPublications
+        ? Array.from(participant.trackPublications.values())
+        : [];
+    const audioPub = pubs.find(function (pub) {
+        return pub?.kind === 'audio';
+    });
+    const screenPub = pubs.find(function (pub) {
+        return pub?.kind === 'video' && isScreenSharePublication(pub);
+    });
+    const micOn = audioPub ? !audioPub.isMuted : true;
+    const camOn = isParticipantCameraOn(participant);
+    const isSharing = screenPub ? !screenPub.isMuted : false;
+    return { micOn, camOn, isSharing };
+}
+
+function updateTilesForParticipant(participant) {
+    if (!participant) return;
+    const state = getParticipantMediaState(participant);
+    const sid = participant.sid || '';
+    const uid = participant.identity || '';
+    const label = participant.name || participant.identity || 'Participant';
+    const tiles = Array.from(document.querySelectorAll(`#call-overlay .call-tile[data-participant-sid="${sid}"]`));
+    tiles.forEach(function (tile) {
+        updateTileMediaState(tile, { ...state, uid, label });
+    });
+}
+
+function updateLocalTileMediaState() {
+    const els = getCallOverlayElements();
+    if (!els.localTile) return;
+    const micOn = !!els.toggleMic?.classList.contains('active');
+    const camOn = !!els.toggleCam?.classList.contains('active');
+    const isSharing = !!els.toggleShare?.classList.contains('active');
+    const uid = els.localTile.dataset.participantUid || currentUser?.uid || '';
+    const label = 'You';
+    updateTileMediaState(els.localTile, { micOn, camOn, isSharing, uid, label });
 }
 
 function getLocalParticipantStub(room) {
@@ -9653,6 +10022,8 @@ function enhanceCallTile(tile) {
     tile.dataset.callTileEnhanced = '1';
     tile.classList.add('call-tile');
     addTileOverlay(tile);
+    ensureTileCameraPlaceholder(tile);
+    ensureTileStatusPill(tile);
     tile.addEventListener('click', function (event) {
         const target = event.target;
         if (target && (target.closest('.call-fullscreen-btn') || target.closest('.call-action-btn') || target.closest('.call-device-btn'))) {
@@ -9748,6 +10119,9 @@ function enterCallFocus(tile) {
         els.strip.appendChild(node);
     });
     callFocusState = { active: true, tileId: tile?.dataset.callTileId || null };
+    requestAnimationFrame(function () {
+        applyCallFocusHeight();
+    });
 }
 
 function exitCallFocus() {
@@ -9769,6 +10143,8 @@ function exitCallFocus() {
     });
     els.mediaGrid.classList.remove('is-focused');
     callFocusState = { active: false, tileId: null };
+    clearCallFocusHeightStyles();
+    updateCallTileLayout();
 }
 
 function toggleCallFocus(tile) {
@@ -10036,6 +10412,8 @@ function resetCallOverlayMedia() {
         elements.remoteGrid.innerHTML = '';
         if (elements.localTile) {
             elements.remoteGrid.appendChild(elements.localTile);
+            enhanceCallTile(elements.localTile);
+            elements.localTile.dataset.originalParentId = elements.remoteGrid.id;
         }
         updateCallTileLayout();
     }
@@ -10159,6 +10537,7 @@ function attachRemoteTrack(track, participant, publication) {
     tile.dataset.trackId = tileId;
     tile.dataset.callTileId = tileId;
     tile.dataset.participantSid = participant.sid || '';
+    tile.dataset.participantUid = participant.identity || '';
     tile.classList.add(isScreenShare ? 'is-screenshare' : 'is-camera');
     if (elements.remoteGrid) {
         tile.dataset.originalParentId = elements.remoteGrid.id;
@@ -10172,6 +10551,12 @@ function attachRemoteTrack(track, participant, publication) {
     elements.remoteGrid.appendChild(tile);
     track.attach(video);
     enhanceCallTile(tile);
+    const mediaState = getParticipantMediaState(participant);
+    updateTileMediaState(tile, {
+        ...mediaState,
+        uid: participant.identity || '',
+        label: participant.name || participant.identity || 'Participant'
+    });
     if (isScreenShare) {
         focusScreenShareTile(tile);
         updateCallTileLayout();
@@ -10192,6 +10577,7 @@ function detachRemoteTrack(track, participant) {
     const wasFocused = callFocusState.active && callFocusState.tileId === tileId;
     const wasScreenShare = tile?.classList.contains('is-screenshare');
     if (tile) tile.remove();
+    updateTilesForParticipant(participant);
     if (wasFocused && wasScreenShare) {
         ensureScreenShareFocusFallback();
         updateCallTileLayout();
@@ -10250,13 +10636,35 @@ async function connectToLiveKitRoom(callSession) {
             audioEl.style.display = 'none';
             document.body.appendChild(audioEl);
         }
+        updateTilesForParticipant(participant);
     });
     room.on(LivekitRoomEvent.TrackUnsubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
             detachRemoteTrack(track, participant);
         }
         track.detach().forEach(function (el) { el.remove(); });
+        updateTilesForParticipant(participant);
     });
+    if (LivekitRoomEvent?.TrackMuted) {
+        room.on(LivekitRoomEvent.TrackMuted, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
+    if (LivekitRoomEvent?.TrackUnmuted) {
+        room.on(LivekitRoomEvent.TrackUnmuted, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
+    if (LivekitRoomEvent?.TrackPublished) {
+        room.on(LivekitRoomEvent.TrackPublished, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
+    if (LivekitRoomEvent?.TrackUnpublished) {
+        room.on(LivekitRoomEvent.TrackUnpublished, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
     if (LivekitRoomEvent?.LocalTrackPublished) {
         room.on(LivekitRoomEvent.LocalTrackPublished, function (publication) {
             if (!publication?.track || publication.track.kind !== 'video') return;
@@ -10312,6 +10720,8 @@ async function connectToLiveKitRoom(callSession) {
     debugCallLog('LiveKit connected', { uid: currentUser?.uid, roomName: callSession.roomName });
     if (elements.localTile && room.localParticipant?.sid) {
         elements.localTile.dataset.participantSid = room.localParticipant.sid;
+        elements.localTile.dataset.participantUid = currentUser?.uid || '';
+        updateLocalTileMediaState();
     }
 
     livekitLocalAudioTrack = await livekitCreateLocalAudioTrack();
@@ -10464,6 +10874,17 @@ async function initCallUi() {
     const els = getCallOverlayElements();
     if (!els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
 
+    if (!callUiInitialized) {
+        callUiInitialized = true;
+        bindCallFocusResizeHandle();
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                updateCallTileLayout();
+            }, 150);
+        });
+    }
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
     els.hangupBtn.dataset.bound = '1';
@@ -10633,11 +11054,17 @@ async function initCallUi() {
     updateCallControlIcons();
     if (els.localTile) {
         els.localTile.dataset.callTileId = 'local';
-        els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
         els.localTile.classList.add('is-camera');
+        if (currentUser?.uid) {
+            els.localTile.dataset.participantUid = currentUser.uid;
+        }
         enhanceCallTile(els.localTile);
         ensureLocalTilePlacement();
+        if (els.remoteGrid) {
+            els.localTile.dataset.originalParentId = els.remoteGrid.id;
+        }
         updateCallTileLayout();
+        updateLocalTileMediaState();
     }
 }
 
