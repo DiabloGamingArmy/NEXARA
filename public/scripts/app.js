@@ -477,6 +477,10 @@ function shouldAnimateItem(key) {
     return true;
 }
 
+function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
 function showSplash() {
     const splash = document.getElementById('nexera-splash');
     if (!splash) return;
@@ -2648,21 +2652,42 @@ async function fetchMissingProfiles(posts) {
     }
 }
 
-async function waitForFeedMedia(targetId = 'feed-content') {
+async function waitForFeedMedia(targetId = 'feed-content', options = {}) {
+    const { timeoutMs = 1500, maxNodes = 12 } = options || {};
     const container = document.getElementById(targetId);
     if (!container) return;
-    const nodes = Array.from(container.querySelectorAll('img, video'));
+    const nodes = Array.from(container.querySelectorAll('img, video')).slice(0, maxNodes);
     if (nodes.length === 0) return;
-    await Promise.all(nodes.map(function (node) {
-        if ((node.tagName === 'IMG' && node.complete) || (node.tagName === 'VIDEO' && node.readyState >= 3)) return Promise.resolve();
+    const waitOne = function (node) {
+        try {
+            if (node.tagName === 'IMG' && node.complete) return Promise.resolve();
+            if (node.tagName === 'VIDEO' && node.readyState >= 3) return Promise.resolve();
+        } catch (_) {}
         return new Promise(function (resolve) {
-            node.addEventListener('load', resolve, { once: true });
-            node.addEventListener('error', resolve, { once: true });
+            let done = false;
+            const finish = function () {
+                if (done) return;
+                done = true;
+                resolve();
+            };
+            const t = setTimeout(finish, timeoutMs);
+            const wrap = function () {
+                clearTimeout(t);
+                finish();
+            };
+            node.addEventListener('load', wrap, { once: true });
+            node.addEventListener('error', wrap, { once: true });
             if (node.tagName === 'VIDEO') {
-                node.addEventListener('loadeddata', resolve, { once: true });
+                node.addEventListener('loadeddata', wrap, { once: true });
+                node.addEventListener('stalled', wrap, { once: true });
+                node.addEventListener('abort', wrap, { once: true });
             }
         });
-    }));
+    };
+    await Promise.race([
+        Promise.all(nodes.map(waitOne)),
+        sleep(timeoutMs)
+    ]);
 }
 
 async function fetchFeedBatch({ reset = false } = {}) {
@@ -2725,13 +2750,21 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
                 window.Nexera.releaseSplash('feed-initial-ready');
             }
         }
-        await waitForFeedMedia();
+        try {
+            await waitForFeedMedia('feed-content', { timeoutMs: 1500, maxNodes: 12 });
+        } catch (e) {
+            console.warn('[Feed] waitForFeedMedia skipped/failed', e?.message || e);
+        }
         postSnapshotCache = nextCache;
     })().catch(function (error) {
         console.error('Feed load failed', error);
     }).finally(function () {
         feedLoading = false;
-        if (didShowSplash) hideSplash();
+        if (didShowSplash) {
+            hideSplash({ reason: 'feed-load-finally' });
+        } else if (typeof isSplashVisible === 'function' && isSplashVisible()) {
+            hideSplash({ reason: 'feed-load-finally-visible' });
+        }
     });
 
     return feedHydrationPromise;
