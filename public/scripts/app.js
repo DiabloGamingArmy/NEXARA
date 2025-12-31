@@ -4,7 +4,7 @@ import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence, 
 import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
-import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
+import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
 import { NexeraGoLiveController } from "/scripts/GoLive.js";
@@ -146,7 +146,9 @@ const db = isSafari
     : getFirestore(app);
 const storage = getStorage(app);
 const functions = getFunctions(app);
-const messaging = getMessaging(app);
+let messaging = null;
+let messagingSupportChecked = false;
+let messagingIsSupported = false;
 const FCM_VAPID_KEY = window.NEXERA_FCM_VAPID_KEY || '';
 let LivekitRoom = null;
 let LivekitRoomEvent = null;
@@ -258,6 +260,7 @@ let pendingVideoThumbnailBlob = null;
 let messagingRegistration = null;
 let messagingListenerReady = false;
 const PUSH_TOKEN_STORAGE_KEY = 'nexera_push_token';
+var callUiInitialized = false;
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
@@ -265,14 +268,12 @@ if (document.readyState === 'loading') {
         ensurePushSettingsUI();
         initCallUi();
         initMessagingForegroundListener();
-        initCallUi();
     });
 } else {
     window.__NEXERA_BOOT_STAGE = 'dom-ready';
     ensurePushSettingsUI();
     initCallUi();
     initMessagingForegroundListener();
-    initCallUi();
 }
 let pendingVideoThumbnailUrl = null;
 let pendingVideoHasCustomThumbnail = false;
@@ -1020,7 +1021,6 @@ let activeLiveSessionId = null;
 let activeCallSession = null;
 let isCallViewOpen = false;
 let callDocUnsubscribe = null;
-let callUiInitialized = false;
 let livekitRoom = null;
 let livekitLocalAudioTrack = null;
 let livekitLocalVideoTrack = null;
@@ -8483,8 +8483,38 @@ function getStoredPushToken() {
     return window.localStorage?.getItem(PUSH_TOKEN_STORAGE_KEY) || '';
 }
 
+async function ensureMessagingReady() {
+    if (messagingSupportChecked) return messagingIsSupported;
+    messagingSupportChecked = true;
+    try {
+        if (!window.isSecureContext && location.hostname !== 'localhost') {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('Notification' in window)) {
+            messagingIsSupported = false;
+            return false;
+        }
+        if (!('serviceWorker' in navigator) || !navigator.serviceWorker) {
+            messagingIsSupported = false;
+            return false;
+        }
+        messagingIsSupported = await isMessagingSupported();
+        if (!messagingIsSupported) return false;
+        messaging = getMessaging(app);
+        return true;
+    } catch (err) {
+        console.warn('[Messaging] Unsupported or failed support check:', err?.message || err);
+        messagingIsSupported = false;
+        messaging = null;
+        return false;
+    }
+}
+
 async function registerMessagingServiceWorker() {
     if (!('serviceWorker' in navigator)) return null;
+    if (!navigator.serviceWorker?.register) return null;
+    if (!window.isSecureContext && location.hostname !== 'localhost') return null;
     if (messagingRegistration) return messagingRegistration;
     try {
         messagingRegistration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
@@ -8523,6 +8553,8 @@ async function enablePushNotifications() {
     if (!currentUser) return toast('Please log in to enable notifications.', 'info');
     if (!('Notification' in window)) return toast('Notifications are not supported in this browser.', 'error');
     if (!FCM_VAPID_KEY) return toast('Push notifications are not configured yet.', 'error');
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return toast('Notifications are not supported in this browser.', 'error');
 
     const permission = await Notification.requestPermission();
     updatePushSettingsUI();
@@ -8555,7 +8587,9 @@ async function disablePushNotifications() {
         console.warn('Unable to remove push token doc', err?.message || err);
     }
     try {
-        await deleteFcmToken(messaging);
+        if (messaging) {
+            await deleteFcmToken(messaging);
+        }
     } catch (err) {
         console.warn('Unable to delete FCM token', err?.message || err);
     }
@@ -8601,6 +8635,17 @@ function updatePushSettingsUI() {
     }
 }
 
+async function refreshPushSupportUI() {
+    const statusEl = document.getElementById('push-notif-status');
+    const btn = document.getElementById('push-notif-enable-btn');
+    if (!statusEl && !btn) return;
+    const supported = await ensureMessagingReady();
+    if (!supported) {
+        if (statusEl) statusEl.textContent = 'Notifications are not supported in this browser.';
+        if (btn) btn.disabled = true;
+    }
+}
+
 function ensurePushSettingsUI() {
     const modalContent = document.querySelector('#settings-modal .modal-content');
     if (!modalContent || document.getElementById('push-notif-settings')) return;
@@ -8616,11 +8661,14 @@ function ensurePushSettingsUI() {
     const btn = section.querySelector('#push-notif-enable-btn');
     if (btn) btn.onclick = function () { enablePushNotifications(); };
     updatePushSettingsUI();
+    refreshPushSupportUI();
 }
 
-function initMessagingForegroundListener() {
+async function initMessagingForegroundListener() {
     if (messagingListenerReady) return;
     messagingListenerReady = true;
+    const supported = await ensureMessagingReady();
+    if (!supported || !messaging) return;
     onMessage(messaging, function (payload) {
         const data = payload?.data || {};
         if (data.kind !== 'dm') return;
