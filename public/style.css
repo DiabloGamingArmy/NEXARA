@@ -4609,6 +4609,56 @@ body.has-incoming-call-modal #app-layout {
     flex: 1;
     justify-content: space-between;
     margin-left: auto;
+    display: flex;
+    align-items: center;
+}
+
+.message-header-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message-header-actions-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+}
+
+.message-header-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message-header-actions-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+}
+
+.message-header-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message-header-actions-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+}
+
+.message-header-actions-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message-header-actions-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
 }
 
 .message-header-actions-left {
