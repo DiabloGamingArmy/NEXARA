@@ -9530,9 +9530,29 @@ function renderConversationList() {
             </div>`;
         applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
         item.onclick = function () {
-            openConversation(mapping.id);
-            const hostCall = getActiveCallForConversation(mapping.id);
-            if (hostCall && activeCallSession?.callId === hostCall.id && !isCallViewOpen) {
+            const convoId = mapping.id;
+            const wasActiveConversation = (activeConversationId === convoId);
+            const wasCallViewOpen = !!isCallViewOpen;
+
+            openConversation(convoId);
+
+            const hostCall = getActiveCallForConversation(convoId);
+            const isCurrentActiveCallThread = !!hostCall
+                && !!activeCallSession
+                && activeCallSession.status === 'active'
+                && activeCallSession.callId === hostCall.id
+                && activeCallSession.conversationId === convoId;
+
+            if (!isCurrentActiveCallThread) return;
+
+            if (!wasActiveConversation) {
+                openCallView();
+                return;
+            }
+
+            if (wasCallViewOpen) {
+                closeCallView();
+            } else {
                 openCallView();
             }
         };
@@ -9797,6 +9817,7 @@ function updateCallControlIcons() {
     const camGroup = els.toggleCam.closest('.call-action-group');
     if (micGroup) micGroup.classList.toggle('is-active', micOn);
     if (camGroup) camGroup.classList.toggle('is-active', camOn);
+    updateLocalTileMediaState();
 }
 
 function isScreenSharePublication(publication) {
@@ -9820,6 +9841,145 @@ function buildCallTileLabel(text, isScreenShare) {
         label.appendChild(chip);
     }
     return label;
+}
+
+function ensureTileCameraPlaceholder(tile) {
+    if (!tile || tile.querySelector('.call-camera-placeholder')) return;
+    const ph = document.createElement('div');
+    ph.className = 'call-camera-placeholder';
+    ph.setAttribute('aria-hidden', 'true');
+
+    const avatarWrap = document.createElement('div');
+    avatarWrap.className = 'call-camera-avatar';
+    ph.appendChild(avatarWrap);
+
+    tile.appendChild(ph);
+}
+
+function setTileAvatarFromUid(tile, uid, fallbackLabel) {
+    if (!tile) return;
+    const ph = tile.querySelector('.call-camera-placeholder');
+    const avatarWrap = ph?.querySelector('.call-camera-avatar');
+    if (!avatarWrap) return;
+
+    const user = uid ? (getCachedUser(uid) || (uid === currentUser?.uid ? currentUser : null)) : null;
+    const label = fallbackLabel || (user?.displayName || user?.username || uid || 'User');
+    const avatarUser = user
+        ? user
+        : {
+            uid: uid || 'unknown',
+            username: label,
+            displayName: label,
+            photoURL: '',
+            avatarColor: computeAvatarColor(label)
+        };
+
+    avatarWrap.innerHTML = renderAvatar(avatarUser, { size: 96, className: '', shape: 'circle' });
+
+    if (uid && !user) {
+        resolveUserProfile(uid).then(function () {
+            const u2 = getCachedUser(uid);
+            if (!u2) return;
+            const label2 = u2.displayName || u2.username || label;
+            avatarWrap.innerHTML = renderAvatar({ ...u2, uid }, { size: 96, shape: 'circle' });
+        }).catch(function () {});
+    }
+}
+
+function isParticipantCameraOn(participant) {
+    try {
+        if (typeof participant?.isCameraEnabled === 'boolean') return participant.isCameraEnabled;
+        const pubs = participant?.trackPublications
+            ? Array.from(participant.trackPublications.values())
+            : [];
+        const camPub = pubs.find(function (pub) {
+            return pub?.kind === 'video' && !isScreenSharePublication(pub);
+        });
+        if (camPub && typeof camPub.isMuted === 'boolean') return !camPub.isMuted;
+    } catch (e) {}
+    return true;
+}
+
+function ensureTileStatusPill(tile) {
+    if (!tile || tile.querySelector('.call-tile-status-pill')) return;
+    const pill = document.createElement('div');
+    pill.className = 'call-tile-status-pill';
+    pill.innerHTML = `
+        <span class="call-tile-status-icon" data-status="mic"><i class="ph ph-microphone"></i></span>
+        <span class="call-tile-status-icon" data-status="cam"><i class="ph ph-video-camera"></i></span>
+        <span class="call-tile-status-icon" data-status="share"><i class="ph ph-monitor"></i></span>
+    `;
+    tile.appendChild(pill);
+}
+
+function updateTileStatusPill(tile, { micOn = true, camOn = true, isSharing = false } = {}) {
+    if (!tile) return;
+    const pill = tile.querySelector('.call-tile-status-pill');
+    if (!pill) return;
+    const micIcon = pill.querySelector('[data-status="mic"]');
+    const camIcon = pill.querySelector('[data-status="cam"]');
+    const shareIcon = pill.querySelector('[data-status="share"]');
+    if (micIcon) micIcon.classList.toggle('is-off', !micOn);
+    if (camIcon) camIcon.classList.toggle('is-off', !camOn);
+    if (shareIcon) {
+        const showShare = tile.classList.contains('is-screenshare') || isSharing;
+        shareIcon.style.display = showShare ? 'inline-flex' : 'none';
+        shareIcon.classList.toggle('is-sharing', !!isSharing || tile.classList.contains('is-screenshare'));
+    }
+}
+
+function updateTileMediaState(tile, { micOn = true, camOn = true, isSharing = false, uid = '', label = '' } = {}) {
+    if (!tile) return;
+    ensureTileCameraPlaceholder(tile);
+    ensureTileStatusPill(tile);
+    if (tile.classList.contains('is-camera')) {
+        tile.classList.toggle('camera-off', !camOn);
+        if (!camOn) {
+            setTileAvatarFromUid(tile, uid, label);
+        }
+    } else {
+        tile.classList.remove('camera-off');
+    }
+    updateTileStatusPill(tile, { micOn, camOn, isSharing });
+}
+
+function getParticipantMediaState(participant) {
+    const pubs = participant?.trackPublications
+        ? Array.from(participant.trackPublications.values())
+        : [];
+    const audioPub = pubs.find(function (pub) {
+        return pub?.kind === 'audio';
+    });
+    const screenPub = pubs.find(function (pub) {
+        return pub?.kind === 'video' && isScreenSharePublication(pub);
+    });
+    const micOn = audioPub ? !audioPub.isMuted : true;
+    const camOn = isParticipantCameraOn(participant);
+    const isSharing = screenPub ? !screenPub.isMuted : false;
+    return { micOn, camOn, isSharing };
+}
+
+function updateTilesForParticipant(participant) {
+    if (!participant) return;
+    const state = getParticipantMediaState(participant);
+    const sid = participant.sid || '';
+    const uid = participant.identity || '';
+    const label = participant.name || participant.identity || 'Participant';
+    const tiles = Array.from(document.querySelectorAll(`#call-overlay .call-tile[data-participant-sid="${sid}"]`));
+    tiles.forEach(function (tile) {
+        updateTileMediaState(tile, { ...state, uid, label });
+    });
+}
+
+function updateLocalTileMediaState() {
+    const els = getCallOverlayElements();
+    if (!els.localTile) return;
+    const micOn = !!els.toggleMic?.classList.contains('active');
+    const camOn = !!els.toggleCam?.classList.contains('active');
+    const isSharing = !!els.toggleShare?.classList.contains('active');
+    const uid = els.localTile.dataset.participantUid || currentUser?.uid || '';
+    const label = 'You';
+    updateTileMediaState(els.localTile, { micOn, camOn, isSharing, uid, label });
 }
 
 function getLocalParticipantStub(room) {
@@ -9862,6 +10022,8 @@ function enhanceCallTile(tile) {
     tile.dataset.callTileEnhanced = '1';
     tile.classList.add('call-tile');
     addTileOverlay(tile);
+    ensureTileCameraPlaceholder(tile);
+    ensureTileStatusPill(tile);
     tile.addEventListener('click', function (event) {
         const target = event.target;
         if (target && (target.closest('.call-fullscreen-btn') || target.closest('.call-action-btn') || target.closest('.call-device-btn'))) {
@@ -10375,6 +10537,7 @@ function attachRemoteTrack(track, participant, publication) {
     tile.dataset.trackId = tileId;
     tile.dataset.callTileId = tileId;
     tile.dataset.participantSid = participant.sid || '';
+    tile.dataset.participantUid = participant.identity || '';
     tile.classList.add(isScreenShare ? 'is-screenshare' : 'is-camera');
     if (elements.remoteGrid) {
         tile.dataset.originalParentId = elements.remoteGrid.id;
@@ -10388,6 +10551,12 @@ function attachRemoteTrack(track, participant, publication) {
     elements.remoteGrid.appendChild(tile);
     track.attach(video);
     enhanceCallTile(tile);
+    const mediaState = getParticipantMediaState(participant);
+    updateTileMediaState(tile, {
+        ...mediaState,
+        uid: participant.identity || '',
+        label: participant.name || participant.identity || 'Participant'
+    });
     if (isScreenShare) {
         focusScreenShareTile(tile);
         updateCallTileLayout();
@@ -10408,6 +10577,7 @@ function detachRemoteTrack(track, participant) {
     const wasFocused = callFocusState.active && callFocusState.tileId === tileId;
     const wasScreenShare = tile?.classList.contains('is-screenshare');
     if (tile) tile.remove();
+    updateTilesForParticipant(participant);
     if (wasFocused && wasScreenShare) {
         ensureScreenShareFocusFallback();
         updateCallTileLayout();
@@ -10466,13 +10636,35 @@ async function connectToLiveKitRoom(callSession) {
             audioEl.style.display = 'none';
             document.body.appendChild(audioEl);
         }
+        updateTilesForParticipant(participant);
     });
     room.on(LivekitRoomEvent.TrackUnsubscribed, function (track, publication, participant) {
         if (track.kind === 'video') {
             detachRemoteTrack(track, participant);
         }
         track.detach().forEach(function (el) { el.remove(); });
+        updateTilesForParticipant(participant);
     });
+    if (LivekitRoomEvent?.TrackMuted) {
+        room.on(LivekitRoomEvent.TrackMuted, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
+    if (LivekitRoomEvent?.TrackUnmuted) {
+        room.on(LivekitRoomEvent.TrackUnmuted, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
+    if (LivekitRoomEvent?.TrackPublished) {
+        room.on(LivekitRoomEvent.TrackPublished, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
+    if (LivekitRoomEvent?.TrackUnpublished) {
+        room.on(LivekitRoomEvent.TrackUnpublished, function (publication, participant) {
+            updateTilesForParticipant(participant);
+        });
+    }
     if (LivekitRoomEvent?.LocalTrackPublished) {
         room.on(LivekitRoomEvent.LocalTrackPublished, function (publication) {
             if (!publication?.track || publication.track.kind !== 'video') return;
@@ -10528,6 +10720,8 @@ async function connectToLiveKitRoom(callSession) {
     debugCallLog('LiveKit connected', { uid: currentUser?.uid, roomName: callSession.roomName });
     if (elements.localTile && room.localParticipant?.sid) {
         elements.localTile.dataset.participantSid = room.localParticipant.sid;
+        elements.localTile.dataset.participantUid = currentUser?.uid || '';
+        updateLocalTileMediaState();
     }
 
     livekitLocalAudioTrack = await livekitCreateLocalAudioTrack();
@@ -10871,12 +11065,16 @@ async function initCallUi() {
     if (els.localTile) {
         els.localTile.dataset.callTileId = 'local';
         els.localTile.classList.add('is-camera');
+        if (currentUser?.uid) {
+            els.localTile.dataset.participantUid = currentUser.uid;
+        }
         enhanceCallTile(els.localTile);
         ensureLocalTilePlacement();
         if (els.remoteGrid) {
             els.localTile.dataset.originalParentId = els.remoteGrid.id;
         }
         updateCallTileLayout();
+        updateLocalTileMediaState();
     }
 }
 
