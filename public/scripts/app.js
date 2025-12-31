@@ -21,6 +21,25 @@ import { renderStoriesAndLiveBar } from "/scripts/ui/StoriesAndLiveBar.js";
 window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
 window.__NEXERA_BOOT_TS = Date.now();
 
+const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
+const AVATAR_TEXT_COLOR = '#0f172a';
+
+function getAvatarPaletteColor(index = 0) {
+    if (!Array.isArray(AVATAR_COLORS) || AVATAR_COLORS.length === 0) return '#6dd3ff';
+    const safeIndex = Math.abs(Number(index) || 0);
+    return AVATAR_COLORS[safeIndex % AVATAR_COLORS.length] || '#6dd3ff';
+}
+
+function computeAvatarColor(seed = 'user') {
+    let hash = 0;
+    const safeSeed = String(seed || 'user');
+    for (let i = 0; i < safeSeed.length; i++) {
+        hash = (hash << 5) - hash + safeSeed.charCodeAt(i);
+        hash |= 0;
+    }
+    return getAvatarPaletteColor(Math.abs(hash));
+}
+
 function showBootErrorOverlay(message) {
     try {
         const existing = document.getElementById('nexera-boot-error');
@@ -40,17 +59,32 @@ function showBootErrorOverlay(message) {
             <div style="max-width:520px; background:#0f141a; border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:20px; text-align:center;">
                 <div style="font-weight:800; font-size:1.1rem; margin-bottom:8px;">Nexera failed to start</div>
                 <div style="color:#c7d2de; font-size:0.95rem; margin-bottom:16px;">${message || 'An unexpected error occurred while starting the app.'}</div>
-                <button id="nexera-boot-reload" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Reload</button>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+                    <button id="nexera-boot-close" style="border-radius:999px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.06); color:#c7d2de; padding:8px 16px; font-weight:700; cursor:pointer;">Close</button>
+                    <button id="nexera-boot-reload" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Reload</button>
+                </div>
             </div>
         `;
         const target = document.body || document.documentElement;
         target.appendChild(overlay);
         const reloadBtn = document.getElementById('nexera-boot-reload');
+        const closeBtn = document.getElementById('nexera-boot-close');
+        const closeOverlay = function () {
+            overlay.remove();
+        };
         if (reloadBtn) {
             reloadBtn.addEventListener('click', function () {
                 window.location.reload();
             });
         }
+        if (closeBtn) {
+            closeBtn.addEventListener('click', closeOverlay);
+        }
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && document.getElementById('nexera-boot-error')) {
+                closeOverlay();
+            }
+        });
     } catch (err) {
         // swallow
     }
@@ -794,18 +828,7 @@ let userProfile = {
     followedCategories: []
 };
 
-const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
-const AVATAR_TEXT_COLOR = '#0f172a';
 let avatarColorBackfilled = false;
-
-function computeAvatarColor(seed = 'user') {
-    let hash = 0;
-    for (let i = 0; i < seed.length; i++) {
-        hash = (hash << 5) - hash + seed.charCodeAt(i);
-        hash |= 0;
-    }
-    return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
 
 function normalizeUsername(value = '') {
     return (value || '').toString().trim().replace(/^@/, '');
@@ -1145,6 +1168,8 @@ function bindCallFocusResizeHandle() {
     });
 }
 const callStatusCache = new Map();
+const callDocCache = new Map();
+const callDocFetchPromises = new Map();
 let activeCallDocId = null;
 let activeCallConversationId = null;
 const CALL_DEBUG_FLAG = '__DEBUG_CALLS';
@@ -10863,9 +10888,6 @@ async function leaveLiveKitRoom({ updateStatus = true } = {}) {
         }).catch(function (err) {
             console.warn('Unable to update call status', err?.message || err);
         });
-        if (didEnd && conversationId && activeCallSession?.callId) {
-            await addCallSystemMessage(conversationId, callId, 'ended', '📞 Call ended');
-        }
     }
     clearCallSession();
 }
@@ -11089,26 +11111,11 @@ function listenToCallStatus(callId, conversationId) {
         }
         const data = snap.data() || {};
         callStatusCache.set(callId, data.status || 'active');
+        callDocCache.set(callId, { id: callId, ...data });
         if (activeCallSession && activeCallSession.callId === callId) {
-            const prevData = activeCallSession.callData || {};
-            const transitions = getCallStatusTransitions(prevData, data);
-            transitions.forEach(function (change) {
-                if (change.next === 'joined') {
-                    addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
-                } else if (change.next === 'declined') {
-                    addCallSystemMessage(conversationId, callId, 'declined', '📞 Call declined');
-                } else if (change.next === 'missed') {
-                    addCallSystemMessage(conversationId, callId, 'missed', '📞 Missed call');
-                }
-            });
             activeCallSession = { ...activeCallSession, status: data.status || activeCallSession.status, callData: { id: callId, ...data } };
         }
         if (data.status === 'ended' || data.status === 'missed') {
-            if (data.status === 'missed' && activeCallSession?.conversationId) {
-                addCallSystemMessage(activeCallSession.conversationId, callId, 'missed', '📞 Missed call');
-            } else if (data.status === 'ended' && activeCallSession?.conversationId) {
-                addCallSystemMessage(activeCallSession.conversationId, callId, 'ended', '📞 Call ended');
-            }
             hideIncomingCallPrompt();
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
@@ -11119,6 +11126,9 @@ function listenToCallStatus(callId, conversationId) {
         renderCallOverlayStatus(conversationId, data);
         if (currentViewId === 'messages') {
             renderConversationList();
+        }
+        if (activeConversationId === conversationId) {
+            renderMessages(messageThreadCache[conversationId] || [], conversationDetailsCache[conversationId] || {});
         }
     }, function (err) {
         handleSnapshotError('Call status', err);
@@ -11349,7 +11359,6 @@ async function acceptIncomingCall(callId, callData, conversationId) {
         debugCallLog('Join transaction aborted', { callId });
         return;
     }
-    await addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
     hideIncomingCallPrompt();
     activeCallSession = {
         callId,
@@ -11400,7 +11409,6 @@ async function declineIncomingCall(callId, conversationId) {
             updatedAt: serverTimestamp()
         });
     });
-    await addCallSystemMessage(conversationId, callId, 'declined', '📞 Call declined');
 }
 
 function startListeningForIncomingCalls() {
@@ -11432,9 +11440,6 @@ function startListeningForIncomingCalls() {
         const ringingCalls = snap.docs.map(function (docSnap) {
             const data = docSnap.data() || {};
             callStatusCache.set(docSnap.id, data.status || 'active');
-            if (data.status === 'ended' && data.userStatus?.[currentUser.uid] === 'missed') {
-                addCallSystemMessage(data.conversationId, docSnap.id, 'missed', '📞 Missed call');
-            }
             return { id: docSnap.id, ...data };
         }).filter(function (data) {
             if (!data || !Array.isArray(data.participants)) return false;
@@ -11565,6 +11570,119 @@ async function joinCallInvite(conversationId, callId) {
 
 window.joinCallInvite = joinCallInvite;
 
+function ensureCallDocCached(callId, conversationId) {
+    if (!callId || callDocCache.has(callId) || callDocFetchPromises.has(callId)) return;
+    const promise = getDoc(doc(db, 'calls', callId)).then(function (snap) {
+        if (snap.exists()) {
+            callDocCache.set(callId, { id: snap.id, ...snap.data() });
+        }
+    }).catch(function (err) {
+        console.warn('Unable to fetch call doc', err?.message || err);
+    }).finally(function () {
+        callDocFetchPromises.delete(callId);
+        if (conversationId && activeConversationId === conversationId) {
+            renderMessages(messageThreadCache[conversationId] || [], conversationDetailsCache[conversationId] || {});
+        }
+    });
+    callDocFetchPromises.set(callId, promise);
+}
+
+function formatCallDurationMs(ms = 0) {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    const pad = function (val) { return val.toString().padStart(2, '0'); };
+    if (hours > 0) {
+        return `${hours}:${pad(minutes)}:${pad(seconds)}`;
+    }
+    return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function buildCallSummaryData(msg, convo = {}) {
+    const callId = msg?.callId || msg?.systemPayload?.callId || '';
+    if (!callId) return null;
+    const callData = callDocCache.get(callId) || {};
+    const initiatorId = callData.initiatorId || msg.initiatorId || msg.senderId || msg?.systemPayload?.initiatorId || callData.createdBy || '';
+    const outgoing = initiatorId && initiatorId === currentUser?.uid;
+    const startedAt = toDateSafe(callData.startedAt);
+    const endedAt = toDateSafe(callData.endedAt);
+    const accepted = !!startedAt;
+    const ended = callData.status === 'ended' || callData.status === 'missed' || !!endedAt;
+    let stateClass = 'is-pending';
+    if (accepted) stateClass = 'is-accepted';
+    else if (ended) stateClass = 'is-missed';
+
+    let durationLabel = 'Duration: --:--';
+    if (startedAt && endedAt) {
+        durationLabel = `Duration: ${formatCallDurationMs(endedAt - startedAt)}`;
+    } else if (startedAt && !endedAt) {
+        durationLabel = 'In call';
+    } else if (endedAt && !startedAt) {
+        durationLabel = 'Duration: 00:00';
+    }
+
+    const participants = convo.participants || [];
+    const isGroup = participants.length > 2 || convo.type === 'group';
+    let title = computeConversationTitle(convo, currentUser?.uid) || 'Conversation';
+    let avatarHtml = '';
+    if (!isGroup) {
+        const meta = deriveOtherParticipantMeta(participants, currentUser?.uid, convo);
+        const otherId = meta.otherIds?.[0] || '';
+        const displayName = meta.names?.[0] || meta.usernames?.[0] || 'User';
+        title = displayName || title;
+        avatarHtml = renderAvatar({
+            uid: otherId || 'user',
+            username: meta.usernames?.[0] || displayName,
+            displayName,
+            photoURL: meta.avatars?.[0] || '',
+            avatarColor: meta.colors?.[0] || computeAvatarColor(displayName)
+        }, { size: 44 });
+    } else {
+        const avatarUrl = getConversationAvatarUrl(convo) || '';
+        avatarHtml = renderAvatar({
+            uid: convo.id || 'group',
+            username: title,
+            displayName: title,
+            photoURL: avatarUrl,
+            avatarColor: computeAvatarColor(title)
+        }, { size: 44 });
+    }
+
+    return {
+        callId,
+        callData,
+        initiatorId,
+        outgoing,
+        accepted,
+        ended,
+        stateClass,
+        durationLabel,
+        title,
+        avatarHtml
+    };
+}
+
+function renderCallSummaryCard(summary) {
+    if (!summary) return '';
+    const directionIcon = summary.outgoing ? 'ph-arrow-up-right' : 'ph-arrow-down-left';
+    return `
+        <div class="message-call-card ${summary.stateClass} ${summary.outgoing ? 'is-outgoing' : 'is-incoming'}">
+            <div class="call-card-icon">
+                <div class="call-card-icon-bg"><i class="ph ph-phone"></i></div>
+                <div class="call-card-direction"><i class="ph ${directionIcon}"></i></div>
+            </div>
+            <div class="call-card-content">
+                <div class="call-card-header">
+                    <div class="call-card-avatar">${summary.avatarHtml}</div>
+                    <div class="call-card-title">${escapeHtml(summary.title)}</div>
+                </div>
+                <div class="call-card-subtitle">${escapeHtml(summary.durationLabel)}</div>
+            </div>
+        </div>
+    `;
+}
+
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
     const scrollRegion = getMessageScrollContainer();
@@ -11582,6 +11700,9 @@ function renderMessages(msgs = [], convo = {}) {
     const fragment = document.createDocumentFragment();
     const searchTerm = (conversationSearchTerm || '').toLowerCase();
     conversationSearchHits = [];
+    const callInviteIds = new Set(msgs.filter(function (message) {
+        return message?.type === 'call_invite' && message.callId;
+    }).map(function (message) { return message.callId; }));
     renderPinnedMessages(convo, msgs);
 
     msgs.forEach(function (msg, idx) {
@@ -11602,6 +11723,42 @@ function renderMessages(msgs = [], convo = {}) {
         lastTimestamp = createdDate;
 
         if (msg.isSystem || msg.type === 'system') {
+            const callSummary = msg.systemType === 'call' ? buildCallSummaryData(msg, convo) : null;
+            if (callSummary && callInviteIds.has(callSummary.callId)) {
+                lastSenderId = null;
+                return;
+            }
+            if (callSummary) {
+                ensureCallDocCached(callSummary.callId, convo.id || activeConversationId);
+                const senderId = callSummary.initiatorId || msg.senderId || '';
+                const isSelf = senderId && senderId === currentUser?.uid;
+                const row = document.createElement('div');
+                row.className = 'message-row ' + (isSelf ? 'self' : 'other');
+                row.dataset.messageId = msg.id;
+                const avatarSlot = isSelf ? null : document.createElement('div');
+                if (avatarSlot) {
+                    avatarSlot.className = 'message-avatar-slot';
+                    const senderMeta = resolveParticipantDisplay(convo, senderId);
+                    avatarSlot.innerHTML = renderAvatar({
+                        uid: senderId,
+                        username: senderMeta.username,
+                        displayName: senderMeta.displayName,
+                        photoURL: senderMeta.avatar,
+                        avatarColor: senderMeta.avatarColor
+                    }, { size: 42 });
+                }
+                const bubbleWrap = document.createElement('div');
+                bubbleWrap.className = 'message-bubble-wrap ' + (isSelf ? 'self' : 'other');
+                const bubble = document.createElement('div');
+                bubble.className = 'message-bubble ' + (isSelf ? 'self' : 'other');
+                bubble.innerHTML = renderCallSummaryCard(callSummary);
+                bubbleWrap.appendChild(bubble);
+                if (avatarSlot) row.appendChild(avatarSlot);
+                row.appendChild(bubbleWrap);
+                fragment.appendChild(row);
+                lastSenderId = senderId || null;
+                return;
+            }
             const row = document.createElement('div');
             row.className = 'message-row system';
             row.dataset.messageId = msg.id;
@@ -11667,19 +11824,11 @@ function renderMessages(msgs = [], convo = {}) {
             content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${textMarkup}</div>${refBtn}</div>`;
         }
         if (msg.type === 'call_invite') {
-            const callType = msg.callType === 'video' ? 'video' : 'audio';
-            const canJoin = livekitLoadStatus === 'ready';
-            const callStatus = msg.callId ? callStatusCache.get(msg.callId) : null;
-            const callEnded = callStatus === 'ended' || callStatus === 'missed';
-            const joinDisabledAttr = canJoin && !callEnded ? '' : ' disabled aria-disabled="true" title="Loading call system…"';
-            const joinBtn = msg.callId && !callEnded
-                ? `<button class="call-join-btn" onclick="window.joinCallInvite('${convo.id || activeConversationId}', '${msg.callId}')"${joinDisabledAttr}>Join call</button>`
-                : '';
-            content = `<div class="message-call-invite">
-                <div class="call-invite-title">${escapeHtml(callType.charAt(0).toUpperCase() + callType.slice(1))} call invite</div>
-                <div style="color:var(--text-muted); font-size:0.85rem;">Tap to join when ready.</div>
-                <div class="call-invite-actions">${joinBtn}</div>
-            </div>`;
+            const callSummary = buildCallSummaryData(msg, convo);
+            if (callSummary) {
+                ensureCallDocCached(callSummary.callId, convo.id || activeConversationId);
+                content = renderCallSummaryCard(callSummary);
+            }
         }
 
         const attachments = Array.isArray(msg.attachments) ? msg.attachments.slice() : [];
@@ -12705,6 +12854,14 @@ async function startDmCall(kind) {
         };
         const callRef = await addDoc(collection(db, 'calls'), callPayload);
         const callId = callRef.id;
+        callDocCache.set(callId, { id: callId, ...callPayload });
+        await sendChatPayload(conversationId, {
+            type: 'call_invite',
+            callId,
+            callKind: kind,
+            callType,
+            initiatorId: currentUser.uid
+        });
         callStatusCache.set(callId, 'active');
         activeCallSession = {
             callId,
@@ -12786,7 +12943,6 @@ async function handleIncomingCallSnapshot(incomingCall, ringingCalls = []) {
             [statusKey]: 'missed',
             updatedAt: serverTimestamp()
         }).catch(function () {});
-        await addCallSystemMessage(incomingCall.conversationId, incomingCall.id, 'missed', '📞 Missed call');
         hideIncomingCallPrompt();
         return;
     }

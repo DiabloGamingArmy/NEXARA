@@ -3789,9 +3789,11 @@ body.light-mode .category-pill.active .topic-verified-icon {
     background: transparent;
     z-index: auto;
     padding: 0;
+    display: flex;
     align-items: stretch;
     justify-content: flex-start;
     flex-direction: column;
+    min-height: 0;
 }
 
 #call-card {
@@ -3887,7 +3889,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     gap: 12px;
     min-height: 0;
-    flex: 1;
+    flex: 1 1 auto;
     overflow: hidden;
 }
 
@@ -3952,6 +3954,10 @@ body.light-mode .category-pill.active .topic-verified-icon {
     height: 100%;
     position: relative;
     overflow: hidden;
+}
+
+#call-local-tile {
+    min-height: 0;
 }
 
 .call-remote-grid {
@@ -4267,6 +4273,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
+    padding-top: 1rem;
 }
 
 .call-action-group {
@@ -4427,6 +4434,102 @@ body.light-mode .category-pill.active .topic-verified-icon {
     padding: 6px 14px;
     font-weight: 700;
     cursor: pointer;
+}
+
+.message-call-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.22);
+}
+
+.message-call-card .call-card-icon {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    flex: 0 0 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.message-call-card .call-card-icon-bg {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #f0f6fc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.message-call-card .call-card-icon-bg i {
+    font-size: 26px;
+}
+
+.message-call-card .call-card-direction {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #f0f6fc;
+}
+
+.message-call-card .call-card-direction i {
+    font-size: 14px;
+    line-height: 1;
+}
+
+.message-call-card.is-accepted .call-card-icon-bg {
+    background: rgba(0, 255, 128, 0.18);
+    border-color: rgba(0, 255, 128, 0.6);
+    color: rgba(0, 255, 128, 0.92);
+}
+
+.message-call-card.is-missed .call-card-icon-bg {
+    background: rgba(255, 77, 77, 0.16);
+    border-color: rgba(255, 77, 77, 0.6);
+    color: #ff4d4d;
+}
+
+.message-call-card .call-card-content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.message-call-card .call-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.message-call-card .call-card-title {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--text-main);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.message-call-card .call-card-subtitle {
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }
 
 .message-row.system {
