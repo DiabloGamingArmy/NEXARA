@@ -4030,6 +4030,50 @@ body.light-mode .category-pill.active .topic-verified-icon {
     background: #000;
 }
 
+.call-media-grid.is-focused .call-focus-area video {
+    object-fit: contain !important;
+    background: #000;
+}
+
+.call-remote-grid .call-video-tile,
+.call-remote-grid .call-remote-tile {
+    height: auto;
+    aspect-ratio: 16 / 9;
+}
+
+.call-focus-resize-handle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: ns-resize;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+}
+
+.call-media-grid.is-focused .call-focus-resize-handle {
+    display: flex;
+}
+
+.call-focus-resize-grip {
+    width: 64px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.call-focus-resize-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
+
+.call-focus-resize-handle.is-dragging .call-focus-resize-grip {
+    background: rgba(255, 255, 255, 0.28);
+}
+
 @media (max-width: 820px) {
     .call-remote-grid.call-grid-2 {
         grid-template-columns: 1fr;

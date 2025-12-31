@@ -529,6 +529,20 @@ function hideSplash(options = {}) {
     }, TRANSITION_BUFFER);
 }
 
+let __initialSplashReleased = false;
+
+function releaseInitialSplashOnce(reason = 'initial-ready') {
+    if (__initialSplashReleased) return;
+    __initialSplashReleased = true;
+    try {
+        if (window.Nexera?.releaseSplash) {
+            window.Nexera.releaseSplash(reason);
+            return;
+        }
+    } catch (e) {}
+    try { hideSplash({ force: true, reason }); } catch (e) {}
+}
+
 const SPLASH_FAILSAFE_TIMEOUT = 8000;
 let splashFailsafeTimer = null;
 
@@ -798,7 +812,8 @@ function normalizeUsername(value = '') {
 }
 
 function resolveDisplayName(userLike = {}) {
-    return userLike.displayName || userLike.name || userLike.fullName || userLike.nickname || '';
+    const u = (userLike && typeof userLike === 'object') ? userLike : {};
+    return (u.displayName || u.username || u.handle || u.uid || u.id || '').toString().trim();
 }
 
 function resolveAvatarInitial(userLike = {}) {
@@ -1045,6 +1060,90 @@ let __ringCtx = null;
 let __ringOsc = null;
 let __ringGain = null;
 let callFocusState = { active: false, tileId: null };
+const CALL_FOCUS_HEIGHT_KEY = 'nexera_call_focus_height_ratio';
+let callFocusHeightRatio = null;
+
+try {
+    const raw = localStorage.getItem(CALL_FOCUS_HEIGHT_KEY);
+    const val = parseFloat(raw);
+    if (Number.isFinite(val)) callFocusHeightRatio = val;
+} catch (e) {}
+
+function clampFocusRatio(r) {
+    const n = Number.isFinite(r) ? r : 0.62;
+    return Math.min(0.85, Math.max(0.35, n));
+}
+
+function applyCallFocusHeight() {
+    if (!callFocusState?.active) return;
+    const els = getCallOverlayElements();
+    if (!els?.focusLayout || !els?.focusArea) return;
+
+    const rect = els.focusLayout.getBoundingClientRect();
+    if (!rect.height) return;
+
+    const ratio = clampFocusRatio(callFocusHeightRatio);
+    const px = Math.round(rect.height * ratio);
+
+    els.focusArea.style.flex = '0 0 auto';
+    els.focusArea.style.height = px + 'px';
+}
+
+function clearCallFocusHeightStyles() {
+    const els = getCallOverlayElements();
+    if (!els?.focusArea) return;
+    els.focusArea.style.removeProperty('height');
+    els.focusArea.style.removeProperty('flex');
+}
+
+function bindCallFocusResizeHandle() {
+    const els = getCallOverlayElements();
+    const handle = els?.focusResizeHandle;
+    if (!handle || handle.dataset.bound === 'true') return;
+    handle.dataset.bound = 'true';
+
+    let dragging = false;
+
+    function onDown(e) {
+        if (!callFocusState?.active) return;
+        dragging = true;
+        handle.classList.add('is-dragging');
+        try { handle.setPointerCapture?.(e.pointerId); } catch (err) {}
+        e.preventDefault();
+    }
+
+    function onMove(e) {
+        if (!dragging || !callFocusState?.active) return;
+        const elsNow = getCallOverlayElements();
+        const layout = elsNow?.focusLayout;
+        if (!layout) return;
+
+        const rect = layout.getBoundingClientRect();
+        if (!rect.height) return;
+
+        const y = e.clientY - rect.top;
+        const ratio = clampFocusRatio(y / rect.height);
+        callFocusHeightRatio = ratio;
+
+        try { localStorage.setItem(CALL_FOCUS_HEIGHT_KEY, String(ratio)); } catch (err) {}
+        applyCallFocusHeight();
+    }
+
+    function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('is-dragging');
+    }
+
+    handle.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+
+    window.addEventListener('resize', function () {
+        if (callFocusState?.active) applyCallFocusHeight();
+    });
+}
 const callStatusCache = new Map();
 let activeCallDocId = null;
 let activeCallConversationId = null;
@@ -1821,9 +1920,6 @@ function initApp(onReady) {
         if (typeof onReady === 'function') onReady();
         if (window.Nexera?.__resolveReady) window.Nexera.__resolveReady();
         if (readyResolver) readyResolver();
-        if (window.Nexera?.releaseSplash) {
-            window.Nexera.releaseSplash('auth-ready');
-        }
     };
 
     onAuthStateChanged(auth, async function (user) {
@@ -2746,9 +2842,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         renderFeed();
         if (isInitialLoad) {
             isInitialLoad = false;
-            if (window.Nexera?.releaseSplash) {
-                window.Nexera.releaseSplash('feed-initial-ready');
-            }
+            releaseInitialSplashOnce('feed-initial-ready');
         }
         try {
             await waitForFeedMedia('feed-content', { timeoutMs: 1500, maxNodes: 12 });
@@ -9311,6 +9405,13 @@ function renderConversationList() {
             listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
         }
         updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
         return;
     }
     if (emptyEl) emptyEl.style.display = 'none';
@@ -9457,6 +9558,13 @@ function renderConversationList() {
             emptyEl.style.display = 'block';
         }
         updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
         return;
     }
 
@@ -9472,6 +9580,13 @@ function renderConversationList() {
         listEl.dataset.scrollBound = 'true';
     }
     updateInboxNavBadge();
+    try {
+        const path = (location.pathname || '').toLowerCase();
+        const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+        if (!isHome) {
+            releaseInitialSplashOnce('inbox-initial-ready');
+        }
+    } catch (e) {}
 }
 
 function renderPinnedMessages(convo = {}, msgs = []) {
@@ -9623,6 +9738,7 @@ function getCallOverlayElements() {
         mediaGrid: document.querySelector('#call-overlay .call-media-grid'),
         focusLayout: document.getElementById('call-focus-layout'),
         focusArea: document.getElementById('call-focus-area'),
+        focusResizeHandle: document.getElementById('call-focus-resize-handle'),
         strip: document.getElementById('call-strip'),
         defaultLayout: document.getElementById('call-default-layout'),
         localTile: document.getElementById('call-local-tile'),
@@ -9841,6 +9957,9 @@ function enterCallFocus(tile) {
         els.strip.appendChild(node);
     });
     callFocusState = { active: true, tileId: tile?.dataset.callTileId || null };
+    requestAnimationFrame(function () {
+        applyCallFocusHeight();
+    });
 }
 
 function exitCallFocus() {
@@ -9862,6 +9981,7 @@ function exitCallFocus() {
     });
     els.mediaGrid.classList.remove('is-focused');
     callFocusState = { active: false, tileId: null };
+    clearCallFocusHeightStyles();
     updateCallTileLayout();
 }
 
@@ -10560,6 +10680,17 @@ async function initCallUi() {
     const els = getCallOverlayElements();
     if (!els.hangupBtn || !els.toggleMic || !els.toggleCam || !els.toggleShare) return;
 
+    if (!callUiInitialized) {
+        callUiInitialized = true;
+        bindCallFocusResizeHandle();
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                updateCallTileLayout();
+            }, 150);
+        });
+    }
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
     els.hangupBtn.dataset.bound = '1';
