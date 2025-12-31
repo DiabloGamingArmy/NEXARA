@@ -9338,20 +9338,8 @@ function renderConversationList() {
         item.onclick = function () {
             openConversation(mapping.id);
             const hostCall = getActiveCallForConversation(mapping.id);
-            if (hostCall && !isCallViewOpen) {
-                if (hostCall.status !== 'active') {
-                    return;
-                }
-                if (activeCallSession?.status === 'active' && activeCallSession.callId !== hostCall.id) {
-                    return;
-                }
-                if (activeCallSession?.callId === hostCall.id) {
-                    openCallView();
-                } else {
-                    joinExistingCall({ id: hostCall.id, ...hostCall }, mapping.id).catch(function (err) {
-                        console.warn('Unable to join active call', err?.message || err);
-                    });
-                }
+            if (hostCall && activeCallSession?.callId === hostCall.id && !isCallViewOpen) {
+                openCallView();
             }
         };
         targetEl.appendChild(item);
@@ -10288,11 +10276,14 @@ async function connectToLiveKitRoom(callSession) {
     });
     room.on(LivekitRoomEvent.Disconnected, function () {
         const now = Date.now();
-        const recentlyConnected = livekitConnectedAt && now - livekitConnectedAt < 2000;
+        const recentlyConnected = livekitConnectedAt && now - livekitConnectedAt < 3000;
         const manuallyEnded = lastManualHangupAt && now - lastManualHangupAt < 2000;
         if (recentlyConnected && !manuallyEnded && now - lastDisconnectToastAt > 10000) {
             lastDisconnectToastAt = now;
             toast('Disconnected. This can happen if the same account joins the call from another device/browser.', 'info');
+        }
+        if (recentlyConnected) {
+            debugCallLog('LiveKit disconnected shortly after connect', { callId: callSession.callId });
         }
         leaveLiveKitRoom({ updateStatus: false });
     });
@@ -10685,11 +10676,6 @@ function listenToCallStatus(callId, conversationId) {
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
             return;
         }
-        if (data.status === 'active' && activeCallSession?.callId === callId && !livekitRoom && !livekitConnecting) {
-            connectToLiveKitRoom(activeCallSession).catch(function (error) {
-                console.warn('Call connect failed', error?.message || error);
-            });
-        }
         if (activeCallSession && activeCallSession.callId === callId) {
             activeCallSession.callData = { id: callId, ...data };
         }
@@ -10785,24 +10771,35 @@ async function joinExistingCall(callData, conversationId) {
     if (!callData?.id || !conversationId) return;
     const callId = callData.id;
     const callRef = doc(db, 'calls', callId);
-    await runTransaction(db, async function (tx) {
-        const snap = await tx.get(callRef);
-        if (!snap.exists()) return;
-        const data = snap.data() || {};
-        if (data.status === 'ended') return;
-        const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
-        if (!active.includes(currentUser.uid)) active.push(currentUser.uid);
-        const ringTargets = Array.isArray(data.ringTargets) ? data.ringTargets.filter(function (uid) { return uid !== currentUser.uid; }) : [];
-        const userStatus = { ...(data.userStatus || {}) };
-        userStatus[currentUser.uid] = 'joined';
-        tx.update(callRef, {
-            status: 'active',
-            activeParticipants: active,
-            ringTargets,
-            userStatus,
-            updatedAt: serverTimestamp()
+    let joined = false;
+    debugCallLog('Join requested', { callId, conversationId });
+    try {
+        await runTransaction(db, async function (tx) {
+            const snap = await tx.get(callRef);
+            if (!snap.exists()) return;
+            const data = snap.data() || {};
+            if (data.status === 'ended') return;
+            const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
+            if (!active.includes(currentUser.uid)) active.push(currentUser.uid);
+            const userStatus = { ...(data.userStatus || {}) };
+            userStatus[currentUser.uid] = 'joined';
+            tx.update(callRef, {
+                status: 'active',
+                activeParticipants: active,
+                userStatus,
+                updatedAt: serverTimestamp()
+            });
+            joined = true;
         });
-    });
+    } catch (err) {
+        console.warn('Join call transaction failed', err?.message || err);
+        debugCallLog('Join transaction failed', { callId, error: err?.message || err });
+        return;
+    }
+    if (!joined) {
+        debugCallLog('Join transaction aborted', { callId });
+        return;
+    }
 
     activeCallSession = {
         callId,
@@ -10885,25 +10882,36 @@ async function acceptIncomingCall(callId, callData, conversationId) {
     const hasPermission = await requestCallPermissions(callData.type || 'audio', 'answer the call');
     if (!hasPermission) return;
     const callRef = doc(db, 'calls', callId);
-    await runTransaction(db, async function (tx) {
-        const snap = await tx.get(callRef);
-        if (!snap.exists()) return;
-        const data = snap.data() || {};
-        if (data.status === 'ended') return;
-        const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
-        if (!active.includes(currentUser.uid)) active.push(currentUser.uid);
-        const ringTargets = Array.isArray(data.ringTargets) ? data.ringTargets.filter(function (uid) { return uid !== currentUser.uid; }) : [];
-        const userStatus = { ...(data.userStatus || {}) };
-        userStatus[currentUser.uid] = 'joined';
-        tx.update(callRef, {
-            status: 'active',
-            startedAt: data.startedAt || serverTimestamp(),
-            activeParticipants: active,
-            ringTargets,
-            userStatus,
-            updatedAt: serverTimestamp()
+    let accepted = false;
+    debugCallLog('Join requested', { callId, conversationId, source: 'incoming-accept' });
+    try {
+        await runTransaction(db, async function (tx) {
+            const snap = await tx.get(callRef);
+            if (!snap.exists()) return;
+            const data = snap.data() || {};
+            if (data.status === 'ended') return;
+            const active = Array.isArray(data.activeParticipants) ? data.activeParticipants.slice() : [];
+            if (!active.includes(currentUser.uid)) active.push(currentUser.uid);
+            const userStatus = { ...(data.userStatus || {}) };
+            userStatus[currentUser.uid] = 'joined';
+            tx.update(callRef, {
+                status: 'active',
+                startedAt: data.startedAt || serverTimestamp(),
+                activeParticipants: active,
+                userStatus,
+                updatedAt: serverTimestamp()
+            });
+            accepted = true;
         });
-    });
+    } catch (err) {
+        console.warn('Accept call transaction failed', err?.message || err);
+        debugCallLog('Join transaction failed', { callId, error: err?.message || err });
+        return;
+    }
+    if (!accepted) {
+        debugCallLog('Join transaction aborted', { callId });
+        return;
+    }
     await addCallSystemMessage(conversationId, callId, 'accepted', '📞 Call accepted');
     hideIncomingCallPrompt();
     activeCallSession = {
@@ -12166,18 +12174,8 @@ async function openConversation(conversationId) {
     refreshConversationUsers(convo, { force: true, updateUI: true });
     renderMessageHeader(convo);
     const activeCall = getActiveCallForConversation(conversationId);
-    if (activeCall) {
-        if (activeCall.status !== 'active') {
-            // do not auto-join ringing calls; prompt handles it
-        } else if (activeCallSession?.status === 'active' && activeCallSession.callId !== activeCall.id) {
-            // already in another call
-        } else if (activeCallSession?.callId === activeCall.id) {
-            openCallView();
-        } else {
-            joinExistingCall({ id: activeCall.id, ...activeCall }, conversationId).catch(function (err) {
-                console.warn('Unable to join active call', err?.message || err);
-            });
-        }
+    if (activeCall && activeCallSession?.callId === activeCall.id) {
+        openCallView();
     }
     renderTypingIndicator(convo);
     listenToConversationDetails(conversationId);
