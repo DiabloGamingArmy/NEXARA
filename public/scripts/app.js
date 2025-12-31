@@ -488,6 +488,14 @@ function showSplash() {
     logSplashEvent('show');
 }
 
+function isSplashVisible() {
+    const splash = document.getElementById('nexera-splash');
+    if (!splash) return false;
+    if (splash.classList.contains('nexera-splash-hidden')) return false;
+    if (splash.style.display === 'none') return false;
+    return true;
+}
+
 function hideSplash(options = {}) {
     const splash = document.getElementById('nexera-splash');
     const { force = false, reason = 'hide' } = options || {};
@@ -1888,7 +1896,6 @@ function initApp(onReady) {
                 // UI Transitions
                 if (authScreen) authScreen.style.display = 'none';
                 if (appLayout) appLayout.style.display = 'flex';
-                if (loadingOverlay) loadingOverlay.style.display = 'none';
                 initCallInviteListener();
                 startActiveCallTracker();
                 markReady();
@@ -1900,6 +1907,7 @@ function initApp(onReady) {
                         if (currentUser?.uid !== signedInUserId) return;
                         startCategoryStreams(signedInUserId);
                         await loadFeedData({ showSplashDuringLoad: true });
+                        if (loadingOverlay) loadingOverlay.style.display = 'none';
                         if (currentUser?.uid !== signedInUserId) return;
                         startUserReviewListener(signedInUserId); // PATCH: Listen for USER reviews globally on load
                         loadInboxModeFromStorage();
@@ -2685,8 +2693,12 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
     if (feedLoading && feedHydrationPromise) return feedHydrationPromise;
 
     feedLoading = true;
+    let didShowSplash = false;
     feedHydrationPromise = (async function () {
-        if (showSplashDuringLoad) showSplash();
+        if (showSplashDuringLoad && !isSplashVisible()) {
+            showSplash();
+            didShowSplash = true;
+        }
         feedPagination.lastDoc = null;
         feedPagination.done = false;
         const batch = await fetchFeedBatch({ reset: true });
@@ -2719,7 +2731,7 @@ async function loadFeedData({ showSplashDuringLoad = false } = {}) {
         console.error('Feed load failed', error);
     }).finally(function () {
         feedLoading = false;
-        if (showSplashDuringLoad) hideSplash();
+        if (didShowSplash) hideSplash();
     });
 
     return feedHydrationPromise;
@@ -9769,6 +9781,7 @@ function exitCallFocus() {
     });
     els.mediaGrid.classList.remove('is-focused');
     callFocusState = { active: false, tileId: null };
+    updateCallTileLayout();
 }
 
 function toggleCallFocus(tile) {
@@ -10036,6 +10049,8 @@ function resetCallOverlayMedia() {
         elements.remoteGrid.innerHTML = '';
         if (elements.localTile) {
             elements.remoteGrid.appendChild(elements.localTile);
+            enhanceCallTile(elements.localTile);
+            elements.localTile.dataset.originalParentId = elements.remoteGrid.id;
         }
         updateCallTileLayout();
     }
@@ -10467,6 +10482,16 @@ async function initCallUi() {
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
     els.hangupBtn.dataset.bound = '1';
+    if (!callUiInitialized) {
+        callUiInitialized = true;
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                updateCallTileLayout();
+            }, 150);
+        });
+    }
 
     const setActive = (btn, on) => {
         if (!btn) return;
@@ -10633,10 +10658,12 @@ async function initCallUi() {
     updateCallControlIcons();
     if (els.localTile) {
         els.localTile.dataset.callTileId = 'local';
-        els.localTile.dataset.originalParentId = els.localTile.parentElement?.id || '';
         els.localTile.classList.add('is-camera');
         enhanceCallTile(els.localTile);
         ensureLocalTilePlacement();
+        if (els.remoteGrid) {
+            els.localTile.dataset.originalParentId = els.remoteGrid.id;
+        }
         updateCallTileLayout();
     }
 }
