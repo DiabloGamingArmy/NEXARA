@@ -309,30 +309,22 @@ service cloud.firestore {
 
     match /calls/{callId} {
       allow read: if isSignedIn()
-        && ('conversationId' in resource.data)
-        && isConversationParticipant(resource.data.conversationId);
+        && (request.auth.uid in resource.data.participants);
       allow create: if isSignedIn()
         && request.resource.data.conversationId is string
-        && isConversationParticipant(request.resource.data.conversationId)
         && request.resource.data.type in ['audio', 'video']
-        && request.resource.data.status == 'ringing'
+        && request.resource.data.status in ['active', 'ringing']
         && request.resource.data.participants is list
         && request.resource.data.participants.size() >= 2
         && request.auth.uid in request.resource.data.participants
-        && request.resource.data.participants.hasAll(
-          get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)).data.participants
-        )
-        && get(/databases/$(database)/documents/conversations/$(request.resource.data.conversationId)).data.participants.hasAll(
-          request.resource.data.participants
-        )
         && (
           request.resource.data.createdBy == request.auth.uid
           || request.resource.data.initiatorId == request.auth.uid
         );
       allow update: if isSignedIn()
-        && isConversationParticipant(resource.data.conversationId)
+        && (request.auth.uid in resource.data.participants)
         && request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['status', 'startedAt', 'endedAt', 'updatedAt'])
+          .hasOnly(['status', 'startedAt', 'endedAt', 'updatedAt', 'activeParticipants', 'userStatus', 'ringTargets'])
         && request.resource.data.status in ['ringing', 'active', 'ended', 'missed']
         && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is timestamp)
         && (!('startedAt' in request.resource.data) || request.resource.data.startedAt is timestamp)
