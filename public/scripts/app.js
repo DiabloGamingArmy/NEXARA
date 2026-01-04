@@ -24,30 +24,14 @@ let bootCompleted = false;
 
 const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
 const AVATAR_TEXT_COLOR = '#0f172a';
+// Expose for safety / reuse (prevents redeclare issues on future merges)
+globalThis.__NEXERA_AVATAR_COLORS__ = globalThis.__NEXERA_AVATAR_COLORS__ || AVATAR_COLORS;
 
 function getAvatarPaletteColor(index = 0) {
-    if (!Array.isArray(AVATAR_COLORS) || AVATAR_COLORS.length === 0) return '#6dd3ff';
+    const palette = globalThis.__NEXERA_AVATAR_COLORS__ || AVATAR_COLORS || [];
+    if (!Array.isArray(palette) || palette.length === 0) return '#6dd3ff';
     const safeIndex = Math.abs(Number(index) || 0);
-    return AVATAR_COLORS[safeIndex % AVATAR_COLORS.length] || '#6dd3ff';
-}
-
-function computeAvatarColor(seed = 'user') {
-    let hash = 0;
-    const safeSeed = String(seed || 'user');
-    for (let i = 0; i < safeSeed.length; i++) {
-        hash = (hash << 5) - hash + safeSeed.charCodeAt(i);
-        hash |= 0;
-    }
-    return getAvatarPaletteColor(Math.abs(hash));
-}
-
-const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
-const AVATAR_TEXT_COLOR = '#0f172a';
-
-function getAvatarPaletteColor(index = 0) {
-    if (!Array.isArray(AVATAR_COLORS) || AVATAR_COLORS.length === 0) return '#6dd3ff';
-    const safeIndex = Math.abs(Number(index) || 0);
-    return AVATAR_COLORS[safeIndex % AVATAR_COLORS.length] || '#6dd3ff';
+    return palette[safeIndex % palette.length] || '#6dd3ff';
 }
 
 function computeAvatarColor(seed = 'user') {
