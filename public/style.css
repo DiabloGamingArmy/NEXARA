@@ -4266,7 +4266,6 @@ body.light-mode .category-pill.active .topic-verified-icon {
 .call-tile-status-icon.is-sharing {
     color: rgba(0, 255, 128, 0.92);
 }
-}
 
 .call-actions {
     display: flex;
@@ -5225,12 +5224,16 @@ body.has-incoming-call-modal #app-layout {
 
 .message-row:hover .message-meta,
 .message-row:focus-within .message-meta,
-.message-row:hover .message-meta-time,
-.message-row:focus-within .message-meta-time,
 .message-row:hover .message-actions-button,
 .message-row:focus-within .message-actions-button {
     opacity: 1;
     pointer-events: auto;
+}
+
+.message-row:hover .message-meta-time,
+.message-row:focus-within .message-meta-time {
+    opacity: 1;
+    pointer-events: none;
 }
 
 .typing-indicator {

@@ -20,6 +20,26 @@ import { renderStoriesAndLiveBar } from "/scripts/ui/StoriesAndLiveBar.js";
 
 window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
 window.__NEXERA_BOOT_TS = Date.now();
+let bootCompleted = false;
+
+const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
+const AVATAR_TEXT_COLOR = '#0f172a';
+
+function getAvatarPaletteColor(index = 0) {
+    if (!Array.isArray(AVATAR_COLORS) || AVATAR_COLORS.length === 0) return '#6dd3ff';
+    const safeIndex = Math.abs(Number(index) || 0);
+    return AVATAR_COLORS[safeIndex % AVATAR_COLORS.length] || '#6dd3ff';
+}
+
+function computeAvatarColor(seed = 'user') {
+    let hash = 0;
+    const safeSeed = String(seed || 'user');
+    for (let i = 0; i < safeSeed.length; i++) {
+        hash = (hash << 5) - hash + safeSeed.charCodeAt(i);
+        hash |= 0;
+    }
+    return getAvatarPaletteColor(Math.abs(hash));
+}
 
 const AVATAR_COLORS = ['#9b8cff', '#6dd3ff', '#ffd166', '#ff7b9c', '#a3f7bf', '#ffcf99', '#8dd3c7', '#f8b195'];
 const AVATAR_TEXT_COLOR = '#0f172a';
@@ -123,6 +143,18 @@ window.addEventListener('error', function (event) {
     try {
         const err = event?.error;
         console.error('Boot error', err || event?.message || event);
+        if (err?.message && err.message.includes('before initialization')) {
+            if (typeof window.toast === 'function') {
+                window.toast('Something went wrong, but you can keep using Nexera.', 'error');
+            }
+            return;
+        }
+        if (bootCompleted) {
+            if (typeof window.toast === 'function') {
+                window.toast('Something went wrong, but you can keep using Nexera.', 'error');
+            }
+            return;
+        }
         hideLoadingOverlay();
         forceHideSplash('boot-error');
         const message = err?.message || event?.message || 'A script error prevented Nexera from starting.';
@@ -136,6 +168,18 @@ window.addEventListener('unhandledrejection', function (event) {
     try {
         const reason = event?.reason;
         console.error('Boot unhandled rejection', reason);
+        if (reason?.message && reason.message.includes('before initialization')) {
+            if (typeof window.toast === 'function') {
+                window.toast('Something went wrong, but you can keep using Nexera.', 'error');
+            }
+            return;
+        }
+        if (bootCompleted) {
+            if (typeof window.toast === 'function') {
+                window.toast('Something went wrong, but you can keep using Nexera.', 'error');
+            }
+            return;
+        }
         hideLoadingOverlay();
         forceHideSplash('boot-error');
         const message = reason?.message || 'A background task failed while starting Nexera.';
@@ -568,6 +612,7 @@ let __initialSplashReleased = false;
 function releaseInitialSplashOnce(reason = 'initial-ready') {
     if (__initialSplashReleased) return;
     __initialSplashReleased = true;
+    bootCompleted = true;
     try {
         if (window.Nexera?.releaseSplash) {
             window.Nexera.releaseSplash(reason);
@@ -1171,6 +1216,8 @@ const callStatusCache = new Map();
 const callDocCache = new Map();
 const callDocFetchPromises = new Map();
 const callStatusListeners = new Set();
+const callStatusUnsubs = new Map();
+const callAccessDenied = new Set();
 let activeCallDocId = null;
 let activeCallConversationId = null;
 const CALL_DEBUG_FLAG = '__DEBUG_CALLS';
@@ -8028,13 +8075,13 @@ function getConversationAvatarUrl(convo = {}, fallback = '') {
     }
 }
 
-function handleSnapshotError(context, error) {
+function handleSnapshotError(context, error, opts = {}) {
     const code = error?.code || '';
     const message = code === 'permission-denied'
         ? 'You do not have access to this data.'
         : 'We had trouble loading this data.';
     console.warn(`${context} snapshot error`, error?.message || error);
-    if (typeof window.toast === 'function') {
+    if (!opts.silent && typeof window.toast === 'function') {
         window.toast(message, 'error');
     }
 }
@@ -11101,10 +11148,18 @@ async function initCallUi() {
     }
 }
 
-function listenToCallStatus(callId, conversationId) {
-    stopCallDocListener();
+function listenToCallStatus(callId, conversationId, options = {}) {
+    if (!callId) return;
+    const scope = options.scope || 'active';
+    if (callAccessDenied.has(callId)) return;
+    if (scope === 'active') {
+        stopCallDocListener();
+    } else if (callStatusUnsubs.has(callId)) {
+        return;
+    }
     const callRef = doc(db, 'calls', callId);
-    callDocUnsubscribe = ListenerRegistry.register(`call:${callId}`, onSnapshot(callRef, function (snap) {
+    const listenerKey = scope === 'active' ? `call:${callId}` : `call-card:${callId}`;
+    const unsubscribe = ListenerRegistry.register(listenerKey, onSnapshot(callRef, function (snap) {
         if (!snap.exists()) {
             hideIncomingCallPrompt();
             leaveLiveKitRoom({ updateStatus: false }).catch(function () {});
@@ -11132,8 +11187,26 @@ function listenToCallStatus(callId, conversationId) {
             renderMessages(messageThreadCache[conversationId] || [], conversationDetailsCache[conversationId] || {});
         }
     }, function (err) {
+        if (err?.code === 'permission-denied') {
+            callAccessDenied.add(callId);
+            callStatusListeners.delete(callId);
+            const cleanup = scope === 'active' ? callDocUnsubscribe : callStatusUnsubs.get(callId);
+            try { cleanup?.(); } catch (e) {}
+            if (scope === 'active') {
+                callDocUnsubscribe = null;
+            } else {
+                callStatusUnsubs.delete(callId);
+            }
+            console.warn('[Calls] permission denied for call doc', callId);
+            return;
+        }
         handleSnapshotError('Call status', err);
     }));
+    if (scope === 'active') {
+        callDocUnsubscribe = unsubscribe;
+    } else {
+        callStatusUnsubs.set(callId, unsubscribe);
+    }
 }
 
 // Returns recent call docs for a conversation, limited to calls the current user can read.
@@ -11590,9 +11663,9 @@ async function ensureCallDocCached(callId) {
 }
 
 function ensureCallStatusListener(callId, conversationId) {
-    if (!callId || callStatusListeners.has(callId)) return;
+    if (!callId || callStatusListeners.has(callId) || callAccessDenied.has(callId)) return;
     callStatusListeners.add(callId);
-    listenToCallStatus(callId, conversationId);
+    listenToCallStatus(callId, conversationId, { scope: 'card' });
 }
 
 function normalizeCallMessageFields(msg) {
@@ -11621,7 +11694,8 @@ function formatCallDurationMs(ms = 0) {
 function buildCallSummaryData(msg, convo = {}) {
     const normalized = normalizeCallMessageFields(msg);
     const callId = normalized.callId || msg?.systemPayload?.callId || '';
-    const callData = callId ? (callDocCache.get(callId) || {}) : {};
+    const useCallCache = callId && !callAccessDenied.has(callId);
+    const callData = useCallCache ? (callDocCache.get(callId) || {}) : {};
     const initiatorId = callData.initiatorId || normalized.initiatorId || msg?.systemPayload?.initiatorId || callData.createdBy || msg.senderId || '';
     const outgoing = initiatorId && initiatorId === currentUser?.uid;
     const startedAt = toDateSafe(callData.startedAt);
@@ -11702,6 +11776,19 @@ function renderCallSummaryCard(summary) {
     `;
 }
 
+const pendingMessageRerenders = new Map();
+
+function scheduleMessagesRerender(conversationId, convo) {
+    if (!conversationId || pendingMessageRerenders.get(conversationId)) return;
+    pendingMessageRerenders.set(conversationId, true);
+    setTimeout(function () {
+        pendingMessageRerenders.delete(conversationId);
+        if (activeConversationId === conversationId) {
+            renderMessages(messageThreadCache[conversationId] || [], convo || conversationDetailsCache[conversationId] || {});
+        }
+    }, 0);
+}
+
 function renderMessages(msgs = [], convo = {}) {
     const body = document.getElementById('message-thread');
     const scrollRegion = getMessageScrollContainer();
@@ -11716,9 +11803,11 @@ function renderMessages(msgs = [], convo = {}) {
     let latestSelfMessage = null;
     const missingSenders = new Set();
     const missingMedia = new Set();
+    const missingCallIds = new Set();
     const fragment = document.createDocumentFragment();
     const searchTerm = (conversationSearchTerm || '').toLowerCase();
     conversationSearchHits = [];
+    const conversationId = convo.id || activeConversationId || '';
     const callInviteIds = new Set(msgs.map(function (message) {
         if (message?.type !== 'call_invite') return null;
         const normalized = normalizeCallMessageFields(message);
@@ -11754,12 +11843,10 @@ function renderMessages(msgs = [], convo = {}) {
             }
             if (callSummary) {
                 if (callSummary.callId) {
-                    ensureCallStatusListener(callSummary.callId, convo.id || activeConversationId);
-                    ensureCallDocCached(callSummary.callId).then(function () {
-                        if (activeConversationId === (convo.id || activeConversationId)) {
-                            renderMessages(messageThreadCache[convo.id || activeConversationId] || [], convo);
-                        }
-                    });
+                    ensureCallStatusListener(callSummary.callId, conversationId);
+                    if (!callDocCache.has(callSummary.callId) && !callDocFetchPromises.has(callSummary.callId) && !callAccessDenied.has(callSummary.callId)) {
+                        missingCallIds.add(callSummary.callId);
+                    }
                 }
                 const senderId = callSummary.initiatorId || msg.senderId || '';
                 const isSelf = senderId && senderId === currentUser?.uid;
@@ -11861,17 +11948,12 @@ function renderMessages(msgs = [], convo = {}) {
             const callSummary = buildCallSummaryData(msg, convo);
             if (callSummary) {
                 if (callSummary.callId) {
-                    ensureCallStatusListener(callSummary.callId, convo.id || activeConversationId);
-                    ensureCallDocCached(callSummary.callId).then(function () {
-                        if (activeConversationId === (convo.id || activeConversationId)) {
-                            renderMessages(messageThreadCache[convo.id || activeConversationId] || [], convo);
-                        }
-                    });
+                    ensureCallStatusListener(callSummary.callId, conversationId);
+                    if (!callDocCache.has(callSummary.callId) && !callDocFetchPromises.has(callSummary.callId) && !callAccessDenied.has(callSummary.callId)) {
+                        missingCallIds.add(callSummary.callId);
+                    }
                 }
                 content = renderCallSummaryCard(callSummary);
-            } else {
-                const fallback = buildCallSummaryData({ initiatorId: msg.initiatorId || msg.senderId }, convo);
-                content = renderCallSummaryCard(fallback);
             }
         }
 
@@ -12028,6 +12110,14 @@ function renderMessages(msgs = [], convo = {}) {
     }
 
     body.appendChild(fragment);
+
+    if (missingCallIds.size && conversationId) {
+        Promise.all(Array.from(missingCallIds).map(function (callId) {
+            return ensureCallDocCached(callId);
+        })).then(function () {
+            scheduleMessagesRerender(conversationId, convo);
+        });
+    }
 
     if (missingSenders.size && convo.id) {
         refreshUserProfiles(Array.from(missingSenders), { force: true }).then(function () {
