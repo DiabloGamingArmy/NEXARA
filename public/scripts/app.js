@@ -1170,6 +1170,7 @@ function bindCallFocusResizeHandle() {
 const callStatusCache = new Map();
 const callDocCache = new Map();
 const callDocFetchPromises = new Map();
+const callStatusListeners = new Set();
 let activeCallDocId = null;
 let activeCallConversationId = null;
 const CALL_DEBUG_FLAG = '__DEBUG_CALLS';
@@ -11570,21 +11571,39 @@ async function joinCallInvite(conversationId, callId) {
 
 window.joinCallInvite = joinCallInvite;
 
-function ensureCallDocCached(callId, conversationId) {
-    if (!callId || callDocCache.has(callId) || callDocFetchPromises.has(callId)) return;
+async function ensureCallDocCached(callId) {
+    if (!callId) return null;
+    if (callDocCache.has(callId)) return callDocCache.get(callId);
+    if (callDocFetchPromises.has(callId)) return callDocFetchPromises.get(callId);
     const promise = getDoc(doc(db, 'calls', callId)).then(function (snap) {
-        if (snap.exists()) {
-            callDocCache.set(callId, { id: snap.id, ...snap.data() });
-        }
-    }).catch(function (err) {
-        console.warn('Unable to fetch call doc', err?.message || err);
+        if (!snap.exists()) return null;
+        const data = { id: snap.id, ...snap.data() };
+        callDocCache.set(callId, data);
+        return data;
+    }).catch(function () {
+        return null;
     }).finally(function () {
         callDocFetchPromises.delete(callId);
-        if (conversationId && activeConversationId === conversationId) {
-            renderMessages(messageThreadCache[conversationId] || [], conversationDetailsCache[conversationId] || {});
-        }
     });
     callDocFetchPromises.set(callId, promise);
+    return promise;
+}
+
+function ensureCallStatusListener(callId, conversationId) {
+    if (!callId || callStatusListeners.has(callId)) return;
+    callStatusListeners.add(callId);
+    listenToCallStatus(callId, conversationId);
+}
+
+function normalizeCallMessageFields(msg) {
+    const m = msg || {};
+    const payload = m.payload || m.data || m.meta || {};
+    const callId = m.callId || m.callID || m.callDocId
+        || payload.callId || payload.callID || payload.callDocId
+        || payload.id || m.id;
+    const initiatorId = m.initiatorId || payload.initiatorId || m.senderId || m.fromUid || m.uid;
+    const callKind = m.callKind || payload.callKind || payload.kind || 'video';
+    return { callId, initiatorId, callKind };
 }
 
 function formatCallDurationMs(ms = 0) {
@@ -11600,10 +11619,10 @@ function formatCallDurationMs(ms = 0) {
 }
 
 function buildCallSummaryData(msg, convo = {}) {
-    const callId = msg?.callId || msg?.systemPayload?.callId || '';
-    if (!callId) return null;
-    const callData = callDocCache.get(callId) || {};
-    const initiatorId = callData.initiatorId || msg.initiatorId || msg.senderId || msg?.systemPayload?.initiatorId || callData.createdBy || '';
+    const normalized = normalizeCallMessageFields(msg);
+    const callId = normalized.callId || msg?.systemPayload?.callId || '';
+    const callData = callId ? (callDocCache.get(callId) || {}) : {};
+    const initiatorId = callData.initiatorId || normalized.initiatorId || msg?.systemPayload?.initiatorId || callData.createdBy || msg.senderId || '';
     const outgoing = initiatorId && initiatorId === currentUser?.uid;
     const startedAt = toDateSafe(callData.startedAt);
     const endedAt = toDateSafe(callData.endedAt);
@@ -11700,9 +11719,11 @@ function renderMessages(msgs = [], convo = {}) {
     const fragment = document.createDocumentFragment();
     const searchTerm = (conversationSearchTerm || '').toLowerCase();
     conversationSearchHits = [];
-    const callInviteIds = new Set(msgs.filter(function (message) {
-        return message?.type === 'call_invite' && message.callId;
-    }).map(function (message) { return message.callId; }));
+    const callInviteIds = new Set(msgs.map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
     renderPinnedMessages(convo, msgs);
 
     msgs.forEach(function (msg, idx) {
@@ -11723,13 +11744,23 @@ function renderMessages(msgs = [], convo = {}) {
         lastTimestamp = createdDate;
 
         if (msg.isSystem || msg.type === 'system') {
+            if ((msg?.type === 'call_invite' || (msg?.isSystem && msg?.systemType === 'call')) && !msg.__dbg && window.__DEBUG_CALL_CARD) {
+                try { msg.__dbg = true; console.debug('[CallCard] msg raw:', JSON.parse(JSON.stringify(msg))); } catch (e) {}
+            }
             const callSummary = msg.systemType === 'call' ? buildCallSummaryData(msg, convo) : null;
             if (callSummary && callInviteIds.has(callSummary.callId)) {
                 lastSenderId = null;
                 return;
             }
             if (callSummary) {
-                ensureCallDocCached(callSummary.callId, convo.id || activeConversationId);
+                if (callSummary.callId) {
+                    ensureCallStatusListener(callSummary.callId, convo.id || activeConversationId);
+                    ensureCallDocCached(callSummary.callId).then(function () {
+                        if (activeConversationId === (convo.id || activeConversationId)) {
+                            renderMessages(messageThreadCache[convo.id || activeConversationId] || [], convo);
+                        }
+                    });
+                }
                 const senderId = callSummary.initiatorId || msg.senderId || '';
                 const isSelf = senderId && senderId === currentUser?.uid;
                 const row = document.createElement('div');
@@ -11824,10 +11855,23 @@ function renderMessages(msgs = [], convo = {}) {
             content = `<div style="display:flex; flex-direction:column; gap:6px;"><div style="font-weight:700;">Shared a post</div><div style="font-size:0.9rem;">${textMarkup}</div>${refBtn}</div>`;
         }
         if (msg.type === 'call_invite') {
+            if ((msg?.type === 'call_invite' || (msg?.isSystem && msg?.systemType === 'call')) && !msg.__dbg && window.__DEBUG_CALL_CARD) {
+                try { msg.__dbg = true; console.debug('[CallCard] msg raw:', JSON.parse(JSON.stringify(msg))); } catch (e) {}
+            }
             const callSummary = buildCallSummaryData(msg, convo);
             if (callSummary) {
-                ensureCallDocCached(callSummary.callId, convo.id || activeConversationId);
+                if (callSummary.callId) {
+                    ensureCallStatusListener(callSummary.callId, convo.id || activeConversationId);
+                    ensureCallDocCached(callSummary.callId).then(function () {
+                        if (activeConversationId === (convo.id || activeConversationId)) {
+                            renderMessages(messageThreadCache[convo.id || activeConversationId] || [], convo);
+                        }
+                    });
+                }
                 content = renderCallSummaryCard(callSummary);
+            } else {
+                const fallback = buildCallSummaryData({ initiatorId: msg.initiatorId || msg.senderId }, convo);
+                content = renderCallSummaryCard(fallback);
             }
         }
 
