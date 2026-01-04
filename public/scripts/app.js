@@ -10911,6 +10911,16 @@ async function initCallUi() {
     // Avoid double-binding
     if (els.hangupBtn.dataset.bound === '1') return;
     els.hangupBtn.dataset.bound = '1';
+    if (!callUiInitialized) {
+        callUiInitialized = true;
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            if (resizeTimer) clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                updateCallTileLayout();
+            }, 150);
+        });
+    }
 
     const setActive = (btn, on) => {
         if (!btn) return;
