@@ -9150,8 +9150,16 @@ function renderContentNotificationList() {
     const emptyEl = document.getElementById('inbox-empty-content');
     if (!listEl) return;
     listEl.innerHTML = '';
+    const enabledBuckets = Object.keys(inboxContentFilters).filter(function (key) {
+        return !!inboxContentFilters[key];
+    });
+    const activeBuckets = enabledBuckets.length ? enabledBuckets : Object.keys(inboxContentFilters);
     const bucketed = contentNotifications
         .slice()
+        .filter(function (notif) {
+            const bucket = getContentNotificationBucket(notif);
+            return bucket && activeBuckets.includes(bucket);
+        })
         .sort(function (a, b) {
             const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
             const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
