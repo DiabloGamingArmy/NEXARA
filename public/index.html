@@ -966,19 +966,11 @@
                     <div class="inbox-content-toggles">
                         <button class="inbox-content-toggle active" data-content="posts" onclick="window.toggleInboxContentFilter('posts')">Posts</button>
                         <button class="inbox-content-toggle active" data-content="videos" onclick="window.toggleInboxContentFilter('videos')">Videos</button>
-                        <button class="inbox-content-toggle active" data-content="livestreams" onclick="window.toggleInboxContentFilter('livestreams')">Live streams</button>
+                        <button class="inbox-content-toggle active" data-content="livestreams" onclick="window.toggleInboxContentFilter('livestreams')">Livestreams</button>
                     </div>
-                    <div class="inbox-content-section" data-content="posts">
-                        <div id="inbox-list-posts" class="inbox-notification-list"></div>
-                        <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
-                    </div>
-                    <div class="inbox-content-section" data-content="videos">
-                        <div id="inbox-list-videos" class="inbox-notification-list"></div>
-                        <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
-                    </div>
-                    <div class="inbox-content-section" data-content="livestreams">
-                        <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
-                        <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
+                    <div class="inbox-content-section" data-content="all">
+                        <div id="inbox-list-content" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-content" class="empty-state">No content notifications yet.</div>
                     </div>
                 </div>
     <div id="inbox-panel-account" class="inbox-panel">
@@ -1758,6 +1750,10 @@
             <div class="call-media-grid">
                 <div id="call-focus-layout" class="call-focus-layout">
                     <div id="call-focus-area" class="call-focus-area"></div>
+                    <div id="call-focus-resize-handle" class="call-focus-resize-handle" role="separator" aria-label="Drag to Adjust Height">
+                        <div class="call-focus-resize-grip"></div>
+                        <div class="call-focus-resize-text">Drag to Adjust Height:</div>
+                    </div>
                     <div id="call-strip" class="call-strip"></div>
                 </div>
                 <div id="call-default-layout" class="call-default-layout">
@@ -1866,15 +1862,31 @@
                         <div style="color:#c7d2de; font-size:0.95rem;">
                             Nexera couldn’t finish initializing in this environment. This can happen in iOS WebView if storage/persistence fails or network resources are blocked. Please reload.
                         </div>
-                        <button id="nexera-boot-retry" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Reload</button>
+                        <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+                            <button id="nexera-boot-close" style="border-radius:999px; border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.06); color:#c7d2de; padding:8px 16px; font-weight:700; cursor:pointer;">Close</button>
+                            <button id="nexera-boot-retry" style="border-radius:999px; border:1px solid rgba(0,242,234,0.5); background:rgba(0,242,234,0.2); color:#bffbff; padding:8px 16px; font-weight:700; cursor:pointer;">Reload</button>
+                        </div>
                     </div>
                 `;
                 const retryBtn = document.getElementById('nexera-boot-retry');
+                const closeBtn = document.getElementById('nexera-boot-close');
+                const closeOverlay = function () {
+                    overlay.style.display = 'none';
+                    overlay.innerHTML = '';
+                };
                 if (retryBtn) {
                     retryBtn.addEventListener('click', function () {
                         window.location.reload();
                     });
                 }
+                if (closeBtn) {
+                    closeBtn.addEventListener('click', closeOverlay);
+                }
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && overlay && overlay.innerHTML) {
+                        closeOverlay();
+                    }
+                });
             };
             setTimeout(triggerBootError, BOOT_TIMEOUT_MS);
         })();
