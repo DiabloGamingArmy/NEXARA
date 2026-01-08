@@ -848,7 +848,7 @@ let userProfile = {
     photoURL: "",
     photoPath: "",
     avatarColor: "",
-    theme: "system",
+    theme: "dark",
     accountRoles: [],
     savedPosts: [],
     savedVideos: [],
@@ -2022,7 +2022,7 @@ function initApp(onReady) {
                         await syncPublicProfile(user.uid, userProfile);
 
                         // Apply stored theme preference
-                        const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'system';
+                        const savedTheme = userProfile.theme || nexeraGetStoredThemePreference() || 'dark';
                         userProfile.theme = savedTheme;
                         applyTheme(savedTheme);
 
@@ -2035,7 +2035,7 @@ function initApp(onReady) {
                         // Create new profile placeholder if it doesn't exist
                         userProfile.email = user.email || "";
                         userProfile.name = user.displayName || "Nexera User";
-                        const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'system';
+                        const storedTheme = nexeraGetStoredThemePreference() || userProfile.theme || 'dark';
                         userProfile.theme = storedTheme;
                         userProfile.avatarColor = userProfile.avatarColor || computeAvatarColor(user.uid || user.email || 'user');
                         userProfile.locationHistory = [];
