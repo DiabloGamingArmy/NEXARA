@@ -3571,6 +3571,7 @@ body.light-mode .category-pill.active .topic-verified-icon {
     margin-right:2.5rem;
     transition: filter 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
     user-select: none;
+    position: relative;
 }
 
 .inbox-notification-item * {
@@ -3584,6 +3585,20 @@ body.light-mode .category-pill.active .topic-verified-icon {
 
 .inbox-notification-item--content {
     justify-content: space-between;
+}
+
+.inbox-notification-type {
+    position: absolute;
+    left: -26px;
+    top: 50%;
+    transform: translateY(-50%) rotate(-90deg);
+    transform-origin: center;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    pointer-events: none;
+    white-space: nowrap;
 }
 
 .inbox-notification-actor {

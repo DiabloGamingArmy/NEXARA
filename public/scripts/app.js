@@ -9058,11 +9058,6 @@ function syncInboxContentFilters() {
         const key = btn.dataset.content;
         btn.classList.toggle('active', !!inboxContentFilters[key]);
     });
-    document.querySelectorAll('.inbox-content-section').forEach(function (section) {
-        const key = section.dataset.content;
-        const enabled = !!inboxContentFilters[key];
-        section.style.display = enabled ? 'block' : 'none';
-    });
 }
 
 function toggleInboxContentFilter(mode) {
@@ -9079,8 +9074,8 @@ function toggleInboxContentFilter(mode) {
         inboxContentFilters = { posts: true, videos: true, livestreams: true };
     }
     syncInboxContentFilters();
-    renderContentNotificationList(mode);
-    void markAllContentNotificationsRead(mode);
+    renderContentNotificationList();
+    void markAllContentNotificationsRead();
     try {
         window.localStorage?.setItem('nexera_last_inbox_mode', 'content');
         window.localStorage?.setItem('nexera_last_inbox_contentMode', inboxContentPreferred || mode);
@@ -9150,13 +9145,13 @@ async function markAllContentNotificationsRead(optionalBucket) {
     updateInboxNotificationCounts();
 }
 
-function renderContentNotificationList(mode = 'posts') {
-    const listEl = document.getElementById(`inbox-list-${mode}`);
-    const emptyEl = document.getElementById(`inbox-empty-${mode}`);
+function renderContentNotificationList() {
+    const listEl = document.getElementById('inbox-list-content');
+    const emptyEl = document.getElementById('inbox-empty-content');
     if (!listEl) return;
     listEl.innerHTML = '';
     const bucketed = contentNotifications
-        .filter(function (notif) { return getContentNotificationBucket(notif) === mode; })
+        .slice()
         .sort(function (a, b) {
             const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
             const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
@@ -9192,6 +9187,8 @@ function renderContentNotificationList(mode = 'posts') {
         const meta = formatMessageHoverTimestamp(notif.createdAt) || '';
         const title = (notif.contentTitle || '').trim();
         const thumb = (notif.contentThumbnailUrl || '').trim();
+        const bucket = getContentNotificationBucket(notif) || 'posts';
+        const bucketLabel = bucket.charAt(0).toUpperCase() + bucket.slice(1);
         const row = document.createElement('div');
         row.className = 'inbox-notification-item inbox-notification-item--content';
         const openContentTarget = function () {
@@ -9206,6 +9203,7 @@ function renderContentNotificationList(mode = 'posts') {
             }
         };
         row.innerHTML = `
+            <div class="inbox-notification-type">${escapeHtml(bucketLabel)}</div>
             <div class="inbox-notification-actor">
                 <div class="conversation-avatar-slot">${renderAvatar({
                     uid: actorId || 'actor',
@@ -9369,14 +9367,10 @@ function setInboxMode(mode = 'messages', options = {}) {
         panel.classList.toggle('active', key === inboxMode);
     });
     if (inboxMode === 'content') {
-        ['posts', 'videos', 'livestreams'].forEach(function (contentMode) {
-            renderContentNotificationList(contentMode);
-        });
+        renderContentNotificationList();
         syncInboxContentFilters();
         if (previousMode !== 'content') {
             void markAllContentNotificationsRead();
-        } else if (contentModes.includes(mode)) {
-            void markAllContentNotificationsRead(mode);
         }
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
@@ -12247,9 +12241,7 @@ function initContentNotifications(userId) {
         contentNotifications = nextNotifications;
         updateInboxNotificationCounts();
         if (inboxMode === 'content') {
-            renderContentNotificationList('posts');
-            renderContentNotificationList('videos');
-            renderContentNotificationList('livestreams');
+            renderContentNotificationList();
             syncInboxContentFilters();
         }
     };

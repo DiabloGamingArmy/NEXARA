@@ -966,19 +966,11 @@
                     <div class="inbox-content-toggles">
                         <button class="inbox-content-toggle active" data-content="posts" onclick="window.toggleInboxContentFilter('posts')">Posts</button>
                         <button class="inbox-content-toggle active" data-content="videos" onclick="window.toggleInboxContentFilter('videos')">Videos</button>
-                        <button class="inbox-content-toggle active" data-content="livestreams" onclick="window.toggleInboxContentFilter('livestreams')">Live streams</button>
+                        <button class="inbox-content-toggle active" data-content="livestreams" onclick="window.toggleInboxContentFilter('livestreams')">Livestreams</button>
                     </div>
-                    <div class="inbox-content-section" data-content="posts">
-                        <div id="inbox-list-posts" class="inbox-notification-list"></div>
-                        <div id="inbox-empty-posts" class="empty-state">No post notifications yet.</div>
-                    </div>
-                    <div class="inbox-content-section" data-content="videos">
-                        <div id="inbox-list-videos" class="inbox-notification-list"></div>
-                        <div id="inbox-empty-videos" class="empty-state">No video notifications yet.</div>
-                    </div>
-                    <div class="inbox-content-section" data-content="livestreams">
-                        <div id="inbox-list-livestreams" class="inbox-notification-list"></div>
-                        <div id="inbox-empty-livestreams" class="empty-state">No livestream notifications yet.</div>
+                    <div class="inbox-content-section" data-content="all">
+                        <div id="inbox-list-content" class="inbox-notification-list"></div>
+                        <div id="inbox-empty-content" class="empty-state">No content notifications yet.</div>
                     </div>
                 </div>
     <div id="inbox-panel-account" class="inbox-panel">
