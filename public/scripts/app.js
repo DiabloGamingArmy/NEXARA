@@ -1,9 +1,8 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, setPersistence, browserLocalPersistence, inMemoryPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { initializeFirestore, getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
+import { setPersistence, browserLocalPersistence, inMemoryPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+import { httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
 import { normalizeReplyTarget, buildReplyRecord, groupCommentsByParent } from "/scripts/commentUtils.js";
 import { buildTopBar, buildTopBarControls } from "/scripts/ui/topBar.js";
@@ -17,6 +16,12 @@ import { renderDiscoverHub } from "/scripts/ui/DiscoverHub.js";
 import { enhanceInboxLayout } from "/scripts/ui/InboxEnhancements.js";
 import { buildVideoCardElement } from "/scripts/ui/VideoCard.js";
 import { renderStoriesAndLiveBar } from "/scripts/ui/StoriesAndLiveBar.js";
+import { app, auth, db, functions, storage } from "/scripts/core/firebase.js";
+import { startTrace, stopTrace } from "/scripts/core/perf.js";
+import { createFeedRepository } from "/scripts/data/feedRepository.js";
+import { createVideoRepository } from "/scripts/data/videoRepository.js";
+import { attachPlayback, destroyPlayback, getHlsUrl, getLegacyMp4Url, getThumbnailUrl } from "/scripts/media/videoManager.js";
+import { createVirtualVideoList } from "/scripts/ui/virtualVideoList.js";
 
 window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
 window.__NEXERA_BOOT_TS = Date.now();
@@ -174,18 +179,6 @@ window.addEventListener('unhandledrejection', function (event) {
 });
 
 // --- Firebase Configuration --- 
-const firebaseConfig = {
-    apiKey: "AIzaSyDg9Duz3xicI3pvvOtLCrV1DJRWDI0NtYA",
-    authDomain: "spike-streaming-service.firebaseapp.com",
-    projectId: "spike-streaming-service",
-    storageBucket: "spike-streaming-service.firebasestorage.app",
-    messagingSenderId: "592955741032",
-    appId: "1:592955741032:web:dbd629cc957b67fc69bcdd",
-    measurementId: "G-BF3GFFY3D6"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
 window.Nexera = window.Nexera || {};
 window.Nexera.authResolved = window.Nexera.authResolved || false;
 window.Nexera.pendingIncomingCall = window.Nexera.pendingIncomingCall || null;
@@ -202,12 +195,6 @@ window.Nexera.pendingIncomingCall = window.Nexera.pendingIncomingCall || null;
         }
     }
 })();
-const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-const db = isSafari
-    ? initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false })
-    : getFirestore(app);
-const storage = getStorage(app);
-const functions = getFunctions(app);
 let messaging = null;
 let messagingSupportChecked = false;
 let messagingIsSupported = false;
@@ -385,11 +372,11 @@ let liveTagSearchDebounce = null;
 let isInitialLoad = true;
 let feedLoading = false;
 let feedHydrationPromise = null;
-const FEED_BATCH_SIZE = 5;
+const FEED_BATCH_SIZE = 10;
 const FEED_PREFETCH_OFFSET = 2;
 const FEED_PREFETCH_ROOT_MARGIN = '0px 0px 400px 0px';
 const animatedItemKeys = new Set();
-const videoDurationBackfill = new Set();
+const feedRepository = createFeedRepository({ pageSize: FEED_BATCH_SIZE });
 const feedPagination = {
     lastDoc: null,
     loading: false,
@@ -424,6 +411,7 @@ const MENTION_SUGGESTION_PAGE_SIZE = 30;
 let currentThreadComments = [];
 let liveSessionsCache = [];
 let homeVideosCache = [];
+let discoverVideosCache = [];
 let homeLiveSessionsCache = [];
 let homeMediaPromise = null;
 let homeMediaLoading = false;
@@ -1082,11 +1070,16 @@ let videosCache = [];
 let feedScrollObserver = null;
 let videosScrollObserver = null;
 const VIDEOS_BATCH_SIZE = 10;
+const videoRepository = createVideoRepository({ pageSize: VIDEOS_BATCH_SIZE });
+const discoverVideoRepository = createVideoRepository({ pageSize: 10 });
 const videosPagination = {
     lastDoc: null,
     loading: false,
     done: false
 };
+let videoVirtualList = null;
+let videoVirtualItems = [];
+let videoModalObserver = null;
 let liveSessionsUnsubscribe = null;
 let activeLiveSessionId = null;
 let activeCallSession = null;
@@ -2848,17 +2841,15 @@ async function fetchFeedBatch({ reset = false } = {}) {
     if (feedPagination.loading || feedPagination.done) return [];
     feedPagination.loading = true;
     try {
-        const postsRef = collection(db, 'posts');
-        const constraints = [orderBy('timestamp', 'desc'), limit(FEED_BATCH_SIZE)];
-        if (!reset && feedPagination.lastDoc) {
-            constraints.splice(1, 0, startAfter(feedPagination.lastDoc));
+        if (reset) {
+            feedRepository.reset();
+            feedPagination.lastDoc = null;
+            feedPagination.done = false;
         }
-        const snapshot = await getDocs(query(postsRef, ...constraints));
-        feedPagination.lastDoc = snapshot.docs[snapshot.docs.length - 1] || feedPagination.lastDoc;
-        if (snapshot.docs.length < FEED_BATCH_SIZE) {
-            feedPagination.done = true;
-        }
-        return snapshot.docs.map(function (docSnap) {
+        const { items, lastDoc, done } = await feedRepository.fetchNext({ limit: FEED_BATCH_SIZE });
+        feedPagination.lastDoc = lastDoc || feedPagination.lastDoc;
+        feedPagination.done = done;
+        return items.map(function (docSnap) {
             const data = docSnap.data();
             return normalizePostData(docSnap.id, data);
         });
@@ -2936,7 +2927,7 @@ async function loadHomeMediaData() {
 
 async function loadHomeVideos() {
     try {
-        const snapshot = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(5)));
+        const snapshot = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(10)));
         homeVideosCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
         homeVideosCache.forEach(ensureVideoStats);
     } catch (error) {
@@ -4293,6 +4284,23 @@ function syncFollowButtonsForKnownUsers() {
     });
 }
 
+function buildVideoPreviewShell({ thumbnailUrl = '', label = 'Play video', onClick = '' } = {}) {
+    const safeThumb = thumbnailUrl ? escapeHtml(thumbnailUrl) : '';
+    const thumbImg = safeThumb
+        ? `<img src="${safeThumb}" alt="Video thumbnail" loading="lazy" decoding="async" class="video-preview-img">`
+        : '';
+    const placeholder = thumbnailUrl ? '' : '<div class="video-preview-placeholder"></div>';
+    return `
+        <button class="video-preview-shell" type="button" aria-label="${escapeHtml(label)}" onclick="${onClick}">
+            <div class="video-preview-aspect">
+                ${thumbImg}
+                ${placeholder}
+                <span class="video-preview-play"><i class="ph-fill ph-play"></i></span>
+            </div>
+        </button>
+    `;
+}
+
 async function hydrateFollowingState(uid, profileData = {}) {
     if (followingUnsubscribe) {
         try { followingUnsubscribe(); } catch (err) { }
@@ -4368,9 +4376,15 @@ function getPostHTML(post, options = {}) {
         let mediaContent = '';
         if (post.mediaUrl) {
             if (post.type === 'video') {
-                mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`;
+                const thumbnailUrl = getThumbnailUrl(post);
+                mediaContent = buildVideoPreviewShell({
+                    thumbnailUrl,
+                    label: 'Play video',
+                    onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+                });
             } else {
-                mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
+                const safeUrl = escapeHtml(post.mediaUrl);
+                mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
             }
         }
 
@@ -4617,6 +4631,9 @@ async function loadMoreFeedPosts() {
         allPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
         fetchMissingProfiles(batch);
         renderFeed();
+        if (feedPagination.done && feedScrollObserver) {
+            feedScrollObserver.disconnect();
+        }
     } catch (error) {
         console.warn('Feed pagination failed', error);
     }
@@ -6422,8 +6439,17 @@ function renderThreadMainPost(postId) {
 
     let mediaContent = '';
     if (post.mediaUrl) {
-        if (post.type === 'video') mediaContent = `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`;
-        else mediaContent = `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
+        if (post.type === 'video') {
+            const thumbnailUrl = getThumbnailUrl(post);
+            mediaContent = buildVideoPreviewShell({
+                thumbnailUrl,
+                label: 'Play video',
+                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+            });
+        } else {
+            const safeUrl = escapeHtml(post.mediaUrl);
+            mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+        }
     }
 
     // UPDATE: Trust Badge Logic for Thread View to match Feed
@@ -7032,11 +7058,12 @@ async function renderDiscoverResults() {
     };
 
     const renderVideosSection = async function (onlyVideos = false, useCarousels = false) {
-        if (!videosCache.length) {
-            const snap = await getDocs(query(collection(db, 'videos'), orderBy('createdAt', 'desc')));
-            videosCache = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        if (!discoverVideosCache.length) {
+            discoverVideoRepository.reset();
+            const { items } = await discoverVideoRepository.fetchNext({ limit: 10 });
+            discoverVideosCache = items.map(function (d) { return ({ id: d.id, ...d.data() }); });
         }
-        let filteredVideos = videosCache;
+        let filteredVideos = discoverVideosCache;
         if (discoverSearchTerm) {
             filteredVideos = filteredVideos.filter(function (v) {
                 return (v.caption || '').toLowerCase().includes(discoverSearchTerm) ||
@@ -7367,13 +7394,13 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
     try {
         const tasks = [];
         if (!videosCache.some(function (video) { return video.ownerId === uid; })) {
-            tasks.push(getDocs(query(collection(db, 'videos'), where('ownerId', '==', uid), orderBy('createdAt', 'desc'), limit(12))).then(function (snap) {
+            tasks.push(getDocs(query(collection(db, 'videos'), where('ownerId', '==', uid), orderBy('createdAt', 'desc'), limit(10))).then(function (snap) {
                 const newVideos = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
                 videosCache = newVideos.concat(videosCache);
             }));
         }
         if (!liveSessionsCache.some(function (session) { return (session.hostId || session.author) === uid; })) {
-            const liveQuery = query(collection(db, 'liveStreams'), where('hostId', '==', uid), limit(12));
+            const liveQuery = query(collection(db, 'liveStreams'), where('hostId', '==', uid), limit(10));
             tasks.push(getDocs(liveQuery).then(function (snap) {
                 const additions = snap.docs.map(function (d) {
                     const data = d.data();
@@ -7452,11 +7479,28 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     let mediaContent = '';
     if (post.mediaUrl && compact) {
-        mediaContent = `<div class="profile-card-media" style="background-image:url('${post.mediaUrl}')"></div>`;
+        if (post.type === 'video') {
+            const thumbnailUrl = getThumbnailUrl(post);
+            mediaContent = buildVideoPreviewShell({
+                thumbnailUrl,
+                label: 'Play video',
+                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+            });
+        } else {
+            mediaContent = `<div class="profile-card-media"><img src="${escapeHtml(post.mediaUrl)}" alt="Post Content" loading="lazy" decoding="async"></div>`;
+        }
     } else if (post.mediaUrl) {
-        mediaContent = post.type === 'video'
-            ? `<div class="video-container" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'video')"><video src="${post.mediaUrl}" controls class="post-media"></video></div>`
-            : `<img src="${post.mediaUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${post.mediaUrl}', 'image')">`;
+        if (post.type === 'video') {
+            const thumbnailUrl = getThumbnailUrl(post);
+            mediaContent = buildVideoPreviewShell({
+                thumbnailUrl,
+                label: 'Play video',
+                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+            });
+        } else {
+            const safeUrl = escapeHtml(post.mediaUrl);
+            mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+        }
     }
 
     const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
@@ -7490,12 +7534,13 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
 }
 
 function renderProfileVideoCard(video, { compact = true } = {}) {
-    const poster = video.thumbURL || video.videoURL || '';
+    const poster = escapeHtml(getThumbnailUrl(video) || '');
     const caption = escapeHtml(video.caption || 'Untitled video');
     const views = getVideoViewCount(video);
     const minWidth = compact ? 'min-width:240px;' : '';
     return `<div class="social-card profile-collage-card" style="${minWidth}">
-        <div class="profile-video-thumb" style="background-image:url('${poster}')" onclick="window.openVideoDetail('${video.id}')">
+        <div class="profile-video-thumb" onclick="window.openVideoDetail('${video.id}')">
+            ${poster ? `<img src="${poster}" alt="Video thumbnail" loading="lazy" decoding="async">` : '<div class="video-preview-placeholder"></div>'}
             <div class="profile-video-meta">${formatCompactNumber(views)} views</div>
         </div>
         <div class="card-content" style="gap:6px;">
@@ -8216,8 +8261,63 @@ window.handleSearchInput = function (e) {
 }
 window.setSavedFilter = function (filter) { savedFilter = filter; document.querySelectorAll('.saved-pill').forEach(function (el) { if (el.textContent === filter) el.classList.add('active'); else el.classList.remove('active'); }); renderSaved(); }
 window.handleSavedSearch = function (e) { savedSearchTerm = e.target.value.toLowerCase(); renderSaved(); }
-window.openFullscreenMedia = function (url, type) { const modal = document.getElementById('media-modal'); const content = document.getElementById('media-modal-content'); if (!modal || !content) return; modal.style.display = 'flex'; if (type === 'video') content.innerHTML = `<video src="${url}" controls style="max-width:100%; max-height:90vh; border-radius:8px;" autoplay></video>`; else content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`; }
-window.closeFullscreenMedia = function () { const modal = document.getElementById('media-modal'); if (modal) modal.style.display = 'none'; const content = document.getElementById('media-modal-content'); if (content) content.innerHTML = ''; }
+window.openPostVideoModal = function (postId) {
+    const post = allPosts.find(function (entry) { return entry.id === postId; });
+    if (!post) return;
+    window.openFullscreenMedia(post, 'video');
+};
+
+window.openFullscreenMedia = function (payload, type) {
+    const modal = document.getElementById('media-modal');
+    const content = document.getElementById('media-modal-content');
+    if (!modal || !content) return;
+    modal.style.display = 'flex';
+    if (type === 'video') {
+        content.innerHTML = `
+            <div class="media-modal-player">
+                <video id="media-modal-video" controls style="max-width:100%; max-height:90vh; border-radius:8px;" playsinline></video>
+            </div>`;
+        const player = document.getElementById('media-modal-video');
+        const trace = startTrace('video_load_time');
+        const doc = typeof payload === 'object' ? payload : { mediaUrl: payload, videoURL: payload };
+        const onEndTrace = function (error) { stopTrace(trace, { error }); };
+        const stopEvents = function () {
+            player.removeEventListener('playing', onPlaying);
+            player.removeEventListener('error', onError);
+        };
+        const onPlaying = function () {
+            stopEvents();
+            onEndTrace();
+        };
+        const onError = function () {
+            stopEvents();
+            onEndTrace('playback_error');
+        };
+        if (player) {
+            player.addEventListener('playing', onPlaying);
+            player.addEventListener('error', onError);
+            attachPlayback(player, doc, { autoplay: true }).then(function (result) {
+                if (!result?.ok) {
+                    onEndTrace(result?.reason || 'unavailable');
+                }
+            });
+        }
+    } else {
+        const url = typeof payload === 'string' ? payload : payload?.mediaUrl || payload?.url || '';
+        content.innerHTML = `<img src="${url}" style="max-width:100%; max-height:90vh; border-radius:8px;">`;
+    }
+};
+
+window.closeFullscreenMedia = function () {
+    const modal = document.getElementById('media-modal');
+    if (modal) modal.style.display = 'none';
+    const content = document.getElementById('media-modal-content');
+    if (content) {
+        const player = content.querySelector('video');
+        if (player) destroyPlayback(player);
+        content.innerHTML = '';
+    }
+};
 window.addTagToSaved = async function (postId) { const tag = prompt("Enter a tag for this saved post (e.g. 'Science', 'Read Later'):"); if (!tag) return; userProfile.savedTags = userProfile.savedTags || {}; userProfile.savedTags[postId] = tag; await setDoc(doc(db, "users", currentUser.uid), { savedTags: userProfile.savedTags }, { merge: true }); renderSaved(); }
 window.setProfileFilter = function (category, uid) {
     const next = PROFILE_FILTER_OPTIONS.includes(category) ? category : 'All Results';
@@ -10755,7 +10855,7 @@ async function connectToLiveKitRoom(callSession) {
         leaveLiveKitRoom({ updateStatus: false });
     });
 
-    const tokenFn = httpsCallable(getFunctions(app, 'us-central1'), 'livekitCreateToken');
+    const tokenFn = httpsCallable(functions, 'livekitCreateToken');
     const response = await tokenFn({
         roomName: callSession.roomName,
         conversationId: callSession.conversationId,
@@ -15270,9 +15370,12 @@ window.openVideoEditModal = async function (videoId) {
     pendingVideoThumbnailBlob = null;
     pendingVideoHasCustomThumbnail = !!(video?.hasCustomThumbnail || video?.thumbURL || video?.thumbnail);
 
+    const normalizedStoragePath = video.storage?.sourcePath
+        ? video.storage.sourcePath.replace(/\/source\.mp4$/, '')
+        : (video.storagePath || `videos/${currentUser.uid}/${video.id}`);
     const videoData = {
         ...video,
-        storagePath: video.storagePath || `videos/${currentUser.uid}/${video.id}`
+        storagePath: normalizedStoragePath
     };
     setVideoUploadModalMode('edit', videoData);
     window.toggleVideoUploadModal(true);
@@ -15302,8 +15405,8 @@ window.updateVideoDetails = async function () {
     const containsSensitiveContent = getVideoToggleValue('video-sensitive-content', VIDEO_UPLOAD_DEFAULTS.containsSensitiveContent);
     const scheduledAt = parseVideoScheduleTimestamp();
     const videoId = editingVideoId;
-    let thumbURL = editingVideoData?.thumbURL || editingVideoData?.thumbnail || '';
-    let hasCustomThumbnail = !!(editingVideoData?.hasCustomThumbnail || thumbURL);
+    let customThumbPath = editingVideoData?.storage?.customThumbPath || '';
+    let hasCustomThumbnail = !!(editingVideoData?.hasCustomThumbnail || customThumbPath);
     const storagePath = editingVideoData?.storagePath || `videos/${currentUser.uid}/${videoId}`;
 
     try {
@@ -15320,9 +15423,9 @@ window.updateVideoDetails = async function () {
         }
 
         if (thumbBlob) {
-            const thumbRef = ref(storage, `${storagePath}/thumb.jpg`);
+            const thumbRef = ref(storage, `${storagePath}/custom_thumb.jpg`);
             await uploadBytes(thumbRef, thumbBlob);
-            thumbURL = await getDownloadURL(thumbRef);
+            customThumbPath = thumbRef.fullPath;
             hasCustomThumbnail = true;
         }
 
@@ -15351,8 +15454,8 @@ window.updateVideoDetails = async function () {
             notifyFollowers,
             ageRestricted,
             containsSensitiveContent,
-            thumbURL,
             hasCustomThumbnail,
+            'storage.customThumbPath': customThumbPath || null,
             updatedAt: serverTimestamp()
         });
 
@@ -15378,7 +15481,10 @@ window.updateVideoDetails = async function () {
             cached.notifyFollowers = notifyFollowers;
             cached.ageRestricted = ageRestricted;
             cached.containsSensitiveContent = containsSensitiveContent;
-            if (thumbURL) cached.thumbURL = thumbURL;
+            if (customThumbPath) {
+                cached.storage = cached.storage || {};
+                cached.storage.customThumbPath = customThumbPath;
+            }
             cached.hasCustomThumbnail = hasCustomThumbnail;
         }
 
@@ -15557,13 +15663,13 @@ async function confirmDeleteVideo(videoId) {
         confirmText: 'Delete',
         onConfirm: async function () {
             const video = getVideoById(videoId);
-            const storagePath = video?.storagePath || '';
+            const storagePath = video?.storage?.sourcePath ? video.storage.sourcePath.replace(/\/source\.mp4$/, '') : (video?.storagePath || '');
             try {
                 if (storagePath) {
                     await deleteObject(ref(storage, `${storagePath}/source.mp4`)).catch(function (err) {
                         console.warn('Video delete warning (source)', err);
                     });
-                    await deleteObject(ref(storage, `${storagePath}/thumb.jpg`)).catch(function (err) {
+                    await deleteObject(ref(storage, `${storagePath}/thumb_720.webp`)).catch(function (err) {
                         console.warn('Video delete warning (thumb)', err);
                     });
                 } else if (video?.videoURL) {
@@ -15571,8 +15677,8 @@ async function confirmDeleteVideo(videoId) {
                         console.warn('Video delete warning (source url)', err);
                     });
                 }
-                if (video?.thumbURL || video?.thumbnail) {
-                    const thumbRef = video.thumbURL || video.thumbnail;
+                if (video?.storage?.customThumbPath) {
+                    const thumbRef = video.storage.customThumbPath;
                     await deleteObject(ref(storage, thumbRef)).catch(function (err) {
                         console.warn('Video delete warning (thumb url)', err);
                     });
@@ -15672,7 +15778,10 @@ function refreshVideoFeedWithFilters(options = {}) {
     if (videoFilter === 'Trending') {
         filtered = filtered.slice().sort(function (a, b) { return (b.stats?.views || 0) - (a.stats?.views || 0); });
     } else if (videoFilter === 'Shorts') {
-        filtered = filtered.filter(function (video) { return (video.duration || 0) <= 120 || (video.lengthSeconds || 0) <= 120 || !(video.duration || video.lengthSeconds); });
+        filtered = filtered.filter(function (video) {
+            const duration = Number(video.media?.durationSeconds || video.duration || video.lengthSeconds || 0) || 0;
+            return duration <= 120 || !duration;
+        });
     } else if (videoFilter === 'Saved') {
         const savedSet = videoEngagementState.saved.size ? videoEngagementState.saved : new Set(userProfile.savedVideos || []);
         filtered = filtered.filter(function (video) { return savedSet.has(video.id); });
@@ -15690,16 +15799,15 @@ async function fetchVideosBatch({ reset = false } = {}) {
     if (videosPagination.loading || videosPagination.done) return [];
     videosPagination.loading = true;
     try {
-        const constraints = [orderBy('createdAt', 'desc'), limit(VIDEOS_BATCH_SIZE)];
-        if (!reset && videosPagination.lastDoc) {
-            constraints.splice(1, 0, startAfter(videosPagination.lastDoc));
+        if (reset) {
+            videoRepository.reset();
+            videosPagination.lastDoc = null;
+            videosPagination.done = false;
         }
-        const snap = await getDocs(query(collection(db, 'videos'), ...constraints));
-        videosPagination.lastDoc = snap.docs[snap.docs.length - 1] || videosPagination.lastDoc;
-        if (snap.docs.length < VIDEOS_BATCH_SIZE) {
-            videosPagination.done = true;
-        }
-        return snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const { items, lastDoc, done } = await videoRepository.fetchNext({ limit: VIDEOS_BATCH_SIZE });
+        videosPagination.lastDoc = lastDoc || videosPagination.lastDoc;
+        videosPagination.done = done;
+        return items.map(function (d) { return ({ id: d.id, ...d.data() }); });
     } finally {
         videosPagination.loading = false;
     }
@@ -15774,44 +15882,15 @@ function formatVideoTimestamp(ts) {
 }
 
 function formatVideoDuration(video = {}) {
-    const seconds = Number(video.duration || video.lengthSeconds || 0) || 0;
+    const seconds = Number(video.media?.durationSeconds || video.duration || video.lengthSeconds || 0) || 0;
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    if (!seconds) return '0:00';
+    if (!seconds) return '--:--';
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function backfillVideoDuration(video = {}) {
-    if (!video || !video.id) return;
-    if (Number(video.duration || 0) > 0) return;
-    if (videoDurationBackfill.has(video.id)) return;
-    const src = video.videoURL || video.url || '';
-    if (!src) return;
-    videoDurationBackfill.add(video.id);
-    const probe = document.createElement('video');
-    probe.preload = 'metadata';
-    probe.src = src;
-    probe.onloadedmetadata = function () {
-        const duration = Math.round(Number(probe.duration || 0) || 0);
-        if (duration > 0) {
-            video.duration = duration;
-            const durationEl = document.querySelector(`.video-card[data-video-id="${video.id}"] .video-duration`);
-            if (durationEl) durationEl.textContent = formatVideoDuration(video);
-            updateDoc(doc(db, 'videos', video.id), { duration }).catch(function (error) {
-                console.warn('Unable to backfill video duration', error);
-            });
-        } else {
-            videoDurationBackfill.delete(video.id);
-        }
-    };
-    probe.onerror = function () {
-        videoDurationBackfill.delete(video.id);
-    };
-    probe.load();
-}
-
 function resolveVideoThumbnail(video = {}) {
-    return video.thumbURL || video.thumbnail || video.previewImage || 'https://images.unsplash.com/photo-1516117172878-fd2c41f4a759?auto=format&fit=crop&w=1200&q=80';
+    return getThumbnailUrl(video) || 'https://images.unsplash.com/photo-1516117172878-fd2c41f4a759?auto=format&fit=crop&w=1200&q=80';
 }
 
 function getVideoViewCount(video = {}) {
@@ -15967,7 +16046,6 @@ function openVideoFromFeed(videoId, videoData) {
 function buildVideoCard(video) {
     const author = getCachedUser(video.ownerId) || { name: 'Nexera Creator', username: 'creator' };
     const canEdit = !!(currentUser?.uid && video.ownerId === currentUser.uid);
-    backfillVideoDuration(video);
     const result = buildVideoCardElement({
         video,
         author,
@@ -16013,16 +16091,36 @@ function buildVideoCard(video) {
     return result.card;
 }
 
+function ensureVideoVirtualList() {
+    const feed = document.getElementById('video-feed');
+    if (!feed || videoVirtualList) return;
+    videoVirtualList = createVirtualVideoList({
+        container: feed,
+        itemHeight: 320,
+        overscan: 3,
+        renderItem: function (video) {
+            const card = buildVideoCard(video);
+            const animateIn = shouldAnimateItem(`video:${video.id}`);
+            if (animateIn) card.classList.add('animate-in');
+            return card;
+        }
+    });
+}
+
 function renderVideoFeed(videos = []) {
     const feed = document.getElementById('video-feed');
     if (!feed) return;
-    feed.innerHTML = '';
     if (videosFeedLoading) {
+        videoVirtualList = null;
+        videoVirtualItems = [];
+        feed.innerHTML = '';
         feed.appendChild(renderVideoSkeletons());
         return;
     }
     debugVideo('feed-render', { count: videos.length });
     if (videos.length === 0) {
+        videoVirtualList = null;
+        videoVirtualItems = [];
         feed.innerHTML = `
             <div class="empty-state">
                 <div style="font-weight:700; margin-bottom:6px;">No videos match this filter.</div>
@@ -16034,14 +16132,9 @@ function renderVideoFeed(videos = []) {
             </div>`;
         return;
     }
-
-    videos.forEach(function (video) {
-        const card = buildVideoCard(video);
-        const animateIn = shouldAnimateItem(`video:${video.id}`);
-        if (animateIn) card.classList.add('animate-in');
-        feed.appendChild(card);
-    });
-
+    ensureVideoVirtualList();
+    videoVirtualItems = videos;
+    videoVirtualList.setItems(videoVirtualItems);
     insertScrollSentinel(feed, 'video-feed-sentinel', 0, { placeAfter: true });
     ensureVideoScrollObserver();
 }
@@ -16078,6 +16171,9 @@ async function loadMoreVideos() {
         });
         videosCache.forEach(ensureVideoStats);
         refreshVideoFeedWithFilters({ skipTopBar: true });
+        if (videosPagination.done && videosScrollObserver) {
+            videosScrollObserver.disconnect();
+        }
     } catch (error) {
         console.warn('Videos pagination failed', error);
     }
@@ -16284,7 +16380,8 @@ function buildInlineWatchPage(video, author, suggestions) {
         const stats = `${formatCompactNumber(getVideoViewCount(entry))} views • ${formatVideoTimestamp(entry.createdAt)}`;
         return `
             <div class="watch-suggestion">
-                <div class="watch-suggestion-thumb" style="background-image:url('${thumb}')">
+                <div class="watch-suggestion-thumb">
+                    ${thumb ? `<img src="${thumb}" alt="Video thumbnail" loading="lazy" decoding="async">` : '<div class="video-preview-placeholder"></div>'}
                     <span class="watch-suggestion-duration">${formatVideoDuration(entry)}</span>
                 </div>
                 <div class="watch-suggestion-meta">
@@ -16302,7 +16399,7 @@ function buildInlineWatchPage(video, author, suggestions) {
             <div class="watch-grid">
                 <section class="watch-primary">
                     <div class="watch-player">
-                        <video id="watch-player" playsinline preload="metadata" src="${escapeHtml(video.videoURL || '')}"></video>
+                        <video id="watch-player" playsinline preload="metadata"></video>
                         <div class="watch-player-overlay">
                             <div class="watch-timeline"></div>
                             <div class="watch-controls">
@@ -16381,6 +16478,8 @@ async function openInlineVideoWatch(video) {
     }
     const sentinel = document.getElementById('video-feed-sentinel');
     if (sentinel) sentinel.remove();
+    videoVirtualList = null;
+    videoVirtualItems = [];
     feed.innerHTML = '';
     feed.classList.add('video-watch-open');
     document.body.classList.add('video-watch-open');
@@ -16471,6 +16570,25 @@ function bindInlineWatchInteractions(video, author) {
 
     if (player && playBtn) {
         updateInlineWatchPlayState(player, playBtn);
+        const trace = startTrace('video_load_time');
+        const stopTraceOnEnd = function (error) {
+            stopTrace(trace, { error });
+            player.removeEventListener('playing', onPlaying);
+            player.removeEventListener('error', onError);
+        };
+        const onPlaying = function () {
+            stopTraceOnEnd();
+        };
+        const onError = function () {
+            stopTraceOnEnd('playback_error');
+        };
+        player.addEventListener('playing', onPlaying);
+        player.addEventListener('error', onError);
+        attachPlayback(player, video, { autoplay: true }).then(function (result) {
+            if (!result?.ok) {
+                stopTraceOnEnd(result?.reason || 'unavailable');
+            }
+        });
         playBtn.addEventListener('click', function () {
             if (player.paused) {
                 player.play().catch(function () {});
@@ -17301,9 +17419,11 @@ function closeVideoDetailModalHandler(options = {}) {
         debugVideo('close', { keepPlayback });
         const player = getVideoModalPlayer();
         if (player && !keepPlayback) {
-            player.pause();
-            player.removeAttribute('src');
-            player.load();
+            destroyPlayback(player);
+        }
+        if (videoModalObserver) {
+            videoModalObserver.disconnect();
+            videoModalObserver = null;
         }
         delete modal.dataset.videoId;
         modal.style.display = 'none';
@@ -17410,9 +17530,7 @@ function hideMiniPlayer({ stopPlayback = true } = {}) {
     if (container) container.style.display = 'none';
     if (!player) return;
     if (stopPlayback) {
-        player.pause();
-        player.removeAttribute('src');
-        player.load();
+        destroyPlayback(player);
     }
     if (stopPlayback || player.closest('#video-mini-player')) {
         moveVideoPlayerTo(getVideoModalPlayerContainer());
@@ -17604,18 +17722,31 @@ window.openVideoDetail = async function (videoId) {
         moveVideoPlayerTo(getVideoModalPlayerContainer());
     }
 
+    if (modal && !USE_INLINE_VIDEO_VIEWER) {
+        modal.style.display = 'flex';
+        document.body.classList.add('modal-open');
+    }
+
     if (player) {
+        destroyPlayback(player);
         player.preload = 'metadata';
         player.setAttribute('preload', 'metadata');
-        const videoSrc = video.videoURL || '';
-        const currentSrc = player.currentSrc || player.src || '';
-        const shouldReset = videoSrc && currentSrc !== videoSrc;
         applyVideoCaptions(player, video);
         applyVideoSettings(player);
         applyCaptionsMode(player, getStoredCaptionsMode());
-        if (shouldReset) {
-            player.src = videoSrc;
-            player.onloadedmetadata = function () {
+
+        if (videoModalObserver) {
+            videoModalObserver.disconnect();
+        }
+
+        const attachHandler = function () {
+            const trace = startTrace('video_load_time');
+            const stopTraceOnEnd = function (error) {
+                stopTrace(trace, { error });
+                player.removeEventListener('playing', onPlaying);
+                player.removeEventListener('error', onError);
+            };
+            const onPlaying = function () {
                 if (typeof videoModalResumeTime === 'number') {
                     try {
                         player.currentTime = videoModalResumeTime;
@@ -17625,25 +17756,32 @@ window.openVideoDetail = async function (videoId) {
                         videoModalResumeTime = null;
                     }
                 }
+                stopTraceOnEnd();
             };
-            player.load();
-            player.autoplay = true;
-            player.controls = false;
-            player.removeAttribute('controls');
-            player.play().catch(function () {});
-        } else if (typeof videoModalResumeTime === 'number') {
-            try {
-                player.currentTime = videoModalResumeTime;
-            } catch (err) {
-                console.warn('Unable to resume video time', err);
-            } finally {
-                videoModalResumeTime = null;
-            }
+            const onError = function () {
+                stopTraceOnEnd('playback_error');
+            };
+            player.addEventListener('playing', onPlaying);
+            player.addEventListener('error', onError);
+            attachPlayback(player, video, { autoplay: true }).then(function (result) {
+                if (!result?.ok) {
+                    stopTraceOnEnd(result?.reason || 'unavailable');
+                }
+            });
+        };
+
+        if ('IntersectionObserver' in window) {
+            videoModalObserver = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) {
+                        videoModalObserver.disconnect();
+                        attachHandler();
+                    }
+                });
+            }, { threshold: 0.2 });
+            videoModalObserver.observe(player);
         } else {
-            player.autoplay = true;
-            player.controls = false;
-            player.removeAttribute('controls');
-            player.play().catch(function () {});
+            attachHandler();
         }
     }
 
@@ -17746,7 +17884,7 @@ window.openVideoDetail = async function (videoId) {
     if (shareBtn) {
         shareBtn.onclick = function (event) {
             event.stopPropagation();
-            const shareUrl = video.videoURL || window.location.href;
+            const shareUrl = getHlsUrl(video) || getLegacyMp4Url(video) || window.location.href;
             if (navigator.share) {
                 navigator.share({ title: videoTitle, url: shareUrl }).catch(function () {});
                 return;
@@ -17762,10 +17900,6 @@ window.openVideoDetail = async function (videoId) {
     await hydrateVideoEngagement(video.id);
     updateVideoModalButtons(video.id);
 
-    if (modal && !USE_INLINE_VIDEO_VIEWER) {
-        modal.style.display = 'flex';
-        document.body.classList.add('modal-open');
-    }
 };
 
 document.addEventListener('keydown', function (event) {
@@ -17870,9 +18004,7 @@ window.uploadVideo = async function () {
             });
         });
 
-        console.info('[VideoUpload] Fetching video URL', { videoId });
-        const videoURL = await getDownloadURL(uploadTask.snapshot.ref);
-        console.info('[VideoUpload] Video URL ready', { videoId });
+        const sourcePath = `${storagePath}/source.mp4`;
         let thumbURL = '';
         let thumbBlob = null;
         let hasCustomThumbnail = false;
@@ -17890,9 +18022,9 @@ window.uploadVideo = async function () {
 
         if (thumbBlob) {
             console.info('[VideoUpload] Uploading thumbnail', { videoId });
-            const thumbRef = ref(storage, `${storagePath}/thumb.jpg`);
+            const thumbRef = ref(storage, `${storagePath}/custom_thumb.jpg`);
             await uploadBytes(thumbRef, thumbBlob);
-            thumbURL = await getDownloadURL(thumbRef);
+            thumbURL = thumbRef.fullPath;
             console.info('[VideoUpload] Thumbnail ready', { videoId });
         }
 
@@ -17905,11 +18037,17 @@ window.uploadVideo = async function () {
             description,
             tags,
             mentions,
-            duration: draftDuration || null,
+            media: { durationSeconds: draftDuration || null },
             createdAt: serverTimestamp(),
-            storagePath,
-            videoURL,
-            thumbURL,
+            storage: {
+                sourcePath,
+                customThumbPath: thumbURL || null
+            },
+            processing: {
+                status: 'PROCESSING',
+                startedAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+            },
             visibility: effectiveVisibility,
             scheduledVisibility,
             scheduledAt,
@@ -18485,7 +18623,7 @@ function deriveIngestHostname(session = {}) {
 
 class GoLiveSetupController {
     constructor() {
-        this.functions = getFunctions(app);
+        this.functions = functions;
         this.state = 'idle';
         this.session = null;
         this.stream = null;
@@ -18933,7 +19071,7 @@ class GoLiveSetupController {
 
     async initializeBackend(config) {
         if (!this.functions) {
-            this.functions = getFunctions(app);
+            this.functions = functions;
         }
         if (!auth?.currentUser) {
             console.error('[GoLive]', 'Cannot start stream without authenticated user');

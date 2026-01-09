@@ -33,7 +33,18 @@ export function buildVideoCardElement({
 
     const thumb = document.createElement('div');
     thumb.className = 'video-thumb';
-    thumb.style.backgroundImage = `url('${resolveVideoThumbnail?.(video)}')`;
+    const thumbUrl = resolveVideoThumbnail?.(video) || '';
+    if (thumbUrl) {
+        const img = document.createElement('img');
+        img.src = thumbUrl;
+        img.alt = video.title || video.caption || 'Video thumbnail';
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.className = 'video-thumb-img';
+        thumb.appendChild(img);
+    } else {
+        thumb.classList.add('video-thumb-placeholder');
+    }
 
     const duration = document.createElement('span');
     duration.className = 'video-duration';
