@@ -356,6 +356,8 @@ let inboxNotifications = [];
 let contentNotificationsUnsubscribe = null;
 let contentNotifications = [];
 let contentNotificationsLegacyFetched = false;
+let accountNotificationsUnsubscribe = null;
+let accountNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -2064,6 +2066,7 @@ function initApp(onReady) {
                         const storedInboxMode = inboxMode || 'content';
                         setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                         initContentNotifications(signedInUserId);
+                        initAccountNotifications(signedInUserId);
                         initConversations(storedInboxMode === 'messages');
                         refreshDmCallButtons();
                         if ('Notification' in window && Notification.permission === 'granted') {
@@ -2109,8 +2112,13 @@ function initApp(onReady) {
                     try { contentNotificationsUnsubscribe(); } catch (err) { }
                     contentNotificationsUnsubscribe = null;
                 }
+                if (accountNotificationsUnsubscribe) {
+                    try { accountNotificationsUnsubscribe(); } catch (err) { }
+                    accountNotificationsUnsubscribe = null;
+                }
                 inboxNotifications = [];
                 contentNotifications = [];
+                accountNotifications = [];
                 inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
                 updateInboxNavBadge();
                 followedCategories = new Set();
@@ -4034,6 +4042,27 @@ function updateFollowButtonsForUser(uid, isFollowing) {
             }
         }
     });
+}
+
+async function syncFollowButtonState(uid) {
+    if (!currentUser || !uid || currentUser.uid === uid) return;
+    try {
+        const followRef = doc(db, 'users', currentUser.uid, 'following', uid);
+        const followSnap = await getDoc(followRef);
+        const isFollowing = followSnap.exists();
+        if (isFollowing) {
+            followedUsers.add(uid);
+        } else {
+            followedUsers.delete(uid);
+        }
+        userProfile.following = Array.from(followedUsers);
+        if (currentUser?.uid && userCache[currentUser.uid]) {
+            userCache[currentUser.uid].following = userProfile.following;
+        }
+        updateFollowButtonsForUser(uid, isFollowing);
+    } catch (err) {
+        console.warn('Unable to sync follow button state', err?.message || err);
+    }
 }
 
 function updateFollowerCountCache(uid, previousState, nextState) {
@@ -7727,6 +7756,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
 
     renderProfileContent(uid, normalizedProfile, isSelfView, 'public-profile-content');
     applyProfileCover(container.querySelector('.profile-header'), normalizedProfile, isSelfView);
+    void syncFollowButtonState(uid);
 }
 
 function renderProfile() {
@@ -9025,6 +9055,120 @@ function formatNotificationEntity(entityType = '') {
     return map[normalized] || 'post';
 }
 
+function isAccountNotification(notification = {}) {
+    const type = (notification.type || '').toLowerCase();
+    const entityType = (notification.entityType || '').toLowerCase();
+    const action = (notification.actionType || notification.eventType || '').toLowerCase();
+    const accountEvent = (notification.accountEvent || notification.accountAction || '').toLowerCase();
+    if (type === 'account' || type === 'security') return true;
+    if (entityType === 'account' || entityType === 'security') return true;
+    return ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(action)
+        || ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(accountEvent);
+}
+
+function formatAccountNotificationTitle(notification = {}) {
+    const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
+    const field = (notification.accountField || notification.field || notification.entityType || '').toLowerCase();
+    if (notification.title) return notification.title;
+    if (action.includes('password') || field === 'password') return 'Password updated';
+    if (action.includes('login') || action.includes('signin') || field === 'session') return 'New login detected';
+    if (action.includes('username') || field === 'username') return 'Username updated';
+    if (action.includes('name') || field === 'name') return 'Name updated';
+    if (action.includes('email') || field === 'email') return 'Email updated';
+    if (action.includes('profile') || field === 'profile') return 'Profile updated';
+    if (action.includes('security') || field === 'security') return 'Security update';
+    return 'Account update';
+}
+
+function formatAccountNotificationBody(notification = {}) {
+    if (notification.body) return notification.body;
+    if (notification.description) return notification.description;
+    const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
+    const fromValue = notification.from || notification.previousValue || notification.oldValue;
+    const toValue = notification.to || notification.newValue || notification.value;
+    if (action.includes('username')) return `Your username was updated${toValue ? ` to @${toValue}` : ''}.`;
+    if (action.includes('name')) return `Your display name was updated${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('email')) return `Your email address was updated${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('password')) return 'Your password was updated. If this wasn’t you, reset it immediately.';
+    if (action.includes('login') || action.includes('signin')) return 'We detected a new sign-in to your account.';
+    if (fromValue || toValue) {
+        const fromText = fromValue ? ` from ${fromValue}` : '';
+        const toText = toValue ? ` to ${toValue}` : '';
+        return `Account details were updated${fromText}${toText}.`;
+    }
+    return 'We updated your account information.';
+}
+
+function formatAccountNotificationMeta(notification = {}) {
+    const timestamp = formatMessageHoverTimestamp(notification.createdAt);
+    const locationBits = [];
+    const location = notification.location || notification.loginLocation || notification.city;
+    const region = notification.region || notification.state;
+    const country = notification.country;
+    const device = notification.device || notification.userAgent;
+    if (location) locationBits.push(location);
+    if (region) locationBits.push(region);
+    if (country) locationBits.push(country);
+    const locationLabel = locationBits.filter(Boolean).join(', ');
+    const details = [];
+    if (locationLabel) details.push(locationLabel);
+    if (notification.ip) details.push(`IP ${notification.ip}`);
+    if (device) details.push(device);
+    if (timestamp) details.push(timestamp);
+    return details.join(' • ');
+}
+
+function buildAccountNotificationPayload(targetUid, payload = {}) {
+    return {
+        targetUid,
+        type: 'account',
+        entityType: 'account',
+        actionType: payload.actionType || payload.eventType || 'profile',
+        title: payload.title || '',
+        body: payload.body || '',
+        accountField: payload.accountField || '',
+        location: payload.location || '',
+        region: payload.region || '',
+        country: payload.country || '',
+        ip: payload.ip || '',
+        device: payload.device || '',
+        from: payload.from || payload.previousValue || '',
+        to: payload.to || payload.newValue || '',
+        createdAt: serverTimestamp(),
+        read: false
+    };
+}
+
+function preparePasswordChangeNotification(userId, options = {}) {
+    return buildAccountNotificationPayload(userId, {
+        actionType: 'password',
+        title: 'Password updated',
+        body: 'Your password was updated. If this wasn’t you, reset it immediately.',
+        location: options.location || '',
+        region: options.region || '',
+        country: options.country || '',
+        ip: options.ip || '',
+        device: options.device || ''
+    });
+}
+
+async function queueAccountNotification(payload = {}) {
+    if (!payload?.targetUid) return;
+    const notifRef = doc(collection(db, 'users', payload.targetUid, 'notifications'));
+    const body = {
+        ...payload,
+        type: payload.type || 'account',
+        entityType: payload.entityType || 'account',
+        createdAt: payload.createdAt || serverTimestamp(),
+        read: payload.read ?? false
+    };
+    try {
+        await setDoc(notifRef, body, { merge: true });
+    } catch (err) {
+        console.warn('Failed to queue account notification', err?.message || err);
+    }
+}
+
 function loadInboxModeFromStorage() {
     if (inboxModeRestored) return;
     inboxModeRestored = true;
@@ -9129,10 +9273,9 @@ function updateInboxNotificationCounts() {
         else if (bucket === 'videos') unreadVideos++;
         else if (bucket === 'livestreams') unreadLivestreams++;
     });
-    inboxNotifications.forEach((notif) => {
+    accountNotifications.forEach((notif) => {
         if (notifIsRead(notif)) return;
-        const bucket = getNotificationBucket(notif);
-        if (bucket === 'account') unreadAccount++;
+        if (isAccountNotification(notif)) unreadAccount++;
     });
 
     inboxNotificationCounts = {
@@ -9185,6 +9328,8 @@ function toggleInboxContentFilter(mode) {
 }
 
 window.toggleInboxContentFilter = toggleInboxContentFilter;
+window.preparePasswordChangeNotification = preparePasswordChangeNotification;
+window.queueAccountNotification = queueAccountNotification;
 
 function markNotificationRead(notif) {
     if (!currentUser || !notif || notifIsRead(notif) || !notif.id) return;
@@ -9444,6 +9589,54 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
+function renderAccountNotifications() {
+    const listEl = document.getElementById('inbox-list-account');
+    const emptyEl = document.getElementById('inbox-empty-account');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const items = accountNotifications
+        .filter(isAccountNotification)
+        .sort(function (a, b) {
+            const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+            const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+            return bTs - aTs;
+        });
+    if (!items.length) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    const fragment = document.createDocumentFragment();
+    items.slice(0, 50).forEach(function (notif) {
+        const row = document.createElement('div');
+        row.className = 'inbox-notification-item inbox-notification-item--content';
+        const title = formatAccountNotificationTitle(notif);
+        const body = formatAccountNotificationBody(notif);
+        const meta = formatAccountNotificationMeta(notif);
+        row.innerHTML = `
+            <div class="inbox-notification-actor">
+                <div class="conversation-avatar-slot">${renderAvatar({
+                    uid: 'account',
+                    username: 'account',
+                    displayName: 'Account',
+                    photoURL: '',
+                    avatarColor: 'var(--primary)'
+                }, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(title)}</strong></div>
+                    ${body ? `<div class=\"inbox-notification-meta\">${escapeHtml(body)}</div>` : ''}
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            </div>
+        `;
+        row.onclick = function () {
+            markNotificationRead(notif);
+        };
+        fragment.appendChild(row);
+    });
+    listEl.appendChild(fragment);
+}
+
 function setInboxMode(mode = 'messages', options = {}) {
     const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const contentModes = ['posts', 'videos', 'livestreams'];
@@ -9480,6 +9673,8 @@ function setInboxMode(mode = 'messages', options = {}) {
         if (previousMode !== 'content') {
             void markAllContentNotificationsRead();
         }
+    } else if (inboxMode === 'account') {
+        renderAccountNotifications();
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
@@ -12326,6 +12521,44 @@ function initInboxNotifications(userId) {
         }
     }, function (err) {
         handleSnapshotError('Inbox notifications', err);
+    });
+}
+
+function initAccountNotifications(userId) {
+    if (accountNotificationsUnsubscribe) {
+        try { accountNotificationsUnsubscribe(); } catch (err) { }
+        accountNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'account'),
+        orderBy('createdAt', 'desc'),
+        limit(100)
+    );
+    const applyAccountNotifications = function (items = []) {
+        accountNotifications = items;
+        updateInboxNotificationCounts();
+        if (inboxMode === 'account') {
+            renderAccountNotifications();
+        }
+    };
+    accountNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        const items = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        applyAccountNotifications(items);
+        if (!snap.empty) return;
+        const legacyRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
+        getDocs(legacyRef).then(function (legacySnap) {
+            if (accountNotifications.length) return;
+            const legacyItems = legacySnap.docs
+                .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+                .filter(isAccountNotification);
+            applyAccountNotifications(legacyItems);
+        }).catch(function (err) {
+            console.warn('Account notifications fallback failed', err?.message || err);
+        });
+    }, function (err) {
+        handleSnapshotError('Account notifications', err);
     });
 }
 
