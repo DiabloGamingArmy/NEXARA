@@ -3563,6 +3563,17 @@ body.light-mode .category-pill.active .topic-verified-icon {
     min-height: 0;
 }
 
+#inbox-panel-content.inbox-panel.active {
+    overflow: hidden;
+}
+
+#inbox-panel-content .inbox-content-section {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
 .inbox-notification-list {
     display: flex;
     flex-direction: column;
