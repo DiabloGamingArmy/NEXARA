@@ -9188,7 +9188,6 @@ function preparePasswordChangeNotification(userId, options = {}) {
 
 async function queueAccountNotification(payload = {}) {
     if (!payload?.targetUid) return;
-    const notifRef = doc(collection(db, 'users', payload.targetUid, 'notifications'));
     const body = {
         ...payload,
         type: payload.type || 'account',
@@ -9197,7 +9196,7 @@ async function queueAccountNotification(payload = {}) {
         read: payload.read ?? false
     };
     try {
-        await setDoc(notifRef, body, { merge: true });
+        await addDoc(collection(db, 'users', payload.targetUid, 'notifications'), body);
     } catch (err) {
         console.warn('Failed to queue account notification', err?.message || err);
     }
