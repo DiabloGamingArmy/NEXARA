@@ -5828,6 +5828,8 @@ window.saveSettings = async function () {
     const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
     const fileInput = document.getElementById('set-pic-file');
     const cameraInput = document.getElementById('set-pic-camera');
+    const previousProfile = { ...userProfile };
+    let didPersist = false;
 
     if (!username) {
         return alert("Username is required.");
@@ -5867,8 +5869,40 @@ window.saveSettings = async function () {
             }
         });
         if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
+        didPersist = true;
     } catch (e) {
         console.error("Save failed", e);
+    }
+
+    if (didPersist) {
+        const queued = new Set();
+        const pushChange = function (field, actionType, fromValue, toValue) {
+            const from = (fromValue ?? '').toString();
+            const to = (toValue ?? '').toString();
+            if (from === to) return;
+            const key = `${actionType}:${from}:${to}`;
+            if (queued.has(key)) return;
+            queued.add(key);
+            const payload = buildAccountNotificationPayload(currentUser.uid, {
+                actionType,
+                accountField: field,
+                from,
+                to
+            });
+            queueAccountNotification(payload);
+        };
+
+        pushChange('name', 'name', previousProfile.name, name);
+        pushChange('displayName', 'name', previousProfile.displayName, name);
+        pushChange('realName', 'name', previousProfile.realName, realName);
+        pushChange('nickname', 'name', previousProfile.nickname, nickname);
+        pushChange('username', 'username', previousProfile.username, username);
+        pushChange('email', 'email', previousProfile.email, email);
+        pushChange('bio', 'profile', previousProfile.bio, bio);
+        pushChange('links', 'profile', previousProfile.links, links);
+        pushChange('phone', 'profile', previousProfile.phone, phone);
+        pushChange('gender', 'profile', previousProfile.gender, gender);
+        pushChange('region', 'profile', previousProfile.region, region);
     }
 
     await persistThemePreference(theme);
