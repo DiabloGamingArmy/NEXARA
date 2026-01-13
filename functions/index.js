@@ -109,6 +109,37 @@ function buildMessagePreview(message = {}) {
   return "New message";
 }
 
+const ACCOUNT_NOTIFICATION_FIELDS = [
+  {field: "displayName", actionType: "name"},
+  {field: "name", actionType: "name"},
+  {field: "realName", actionType: "name"},
+  {field: "nickname", actionType: "name"},
+  {field: "username", actionType: "username"},
+  {field: "email", actionType: "email"},
+  {field: "bio", actionType: "profile"},
+  {field: "links", actionType: "profile"},
+  {field: "phone", actionType: "profile"},
+  {field: "gender", actionType: "profile"},
+  {field: "region", actionType: "profile"},
+];
+
+function normalizeAccountValue(value) {
+  if (value === null || value === undefined) return "";
+  return value.toString();
+}
+
+function resolveAccountNotificationPriority({field = "", actionType = ""} = {}) {
+  const action = actionType.toLowerCase();
+  const key = field.toLowerCase();
+  const high = ["password", "email", "security", "login", "signin", "session"];
+  const medium = ["username", "realname", "name", "displayname"];
+  const low = ["nickname", "bio", "region", "links", "photo", "photourl", "avatar"];
+  if (high.includes(action) || high.includes(key)) return "high";
+  if (medium.includes(action) || medium.includes(key)) return "medium";
+  if (low.includes(action) || low.includes(key)) return "low";
+  return "low";
+}
+
 function pickOtherParticipantField(participants = [], values = [], targetUid = "") {
   if (!Array.isArray(values) || !Array.isArray(participants)) return [];
   const mapped = [];
@@ -200,6 +231,40 @@ exports.onCommentDelete = onDocumentDeleted("posts/{postId}/comments/{commentId}
   const postData = postSnap.exists ? postSnap.data() : {};
   const slug = postData?.categoryId || postData?.categorySlug || postData?.category;
   await updateTrendingPopularity(slug, -1);
+});
+
+exports.onUserProfileUpdate = onDocumentUpdated("users/{userId}", async (event) => {
+  const before = event.data?.before?.data() || {};
+  const after = event.data?.after?.data() || {};
+  const userId = event.params.userId;
+  if (!userId) return;
+
+  const notifications = [];
+  const seen = new Set();
+  ACCOUNT_NOTIFICATION_FIELDS.forEach(({field, actionType}) => {
+    const beforeValue = normalizeAccountValue(before[field]);
+    const afterValue = normalizeAccountValue(after[field]);
+    if (beforeValue === afterValue) return;
+    const key = `${actionType}:${beforeValue}:${afterValue}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    notifications.push({
+      targetUid: userId,
+      type: "account",
+      entityType: "account",
+      actionType,
+      accountField: field,
+      priority: resolveAccountNotificationPriority({field, actionType}),
+      from: beforeValue,
+      to: afterValue,
+      createdAt: FieldValue.serverTimestamp(),
+      read: false,
+    });
+  });
+
+  if (!notifications.length) return;
+  const notifRef = db.collection("users").doc(userId).collection("notifications");
+  await Promise.all(notifications.map((notif) => notifRef.add(notif)));
 });
 
 exports.onPostReaction = onDocumentUpdated("posts/{postId}", async (event) => {

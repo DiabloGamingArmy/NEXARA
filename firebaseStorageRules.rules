@@ -50,6 +50,13 @@ service firebase.storage {
         && request.auth.uid in get(/databases/{database}/documents/conversations/$(cid)).data.participants;
     }
 
+    match /comment_media/{uid}/{fileName} {
+      allow read: if true;
+      allow write: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.size < 25 * 1024 * 1024;
+    }
+
     // Default deny
     match /{allPaths=**} {
       allow read, write: if false;
