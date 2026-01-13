@@ -1523,6 +1523,8 @@ const FEED_TYPE_TOGGLES = [
 
 let sidebarCollapsed = false;
 let desktopSidebarOpen = false;
+let desktopSidebarFocusTrap = null;
+let desktopSidebarFocusReturn = null;
 let quickActionBarTimer = null;
 
 function getFeedTypeToggleSlot() {
@@ -1639,17 +1641,10 @@ function syncFeedTypeToggleState() {
 
 function applyDesktopSidebarState(collapsed, persist = true) {
     sidebarCollapsed = !!collapsed;
-    if (!isMobileViewport()) {
-        document.body.classList.remove('sidebar-collapsed');
-        document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
-            sidebar.classList.remove('collapsed');
-        });
-    } else {
-        document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
-        document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
-            sidebar.classList.toggle('collapsed', sidebarCollapsed);
-        });
-    }
+    document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1659,24 +1654,86 @@ function setSidebarOverlayOpen(open) {
     document.body.classList.toggle('sidebar-overlay-open', !!open);
 }
 
+function releaseDesktopSidebarFocusTrap() {
+    if (desktopSidebarFocusTrap) {
+        document.removeEventListener('keydown', desktopSidebarFocusTrap);
+        desktopSidebarFocusTrap = null;
+    }
+    if (desktopSidebarFocusReturn && typeof desktopSidebarFocusReturn.focus === 'function') {
+        desktopSidebarFocusReturn.focus();
+    }
+    desktopSidebarFocusReturn = null;
+}
+
+function activateDesktopSidebarFocusTrap(sidebar) {
+    if (!sidebar) return;
+    const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex=\"-1\"])';
+    const focusable = Array.from(sidebar.querySelectorAll(focusableSelector)).filter(function (el) {
+        return !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden');
+    });
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    desktopSidebarFocusReturn = document.activeElement;
+    if (first) first.focus();
+    desktopSidebarFocusTrap = function (event) {
+        if (event.key !== 'Tab') return;
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
+    document.addEventListener('keydown', desktopSidebarFocusTrap);
+}
+
 function setDesktopSidebarOpen(open) {
     desktopSidebarOpen = !!open;
     document.body.classList.toggle('desktop-sidebar-open', desktopSidebarOpen);
+    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+        sidebar.classList.toggle('sidebar-overlay', desktopSidebarOpen);
+    });
     const backdrop = document.getElementById('desktop-sidebar-backdrop');
     if (backdrop) {
         backdrop.classList.toggle('is-visible', desktopSidebarOpen);
     }
     if (desktopSidebarOpen) {
         hideQuickActionBar();
+        const sidebar = document.querySelector('.sidebar-left');
+        if (sidebar) {
+            sidebar.setAttribute('aria-hidden', 'false');
+            activateDesktopSidebarFocusTrap(sidebar);
+        }
+    } else {
+        const sidebar = document.querySelector('.sidebar-left');
+        if (sidebar) sidebar.setAttribute('aria-hidden', 'true');
+        releaseDesktopSidebarFocusTrap();
     }
 }
 
 function initSidebarState() {
+    let stored = null;
     if (window.localStorage) {
-        sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+        stored = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+        sidebarCollapsed = stored === '1';
     }
-    applyDesktopSidebarState(sidebarCollapsed, false);
-    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
+    if (isDesktopViewport()) {
+        applyDesktopSidebarState(true, false);
+        if (stored !== null) {
+            applyDesktopSidebarState(stored === '1', false);
+        } else if (window.localStorage) {
+            window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '1');
+        }
+    } else {
+        applyDesktopSidebarState(sidebarCollapsed, false);
+    }
+    if (isDesktopViewport()) {
+        document.body.classList.add('has-desktop-app-bar');
+    } else {
+        document.body.classList.remove('has-desktop-app-bar');
+    }
     setDesktopSidebarOpen(false);
 }
 
