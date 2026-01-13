@@ -356,6 +356,8 @@ let inboxNotifications = [];
 let contentNotificationsUnsubscribe = null;
 let contentNotifications = [];
 let contentNotificationsLegacyFetched = false;
+let accountNotificationsUnsubscribe = null;
+let accountNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -392,6 +394,8 @@ let recentLocations = [];
 let categoryVisibleCount = 10;
 let commentRootDisplayCount = {};
 let replyExpansionState = {};
+let lastCommentSendAt = 0;
+let lastCommentSignature = '';
 let currentEditPost = null;
 let goLiveController = null;
 let tagSuggestionPool = [];
@@ -2064,6 +2068,7 @@ function initApp(onReady) {
                         const storedInboxMode = inboxMode || 'content';
                         setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                         initContentNotifications(signedInUserId);
+                        initAccountNotifications(signedInUserId);
                         initConversations(storedInboxMode === 'messages');
                         refreshDmCallButtons();
                         if ('Notification' in window && Notification.permission === 'granted') {
@@ -2109,8 +2114,13 @@ function initApp(onReady) {
                     try { contentNotificationsUnsubscribe(); } catch (err) { }
                     contentNotificationsUnsubscribe = null;
                 }
+                if (accountNotificationsUnsubscribe) {
+                    try { accountNotificationsUnsubscribe(); } catch (err) { }
+                    accountNotificationsUnsubscribe = null;
+                }
                 inboxNotifications = [];
                 contentNotifications = [];
+                accountNotifications = [];
                 inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
                 updateInboxNavBadge();
                 followedCategories = new Set();
@@ -4036,6 +4046,27 @@ function updateFollowButtonsForUser(uid, isFollowing) {
     });
 }
 
+async function syncFollowButtonState(uid) {
+    if (!currentUser || !uid || currentUser.uid === uid) return;
+    try {
+        const followRef = doc(db, 'users', currentUser.uid, 'following', uid);
+        const followSnap = await getDoc(followRef);
+        const isFollowing = followSnap.exists();
+        if (isFollowing) {
+            followedUsers.add(uid);
+        } else {
+            followedUsers.delete(uid);
+        }
+        userProfile.following = Array.from(followedUsers);
+        if (currentUser?.uid && userCache[currentUser.uid]) {
+            userCache[currentUser.uid].following = userProfile.following;
+        }
+        updateFollowButtonsForUser(uid, isFollowing);
+    } catch (err) {
+        console.warn('Unable to sync follow button state', err?.message || err);
+    }
+}
+
 function updateFollowerCountCache(uid, previousState, nextState) {
     if (previousState === nextState) return;
     const delta = nextState ? 1 : -1;
@@ -4387,6 +4418,12 @@ function getPostHTML(post, options = {}) {
                 mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
             }
         }
+        if (mediaContent) {
+            mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+                ${mediaContent}
+                <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+            </div>`;
+        }
 
         let commentPreviewHtml = '';
         if (post.previewComment) {
@@ -4602,7 +4639,10 @@ function renderFeed(targetId = 'feed-content') {
 
 function ensureFeedScrollObserver() {
     const sentinel = document.getElementById('feed-scroll-sentinel');
-    if (!sentinel || feedPagination.done) return;
+    if (!sentinel || feedPagination.done) {
+        if (feedScrollObserver) feedScrollObserver.disconnect();
+        return;
+    }
     if (feedScrollObserver) {
         feedScrollObserver.disconnect();
     }
@@ -4766,6 +4806,31 @@ window.toggleLike = async function (postId, event) {
         loadFeedData();
     }
 }
+
+function triggerPostLikeBurst(postId) {
+    const shell = document.querySelector(`.post-media-shell[data-post-id="${postId}"]`);
+    if (!shell) return;
+    const burst = shell.querySelector('.post-like-burst');
+    if (!burst) return;
+    burst.classList.remove('is-active');
+    void burst.offsetWidth;
+    burst.classList.add('is-active');
+    setTimeout(function () {
+        burst.classList.remove('is-active');
+    }, 700);
+}
+
+window.handlePostDoubleTap = function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!postId) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post || (currentUser && post.likedBy && post.likedBy.includes(currentUser.uid))) {
+        triggerPostLikeBurst(postId);
+        return;
+    }
+    window.toggleLike(postId);
+    triggerPostLikeBurst(postId);
+};
 
 window.toggleSave = async function (postId, event) {
     if (event) event.stopPropagation();
@@ -5799,6 +5864,8 @@ window.saveSettings = async function () {
     const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
     const fileInput = document.getElementById('set-pic-file');
     const cameraInput = document.getElementById('set-pic-camera');
+    const previousProfile = { ...userProfile };
+    let didPersist = false;
 
     if (!username) {
         return alert("Username is required.");
@@ -5838,8 +5905,40 @@ window.saveSettings = async function () {
             }
         });
         if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
+        didPersist = true;
     } catch (e) {
         console.error("Save failed", e);
+    }
+
+    if (didPersist) {
+        const queued = new Set();
+        const pushChange = function (field, actionType, fromValue, toValue) {
+            const from = (fromValue ?? '').toString();
+            const to = (toValue ?? '').toString();
+            if (from === to) return;
+            const key = `${actionType}:${from}:${to}`;
+            if (queued.has(key)) return;
+            queued.add(key);
+            const payload = buildAccountNotificationPayload(currentUser.uid, {
+                actionType,
+                accountField: field,
+                from,
+                to
+            });
+            queueAccountNotification(payload);
+        };
+
+        pushChange('name', 'name', previousProfile.name, name);
+        pushChange('displayName', 'name', previousProfile.displayName, name);
+        pushChange('realName', 'name', previousProfile.realName, realName);
+        pushChange('nickname', 'name', previousProfile.nickname, nickname);
+        pushChange('username', 'username', previousProfile.username, username);
+        pushChange('email', 'email', previousProfile.email, email);
+        pushChange('bio', 'profile', previousProfile.bio, bio);
+        pushChange('links', 'profile', previousProfile.links, links);
+        pushChange('phone', 'profile', previousProfile.phone, phone);
+        pushChange('gender', 'profile', previousProfile.gender, gender);
+        pushChange('region', 'profile', previousProfile.region, region);
     }
 
     await persistThemePreference(theme);
@@ -6451,6 +6550,12 @@ function renderThreadMainPost(postId) {
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
+    if (mediaContent) {
+        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+            ${mediaContent}
+            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+        </div>`;
+    }
 
     // UPDATE: Trust Badge Logic for Thread View to match Feed
     let trustBadge = "";
@@ -6514,15 +6619,27 @@ window.sendComment = async function () {
     if (!text && !fileInput.files[0]) return;
 
     const btn = document.getElementById('thread-send-btn');
+    const signature = `${text}::${fileInput.files[0]?.name || ''}`;
+    const now = Date.now();
+    if (signature === lastCommentSignature && now - lastCommentSendAt < 1500) return;
+    lastCommentSignature = signature;
+    lastCommentSendAt = now;
     btn.disabled = true;
     btn.textContent = "...";
+    btn.setAttribute('aria-busy', 'true');
+    btn.classList.add('comment-send-busy');
 
     let optimisticId = null;
     try {
         let mediaUrl = null;
         if (fileInput.files[0]) {
-            const path = `comments/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
-            mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            const path = `comment_media/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
+            try {
+                mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            } catch (err) {
+                alert('Unable to upload the image. Please try again.');
+                return;
+            }
         }
 
         const parentCommentId = normalizeReplyTarget(activeReplyId);
@@ -6554,10 +6671,6 @@ window.sendComment = async function () {
                 likes: 0
             }
         });
-        resetInputBox();
-        document.getElementById('attach-btn-text').textContent = "📎 Attach";
-        document.getElementById('attach-btn-text').style.color = "var(--text-muted)";
-        fileInput.value = "";
     } catch (e) {
         console.error(e);
         optimisticThreadComments = optimisticThreadComments.filter(function (c) { return c.id !== optimisticId; });
@@ -6565,6 +6678,9 @@ window.sendComment = async function () {
     } finally {
         btn.disabled = false;
         btn.textContent = "Reply";
+        btn.removeAttribute('aria-busy');
+        btn.classList.remove('comment-send-busy');
+        resetInputBox();
         const defaultSlot = document.getElementById('thread-input-default-slot');
         const inputArea = document.getElementById('thread-input-area');
         if (defaultSlot && inputArea && !defaultSlot.contains(inputArea)) {
@@ -7502,6 +7618,12 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
+    if (mediaContent) {
+        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+            ${mediaContent}
+            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+        </div>`;
+    }
 
     const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
     const bodyPreview = compact
@@ -7727,6 +7849,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
 
     renderProfileContent(uid, normalizedProfile, isSelfView, 'public-profile-content');
     applyProfileCover(container.querySelector('.profile-header'), normalizedProfile, isSelfView);
+    void syncFollowButtonState(uid);
 }
 
 function renderProfile() {
@@ -8325,9 +8448,66 @@ window.setProfileFilter = function (category, uid) {
     if (uid === 'me') renderProfile(); else renderPublicProfile(uid);
 }
 window.moveInputToComment = function (commentId, authorName) { activeReplyId = commentId; const slot = document.getElementById(`reply-slot-${commentId}`); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (slot && inputArea) { slot.appendChild(inputArea); input.placeholder = `Replying to ${authorName}...`; if (cancelBtn) cancelBtn.style.display = 'inline-block'; input.focus(); } }
-window.resetInputBox = function () { activeReplyId = null; const defaultSlot = document.getElementById('thread-input-default-slot'); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (defaultSlot && inputArea) { defaultSlot.appendChild(inputArea); input.placeholder = "Post your reply"; input.value = ""; if (cancelBtn) cancelBtn.style.display = 'none'; } }
+window.resetInputBox = function () {
+    activeReplyId = null;
+    const defaultSlot = document.getElementById('thread-input-default-slot');
+    const inputArea = document.getElementById('thread-input-area');
+    const input = document.getElementById('thread-input');
+    const cancelBtn = document.getElementById('thread-cancel-btn');
+    if (defaultSlot && inputArea) {
+        defaultSlot.appendChild(inputArea);
+        input.placeholder = "Post your reply";
+        input.value = "";
+        if (cancelBtn) cancelBtn.style.display = 'none';
+    }
+    clearCommentAttachment();
+};
 window.triggerFileSelect = function () { document.getElementById('thread-file').click(); }
-window.handleFileSelect = function (input) { const btn = document.getElementById('attach-btn-text'); if (input.files && input.files[0]) { btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "..."; btn.style.color = "var(--primary)"; } else { btn.innerHTML = `<i class="ph ph-paperclip"></i> Attach`; btn.style.color = "var(--text-muted)"; } }
+function updateCommentAttachmentPreview(file) {
+    const preview = document.getElementById('thread-image-preview');
+    if (!preview) return;
+    if (!file) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        preview.innerHTML = `
+            <div class="comment-image-preview__inner">
+                <img src="${e.target.result}" alt="Selected comment image preview">
+                <button type="button" class="comment-image-preview__remove" onclick="window.clearCommentAttachment()"><i class="ph ph-x"></i></button>
+            </div>`;
+        preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+window.clearCommentAttachment = function () {
+    const input = document.getElementById('thread-file');
+    const preview = document.getElementById('thread-image-preview');
+    if (input) input.value = '';
+    if (preview) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+    }
+    const btn = document.getElementById('attach-btn-text');
+    if (btn) {
+        btn.textContent = "📎 Attach";
+        btn.style.color = "var(--text-muted)";
+    }
+};
+window.handleFileSelect = function (input) {
+    const btn = document.getElementById('attach-btn-text');
+    if (input.files && input.files[0]) {
+        if (btn) {
+            btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "...";
+            btn.style.color = "var(--primary)";
+        }
+        updateCommentAttachmentPreview(input.files[0]);
+    } else {
+        window.clearCommentAttachment();
+    }
+}
 window.previewPostImage = function (input) { if (input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function (e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
 window.clearPostImage = function () { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
 window.togglePostOption = function (type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type);['poll', 'gif', 'schedule', 'location'].forEach(function (t) { if (t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
@@ -9025,6 +9205,119 @@ function formatNotificationEntity(entityType = '') {
     return map[normalized] || 'post';
 }
 
+function isAccountNotification(notification = {}) {
+    const type = (notification.type || '').toLowerCase();
+    const entityType = (notification.entityType || '').toLowerCase();
+    const action = (notification.actionType || notification.eventType || '').toLowerCase();
+    const accountEvent = (notification.accountEvent || notification.accountAction || '').toLowerCase();
+    if (type === 'account' || type === 'security') return true;
+    if (entityType === 'account' || entityType === 'security') return true;
+    return ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(action)
+        || ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(accountEvent);
+}
+
+function formatAccountNotificationTitle(notification = {}) {
+    const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
+    const field = (notification.accountField || notification.field || notification.entityType || '').toLowerCase();
+    if (notification.title) return notification.title;
+    if (action.includes('password') || field === 'password') return 'Password updated';
+    if (action.includes('login') || action.includes('signin') || field === 'session') return 'New login detected';
+    if (action.includes('username') || field === 'username') return 'Username updated';
+    if (action.includes('name') || field === 'name') return 'Name updated';
+    if (action.includes('email') || field === 'email') return 'Email updated';
+    if (action.includes('profile') || field === 'profile') return 'Profile updated';
+    if (action.includes('security') || field === 'security') return 'Security update';
+    return 'Account update';
+}
+
+function formatAccountNotificationBody(notification = {}) {
+    if (notification.body) return notification.body;
+    if (notification.description) return notification.description;
+    const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
+    const fromValue = notification.from || notification.previousValue || notification.oldValue;
+    const toValue = notification.to || notification.newValue || notification.value;
+    if (action.includes('username')) return `Your username was updated${toValue ? ` to @${toValue}` : ''}.`;
+    if (action.includes('name')) return `Your display name was updated${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('email')) return `Your email address was updated${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('password')) return 'Your password was updated. If this wasn’t you, reset it immediately.';
+    if (action.includes('login') || action.includes('signin')) return 'We detected a new sign-in to your account.';
+    if (fromValue || toValue) {
+        const fromText = fromValue ? ` from ${fromValue}` : '';
+        const toText = toValue ? ` to ${toValue}` : '';
+        return `Account details were updated${fromText}${toText}.`;
+    }
+    return 'We updated your account information.';
+}
+
+function formatAccountNotificationMeta(notification = {}) {
+    const timestamp = formatMessageHoverTimestamp(notification.createdAt);
+    const locationBits = [];
+    const location = notification.location || notification.loginLocation || notification.city;
+    const region = notification.region || notification.state;
+    const country = notification.country;
+    const device = notification.device || notification.userAgent;
+    if (location) locationBits.push(location);
+    if (region) locationBits.push(region);
+    if (country) locationBits.push(country);
+    const locationLabel = locationBits.filter(Boolean).join(', ');
+    const details = [];
+    if (locationLabel) details.push(locationLabel);
+    if (notification.ip) details.push(`IP ${notification.ip}`);
+    if (device) details.push(device);
+    if (timestamp) details.push(timestamp);
+    return details.join(' • ');
+}
+
+function buildAccountNotificationPayload(targetUid, payload = {}) {
+    return {
+        targetUid,
+        type: 'account',
+        entityType: 'account',
+        actionType: payload.actionType || payload.eventType || 'profile',
+        title: payload.title || '',
+        body: payload.body || '',
+        accountField: payload.accountField || '',
+        location: payload.location || '',
+        region: payload.region || '',
+        country: payload.country || '',
+        ip: payload.ip || '',
+        device: payload.device || '',
+        from: payload.from || payload.previousValue || '',
+        to: payload.to || payload.newValue || '',
+        createdAt: serverTimestamp(),
+        read: false
+    };
+}
+
+function preparePasswordChangeNotification(userId, options = {}) {
+    return buildAccountNotificationPayload(userId, {
+        actionType: 'password',
+        title: 'Password updated',
+        body: 'Your password was updated. If this wasn’t you, reset it immediately.',
+        location: options.location || '',
+        region: options.region || '',
+        country: options.country || '',
+        ip: options.ip || '',
+        device: options.device || ''
+    });
+}
+
+async function queueAccountNotification(payload = {}) {
+    if (!payload?.targetUid) return;
+    const body = {
+        ...payload,
+        type: payload.type || 'account',
+        entityType: payload.entityType || 'account',
+        createdAt: payload.createdAt || serverTimestamp(),
+        read: payload.read ?? false
+    };
+    try {
+        await addDoc(collection(db, 'users', payload.targetUid, 'notifications'), body);
+    } catch (err) {
+        console.warn('Failed to queue account notification', err?.message || err);
+    }
+}
+
 function loadInboxModeFromStorage() {
     if (inboxModeRestored) return;
     inboxModeRestored = true;
@@ -9129,10 +9422,9 @@ function updateInboxNotificationCounts() {
         else if (bucket === 'videos') unreadVideos++;
         else if (bucket === 'livestreams') unreadLivestreams++;
     });
-    inboxNotifications.forEach((notif) => {
+    accountNotifications.forEach((notif) => {
         if (notifIsRead(notif)) return;
-        const bucket = getNotificationBucket(notif);
-        if (bucket === 'account') unreadAccount++;
+        if (isAccountNotification(notif)) unreadAccount++;
     });
 
     inboxNotificationCounts = {
@@ -9185,6 +9477,8 @@ function toggleInboxContentFilter(mode) {
 }
 
 window.toggleInboxContentFilter = toggleInboxContentFilter;
+window.preparePasswordChangeNotification = preparePasswordChangeNotification;
+window.queueAccountNotification = queueAccountNotification;
 
 function markNotificationRead(notif) {
     if (!currentUser || !notif || notifIsRead(notif) || !notif.id) return;
@@ -9240,6 +9534,39 @@ async function markAllContentNotificationsRead(optionalBucket) {
             await batch.commit();
         } catch (err) {
             console.warn('Failed to mark content notifications read', err?.message || err);
+        }
+    }
+    updateInboxNotificationCounts();
+}
+
+async function markAllAccountNotificationsRead() {
+    if (!currentUser) return;
+    const pending = accountNotifications.filter(function (notif) {
+        if (!notif || !notif.id || notifIsRead(notif)) return false;
+        return true;
+    });
+    if (!pending.length) return;
+    pending.forEach(function (notif) {
+        notif.read = true;
+        notif.isRead = true;
+        notif.readAt = new Date();
+    });
+    updateInboxNotificationCounts();
+    const updates = pending.slice();
+    for (let i = 0; i < updates.length; i += 450) {
+        const batch = writeBatch(db);
+        updates.slice(i, i + 450).forEach(function (notif) {
+            const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
+            batch.update(notifRef, {
+                read: true,
+                isRead: true,
+                readAt: serverTimestamp()
+            });
+        });
+        try {
+            await batch.commit();
+        } catch (err) {
+            console.warn('Failed to mark account notifications read', err?.message || err);
         }
     }
     updateInboxNotificationCounts();
@@ -9444,6 +9771,57 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
+function renderAccountNotifications() {
+    const listEl = document.getElementById('inbox-list-account');
+    const emptyEl = document.getElementById('inbox-empty-account');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const items = accountNotifications
+        .filter(isAccountNotification)
+        .sort(function (a, b) {
+            const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+            const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+            return bTs - aTs;
+        });
+    if (!items.length) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    const fragment = document.createDocumentFragment();
+    items.slice(0, 50).forEach(function (notif) {
+        const row = document.createElement('div');
+        row.className = 'inbox-notification-item inbox-notification-item--content';
+        const title = formatAccountNotificationTitle(notif);
+        const body = formatAccountNotificationBody(notif);
+        const meta = formatAccountNotificationMeta(notif);
+        const displayName = userProfile?.name || userProfile?.displayName || currentUser?.displayName || 'Account';
+        const photoURL = currentUser?.photoURL || userProfile?.photoURL || '';
+        const avatarData = {
+            uid: currentUser?.uid || 'account',
+            username: displayName,
+            displayName: displayName,
+            photoURL: photoURL,
+            avatarColor: computeAvatarColor(displayName)
+        };
+        row.innerHTML = `
+            <div class="inbox-notification-actor">
+                <div class="conversation-avatar-slot">${renderAvatar(avatarData, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(title)}</strong></div>
+                    ${body ? `<div class=\"inbox-notification-meta\">${escapeHtml(body)}</div>` : ''}
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            </div>
+        `;
+        row.onclick = function () {
+            markNotificationRead(notif);
+        };
+        fragment.appendChild(row);
+    });
+    listEl.appendChild(fragment);
+}
+
 function setInboxMode(mode = 'messages', options = {}) {
     const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const contentModes = ['posts', 'videos', 'livestreams'];
@@ -9477,8 +9855,11 @@ function setInboxMode(mode = 'messages', options = {}) {
     if (inboxMode === 'content') {
         renderContentNotificationList();
         syncInboxContentFilters();
-        if (previousMode !== 'content') {
-            void markAllContentNotificationsRead();
+        void markAllContentNotificationsRead();
+    } else if (inboxMode === 'account') {
+        renderAccountNotifications();
+        if (previousMode !== 'account') {
+            void markAllAccountNotificationsRead();
         }
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
@@ -12329,6 +12710,44 @@ function initInboxNotifications(userId) {
     });
 }
 
+function initAccountNotifications(userId) {
+    if (accountNotificationsUnsubscribe) {
+        try { accountNotificationsUnsubscribe(); } catch (err) { }
+        accountNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'account'),
+        orderBy('createdAt', 'desc'),
+        limit(100)
+    );
+    const applyAccountNotifications = function (items = []) {
+        accountNotifications = items;
+        updateInboxNotificationCounts();
+        if (inboxMode === 'account') {
+            renderAccountNotifications();
+        }
+    };
+    accountNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        const items = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        applyAccountNotifications(items);
+        if (!snap.empty) return;
+        const legacyRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
+        getDocs(legacyRef).then(function (legacySnap) {
+            if (accountNotifications.length) return;
+            const legacyItems = legacySnap.docs
+                .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+                .filter(isAccountNotification);
+            applyAccountNotifications(legacyItems);
+        }).catch(function (err) {
+            console.warn('Account notifications fallback failed', err?.message || err);
+        });
+    }, function (err) {
+        handleSnapshotError('Account notifications', err);
+    });
+}
+
 function initContentNotifications(userId) {
     if (contentNotificationsUnsubscribe) {
         try { contentNotificationsUnsubscribe(); } catch (err) { }
@@ -14298,6 +14717,7 @@ window.markConversationAsRead = async function (conversationId = activeConversat
     } catch (e) {
         console.warn('Unable to update mapping unread', e);
     }
+    updateInboxNotificationCounts();
 };
 
 function updateChatStartControls() {
@@ -16142,7 +16562,10 @@ function renderVideoFeed(videos = []) {
 function ensureVideoScrollObserver() {
     if (isInlineWatchOpen()) return;
     const sentinel = document.getElementById('video-feed-sentinel');
-    if (!sentinel || videosPagination.done) return;
+    if (!sentinel || videosPagination.done) {
+        if (videosScrollObserver) videosScrollObserver.disconnect();
+        return;
+    }
     if (videosScrollObserver) {
         videosScrollObserver.disconnect();
     }

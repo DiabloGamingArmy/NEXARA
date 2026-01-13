@@ -1244,6 +1244,96 @@ body.sidebar-overlay-open .sidebar-backdrop {
     margin-right: auto;
 }
 
+.post-media-shell {
+    position: relative;
+}
+
+.post-like-burst {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 4rem;
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.6);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    text-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+}
+
+.post-like-burst.is-active {
+    animation: post-like-burst 0.7s ease forwards;
+}
+
+@keyframes post-like-burst {
+    0% { opacity: 0; transform: scale(0.6); }
+    30% { opacity: 1; transform: scale(1.1); }
+    100% { opacity: 0; transform: scale(1.4); }
+}
+
+.comment-image-preview {
+    margin: 8px 0;
+}
+
+.comment-image-preview__inner {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    background: var(--bg-card);
+}
+
+.comment-image-preview__inner img {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    display: block;
+}
+
+.comment-image-preview__remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.comment-send-busy {
+    position: relative;
+    padding-right: 30px;
+}
+
+.comment-send-busy::after {
+    content: '';
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    border-top-color: #fff;
+    transform: translateY(-50%);
+    animation: comment-send-spin 0.8s linear infinite;
+}
+
+@keyframes comment-send-spin {
+    to { transform: translateY(-50%) rotate(360deg); }
+}
+
 /* Ensure video container also respects centering */
 .video-container {
     width: 100%;
@@ -3561,6 +3651,17 @@ body.light-mode .category-pill.active .topic-verified-icon {
     flex-direction: column;
     height: calc(100vh - var(--inbox-tabs-h, 0px));
     min-height: 0;
+}
+
+#inbox-panel-content.inbox-panel.active {
+    overflow: hidden;
+}
+
+#inbox-panel-content .inbox-content-section {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 6px;
 }
 
 .inbox-notification-list {
