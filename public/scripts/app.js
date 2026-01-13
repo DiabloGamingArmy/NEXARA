@@ -270,7 +270,7 @@ const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
 const USE_CUSTOM_VIDEO_VIEWER = true;
-const USE_INLINE_VIDEO_WATCH = false;
+const USE_INLINE_VIDEO_WATCH = true;
 const USE_INLINE_VIDEO_VIEWER = true;
 const VIDEO_DEBUG = window.__NEXERA_DEBUG_VIDEO === true || window.__NEXERA_DEBUG_VIDEOS === true;
 let currentProfileFilter = 'All Results';
@@ -4091,7 +4091,11 @@ function updateFollowButtonsForUser(uid, isFollowing) {
     const btns = document.querySelectorAll(`.js-follow-user-${uid}`);
     btns.forEach(function (btn) {
         if (isFollowing) {
-            btn.innerHTML = 'Following';
+            if (btn.classList.contains('watch-join-btn')) {
+                btn.textContent = 'Following';
+            } else {
+                btn.innerHTML = 'Following';
+            }
             btn.classList.add('following');
 
             btn.style.background = 'transparent';
@@ -4105,7 +4109,11 @@ function updateFollowButtonsForUser(uid, isFollowing) {
                 btn.style.borderColor = "var(--primary)";
             }
         } else {
-            btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
+            if (btn.classList.contains('watch-join-btn')) {
+                btn.textContent = 'Follow';
+            } else {
+                btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
+            }
             btn.classList.remove('following');
 
             btn.style.background = 'rgba(255,255,255,0.1)';
@@ -16656,6 +16664,10 @@ function buildVideoCard(video) {
                 openVideoFromFeed(video.id, video);
                 return;
             }
+            if (USE_INLINE_VIDEO_WATCH) {
+                openInlineVideoWatch(video);
+                return;
+            }
             window.openVideoDetail(video.id);
         },
         onOpenProfile: function (uid, event) {
@@ -16955,25 +16967,254 @@ function initVideoViewerLayout() {
 // Inline watch helpers are grouped to avoid duplicate function declarations in module scope.
 const InlineWatchHelpers = {
     getInlineWatchSuggestions(videoId, limit = 8) {
-        return videosCache.filter(function (video) { return video.id !== videoId; }).slice(0, limit);
+        const pool = videosCache.filter(function (video) { return video.id !== videoId; });
+        const ranked = pool.slice().sort(function (a, b) {
+            return (b.stats?.views || 0) - (a.stats?.views || 0);
+        });
+        const pickFrom = ranked.slice(0, Math.max(limit * 3, limit));
+        for (let i = pickFrom.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [pickFrom[i], pickFrom[j]] = [pickFrom[j], pickFrom[i]];
+        }
+        return pickFrom.slice(0, limit);
     }
 };
 
+const VIDEO_COMMENTS_PAGE_SIZE = 20;
+const inlineWatchCommentState = new Map();
+const inlineWatchViewSessions = new Set();
+
+function linkifyWatchText(text = '') {
+    const raw = String(text || '');
+    const regex = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+    let lastIndex = 0;
+    let output = '';
+    raw.replace(regex, function (match, _group, offset) {
+        const before = raw.slice(lastIndex, offset);
+        output += escapeHtml(before);
+        const href = match.startsWith('http') ? match : `https://${match}`;
+        const safeHref = escapeHtml(href);
+        const label = escapeHtml(match);
+        output += `<a href="${safeHref}" target="_blank" rel="noopener">${label}</a>`;
+        lastIndex = offset + match.length;
+        return match;
+    });
+    if (lastIndex < raw.length) {
+        output += escapeHtml(raw.slice(lastIndex));
+    }
+    return output || escapeHtml(raw);
+}
+
+function buildWatchDescriptionPreview(text = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return '';
+    const firstParagraph = raw.split(/\n+/)[0] || raw;
+    if (firstParagraph.length <= 150) return firstParagraph;
+    return `${firstParagraph.slice(0, 150).trim()}…`;
+}
+
+function resolveWatchDescriptionHtml(text = '') {
+    const raw = String(text || '');
+    const parts = raw.split(/\n/);
+    return parts.map(function (part) { return linkifyWatchText(part); }).join('<br>');
+}
+
+function renderWatchDescription(root, options = {}) {
+    if (!root) return;
+    const descEl = root.querySelector('.watch-description-text');
+    const toggle = root.querySelector('.watch-description-toggle');
+    if (!descEl || !toggle) return;
+    const raw = decodeURIComponent(descEl.dataset.full || '');
+    const preview = decodeURIComponent(descEl.dataset.preview || '');
+    const isExpanded = descEl.dataset.expanded === 'true';
+    const nextHtml = resolveWatchDescriptionHtml(isExpanded ? raw : preview);
+    descEl.innerHTML = nextHtml || '<span class="watch-description-empty">No description yet.</span>';
+    toggle.textContent = isExpanded ? 'Show less' : 'Show more';
+    toggle.style.display = raw && raw !== preview ? 'inline-flex' : 'none';
+}
+
+function getInlineWatchCommentState(videoId) {
+    if (!inlineWatchCommentState.has(videoId)) {
+        inlineWatchCommentState.set(videoId, {
+            items: [],
+            lastDoc: null,
+            done: false,
+            loading: false
+        });
+    }
+    return inlineWatchCommentState.get(videoId);
+}
+
+async function fetchInlineWatchComments(videoId, options = {}) {
+    const state = getInlineWatchCommentState(videoId);
+    if (state.loading || state.done) return state;
+    state.loading = true;
+    const batchSize = Number(options.limit) || VIDEO_COMMENTS_PAGE_SIZE;
+    try {
+        const commentsRef = collection(db, 'videos', videoId, 'comments');
+        const clauses = [orderBy('createdAt', 'desc'), limit(batchSize)];
+        if (state.lastDoc) {
+            clauses.splice(1, 0, startAfter(state.lastDoc));
+        }
+        const q = query(commentsRef, ...clauses);
+        const snap = await getDocs(q);
+        const nextItems = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        state.items = state.items.concat(nextItems);
+        const missingProfiles = nextItems.map(function (item) { return item.uid; })
+            .filter(Boolean)
+            .filter(function (uid) { return !getCachedUser(uid); });
+        await Promise.all(missingProfiles.map(function (uid) { return resolveUserProfile(uid); }));
+        state.lastDoc = snap.docs[snap.docs.length - 1] || state.lastDoc;
+        state.done = snap.empty || snap.docs.length < batchSize;
+        return state;
+    } finally {
+        state.loading = false;
+    }
+}
+
+function buildInlineWatchCommentItem(comment = {}) {
+    const profile = getCachedUser(comment.uid) || { uid: comment.uid, displayName: comment.displayName || comment.name || 'Viewer', photoURL: comment.photoURL || '' };
+    const timestamp = formatVideoTimestamp(comment.createdAt);
+    const text = escapeHtml(comment.text || '').replace(/\n/g, '<br>');
+    const attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
+    const attachmentHtml = attachments.map(function (att) {
+        const mediaRef = att.url || att.storagePath || '';
+        if (!mediaRef) return '';
+        const resolved = resolveDmMediaUrl(mediaRef);
+        if (resolved.status === 'ok' && resolved.url) {
+            return `<img src="${resolved.url}" alt="Comment attachment" loading="lazy">`;
+        }
+        if (resolved.status === 'pending') {
+            fetchDmMediaUrl(mediaRef).then(function (next) {
+                if (!next.url) return;
+                const img = document.querySelector(`[data-comment-attachment='${comment.id}'] img[data-media='${mediaRef}']`);
+                if (img) img.src = next.url;
+            });
+            return `<img data-media="${mediaRef}" src="" alt="Comment attachment" loading="lazy">`;
+        }
+        return `<div class="watch-comment-attachment-fallback">${getDmMediaFallbackText(resolved.status)}</div>`;
+    }).filter(Boolean).join('');
+    return `
+        <div class="watch-comment" data-comment-id="${comment.id}">
+            <div class="watch-comment-avatar">${renderAvatar(profile, { size: 40 })}</div>
+            <div class="watch-comment-body">
+                <div class="watch-comment-meta">${escapeHtml(profile.displayName || profile.username || 'Viewer')} • ${timestamp}</div>
+                <div class="watch-comment-text">${text}</div>
+                ${attachmentHtml ? `<div class="watch-comment-attachments" data-comment-attachment="${comment.id}">${attachmentHtml}</div>` : ''}
+                <div class="watch-comment-actions">
+                    <span><i class="ph ph-thumbs-up"></i> ${comment.likes || 0}</span>
+                    <span>Reply</span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderInlineWatchComments(videoId) {
+    const root = document.querySelector('#video-feed .watch-page');
+    if (!root) return;
+    const list = root.querySelector('.watch-comments-list');
+    const countEl = root.querySelector('.watch-comments-count');
+    if (!list || !countEl) return;
+    const state = getInlineWatchCommentState(videoId);
+    list.innerHTML = state.items.map(buildInlineWatchCommentItem).join('') || '<div class="watch-empty">No comments yet. Be the first to share your thoughts.</div>';
+    const video = getVideoById(videoId);
+    const serverCount = video?.stats?.comments || 0;
+    const count = Math.max(serverCount, state.items.length || 0);
+    countEl.textContent = `${formatCompactNumber(count)} Comment${count === 1 ? '' : 's'}`;
+    const moreBtn = root.querySelector('.watch-comments-more');
+    if (moreBtn) {
+        moreBtn.style.display = state.done ? 'none' : 'inline-flex';
+        moreBtn.disabled = state.loading;
+        moreBtn.textContent = state.loading ? 'Loading…' : 'Load more';
+    }
+}
+
+async function createVideoComment(videoId, payload = {}) {
+    if (!videoId) return null;
+    const commentRef = await addDoc(collection(db, 'videos', videoId, 'comments'), {
+        uid: payload.uid || currentUser?.uid || null,
+        displayName: payload.displayName || currentUser?.displayName || currentUser?.email || 'Viewer',
+        photoURL: payload.photoURL || currentUser?.photoURL || null,
+        text: payload.text || '',
+        attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+        createdAt: serverTimestamp(),
+        editedAt: null,
+        likes: 0
+    });
+    await updateDoc(doc(db, 'videos', videoId), { 'stats.comments': increment(1) });
+    updateVideoStats(videoId, { comments: 1 });
+    return commentRef;
+}
+
+function updateInlineWatchMeta(videoId) {
+    const root = document.querySelector('#video-feed .watch-page');
+    if (!root || root.dataset.videoId !== videoId) return;
+    const video = getVideoById(videoId);
+    if (!video) return;
+    const meta = root.querySelector('.watch-description-meta');
+    if (meta) {
+        meta.textContent = `${formatCompactNumber(getVideoViewCount(video))} views • ${formatVideoTimestamp(video.createdAt)}`;
+    }
+}
+
+async function recordVideoView(videoId, uid) {
+    if (!videoId) return;
+    const dedupeKey = `${videoId}:${uid || 'guest'}`;
+    if (inlineWatchViewSessions.has(dedupeKey)) return;
+    inlineWatchViewSessions.add(dedupeKey);
+    if (!uid) {
+        updateVideoStats(videoId, { views: 1 });
+        updateInlineWatchMeta(videoId);
+        updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) }).catch(function () {});
+        return;
+    }
+    const viewRef = doc(db, 'videos', videoId, 'views', uid);
+    try {
+        const snap = await getDoc(viewRef);
+        if (snap.exists()) return;
+        await Promise.all([
+            setDoc(viewRef, { createdAt: serverTimestamp() }),
+            updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) })
+        ]);
+        updateVideoStats(videoId, { views: 1 });
+        updateInlineWatchMeta(videoId);
+    } catch (err) {
+        console.warn('Video view record failed', err?.message || err);
+    }
+}
+
+async function notifyVideoOwner({ videoId, ownerId, actionType, previewText, extra }) {
+    if (!ownerId || !currentUser?.uid) return;
+    await createNotificationOnce({
+        targetUid: ownerId,
+        actorUid: currentUser.uid,
+        entityType: 'video',
+        entityId: videoId,
+        contentType: 'video',
+        actionType,
+        previewText: previewText || '',
+        extra: extra || null
+    });
+}
+
 function buildInlineWatchPage(video, author, suggestions) {
     const videoTitle = escapeHtml(video.title || video.caption || 'Untitled video');
-    const videoDescription = escapeHtml(video.description || '');
+    const rawDescription = video.description || '';
+    const descriptionPreview = buildWatchDescriptionPreview(rawDescription);
     const channelName = escapeHtml(author?.displayName || author?.name || author?.username || 'Nexera Creator');
     const channelHandle = escapeHtml(author?.username ? `@${author.username}` : 'Nexera');
     const views = formatCompactNumber(getVideoViewCount(video));
     const updated = formatVideoTimestamp(video.createdAt) || 'Today';
     const likeCount = formatCompactNumber(video.stats?.likes || 0);
+    const dislikeCount = formatCompactNumber(video.stats?.dislikes || 0);
     const suggestedHtml = suggestions.map(function (entry) {
         const thumb = escapeHtml(resolveVideoThumbnail(entry));
         const title = escapeHtml(entry.title || entry.caption || 'Untitled video');
         const channel = escapeHtml((getCachedUser(entry.ownerId)?.displayName || getCachedUser(entry.ownerId)?.name || getCachedUser(entry.ownerId)?.username || 'Nexera Creator'));
         const stats = `${formatCompactNumber(getVideoViewCount(entry))} views • ${formatVideoTimestamp(entry.createdAt)}`;
         return `
-            <div class="watch-suggestion">
+            <div class="watch-suggestion" data-video-id="${entry.id}">
                 <div class="watch-suggestion-thumb">
                     ${thumb ? `<img src="${thumb}" alt="Video thumbnail" loading="lazy" decoding="async">` : '<div class="video-preview-placeholder"></div>'}
                     <span class="watch-suggestion-duration">${formatVideoDuration(entry)}</span>
@@ -16989,7 +17230,10 @@ function buildInlineWatchPage(video, author, suggestions) {
     }).join('');
 
     return `
-        <div class="watch-page">
+        <div class="watch-page" data-video-id="${video.id}">
+            <div class="watch-toolbar">
+                <button class="watch-back-btn" data-watch-action="back"><i class="ph ph-arrow-left"></i> Back</button>
+            </div>
             <div class="watch-grid">
                 <section class="watch-primary">
                     <div class="watch-player">
@@ -17013,11 +17257,11 @@ function buildInlineWatchPage(video, author, suggestions) {
                                 <div class="watch-channel-name">${channelName}</div>
                                 <div class="watch-channel-handle">${channelHandle}</div>
                             </div>
-                            <button class="watch-join-btn">Follow</button>
+                            ${video.ownerId && currentUser?.uid !== video.ownerId ? `<button class="watch-join-btn js-follow-user-${video.ownerId}" data-author-id="${video.ownerId}">Follow</button>` : ''}
                         </div>
                         <div class="watch-actions">
                             <button class="watch-pill watch-like-btn" data-count="${video.stats?.likes || 0}" data-liked="false"><i class="ph ph-thumbs-up"></i><span>Like</span><span class="watch-like-count">${likeCount}</span></button>
-                            <button class="watch-pill"><i class="ph ph-thumbs-down"></i></button>
+                            <button class="watch-pill watch-dislike-btn" data-count="${video.stats?.dislikes || 0}" data-disliked="false"><i class="ph ph-thumbs-down"></i><span>Dislike</span><span class="watch-dislike-count">${dislikeCount}</span></button>
                             <button class="watch-pill" data-watch-action="share"><i class="ph ph-share-network"></i> Share</button>
                             <button class="watch-pill" data-watch-action="save"><i class="ph ph-bookmark-simple"></i> Save</button>
                             <button class="watch-pill" data-watch-action="thanks"><i class="ph ph-currency-dollar"></i> Thanks</button>
@@ -17025,26 +17269,30 @@ function buildInlineWatchPage(video, author, suggestions) {
                     </div>
                     <div class="watch-description">
                         <div class="watch-description-meta">${views} views • ${updated}</div>
-                        <div class="watch-description-text">${videoDescription || 'No description yet.'}</div>
-                        <span class="watch-description-more">...more</span>
+                        <div class="watch-description-text" data-full="${encodeURIComponent(rawDescription)}" data-preview="${encodeURIComponent(descriptionPreview)}"></div>
+                        <button class="watch-description-toggle" type="button">Show more</button>
                     </div>
                     <div class="watch-comments">
                         <div class="watch-comments-header">
-                            <span>5,090 Comments</span>
-                            <button class="watch-pill small"><i class="ph ph-sort-ascending"></i> Sort by</button>
+                            <span class="watch-comments-count">0 Comments</span>
+                            <button class="watch-pill small" data-watch-action="sort"><i class="ph ph-sort-ascending"></i> Sort by</button>
                         </div>
                         <div class="watch-comment-compose">
                             <div class="watch-comment-avatar"></div>
-                            <input type="text" placeholder="Add a comment..." />
-                        </div>
-                        <div class="watch-comment">
-                            <div class="watch-comment-avatar"></div>
-                            <div>
-                                <div class="watch-comment-meta">Nexera Viewer • 1 day ago</div>
-                                <div class="watch-comment-text">Great breakdown—thanks for sharing!</div>
-                                <div class="watch-comment-actions"><span><i class="ph ph-thumbs-up"></i> 24</span><span>Reply</span></div>
+                            <div class="watch-comment-input">
+                                <textarea class="watch-comment-textarea" placeholder="Add a comment..." rows="2"></textarea>
+                                <div class="watch-comment-compose-actions">
+                                    <label class="watch-comment-upload">
+                                        <input class="watch-comment-file" type="file" accept="image/*" />
+                                        <i class="ph ph-image"></i> Add image
+                                    </label>
+                                    <button class="watch-pill small watch-comment-submit" type="button">Comment</button>
+                                </div>
+                                <div class="watch-comment-attachment-preview"></div>
                             </div>
                         </div>
+                        <div class="watch-comments-list"></div>
+                        <button class="watch-pill small watch-comments-more" type="button">Load more</button>
                     </div>
                 </section>
                 <aside class="watch-rail">
@@ -17083,6 +17331,12 @@ async function openInlineVideoWatch(video) {
     const suggestions = InlineWatchHelpers.getInlineWatchSuggestions(video.id);
     feed.innerHTML = buildInlineWatchPage(video, author, suggestions);
     bindInlineWatchInteractions(video, author);
+    renderWatchDescription(feed.querySelector('.watch-page'));
+    const state = getInlineWatchCommentState(video.id);
+    if (!state.items.length) {
+        await fetchInlineWatchComments(video.id);
+    }
+    renderInlineWatchComments(video.id);
 }
 
 function restoreInlineVideoWatch() {
@@ -17107,12 +17361,16 @@ function openInlineWatchActionModal(action) {
     const titles = {
         share: 'Share',
         save: 'Save',
-        thanks: 'Thanks'
+        thanks: 'Thanks',
+        sort: 'Sort comments',
+        more: 'More options'
     };
     const messages = {
         share: 'Sharing options are coming soon.',
         save: 'Save this video to your library.',
-        thanks: 'Thanks for supporting the creator.'
+        thanks: 'Thanks for supporting the creator.',
+        sort: 'Comment sorting options are coming soon.',
+        more: 'More actions are coming soon.'
     };
     if (typeof openConfirmModal === 'function') {
         openConfirmModal({
@@ -17144,6 +17402,41 @@ function updateInlineWatchLikeButton(button) {
     if (iconEl) iconEl.className = iconClass;
     if (textNode) textNode.textContent = label;
     if (countEl) countEl.textContent = formatCompactNumber(count);
+    button.classList.toggle('is-active', liked);
+}
+
+function updateInlineWatchDislikeButton(button) {
+    if (!button) return;
+    const disliked = button.dataset.disliked === 'true';
+    const count = Number(button.dataset.count) || 0;
+    const iconClass = disliked ? 'ph-fill ph-thumbs-down' : 'ph ph-thumbs-down';
+    const label = disliked ? 'Disliked' : 'Dislike';
+    const countEl = button.querySelector('.watch-dislike-count');
+    const textNode = button.querySelector('span');
+    const iconEl = button.querySelector('i');
+    if (iconEl) iconEl.className = iconClass;
+    if (textNode) textNode.textContent = label;
+    if (countEl) countEl.textContent = formatCompactNumber(count);
+    button.classList.toggle('is-active', disliked);
+}
+
+function syncInlineWatchEngagement(videoId, root) {
+    const video = getVideoById(videoId);
+    if (!video) return;
+    ensureVideoStats(video);
+    const state = getVideoEngagementStatus(videoId);
+    const likeBtn = root?.querySelector('.watch-like-btn');
+    const dislikeBtn = root?.querySelector('.watch-dislike-btn');
+    if (likeBtn) {
+        likeBtn.dataset.liked = state.liked ? 'true' : 'false';
+        likeBtn.dataset.count = String(video.stats.likes || 0);
+        updateInlineWatchLikeButton(likeBtn);
+    }
+    if (dislikeBtn) {
+        dislikeBtn.dataset.disliked = state.disliked ? 'true' : 'false';
+        dislikeBtn.dataset.count = String(video.stats.dislikes || 0);
+        updateInlineWatchDislikeButton(dislikeBtn);
+    }
 }
 
 function bindInlineWatchInteractions(video, author) {
@@ -17152,19 +17445,29 @@ function bindInlineWatchInteractions(video, author) {
     const player = root.querySelector('#watch-player');
     const playBtn = root.querySelector('.watch-control-btn[data-action="toggle-play"]');
     const likeBtn = root.querySelector('.watch-like-btn');
+    const dislikeBtn = root.querySelector('.watch-dislike-btn');
+    const followBtn = root.querySelector('.watch-join-btn');
     const channelAvatar = root.querySelector('.watch-channel-avatar');
     const composeAvatar = root.querySelector('.watch-comment-compose .watch-comment-avatar');
+    const descToggle = root.querySelector('.watch-description-toggle');
+    const commentSubmit = root.querySelector('.watch-comment-submit');
+    const commentInput = root.querySelector('.watch-comment-textarea');
+    const commentFile = root.querySelector('.watch-comment-file');
+    const commentPreview = root.querySelector('.watch-comment-attachment-preview');
+    const commentsMore = root.querySelector('.watch-comments-more');
+    const backBtn = root.querySelector('.watch-back-btn');
 
     if (channelAvatar) applyAvatarToElement(channelAvatar, author || {}, { size: 40 });
     if (composeAvatar) applyAvatarToElement(composeAvatar, currentUser || author || {}, { size: 40 });
-    root.querySelectorAll('.watch-comment-avatar').forEach(function (avatar) {
-        if (avatar === composeAvatar) return;
-        applyAvatarToElement(avatar, author || {}, { size: 40 });
-    });
+    if (followBtn && followBtn.dataset.authorId) {
+        updateFollowButtonsForUser(followBtn.dataset.authorId, followedUsers.has(followBtn.dataset.authorId));
+    }
 
     if (player && playBtn) {
         updateInlineWatchPlayState(player, playBtn);
         const trace = startTrace('video_load_time');
+        let viewTimer = null;
+        let viewRecorded = false;
         const stopTraceOnEnd = function (error) {
             stopTrace(trace, { error });
             player.removeEventListener('playing', onPlaying);
@@ -17191,26 +17494,195 @@ function bindInlineWatchInteractions(video, author) {
             }
             updateInlineWatchPlayState(player, playBtn);
         });
-        player.addEventListener('play', function () { updateInlineWatchPlayState(player, playBtn); });
-        player.addEventListener('pause', function () { updateInlineWatchPlayState(player, playBtn); });
+        player.addEventListener('play', function () {
+            updateInlineWatchPlayState(player, playBtn);
+            if (!viewRecorded) {
+                if (viewTimer) clearTimeout(viewTimer);
+                viewTimer = setTimeout(function () {
+                    viewRecorded = true;
+                    recordVideoView(video.id, currentUser?.uid || null);
+                }, 2000);
+            }
+        });
+        player.addEventListener('pause', function () {
+            updateInlineWatchPlayState(player, playBtn);
+            if (viewTimer) {
+                clearTimeout(viewTimer);
+                viewTimer = null;
+            }
+        });
+        player.addEventListener('ended', function () {
+            updateInlineWatchPlayState(player, playBtn);
+            if (viewTimer) {
+                clearTimeout(viewTimer);
+                viewTimer = null;
+            }
+        });
     }
+
+    hydrateVideoEngagement(video.id).then(function () {
+        syncInlineWatchEngagement(video.id, root);
+    });
 
     if (likeBtn) {
         updateInlineWatchLikeButton(likeBtn);
-        likeBtn.addEventListener('click', function () {
-            const liked = likeBtn.dataset.liked === 'true';
-            const current = Number(likeBtn.dataset.count) || 0;
-            const nextLiked = !liked;
-            const nextCount = Math.max(0, current + (nextLiked ? 1 : -1));
-            likeBtn.dataset.liked = nextLiked ? 'true' : 'false';
-            likeBtn.dataset.count = String(nextCount);
-            updateInlineWatchLikeButton(likeBtn);
+        likeBtn.addEventListener('click', async function () {
+            const before = getVideoEngagementStatus(video.id);
+            await window.likeVideo(video.id);
+            syncInlineWatchEngagement(video.id, root);
+            const after = getVideoEngagementStatus(video.id);
+            if (video.ownerId && !before.liked && after.liked) {
+                await notifyVideoOwner({
+                    videoId: video.id,
+                    ownerId: video.ownerId,
+                    actionType: 'video-like',
+                    previewText: video.title || video.caption || 'Video'
+                });
+            }
+        });
+    }
+
+    if (dislikeBtn) {
+        updateInlineWatchDislikeButton(dislikeBtn);
+        dislikeBtn.addEventListener('click', async function () {
+            const before = getVideoEngagementStatus(video.id);
+            await window.dislikeVideo(video.id);
+            syncInlineWatchEngagement(video.id, root);
+            const after = getVideoEngagementStatus(video.id);
+            if (video.ownerId && !before.disliked && after.disliked) {
+                await notifyVideoOwner({
+                    videoId: video.id,
+                    ownerId: video.ownerId,
+                    actionType: 'video-dislike',
+                    previewText: video.title || video.caption || 'Video'
+                });
+            }
+        });
+    }
+
+    if (followBtn && followBtn.dataset.authorId) {
+        followBtn.addEventListener('click', function (event) {
+            window.toggleFollowUser(followBtn.dataset.authorId, event);
         });
     }
 
     root.querySelectorAll('[data-watch-action]').forEach(function (button) {
         button.addEventListener('click', function () {
-            openInlineWatchActionModal(button.dataset.watchAction);
+            const action = button.dataset.watchAction;
+            if (action === 'back') {
+                restoreInlineVideoWatch();
+                return;
+            }
+            if (action === 'sort') {
+                openInlineWatchActionModal('sort');
+                return;
+            }
+            openInlineWatchActionModal(action);
+        });
+    });
+
+    root.querySelectorAll('.watch-suggestion-menu').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+            event.stopPropagation();
+            openInlineWatchActionModal('more');
+        });
+    });
+
+    if (descToggle) {
+        renderWatchDescription(root);
+        descToggle.addEventListener('click', function () {
+            const descEl = root.querySelector('.watch-description-text');
+            if (!descEl) return;
+            const next = descEl.dataset.expanded === 'true' ? 'false' : 'true';
+            descEl.dataset.expanded = next;
+            renderWatchDescription(root);
+        });
+    }
+
+    if (commentFile && commentPreview) {
+        commentFile.addEventListener('change', function () {
+            const file = commentFile.files?.[0];
+            if (!file) {
+                commentPreview.innerHTML = '';
+                return;
+            }
+            const url = URL.createObjectURL(file);
+            commentPreview.innerHTML = `<div class="watch-comment-preview-card"><img src="${url}" alt="Selected attachment"></div>`;
+        });
+    }
+
+    if (commentSubmit && commentInput) {
+        commentSubmit.addEventListener('click', async function () {
+            if (!requireAuth()) return;
+            const text = (commentInput.value || '').trim();
+            const file = commentFile?.files?.[0] || null;
+            if (!text && !file) {
+                toast('Add a comment before posting.', 'info');
+                return;
+            }
+            commentSubmit.disabled = true;
+            commentSubmit.textContent = 'Posting...';
+            const attachments = [];
+            try {
+                if (file) {
+                    const path = `comment_media/${currentUser.uid}/${Date.now()}-${sanitizeFileName(file.name)}`;
+                    const url = await uploadFileToStorage(file, path);
+                    attachments.push({ url, storagePath: path, type: file.type, name: file.name });
+                }
+                await createVideoComment(video.id, {
+                    text,
+                    attachments,
+                    uid: currentUser.uid,
+                    displayName: currentUser.displayName || currentUser.email || 'Viewer',
+                    photoURL: currentUser.photoURL || null
+                });
+                const state = getInlineWatchCommentState(video.id);
+                state.items.unshift({
+                    id: `local-${Date.now()}`,
+                    uid: currentUser.uid,
+                    displayName: currentUser.displayName || currentUser.email || 'Viewer',
+                    photoURL: currentUser.photoURL || null,
+                    text,
+                    attachments,
+                    createdAt: new Date(),
+                    likes: 0
+                });
+                commentInput.value = '';
+                if (commentFile) commentFile.value = '';
+                if (commentPreview) commentPreview.innerHTML = '';
+                renderInlineWatchComments(video.id);
+                if (video.ownerId) {
+                    await notifyVideoOwner({
+                        videoId: video.id,
+                        ownerId: video.ownerId,
+                        actionType: 'video-comment',
+                        previewText: truncateDescription(text, 20),
+                        extra: { commentText: text }
+                    });
+                }
+            } catch (err) {
+                console.error('Unable to post comment', err);
+                toast('Unable to post comment.', 'error');
+            } finally {
+                commentSubmit.disabled = false;
+                commentSubmit.textContent = 'Comment';
+            }
+        });
+    }
+
+    if (commentsMore) {
+        commentsMore.addEventListener('click', async function () {
+            await fetchInlineWatchComments(video.id);
+            renderInlineWatchComments(video.id);
+        });
+    }
+
+    root.querySelectorAll('.watch-suggestion').forEach(function (item) {
+        item.addEventListener('click', function () {
+            const nextId = item.dataset.videoId;
+            if (!nextId) return;
+            const nextVideo = getVideoById(nextId);
+            if (nextVideo) openInlineVideoWatch(nextVideo);
         });
     });
 }
