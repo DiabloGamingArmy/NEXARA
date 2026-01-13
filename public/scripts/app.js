@@ -270,7 +270,7 @@ const USER_CACHE_TTL_MS = 10 * 60 * 1000;
 window.myReviewCache = {}; // Global cache for reviews
 let currentCategory = 'For You';
 const USE_CUSTOM_VIDEO_VIEWER = true;
-const USE_INLINE_VIDEO_WATCH = false;
+const USE_INLINE_VIDEO_WATCH = true;
 const USE_INLINE_VIDEO_VIEWER = true;
 const VIDEO_DEBUG = window.__NEXERA_DEBUG_VIDEO === true || window.__NEXERA_DEBUG_VIDEOS === true;
 let currentProfileFilter = 'All Results';
@@ -356,6 +356,8 @@ let inboxNotifications = [];
 let contentNotificationsUnsubscribe = null;
 let contentNotifications = [];
 let contentNotificationsLegacyFetched = false;
+let accountNotificationsUnsubscribe = null;
+let accountNotifications = [];
 let inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
 let inboxContentFilters = { posts: true, videos: true, livestreams: true };
 let inboxContentPreferred = 'posts';
@@ -392,6 +394,8 @@ let recentLocations = [];
 let categoryVisibleCount = 10;
 let commentRootDisplayCount = {};
 let replyExpansionState = {};
+let lastCommentSendAt = 0;
+let lastCommentSignature = '';
 let currentEditPost = null;
 let goLiveController = null;
 let tagSuggestionPool = [];
@@ -1381,6 +1385,10 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+function isDesktopViewport() {
+    return window.innerWidth > 768 && !isMobileViewport();
+}
+
 function shouldShowRightSidebar(viewId) {
     return ['feed', 'videos', 'discover', 'saved', 'messages', 'profile', 'live'].includes(viewId);
 }
@@ -1514,6 +1522,8 @@ const FEED_TYPE_TOGGLES = [
 ];
 
 let sidebarCollapsed = false;
+let desktopSidebarOpen = false;
+let quickActionBarTimer = null;
 
 function getFeedTypeToggleSlot() {
     return document.getElementById('feed-type-toggle-bar') || document.querySelector('.feed-type-toggle-bar');
@@ -1630,11 +1640,16 @@ function syncFeedTypeToggleState() {
 function applyDesktopSidebarState(collapsed, persist = true) {
     sidebarCollapsed = !!collapsed;
     if (!isMobileViewport()) {
+        document.body.classList.remove('sidebar-collapsed');
+        document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+            sidebar.classList.remove('collapsed');
+        });
+    } else {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+        document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+            sidebar.classList.toggle('collapsed', sidebarCollapsed);
+        });
     }
-    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
-        sidebar.classList.toggle('collapsed', sidebarCollapsed);
-    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1644,11 +1659,25 @@ function setSidebarOverlayOpen(open) {
     document.body.classList.toggle('sidebar-overlay-open', !!open);
 }
 
+function setDesktopSidebarOpen(open) {
+    desktopSidebarOpen = !!open;
+    document.body.classList.toggle('desktop-sidebar-open', desktopSidebarOpen);
+    const backdrop = document.getElementById('desktop-sidebar-backdrop');
+    if (backdrop) {
+        backdrop.classList.toggle('is-visible', desktopSidebarOpen);
+    }
+    if (desktopSidebarOpen) {
+        hideQuickActionBar();
+    }
+}
+
 function initSidebarState() {
     if (window.localStorage) {
         sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
     }
     applyDesktopSidebarState(sidebarCollapsed, false);
+    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
+    setDesktopSidebarOpen(false);
 }
 
 function openSidebar() {
@@ -1656,7 +1685,7 @@ function openSidebar() {
         setSidebarOverlayOpen(true);
         return;
     }
-    applyDesktopSidebarState(false);
+    setDesktopSidebarOpen(true);
 }
 
 function closeSidebar() {
@@ -1664,7 +1693,7 @@ function closeSidebar() {
         setSidebarOverlayOpen(false);
         return;
     }
-    applyDesktopSidebarState(true);
+    setDesktopSidebarOpen(false);
 }
 
 function toggleSidebar() {
@@ -1672,7 +1701,7 @@ function toggleSidebar() {
         setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
         return;
     }
-    applyDesktopSidebarState(!sidebarCollapsed);
+    setDesktopSidebarOpen(!desktopSidebarOpen);
 }
 
 function bindSidebarEvents() {
@@ -1680,13 +1709,20 @@ function bindSidebarEvents() {
         item.addEventListener('click', function () {
             if (isMobileViewport()) {
                 setSidebarOverlayOpen(false);
+                return;
             }
+            setDesktopSidebarOpen(false);
         });
     });
 
     document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape' && document.body.classList.contains('sidebar-overlay-open')) {
-            setSidebarOverlayOpen(false);
+        if (event.key === 'Escape') {
+            if (document.body.classList.contains('sidebar-overlay-open')) {
+                setSidebarOverlayOpen(false);
+            }
+            if (document.body.classList.contains('desktop-sidebar-open')) {
+                setDesktopSidebarOpen(false);
+            }
         }
     });
 
@@ -1694,12 +1730,51 @@ function bindSidebarEvents() {
         MOBILE_VIEWPORT.addEventListener('change', function () {
             if (isMobileViewport()) {
                 document.body.classList.remove('sidebar-collapsed');
+                setDesktopSidebarOpen(false);
             } else {
                 setSidebarOverlayOpen(false);
                 applyDesktopSidebarState(sidebarCollapsed);
+                document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
             }
         });
     }
+}
+
+function showQuickActionBar() {
+    const bar = document.getElementById('quick-action-bar');
+    if (!bar) return;
+    bar.classList.add('is-visible');
+}
+
+function hideQuickActionBar() {
+    const bar = document.getElementById('quick-action-bar');
+    if (!bar) return;
+    bar.classList.remove('is-visible');
+}
+
+function initQuickActionBar() {
+    const bar = document.getElementById('quick-action-bar');
+    if (!bar) return;
+    bar.querySelectorAll('a').forEach(function (link) {
+        link.addEventListener('click', function () {
+            hideQuickActionBar();
+        });
+    });
+    document.addEventListener('mousemove', function (event) {
+        if (!isDesktopViewport() || desktopSidebarOpen) return;
+        if (event.clientX <= 5) {
+            showQuickActionBar();
+            if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
+            quickActionBarTimer = setTimeout(function () {
+                hideQuickActionBar();
+            }, 1200);
+        } else if (bar.classList.contains('is-visible')) {
+            if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
+            quickActionBarTimer = setTimeout(function () {
+                hideQuickActionBar();
+            }, 800);
+        }
+    });
 }
 
 window.Nexera.toggleSidebar = toggleSidebar;
@@ -2023,7 +2098,10 @@ function initApp(onReady) {
                         await hydrateFollowedCategories(user.uid, userProfile);
                         await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
-                        if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
+                        const quickStaffNav = document.getElementById('qa-nav-staff');
+                        const showStaff = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient());
+                        if (staffNav) staffNav.style.display = showStaff ? 'flex' : 'none';
+                        if (quickStaffNav) quickStaffNav.style.display = showStaff ? 'flex' : 'none';
                     } else {
                         // Create new profile placeholder if it doesn't exist
                         userProfile.email = user.email || "";
@@ -2037,7 +2115,9 @@ function initApp(onReady) {
                         syncSavedVideosFromProfile(userProfile);
                         await syncPublicProfile(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
+                        const quickStaffNav = document.getElementById('qa-nav-staff');
                         if (staffNav) staffNav.style.display = 'none';
+                        if (quickStaffNav) quickStaffNav.style.display = 'none';
                     }
                 } catch (e) {
                     console.error("Profile Load Error", e);
@@ -2064,6 +2144,7 @@ function initApp(onReady) {
                         const storedInboxMode = inboxMode || 'content';
                         setInboxMode(storedInboxMode, { skipRouteUpdate: true });
                         initContentNotifications(signedInUserId);
+                        initAccountNotifications(signedInUserId);
                         initConversations(storedInboxMode === 'messages');
                         refreshDmCallButtons();
                         if ('Notification' in window && Notification.permission === 'granted') {
@@ -2109,8 +2190,13 @@ function initApp(onReady) {
                     try { contentNotificationsUnsubscribe(); } catch (err) { }
                     contentNotificationsUnsubscribe = null;
                 }
+                if (accountNotificationsUnsubscribe) {
+                    try { accountNotificationsUnsubscribe(); } catch (err) { }
+                    accountNotificationsUnsubscribe = null;
+                }
                 inboxNotifications = [];
                 contentNotifications = [];
+                accountNotifications = [];
                 inboxNotificationCounts = { posts: 0, videos: 0, livestreams: 0, account: 0 };
                 updateInboxNavBadge();
                 followedCategories = new Set();
@@ -4005,7 +4091,11 @@ function updateFollowButtonsForUser(uid, isFollowing) {
     const btns = document.querySelectorAll(`.js-follow-user-${uid}`);
     btns.forEach(function (btn) {
         if (isFollowing) {
-            btn.innerHTML = 'Following';
+            if (btn.classList.contains('watch-join-btn')) {
+                btn.textContent = 'Following';
+            } else {
+                btn.innerHTML = 'Following';
+            }
             btn.classList.add('following');
 
             btn.style.background = 'transparent';
@@ -4019,7 +4109,11 @@ function updateFollowButtonsForUser(uid, isFollowing) {
                 btn.style.borderColor = "var(--primary)";
             }
         } else {
-            btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
+            if (btn.classList.contains('watch-join-btn')) {
+                btn.textContent = 'Follow';
+            } else {
+                btn.innerHTML = '<i class="ph-bold ph-plus"></i> User';
+            }
             btn.classList.remove('following');
 
             btn.style.background = 'rgba(255,255,255,0.1)';
@@ -4034,6 +4128,27 @@ function updateFollowButtonsForUser(uid, isFollowing) {
             }
         }
     });
+}
+
+async function syncFollowButtonState(uid) {
+    if (!currentUser || !uid || currentUser.uid === uid) return;
+    try {
+        const followRef = doc(db, 'users', currentUser.uid, 'following', uid);
+        const followSnap = await getDoc(followRef);
+        const isFollowing = followSnap.exists();
+        if (isFollowing) {
+            followedUsers.add(uid);
+        } else {
+            followedUsers.delete(uid);
+        }
+        userProfile.following = Array.from(followedUsers);
+        if (currentUser?.uid && userCache[currentUser.uid]) {
+            userCache[currentUser.uid].following = userProfile.following;
+        }
+        updateFollowButtonsForUser(uid, isFollowing);
+    } catch (err) {
+        console.warn('Unable to sync follow button state', err?.message || err);
+    }
 }
 
 function updateFollowerCountCache(uid, previousState, nextState) {
@@ -4387,6 +4502,12 @@ function getPostHTML(post, options = {}) {
                 mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
             }
         }
+        if (mediaContent) {
+            mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+                ${mediaContent}
+                <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+            </div>`;
+        }
 
         let commentPreviewHtml = '';
         if (post.previewComment) {
@@ -4602,7 +4723,10 @@ function renderFeed(targetId = 'feed-content') {
 
 function ensureFeedScrollObserver() {
     const sentinel = document.getElementById('feed-scroll-sentinel');
-    if (!sentinel || feedPagination.done) return;
+    if (!sentinel || feedPagination.done) {
+        if (feedScrollObserver) feedScrollObserver.disconnect();
+        return;
+    }
     if (feedScrollObserver) {
         feedScrollObserver.disconnect();
     }
@@ -4766,6 +4890,31 @@ window.toggleLike = async function (postId, event) {
         loadFeedData();
     }
 }
+
+function triggerPostLikeBurst(postId) {
+    const shell = document.querySelector(`.post-media-shell[data-post-id="${postId}"]`);
+    if (!shell) return;
+    const burst = shell.querySelector('.post-like-burst');
+    if (!burst) return;
+    burst.classList.remove('is-active');
+    void burst.offsetWidth;
+    burst.classList.add('is-active');
+    setTimeout(function () {
+        burst.classList.remove('is-active');
+    }, 700);
+}
+
+window.handlePostDoubleTap = function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!postId) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post || (currentUser && post.likedBy && post.likedBy.includes(currentUser.uid))) {
+        triggerPostLikeBurst(postId);
+        return;
+    }
+    window.toggleLike(postId);
+    triggerPostLikeBurst(postId);
+};
 
 window.toggleSave = async function (postId, event) {
     if (event) event.stopPropagation();
@@ -5799,6 +5948,8 @@ window.saveSettings = async function () {
     const theme = themeChoice ? themeChoice.value : (userProfile.theme || 'system');
     const fileInput = document.getElementById('set-pic-file');
     const cameraInput = document.getElementById('set-pic-camera');
+    const previousProfile = { ...userProfile };
+    let didPersist = false;
 
     if (!username) {
         return alert("Username is required.");
@@ -5838,8 +5989,40 @@ window.saveSettings = async function () {
             }
         });
         if (name) await updateProfile(auth.currentUser, { displayName: name, photoURL: photoURL });
+        didPersist = true;
     } catch (e) {
         console.error("Save failed", e);
+    }
+
+    if (didPersist) {
+        const queued = new Set();
+        const pushChange = function (field, actionType, fromValue, toValue) {
+            const from = (fromValue ?? '').toString();
+            const to = (toValue ?? '').toString();
+            if (from === to) return;
+            const key = `${actionType}:${from}:${to}`;
+            if (queued.has(key)) return;
+            queued.add(key);
+            const payload = buildAccountNotificationPayload(currentUser.uid, {
+                actionType,
+                accountField: field,
+                from,
+                to
+            });
+            queueAccountNotification(payload);
+        };
+
+        pushChange('name', 'name', previousProfile.name, name);
+        pushChange('displayName', 'name', previousProfile.displayName, name);
+        pushChange('realName', 'name', previousProfile.realName, realName);
+        pushChange('nickname', 'name', previousProfile.nickname, nickname);
+        pushChange('username', 'username', previousProfile.username, username);
+        pushChange('email', 'email', previousProfile.email, email);
+        pushChange('bio', 'profile', previousProfile.bio, bio);
+        pushChange('links', 'profile', previousProfile.links, links);
+        pushChange('phone', 'profile', previousProfile.phone, phone);
+        pushChange('gender', 'profile', previousProfile.gender, gender);
+        pushChange('region', 'profile', previousProfile.region, region);
     }
 
     await persistThemePreference(theme);
@@ -6451,6 +6634,12 @@ function renderThreadMainPost(postId) {
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
+    if (mediaContent) {
+        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+            ${mediaContent}
+            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+        </div>`;
+    }
 
     // UPDATE: Trust Badge Logic for Thread View to match Feed
     let trustBadge = "";
@@ -6514,15 +6703,27 @@ window.sendComment = async function () {
     if (!text && !fileInput.files[0]) return;
 
     const btn = document.getElementById('thread-send-btn');
+    const signature = `${text}::${fileInput.files[0]?.name || ''}`;
+    const now = Date.now();
+    if (signature === lastCommentSignature && now - lastCommentSendAt < 1500) return;
+    lastCommentSignature = signature;
+    lastCommentSendAt = now;
     btn.disabled = true;
     btn.textContent = "...";
+    btn.setAttribute('aria-busy', 'true');
+    btn.classList.add('comment-send-busy');
 
     let optimisticId = null;
     try {
         let mediaUrl = null;
         if (fileInput.files[0]) {
-            const path = `comments/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
-            mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            const path = `comment_media/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
+            try {
+                mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            } catch (err) {
+                alert('Unable to upload the image. Please try again.');
+                return;
+            }
         }
 
         const parentCommentId = normalizeReplyTarget(activeReplyId);
@@ -6554,10 +6755,6 @@ window.sendComment = async function () {
                 likes: 0
             }
         });
-        resetInputBox();
-        document.getElementById('attach-btn-text').textContent = "📎 Attach";
-        document.getElementById('attach-btn-text').style.color = "var(--text-muted)";
-        fileInput.value = "";
     } catch (e) {
         console.error(e);
         optimisticThreadComments = optimisticThreadComments.filter(function (c) { return c.id !== optimisticId; });
@@ -6565,6 +6762,9 @@ window.sendComment = async function () {
     } finally {
         btn.disabled = false;
         btn.textContent = "Reply";
+        btn.removeAttribute('aria-busy');
+        btn.classList.remove('comment-send-busy');
+        resetInputBox();
         const defaultSlot = document.getElementById('thread-input-default-slot');
         const inputArea = document.getElementById('thread-input-area');
         if (defaultSlot && inputArea && !defaultSlot.contains(inputArea)) {
@@ -7502,6 +7702,12 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
+    if (mediaContent) {
+        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+            ${mediaContent}
+            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+        </div>`;
+    }
 
     const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
     const bodyPreview = compact
@@ -7727,6 +7933,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
 
     renderProfileContent(uid, normalizedProfile, isSelfView, 'public-profile-content');
     applyProfileCover(container.querySelector('.profile-header'), normalizedProfile, isSelfView);
+    void syncFollowButtonState(uid);
 }
 
 function renderProfile() {
@@ -8325,9 +8532,66 @@ window.setProfileFilter = function (category, uid) {
     if (uid === 'me') renderProfile(); else renderPublicProfile(uid);
 }
 window.moveInputToComment = function (commentId, authorName) { activeReplyId = commentId; const slot = document.getElementById(`reply-slot-${commentId}`); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (slot && inputArea) { slot.appendChild(inputArea); input.placeholder = `Replying to ${authorName}...`; if (cancelBtn) cancelBtn.style.display = 'inline-block'; input.focus(); } }
-window.resetInputBox = function () { activeReplyId = null; const defaultSlot = document.getElementById('thread-input-default-slot'); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (defaultSlot && inputArea) { defaultSlot.appendChild(inputArea); input.placeholder = "Post your reply"; input.value = ""; if (cancelBtn) cancelBtn.style.display = 'none'; } }
+window.resetInputBox = function () {
+    activeReplyId = null;
+    const defaultSlot = document.getElementById('thread-input-default-slot');
+    const inputArea = document.getElementById('thread-input-area');
+    const input = document.getElementById('thread-input');
+    const cancelBtn = document.getElementById('thread-cancel-btn');
+    if (defaultSlot && inputArea) {
+        defaultSlot.appendChild(inputArea);
+        input.placeholder = "Post your reply";
+        input.value = "";
+        if (cancelBtn) cancelBtn.style.display = 'none';
+    }
+    clearCommentAttachment();
+};
 window.triggerFileSelect = function () { document.getElementById('thread-file').click(); }
-window.handleFileSelect = function (input) { const btn = document.getElementById('attach-btn-text'); if (input.files && input.files[0]) { btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "..."; btn.style.color = "var(--primary)"; } else { btn.innerHTML = `<i class="ph ph-paperclip"></i> Attach`; btn.style.color = "var(--text-muted)"; } }
+function updateCommentAttachmentPreview(file) {
+    const preview = document.getElementById('thread-image-preview');
+    if (!preview) return;
+    if (!file) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        preview.innerHTML = `
+            <div class="comment-image-preview__inner">
+                <img src="${e.target.result}" alt="Selected comment image preview">
+                <button type="button" class="comment-image-preview__remove" onclick="window.clearCommentAttachment()"><i class="ph ph-x"></i></button>
+            </div>`;
+        preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+window.clearCommentAttachment = function () {
+    const input = document.getElementById('thread-file');
+    const preview = document.getElementById('thread-image-preview');
+    if (input) input.value = '';
+    if (preview) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+    }
+    const btn = document.getElementById('attach-btn-text');
+    if (btn) {
+        btn.textContent = "📎 Attach";
+        btn.style.color = "var(--text-muted)";
+    }
+};
+window.handleFileSelect = function (input) {
+    const btn = document.getElementById('attach-btn-text');
+    if (input.files && input.files[0]) {
+        if (btn) {
+            btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "...";
+            btn.style.color = "var(--primary)";
+        }
+        updateCommentAttachmentPreview(input.files[0]);
+    } else {
+        window.clearCommentAttachment();
+    }
+}
 window.previewPostImage = function (input) { if (input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function (e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
 window.clearPostImage = function () { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
 window.togglePostOption = function (type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type);['poll', 'gif', 'schedule', 'location'].forEach(function (t) { if (t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
@@ -9025,6 +9289,144 @@ function formatNotificationEntity(entityType = '') {
     return map[normalized] || 'post';
 }
 
+function isAccountNotification(notification = {}) {
+    const type = (notification.type || '').toLowerCase();
+    const entityType = (notification.entityType || '').toLowerCase();
+    const action = (notification.actionType || notification.eventType || '').toLowerCase();
+    const accountEvent = (notification.accountEvent || notification.accountAction || '').toLowerCase();
+    if (type === 'account' || type === 'security') return true;
+    if (entityType === 'account' || entityType === 'security') return true;
+    return ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(action)
+        || ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(accountEvent);
+}
+
+function resolveAccountNotificationPriority(notification = {}) {
+    const action = (notification.actionType || notification.eventType || '').toLowerCase();
+    const field = (notification.accountField || '').toLowerCase();
+    const high = ['password', 'email', 'security', 'login', 'signin', 'session'];
+    const medium = ['username', 'name', 'realname', 'real_name', 'real-name'];
+    const low = ['nickname', 'bio', 'region', 'links', 'photo', 'avatar', 'profile', 'photoURL', 'photoUrl'];
+    if (high.includes(action) || high.includes(field)) return 'high';
+    if (medium.includes(action) || medium.includes(field)) return 'medium';
+    if (low.includes(action) || low.includes(field)) return 'low';
+    return 'low';
+}
+
+function getAccountNotificationPriorityMeta(notification = {}) {
+    const value = (notification.priority || resolveAccountNotificationPriority(notification) || 'low').toLowerCase();
+    if (value === 'high') return { value: 'high', label: 'HIGH' };
+    if (value === 'medium') return { value: 'medium', label: 'MEDIUM' };
+    return { value: 'low', label: 'LOW' };
+}
+
+function formatAccountNotificationTitle(notification = {}) {
+    const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
+    const field = (notification.accountField || notification.field || notification.entityType || '').toLowerCase();
+    if (notification.title) return notification.title;
+    if (action.includes('password') || field === 'password') return 'Password updated';
+    if (action.includes('login') || action.includes('signin') || field === 'session') return 'New login detected';
+    if (action.includes('username') || field === 'username') return 'Username updated';
+    if (action.includes('name') || field === 'name') return 'Name updated';
+    if (action.includes('email') || field === 'email') return 'Email updated';
+    if (action.includes('profile') || field === 'profile') return 'Profile updated';
+    if (action.includes('security') || field === 'security') return 'Security update';
+    return 'Account update';
+}
+
+function formatAccountNotificationBody(notification = {}, options = {}) {
+    const { includeLabel = true } = options;
+    const priorityMeta = getAccountNotificationPriorityMeta(notification);
+    const prefix = includeLabel ? `[${priorityMeta.label} PRIORITY] ` : '';
+    const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
+    const field = (notification.accountField || '').toLowerCase();
+    const toValue = notification.to || notification.newValue || notification.value;
+    if (action.includes('password')) return `${prefix}Your password was changed.`;
+    if (action.includes('email')) return `${prefix}Your email was changed${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('username')) return `${prefix}Your username was changed${toValue ? ` to @${toValue}` : ''}.`;
+    if (field.includes('nickname')) return `${prefix}Your nickname was updated.`;
+    if (field.includes('bio')) return `${prefix}Your bio was updated.`;
+    if (field.includes('region')) return `${prefix}Your region was updated.`;
+    if (field.includes('links')) return `${prefix}Your links were updated.`;
+    if (field.includes('photo') || field.includes('avatar')) return `${prefix}Your profile photo was updated.`;
+    if (action.includes('name')) return `${prefix}Your name was changed${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('login') || action.includes('signin') || action.includes('session')) return `${prefix}A new login was detected.`;
+    if (action.includes('profile')) return `${prefix}Your profile was updated.`;
+    return `${prefix}Your account was updated.`;
+}
+
+function formatAccountNotificationMeta(notification = {}) {
+    const timestamp = formatMessageHoverTimestamp(notification.createdAt);
+    const locationBits = [];
+    const location = notification.location || notification.loginLocation || notification.city;
+    const region = notification.region || notification.state;
+    const country = notification.country;
+    const device = notification.device || notification.userAgent;
+    if (location) locationBits.push(location);
+    if (region) locationBits.push(region);
+    if (country) locationBits.push(country);
+    const locationLabel = locationBits.filter(Boolean).join(', ');
+    const details = [];
+    if (locationLabel) details.push(locationLabel);
+    if (notification.ip) details.push(`IP ${notification.ip}`);
+    if (device) details.push(device);
+    if (timestamp) details.push(timestamp);
+    return details.join(' • ');
+}
+
+function buildAccountNotificationPayload(targetUid, payload = {}) {
+    const priority = (payload.priority || resolveAccountNotificationPriority(payload)).toLowerCase();
+    return {
+        targetUid,
+        type: 'account',
+        entityType: 'account',
+        actionType: payload.actionType || payload.eventType || 'profile',
+        title: payload.title || '',
+        body: payload.body || '',
+        accountField: payload.accountField || '',
+        priority,
+        location: payload.location || '',
+        region: payload.region || '',
+        country: payload.country || '',
+        ip: payload.ip || '',
+        device: payload.device || '',
+        from: payload.from || payload.previousValue || '',
+        to: payload.to || payload.newValue || '',
+        createdAt: serverTimestamp(),
+        read: false
+    };
+}
+
+function preparePasswordChangeNotification(userId, options = {}) {
+    return buildAccountNotificationPayload(userId, {
+        actionType: 'password',
+        title: 'Password updated',
+        body: 'Your password was updated. If this wasn’t you, reset it immediately.',
+        location: options.location || '',
+        region: options.region || '',
+        country: options.country || '',
+        ip: options.ip || '',
+        device: options.device || ''
+    });
+}
+
+async function queueAccountNotification(payload = {}) {
+    if (!payload?.targetUid) return;
+    const priority = (payload.priority || resolveAccountNotificationPriority(payload)).toLowerCase();
+    const body = {
+        ...payload,
+        type: payload.type || 'account',
+        entityType: payload.entityType || 'account',
+        createdAt: payload.createdAt || serverTimestamp(),
+        priority,
+        read: payload.read ?? false
+    };
+    try {
+        await addDoc(collection(db, 'users', payload.targetUid, 'notifications'), body);
+    } catch (err) {
+        console.warn('Failed to queue account notification', err?.message || err);
+    }
+}
+
 function loadInboxModeFromStorage() {
     if (inboxModeRestored) return;
     inboxModeRestored = true;
@@ -9129,10 +9531,9 @@ function updateInboxNotificationCounts() {
         else if (bucket === 'videos') unreadVideos++;
         else if (bucket === 'livestreams') unreadLivestreams++;
     });
-    inboxNotifications.forEach((notif) => {
+    accountNotifications.forEach((notif) => {
         if (notifIsRead(notif)) return;
-        const bucket = getNotificationBucket(notif);
-        if (bucket === 'account') unreadAccount++;
+        if (isAccountNotification(notif)) unreadAccount++;
     });
 
     inboxNotificationCounts = {
@@ -9185,6 +9586,8 @@ function toggleInboxContentFilter(mode) {
 }
 
 window.toggleInboxContentFilter = toggleInboxContentFilter;
+window.preparePasswordChangeNotification = preparePasswordChangeNotification;
+window.queueAccountNotification = queueAccountNotification;
 
 function markNotificationRead(notif) {
     if (!currentUser || !notif || notifIsRead(notif) || !notif.id) return;
@@ -9240,6 +9643,39 @@ async function markAllContentNotificationsRead(optionalBucket) {
             await batch.commit();
         } catch (err) {
             console.warn('Failed to mark content notifications read', err?.message || err);
+        }
+    }
+    updateInboxNotificationCounts();
+}
+
+async function markAllAccountNotificationsRead() {
+    if (!currentUser) return;
+    const pending = accountNotifications.filter(function (notif) {
+        if (!notif || !notif.id || notifIsRead(notif)) return false;
+        return true;
+    });
+    if (!pending.length) return;
+    pending.forEach(function (notif) {
+        notif.read = true;
+        notif.isRead = true;
+        notif.readAt = new Date();
+    });
+    updateInboxNotificationCounts();
+    const updates = pending.slice();
+    for (let i = 0; i < updates.length; i += 450) {
+        const batch = writeBatch(db);
+        updates.slice(i, i + 450).forEach(function (notif) {
+            const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
+            batch.update(notifRef, {
+                read: true,
+                isRead: true,
+                readAt: serverTimestamp()
+            });
+        });
+        try {
+            await batch.commit();
+        } catch (err) {
+            console.warn('Failed to mark account notifications read', err?.message || err);
         }
     }
     updateInboxNotificationCounts();
@@ -9444,6 +9880,127 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
+function openAccountNotificationModal(notif = {}) {
+    if (!notif) return;
+    let modal = document.getElementById('account-notification-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'account-notification-modal';
+        modal.className = 'modal-overlay account-notification-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Account notification</h3>
+                    <button class="x-close-btn" type="button" aria-label="Close" onclick="window.closeAccountNotificationModal()">&times;</button>
+                </div>
+                <div id="account-notification-body" class="account-notification-body"></div>
+                <div class="modal-actions">
+                    <button type="button" class="create-btn-sidebar" style="width:auto;" onclick="window.closeAccountNotificationModal()">Close</button>
+                </div>
+            </div>`;
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) {
+                window.closeAccountNotificationModal();
+            }
+        });
+        document.body.appendChild(modal);
+    }
+    const body = modal.querySelector('#account-notification-body');
+    const timestamp = formatMessageHoverTimestamp(notif.createdAt) || 'Just now';
+    const fieldLabel = notif.accountField || notif.actionType || 'Account';
+    const previousValue = notif.from || notif.previousValue || notif.oldValue || '—';
+    const nextValue = notif.to || notif.newValue || notif.value || '—';
+    const details = [];
+    if (notif.location || notif.loginLocation) details.push({ label: 'Location', value: notif.location || notif.loginLocation });
+    if (notif.device || notif.userAgent) details.push({ label: 'Device', value: notif.device || notif.userAgent });
+    if (notif.ip) details.push({ label: 'IP', value: notif.ip });
+    body.innerHTML = `
+        <div class="account-notification-detail">
+            <div class="detail-label">Changed field</div>
+            <div class="detail-value">${escapeHtml(fieldLabel)}</div>
+        </div>
+        <div class="account-notification-detail">
+            <div class="detail-label">Previous value</div>
+            <div class="detail-value">${escapeHtml(previousValue)}</div>
+        </div>
+        <div class="account-notification-detail">
+            <div class="detail-label">New value</div>
+            <div class="detail-value">${escapeHtml(nextValue)}</div>
+        </div>
+        <div class="account-notification-detail">
+            <div class="detail-label">Timestamp</div>
+            <div class="detail-value">${escapeHtml(timestamp)}</div>
+        </div>
+        ${details.map(function (item) {
+            return `<div class="account-notification-detail"><div class="detail-label">${escapeHtml(item.label)}</div><div class="detail-value">${escapeHtml(item.value)}</div></div>`;
+        }).join('')}
+    `;
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    document.body.style.overflow = 'hidden';
+}
+
+window.closeAccountNotificationModal = function () {
+    const modal = document.getElementById('account-notification-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+    document.body.style.overflow = '';
+};
+
+function renderAccountNotifications() {
+    const listEl = document.getElementById('inbox-list-account');
+    const emptyEl = document.getElementById('inbox-empty-account');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const items = accountNotifications
+        .filter(isAccountNotification)
+        .sort(function (a, b) {
+            const aTs = toDateSafe(a.createdAt)?.getTime() || 0;
+            const bTs = toDateSafe(b.createdAt)?.getTime() || 0;
+            return bTs - aTs;
+        });
+    if (!items.length) {
+        if (emptyEl) emptyEl.style.display = 'block';
+        return;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    const fragment = document.createDocumentFragment();
+    items.slice(0, 50).forEach(function (notif) {
+        const row = document.createElement('div');
+        row.className = 'inbox-notification-item inbox-notification-item--content';
+        const title = formatAccountNotificationTitle(notif);
+        const priorityMeta = getAccountNotificationPriorityMeta(notif);
+        const body = formatAccountNotificationBody(notif, { includeLabel: false });
+        const meta = formatAccountNotificationMeta(notif);
+        const displayName = userProfile?.name || userProfile?.displayName || currentUser?.displayName || 'Account';
+        const photoURL = currentUser?.photoURL || userProfile?.photoURL || '';
+        const avatarData = {
+            uid: currentUser?.uid || 'account',
+            username: displayName,
+            displayName: displayName,
+            photoURL: photoURL,
+            avatarColor: computeAvatarColor(displayName)
+        };
+        row.innerHTML = `
+            <div class="inbox-notification-actor">
+                <div class="conversation-avatar-slot">${renderAvatar(avatarData, { size: 42 })}</div>
+                <div class="inbox-notification-text">
+                    <div><strong>${escapeHtml(title)}</strong></div>
+                    ${body ? `<div class=\"inbox-notification-meta\"><span class=\"notif-priority notif-priority-${priorityMeta.value}\">[${priorityMeta.label} PRIORITY]</span> ${escapeHtml(body)}</div>` : ''}
+                    ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
+                </div>
+            </div>
+        `;
+        row.onclick = function () {
+            markNotificationRead(notif);
+            openAccountNotificationModal(notif);
+        };
+        fragment.appendChild(row);
+    });
+    listEl.appendChild(fragment);
+}
+
 function setInboxMode(mode = 'messages', options = {}) {
     const { skipRouteUpdate = false, routeView = currentViewId } = options;
     const contentModes = ['posts', 'videos', 'livestreams'];
@@ -9477,8 +10034,11 @@ function setInboxMode(mode = 'messages', options = {}) {
     if (inboxMode === 'content') {
         renderContentNotificationList();
         syncInboxContentFilters();
-        if (previousMode !== 'content') {
-            void markAllContentNotificationsRead();
+        void markAllContentNotificationsRead();
+    } else if (inboxMode === 'account') {
+        renderAccountNotifications();
+        if (previousMode !== 'account') {
+            void markAllAccountNotificationsRead();
         }
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
@@ -12329,6 +12889,44 @@ function initInboxNotifications(userId) {
     });
 }
 
+function initAccountNotifications(userId) {
+    if (accountNotificationsUnsubscribe) {
+        try { accountNotificationsUnsubscribe(); } catch (err) { }
+        accountNotificationsUnsubscribe = null;
+    }
+    if (!userId) return;
+    const notifRef = query(
+        collection(db, 'users', userId, 'notifications'),
+        where('type', '==', 'account'),
+        orderBy('createdAt', 'desc'),
+        limit(100)
+    );
+    const applyAccountNotifications = function (items = []) {
+        accountNotifications = items;
+        updateInboxNotificationCounts();
+        if (inboxMode === 'account') {
+            renderAccountNotifications();
+        }
+    };
+    accountNotificationsUnsubscribe = onSnapshot(notifRef, function (snap) {
+        const items = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        applyAccountNotifications(items);
+        if (!snap.empty) return;
+        const legacyRef = query(collection(db, 'users', userId, 'notifications'), orderBy('createdAt', 'desc'), limit(200));
+        getDocs(legacyRef).then(function (legacySnap) {
+            if (accountNotifications.length) return;
+            const legacyItems = legacySnap.docs
+                .map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); })
+                .filter(isAccountNotification);
+            applyAccountNotifications(legacyItems);
+        }).catch(function (err) {
+            console.warn('Account notifications fallback failed', err?.message || err);
+        });
+    }, function (err) {
+        handleSnapshotError('Account notifications', err);
+    });
+}
+
 function initContentNotifications(userId) {
     if (contentNotificationsUnsubscribe) {
         try { contentNotificationsUnsubscribe(); } catch (err) { }
@@ -14298,6 +14896,7 @@ window.markConversationAsRead = async function (conversationId = activeConversat
     } catch (e) {
         console.warn('Unable to update mapping unread', e);
     }
+    updateInboxNotificationCounts();
 };
 
 function updateChatStartControls() {
@@ -16065,6 +16664,10 @@ function buildVideoCard(video) {
                 openVideoFromFeed(video.id, video);
                 return;
             }
+            if (USE_INLINE_VIDEO_WATCH) {
+                openInlineVideoWatch(video);
+                return;
+            }
             window.openVideoDetail(video.id);
         },
         onOpenProfile: function (uid, event) {
@@ -16142,7 +16745,10 @@ function renderVideoFeed(videos = []) {
 function ensureVideoScrollObserver() {
     if (isInlineWatchOpen()) return;
     const sentinel = document.getElementById('video-feed-sentinel');
-    if (!sentinel || videosPagination.done) return;
+    if (!sentinel || videosPagination.done) {
+        if (videosScrollObserver) videosScrollObserver.disconnect();
+        return;
+    }
     if (videosScrollObserver) {
         videosScrollObserver.disconnect();
     }
@@ -16361,25 +16967,254 @@ function initVideoViewerLayout() {
 // Inline watch helpers are grouped to avoid duplicate function declarations in module scope.
 const InlineWatchHelpers = {
     getInlineWatchSuggestions(videoId, limit = 8) {
-        return videosCache.filter(function (video) { return video.id !== videoId; }).slice(0, limit);
+        const pool = videosCache.filter(function (video) { return video.id !== videoId; });
+        const ranked = pool.slice().sort(function (a, b) {
+            return (b.stats?.views || 0) - (a.stats?.views || 0);
+        });
+        const pickFrom = ranked.slice(0, Math.max(limit * 3, limit));
+        for (let i = pickFrom.length - 1; i > 0; i -= 1) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [pickFrom[i], pickFrom[j]] = [pickFrom[j], pickFrom[i]];
+        }
+        return pickFrom.slice(0, limit);
     }
 };
 
+const VIDEO_COMMENTS_PAGE_SIZE = 20;
+const inlineWatchCommentState = new Map();
+const inlineWatchViewSessions = new Set();
+
+function linkifyWatchText(text = '') {
+    const raw = String(text || '');
+    const regex = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+    let lastIndex = 0;
+    let output = '';
+    raw.replace(regex, function (match, _group, offset) {
+        const before = raw.slice(lastIndex, offset);
+        output += escapeHtml(before);
+        const href = match.startsWith('http') ? match : `https://${match}`;
+        const safeHref = escapeHtml(href);
+        const label = escapeHtml(match);
+        output += `<a href="${safeHref}" target="_blank" rel="noopener">${label}</a>`;
+        lastIndex = offset + match.length;
+        return match;
+    });
+    if (lastIndex < raw.length) {
+        output += escapeHtml(raw.slice(lastIndex));
+    }
+    return output || escapeHtml(raw);
+}
+
+function buildWatchDescriptionPreview(text = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return '';
+    const firstParagraph = raw.split(/\n+/)[0] || raw;
+    if (firstParagraph.length <= 150) return firstParagraph;
+    return `${firstParagraph.slice(0, 150).trim()}…`;
+}
+
+function resolveWatchDescriptionHtml(text = '') {
+    const raw = String(text || '');
+    const parts = raw.split(/\n/);
+    return parts.map(function (part) { return linkifyWatchText(part); }).join('<br>');
+}
+
+function renderWatchDescription(root, options = {}) {
+    if (!root) return;
+    const descEl = root.querySelector('.watch-description-text');
+    const toggle = root.querySelector('.watch-description-toggle');
+    if (!descEl || !toggle) return;
+    const raw = decodeURIComponent(descEl.dataset.full || '');
+    const preview = decodeURIComponent(descEl.dataset.preview || '');
+    const isExpanded = descEl.dataset.expanded === 'true';
+    const nextHtml = resolveWatchDescriptionHtml(isExpanded ? raw : preview);
+    descEl.innerHTML = nextHtml || '<span class="watch-description-empty">No description yet.</span>';
+    toggle.textContent = isExpanded ? 'Show less' : 'Show more';
+    toggle.style.display = raw && raw !== preview ? 'inline-flex' : 'none';
+}
+
+function getInlineWatchCommentState(videoId) {
+    if (!inlineWatchCommentState.has(videoId)) {
+        inlineWatchCommentState.set(videoId, {
+            items: [],
+            lastDoc: null,
+            done: false,
+            loading: false
+        });
+    }
+    return inlineWatchCommentState.get(videoId);
+}
+
+async function fetchInlineWatchComments(videoId, options = {}) {
+    const state = getInlineWatchCommentState(videoId);
+    if (state.loading || state.done) return state;
+    state.loading = true;
+    const batchSize = Number(options.limit) || VIDEO_COMMENTS_PAGE_SIZE;
+    try {
+        const commentsRef = collection(db, 'videos', videoId, 'comments');
+        const clauses = [orderBy('createdAt', 'desc'), limit(batchSize)];
+        if (state.lastDoc) {
+            clauses.splice(1, 0, startAfter(state.lastDoc));
+        }
+        const q = query(commentsRef, ...clauses);
+        const snap = await getDocs(q);
+        const nextItems = snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
+        state.items = state.items.concat(nextItems);
+        const missingProfiles = nextItems.map(function (item) { return item.uid; })
+            .filter(Boolean)
+            .filter(function (uid) { return !getCachedUser(uid); });
+        await Promise.all(missingProfiles.map(function (uid) { return resolveUserProfile(uid); }));
+        state.lastDoc = snap.docs[snap.docs.length - 1] || state.lastDoc;
+        state.done = snap.empty || snap.docs.length < batchSize;
+        return state;
+    } finally {
+        state.loading = false;
+    }
+}
+
+function buildInlineWatchCommentItem(comment = {}) {
+    const profile = getCachedUser(comment.uid) || { uid: comment.uid, displayName: comment.displayName || comment.name || 'Viewer', photoURL: comment.photoURL || '' };
+    const timestamp = formatVideoTimestamp(comment.createdAt);
+    const text = escapeHtml(comment.text || '').replace(/\n/g, '<br>');
+    const attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
+    const attachmentHtml = attachments.map(function (att) {
+        const mediaRef = att.url || att.storagePath || '';
+        if (!mediaRef) return '';
+        const resolved = resolveDmMediaUrl(mediaRef);
+        if (resolved.status === 'ok' && resolved.url) {
+            return `<img src="${resolved.url}" alt="Comment attachment" loading="lazy">`;
+        }
+        if (resolved.status === 'pending') {
+            fetchDmMediaUrl(mediaRef).then(function (next) {
+                if (!next.url) return;
+                const img = document.querySelector(`[data-comment-attachment='${comment.id}'] img[data-media='${mediaRef}']`);
+                if (img) img.src = next.url;
+            });
+            return `<img data-media="${mediaRef}" src="" alt="Comment attachment" loading="lazy">`;
+        }
+        return `<div class="watch-comment-attachment-fallback">${getDmMediaFallbackText(resolved.status)}</div>`;
+    }).filter(Boolean).join('');
+    return `
+        <div class="watch-comment" data-comment-id="${comment.id}">
+            <div class="watch-comment-avatar">${renderAvatar(profile, { size: 40 })}</div>
+            <div class="watch-comment-body">
+                <div class="watch-comment-meta">${escapeHtml(profile.displayName || profile.username || 'Viewer')} • ${timestamp}</div>
+                <div class="watch-comment-text">${text}</div>
+                ${attachmentHtml ? `<div class="watch-comment-attachments" data-comment-attachment="${comment.id}">${attachmentHtml}</div>` : ''}
+                <div class="watch-comment-actions">
+                    <span><i class="ph ph-thumbs-up"></i> ${comment.likes || 0}</span>
+                    <span>Reply</span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderInlineWatchComments(videoId) {
+    const root = document.querySelector('#video-feed .watch-page');
+    if (!root) return;
+    const list = root.querySelector('.watch-comments-list');
+    const countEl = root.querySelector('.watch-comments-count');
+    if (!list || !countEl) return;
+    const state = getInlineWatchCommentState(videoId);
+    list.innerHTML = state.items.map(buildInlineWatchCommentItem).join('') || '<div class="watch-empty">No comments yet. Be the first to share your thoughts.</div>';
+    const video = getVideoById(videoId);
+    const serverCount = video?.stats?.comments || 0;
+    const count = Math.max(serverCount, state.items.length || 0);
+    countEl.textContent = `${formatCompactNumber(count)} Comment${count === 1 ? '' : 's'}`;
+    const moreBtn = root.querySelector('.watch-comments-more');
+    if (moreBtn) {
+        moreBtn.style.display = state.done ? 'none' : 'inline-flex';
+        moreBtn.disabled = state.loading;
+        moreBtn.textContent = state.loading ? 'Loading…' : 'Load more';
+    }
+}
+
+async function createVideoComment(videoId, payload = {}) {
+    if (!videoId) return null;
+    const commentRef = await addDoc(collection(db, 'videos', videoId, 'comments'), {
+        uid: payload.uid || currentUser?.uid || null,
+        displayName: payload.displayName || currentUser?.displayName || currentUser?.email || 'Viewer',
+        photoURL: payload.photoURL || currentUser?.photoURL || null,
+        text: payload.text || '',
+        attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+        createdAt: serverTimestamp(),
+        editedAt: null,
+        likes: 0
+    });
+    await updateDoc(doc(db, 'videos', videoId), { 'stats.comments': increment(1) });
+    updateVideoStats(videoId, { comments: 1 });
+    return commentRef;
+}
+
+function updateInlineWatchMeta(videoId) {
+    const root = document.querySelector('#video-feed .watch-page');
+    if (!root || root.dataset.videoId !== videoId) return;
+    const video = getVideoById(videoId);
+    if (!video) return;
+    const meta = root.querySelector('.watch-description-meta');
+    if (meta) {
+        meta.textContent = `${formatCompactNumber(getVideoViewCount(video))} views • ${formatVideoTimestamp(video.createdAt)}`;
+    }
+}
+
+async function recordVideoView(videoId, uid) {
+    if (!videoId) return;
+    const dedupeKey = `${videoId}:${uid || 'guest'}`;
+    if (inlineWatchViewSessions.has(dedupeKey)) return;
+    inlineWatchViewSessions.add(dedupeKey);
+    if (!uid) {
+        updateVideoStats(videoId, { views: 1 });
+        updateInlineWatchMeta(videoId);
+        updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) }).catch(function () {});
+        return;
+    }
+    const viewRef = doc(db, 'videos', videoId, 'views', uid);
+    try {
+        const snap = await getDoc(viewRef);
+        if (snap.exists()) return;
+        await Promise.all([
+            setDoc(viewRef, { createdAt: serverTimestamp() }),
+            updateDoc(doc(db, 'videos', videoId), { 'stats.views': increment(1) })
+        ]);
+        updateVideoStats(videoId, { views: 1 });
+        updateInlineWatchMeta(videoId);
+    } catch (err) {
+        console.warn('Video view record failed', err?.message || err);
+    }
+}
+
+async function notifyVideoOwner({ videoId, ownerId, actionType, previewText, extra }) {
+    if (!ownerId || !currentUser?.uid) return;
+    await createNotificationOnce({
+        targetUid: ownerId,
+        actorUid: currentUser.uid,
+        entityType: 'video',
+        entityId: videoId,
+        contentType: 'video',
+        actionType,
+        previewText: previewText || '',
+        extra: extra || null
+    });
+}
+
 function buildInlineWatchPage(video, author, suggestions) {
     const videoTitle = escapeHtml(video.title || video.caption || 'Untitled video');
-    const videoDescription = escapeHtml(video.description || '');
+    const rawDescription = video.description || '';
+    const descriptionPreview = buildWatchDescriptionPreview(rawDescription);
     const channelName = escapeHtml(author?.displayName || author?.name || author?.username || 'Nexera Creator');
     const channelHandle = escapeHtml(author?.username ? `@${author.username}` : 'Nexera');
     const views = formatCompactNumber(getVideoViewCount(video));
     const updated = formatVideoTimestamp(video.createdAt) || 'Today';
     const likeCount = formatCompactNumber(video.stats?.likes || 0);
+    const dislikeCount = formatCompactNumber(video.stats?.dislikes || 0);
     const suggestedHtml = suggestions.map(function (entry) {
         const thumb = escapeHtml(resolveVideoThumbnail(entry));
         const title = escapeHtml(entry.title || entry.caption || 'Untitled video');
         const channel = escapeHtml((getCachedUser(entry.ownerId)?.displayName || getCachedUser(entry.ownerId)?.name || getCachedUser(entry.ownerId)?.username || 'Nexera Creator'));
         const stats = `${formatCompactNumber(getVideoViewCount(entry))} views • ${formatVideoTimestamp(entry.createdAt)}`;
         return `
-            <div class="watch-suggestion">
+            <div class="watch-suggestion" data-video-id="${entry.id}">
                 <div class="watch-suggestion-thumb">
                     ${thumb ? `<img src="${thumb}" alt="Video thumbnail" loading="lazy" decoding="async">` : '<div class="video-preview-placeholder"></div>'}
                     <span class="watch-suggestion-duration">${formatVideoDuration(entry)}</span>
@@ -16395,7 +17230,10 @@ function buildInlineWatchPage(video, author, suggestions) {
     }).join('');
 
     return `
-        <div class="watch-page">
+        <div class="watch-page" data-video-id="${video.id}">
+            <div class="watch-toolbar">
+                <button class="watch-back-btn" data-watch-action="back"><i class="ph ph-arrow-left"></i> Back</button>
+            </div>
             <div class="watch-grid">
                 <section class="watch-primary">
                     <div class="watch-player">
@@ -16419,11 +17257,11 @@ function buildInlineWatchPage(video, author, suggestions) {
                                 <div class="watch-channel-name">${channelName}</div>
                                 <div class="watch-channel-handle">${channelHandle}</div>
                             </div>
-                            <button class="watch-join-btn">Follow</button>
+                            ${video.ownerId && currentUser?.uid !== video.ownerId ? `<button class="watch-join-btn js-follow-user-${video.ownerId}" data-author-id="${video.ownerId}">Follow</button>` : ''}
                         </div>
                         <div class="watch-actions">
                             <button class="watch-pill watch-like-btn" data-count="${video.stats?.likes || 0}" data-liked="false"><i class="ph ph-thumbs-up"></i><span>Like</span><span class="watch-like-count">${likeCount}</span></button>
-                            <button class="watch-pill"><i class="ph ph-thumbs-down"></i></button>
+                            <button class="watch-pill watch-dislike-btn" data-count="${video.stats?.dislikes || 0}" data-disliked="false"><i class="ph ph-thumbs-down"></i><span>Dislike</span><span class="watch-dislike-count">${dislikeCount}</span></button>
                             <button class="watch-pill" data-watch-action="share"><i class="ph ph-share-network"></i> Share</button>
                             <button class="watch-pill" data-watch-action="save"><i class="ph ph-bookmark-simple"></i> Save</button>
                             <button class="watch-pill" data-watch-action="thanks"><i class="ph ph-currency-dollar"></i> Thanks</button>
@@ -16431,26 +17269,30 @@ function buildInlineWatchPage(video, author, suggestions) {
                     </div>
                     <div class="watch-description">
                         <div class="watch-description-meta">${views} views • ${updated}</div>
-                        <div class="watch-description-text">${videoDescription || 'No description yet.'}</div>
-                        <span class="watch-description-more">...more</span>
+                        <div class="watch-description-text" data-full="${encodeURIComponent(rawDescription)}" data-preview="${encodeURIComponent(descriptionPreview)}"></div>
+                        <button class="watch-description-toggle" type="button">Show more</button>
                     </div>
                     <div class="watch-comments">
                         <div class="watch-comments-header">
-                            <span>5,090 Comments</span>
-                            <button class="watch-pill small"><i class="ph ph-sort-ascending"></i> Sort by</button>
+                            <span class="watch-comments-count">0 Comments</span>
+                            <button class="watch-pill small" data-watch-action="sort"><i class="ph ph-sort-ascending"></i> Sort by</button>
                         </div>
                         <div class="watch-comment-compose">
                             <div class="watch-comment-avatar"></div>
-                            <input type="text" placeholder="Add a comment..." />
-                        </div>
-                        <div class="watch-comment">
-                            <div class="watch-comment-avatar"></div>
-                            <div>
-                                <div class="watch-comment-meta">Nexera Viewer • 1 day ago</div>
-                                <div class="watch-comment-text">Great breakdown—thanks for sharing!</div>
-                                <div class="watch-comment-actions"><span><i class="ph ph-thumbs-up"></i> 24</span><span>Reply</span></div>
+                            <div class="watch-comment-input">
+                                <textarea class="watch-comment-textarea" placeholder="Add a comment..." rows="2"></textarea>
+                                <div class="watch-comment-compose-actions">
+                                    <label class="watch-comment-upload">
+                                        <input class="watch-comment-file" type="file" accept="image/*" />
+                                        <i class="ph ph-image"></i> Add image
+                                    </label>
+                                    <button class="watch-pill small watch-comment-submit" type="button">Comment</button>
+                                </div>
+                                <div class="watch-comment-attachment-preview"></div>
                             </div>
                         </div>
+                        <div class="watch-comments-list"></div>
+                        <button class="watch-pill small watch-comments-more" type="button">Load more</button>
                     </div>
                 </section>
                 <aside class="watch-rail">
@@ -16489,6 +17331,12 @@ async function openInlineVideoWatch(video) {
     const suggestions = InlineWatchHelpers.getInlineWatchSuggestions(video.id);
     feed.innerHTML = buildInlineWatchPage(video, author, suggestions);
     bindInlineWatchInteractions(video, author);
+    renderWatchDescription(feed.querySelector('.watch-page'));
+    const state = getInlineWatchCommentState(video.id);
+    if (!state.items.length) {
+        await fetchInlineWatchComments(video.id);
+    }
+    renderInlineWatchComments(video.id);
 }
 
 function restoreInlineVideoWatch() {
@@ -16513,12 +17361,16 @@ function openInlineWatchActionModal(action) {
     const titles = {
         share: 'Share',
         save: 'Save',
-        thanks: 'Thanks'
+        thanks: 'Thanks',
+        sort: 'Sort comments',
+        more: 'More options'
     };
     const messages = {
         share: 'Sharing options are coming soon.',
         save: 'Save this video to your library.',
-        thanks: 'Thanks for supporting the creator.'
+        thanks: 'Thanks for supporting the creator.',
+        sort: 'Comment sorting options are coming soon.',
+        more: 'More actions are coming soon.'
     };
     if (typeof openConfirmModal === 'function') {
         openConfirmModal({
@@ -16550,6 +17402,41 @@ function updateInlineWatchLikeButton(button) {
     if (iconEl) iconEl.className = iconClass;
     if (textNode) textNode.textContent = label;
     if (countEl) countEl.textContent = formatCompactNumber(count);
+    button.classList.toggle('is-active', liked);
+}
+
+function updateInlineWatchDislikeButton(button) {
+    if (!button) return;
+    const disliked = button.dataset.disliked === 'true';
+    const count = Number(button.dataset.count) || 0;
+    const iconClass = disliked ? 'ph-fill ph-thumbs-down' : 'ph ph-thumbs-down';
+    const label = disliked ? 'Disliked' : 'Dislike';
+    const countEl = button.querySelector('.watch-dislike-count');
+    const textNode = button.querySelector('span');
+    const iconEl = button.querySelector('i');
+    if (iconEl) iconEl.className = iconClass;
+    if (textNode) textNode.textContent = label;
+    if (countEl) countEl.textContent = formatCompactNumber(count);
+    button.classList.toggle('is-active', disliked);
+}
+
+function syncInlineWatchEngagement(videoId, root) {
+    const video = getVideoById(videoId);
+    if (!video) return;
+    ensureVideoStats(video);
+    const state = getVideoEngagementStatus(videoId);
+    const likeBtn = root?.querySelector('.watch-like-btn');
+    const dislikeBtn = root?.querySelector('.watch-dislike-btn');
+    if (likeBtn) {
+        likeBtn.dataset.liked = state.liked ? 'true' : 'false';
+        likeBtn.dataset.count = String(video.stats.likes || 0);
+        updateInlineWatchLikeButton(likeBtn);
+    }
+    if (dislikeBtn) {
+        dislikeBtn.dataset.disliked = state.disliked ? 'true' : 'false';
+        dislikeBtn.dataset.count = String(video.stats.dislikes || 0);
+        updateInlineWatchDislikeButton(dislikeBtn);
+    }
 }
 
 function bindInlineWatchInteractions(video, author) {
@@ -16558,19 +17445,29 @@ function bindInlineWatchInteractions(video, author) {
     const player = root.querySelector('#watch-player');
     const playBtn = root.querySelector('.watch-control-btn[data-action="toggle-play"]');
     const likeBtn = root.querySelector('.watch-like-btn');
+    const dislikeBtn = root.querySelector('.watch-dislike-btn');
+    const followBtn = root.querySelector('.watch-join-btn');
     const channelAvatar = root.querySelector('.watch-channel-avatar');
     const composeAvatar = root.querySelector('.watch-comment-compose .watch-comment-avatar');
+    const descToggle = root.querySelector('.watch-description-toggle');
+    const commentSubmit = root.querySelector('.watch-comment-submit');
+    const commentInput = root.querySelector('.watch-comment-textarea');
+    const commentFile = root.querySelector('.watch-comment-file');
+    const commentPreview = root.querySelector('.watch-comment-attachment-preview');
+    const commentsMore = root.querySelector('.watch-comments-more');
+    const backBtn = root.querySelector('.watch-back-btn');
 
     if (channelAvatar) applyAvatarToElement(channelAvatar, author || {}, { size: 40 });
     if (composeAvatar) applyAvatarToElement(composeAvatar, currentUser || author || {}, { size: 40 });
-    root.querySelectorAll('.watch-comment-avatar').forEach(function (avatar) {
-        if (avatar === composeAvatar) return;
-        applyAvatarToElement(avatar, author || {}, { size: 40 });
-    });
+    if (followBtn && followBtn.dataset.authorId) {
+        updateFollowButtonsForUser(followBtn.dataset.authorId, followedUsers.has(followBtn.dataset.authorId));
+    }
 
     if (player && playBtn) {
         updateInlineWatchPlayState(player, playBtn);
         const trace = startTrace('video_load_time');
+        let viewTimer = null;
+        let viewRecorded = false;
         const stopTraceOnEnd = function (error) {
             stopTrace(trace, { error });
             player.removeEventListener('playing', onPlaying);
@@ -16597,26 +17494,195 @@ function bindInlineWatchInteractions(video, author) {
             }
             updateInlineWatchPlayState(player, playBtn);
         });
-        player.addEventListener('play', function () { updateInlineWatchPlayState(player, playBtn); });
-        player.addEventListener('pause', function () { updateInlineWatchPlayState(player, playBtn); });
+        player.addEventListener('play', function () {
+            updateInlineWatchPlayState(player, playBtn);
+            if (!viewRecorded) {
+                if (viewTimer) clearTimeout(viewTimer);
+                viewTimer = setTimeout(function () {
+                    viewRecorded = true;
+                    recordVideoView(video.id, currentUser?.uid || null);
+                }, 2000);
+            }
+        });
+        player.addEventListener('pause', function () {
+            updateInlineWatchPlayState(player, playBtn);
+            if (viewTimer) {
+                clearTimeout(viewTimer);
+                viewTimer = null;
+            }
+        });
+        player.addEventListener('ended', function () {
+            updateInlineWatchPlayState(player, playBtn);
+            if (viewTimer) {
+                clearTimeout(viewTimer);
+                viewTimer = null;
+            }
+        });
     }
+
+    hydrateVideoEngagement(video.id).then(function () {
+        syncInlineWatchEngagement(video.id, root);
+    });
 
     if (likeBtn) {
         updateInlineWatchLikeButton(likeBtn);
-        likeBtn.addEventListener('click', function () {
-            const liked = likeBtn.dataset.liked === 'true';
-            const current = Number(likeBtn.dataset.count) || 0;
-            const nextLiked = !liked;
-            const nextCount = Math.max(0, current + (nextLiked ? 1 : -1));
-            likeBtn.dataset.liked = nextLiked ? 'true' : 'false';
-            likeBtn.dataset.count = String(nextCount);
-            updateInlineWatchLikeButton(likeBtn);
+        likeBtn.addEventListener('click', async function () {
+            const before = getVideoEngagementStatus(video.id);
+            await window.likeVideo(video.id);
+            syncInlineWatchEngagement(video.id, root);
+            const after = getVideoEngagementStatus(video.id);
+            if (video.ownerId && !before.liked && after.liked) {
+                await notifyVideoOwner({
+                    videoId: video.id,
+                    ownerId: video.ownerId,
+                    actionType: 'video-like',
+                    previewText: video.title || video.caption || 'Video'
+                });
+            }
+        });
+    }
+
+    if (dislikeBtn) {
+        updateInlineWatchDislikeButton(dislikeBtn);
+        dislikeBtn.addEventListener('click', async function () {
+            const before = getVideoEngagementStatus(video.id);
+            await window.dislikeVideo(video.id);
+            syncInlineWatchEngagement(video.id, root);
+            const after = getVideoEngagementStatus(video.id);
+            if (video.ownerId && !before.disliked && after.disliked) {
+                await notifyVideoOwner({
+                    videoId: video.id,
+                    ownerId: video.ownerId,
+                    actionType: 'video-dislike',
+                    previewText: video.title || video.caption || 'Video'
+                });
+            }
+        });
+    }
+
+    if (followBtn && followBtn.dataset.authorId) {
+        followBtn.addEventListener('click', function (event) {
+            window.toggleFollowUser(followBtn.dataset.authorId, event);
         });
     }
 
     root.querySelectorAll('[data-watch-action]').forEach(function (button) {
         button.addEventListener('click', function () {
-            openInlineWatchActionModal(button.dataset.watchAction);
+            const action = button.dataset.watchAction;
+            if (action === 'back') {
+                restoreInlineVideoWatch();
+                return;
+            }
+            if (action === 'sort') {
+                openInlineWatchActionModal('sort');
+                return;
+            }
+            openInlineWatchActionModal(action);
+        });
+    });
+
+    root.querySelectorAll('.watch-suggestion-menu').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+            event.stopPropagation();
+            openInlineWatchActionModal('more');
+        });
+    });
+
+    if (descToggle) {
+        renderWatchDescription(root);
+        descToggle.addEventListener('click', function () {
+            const descEl = root.querySelector('.watch-description-text');
+            if (!descEl) return;
+            const next = descEl.dataset.expanded === 'true' ? 'false' : 'true';
+            descEl.dataset.expanded = next;
+            renderWatchDescription(root);
+        });
+    }
+
+    if (commentFile && commentPreview) {
+        commentFile.addEventListener('change', function () {
+            const file = commentFile.files?.[0];
+            if (!file) {
+                commentPreview.innerHTML = '';
+                return;
+            }
+            const url = URL.createObjectURL(file);
+            commentPreview.innerHTML = `<div class="watch-comment-preview-card"><img src="${url}" alt="Selected attachment"></div>`;
+        });
+    }
+
+    if (commentSubmit && commentInput) {
+        commentSubmit.addEventListener('click', async function () {
+            if (!requireAuth()) return;
+            const text = (commentInput.value || '').trim();
+            const file = commentFile?.files?.[0] || null;
+            if (!text && !file) {
+                toast('Add a comment before posting.', 'info');
+                return;
+            }
+            commentSubmit.disabled = true;
+            commentSubmit.textContent = 'Posting...';
+            const attachments = [];
+            try {
+                if (file) {
+                    const path = `comment_media/${currentUser.uid}/${Date.now()}-${sanitizeFileName(file.name)}`;
+                    const url = await uploadFileToStorage(file, path);
+                    attachments.push({ url, storagePath: path, type: file.type, name: file.name });
+                }
+                await createVideoComment(video.id, {
+                    text,
+                    attachments,
+                    uid: currentUser.uid,
+                    displayName: currentUser.displayName || currentUser.email || 'Viewer',
+                    photoURL: currentUser.photoURL || null
+                });
+                const state = getInlineWatchCommentState(video.id);
+                state.items.unshift({
+                    id: `local-${Date.now()}`,
+                    uid: currentUser.uid,
+                    displayName: currentUser.displayName || currentUser.email || 'Viewer',
+                    photoURL: currentUser.photoURL || null,
+                    text,
+                    attachments,
+                    createdAt: new Date(),
+                    likes: 0
+                });
+                commentInput.value = '';
+                if (commentFile) commentFile.value = '';
+                if (commentPreview) commentPreview.innerHTML = '';
+                renderInlineWatchComments(video.id);
+                if (video.ownerId) {
+                    await notifyVideoOwner({
+                        videoId: video.id,
+                        ownerId: video.ownerId,
+                        actionType: 'video-comment',
+                        previewText: truncateDescription(text, 20),
+                        extra: { commentText: text }
+                    });
+                }
+            } catch (err) {
+                console.error('Unable to post comment', err);
+                toast('Unable to post comment.', 'error');
+            } finally {
+                commentSubmit.disabled = false;
+                commentSubmit.textContent = 'Comment';
+            }
+        });
+    }
+
+    if (commentsMore) {
+        commentsMore.addEventListener('click', async function () {
+            await fetchInlineWatchComments(video.id);
+            renderInlineWatchComments(video.id);
+        });
+    }
+
+    root.querySelectorAll('.watch-suggestion').forEach(function (item) {
+        item.addEventListener('click', function () {
+            const nextId = item.dataset.videoId;
+            if (!nextId) return;
+            const nextVideo = getVideoById(nextId);
+            if (nextVideo) openInlineVideoWatch(nextVideo);
         });
     });
 }
@@ -19531,6 +20597,7 @@ document.addEventListener('DOMContentLoaded', function () {
     updateInboxTabsHeight();
     initSidebarState();
     bindSidebarEvents();
+    initQuickActionBar();
     loadFeedTypeState();
     mountFeedTypeToggleBar();
     syncMobileComposerState();
@@ -19555,6 +20622,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('resize', function () {
     updateInboxTabsHeight();
+    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
+    if (!isDesktopViewport()) {
+        hideQuickActionBar();
+        setDesktopSidebarOpen(false);
+    }
 });
 
 window.addEventListener('hashchange', function () {
