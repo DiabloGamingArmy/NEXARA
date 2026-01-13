@@ -630,6 +630,7 @@ body.has-desktop-app-bar {
 body.sidebar-collapsed .sidebar-left {
     width: 72px;
     padding: 1.5rem 0.75rem;
+    pointer-events: none;
 }
 
 body.sidebar-collapsed .sidebar-left .brand-nav,
@@ -716,7 +717,7 @@ body.sidebar-overlay-open .sidebar-backdrop {
     align-items: center;
     padding: 1rem 0.5rem;
     gap: 10px;
-    transform: translateX(-110%);
+    transform: translateX(-100%);
     transition: transform 0.2s ease;
     z-index: 59;
 }
@@ -741,8 +742,12 @@ body.sidebar-overlay-open .sidebar-backdrop {
 }
 
 body.desktop-sidebar-open .quick-action-bar {
-    transform: translateX(-110%);
+    transform: translateX(-100%);
     pointer-events: none;
+}
+
+body.desktop-sidebar-open .main-feed {
+    margin-left: 0;
 }
 
 @media(max-width: 768px) {
@@ -777,7 +782,7 @@ body.desktop-sidebar-open .quick-action-bar {
 }
 
 @media(min-width: 769px) {
-    .desktop-app-bar {
+    body.has-desktop-app-bar .desktop-app-bar {
         display: flex;
     }
 

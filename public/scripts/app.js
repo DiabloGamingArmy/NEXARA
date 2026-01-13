@@ -1725,11 +1725,7 @@ function initSidebarState() {
         }
         applyDesktopSidebarState(sidebarCollapsed, false);
     }
-    if (isDesktopViewport()) {
-        document.body.classList.add('has-desktop-app-bar');
-    } else {
-        document.body.classList.remove('has-desktop-app-bar');
-    }
+    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
     setDesktopSidebarOpen(false);
 }
 
@@ -1814,7 +1810,7 @@ function initQuickActionBar() {
         });
     });
     document.addEventListener('mousemove', function (event) {
-        if (!isDesktopViewport() || desktopSidebarOpen) return;
+        if (!isDesktopViewport() || desktopSidebarOpen || !sidebarCollapsed) return;
         if (event.clientX <= 5) {
             showQuickActionBar();
             if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
