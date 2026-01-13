@@ -1714,19 +1714,15 @@ function setDesktopSidebarOpen(open) {
 }
 
 function initSidebarState() {
-    let stored = null;
-    if (window.localStorage) {
-        stored = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
-        sidebarCollapsed = stored === '1';
-    }
     if (isDesktopViewport()) {
         applyDesktopSidebarState(true, false);
-        if (stored !== null) {
-            applyDesktopSidebarState(stored === '1', false);
-        } else if (window.localStorage) {
+        if (window.localStorage) {
             window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '1');
         }
     } else {
+        if (window.localStorage) {
+            sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+        }
         applyDesktopSidebarState(sidebarCollapsed, false);
     }
     if (isDesktopViewport()) {

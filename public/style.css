@@ -288,6 +288,16 @@ body {
     width: 100vw;
     min-height: 100vh;
     height: 100%;
+    --sidebar-collapsed-width: 72px;
+    --right-sidebar-width: 0px;
+}
+
+body.desktop-sidebar-open {
+    --sidebar-collapsed-width: 250px;
+}
+
+body.sidebar-home {
+    --right-sidebar-width: 320px;
 }
 
 .messages-scroll-lock {
@@ -779,10 +789,12 @@ body.desktop-sidebar-open .quick-action-bar {
         transform: translateX(-250px);
         transition: transform 0.2s ease;
         z-index: 60;
+        pointer-events: none;
     }
 
     body.desktop-sidebar-open .sidebar-left {
         transform: translateX(0);
+        pointer-events: auto;
     }
 
     body.has-desktop-app-bar .main-feed {
@@ -790,18 +802,9 @@ body.desktop-sidebar-open .quick-action-bar {
         height: calc(100vh - var(--desktop-app-bar-height, 0px));
     }
 
-    body.desktop-sidebar-open .main-feed {
-        margin-left: 250px;
-        pointer-events: none;
-    }
-
     body.has-desktop-app-bar .sidebar-right {
         top: var(--desktop-app-bar-height, 0px);
         height: calc(100vh - var(--desktop-app-bar-height, 0px));
-    }
-
-    body.desktop-sidebar-open .sidebar-right {
-        pointer-events: none;
     }
 
     .desktop-sidebar-backdrop {
@@ -819,22 +822,22 @@ body.desktop-sidebar-open .quick-action-bar {
         display: none !important;
     }
 
-    body.sidebar-home .main-feed {
-        flex: 0 0 calc(100vw - 320px);
-        width: calc(100vw - 320px);
-        max-width: calc(100vw - 320px);
+body.sidebar-home .main-feed {
+        flex: 0 0 calc(100vw - var(--right-sidebar-width, 0px));
+        width: calc(100vw - var(--right-sidebar-width, 0px));
+        max-width: calc(100vw - var(--right-sidebar-width, 0px));
     }
 
     /* Constrain category header width to fit between right sidebar */
     body.sidebar-home .category-header {
-        width: calc(100vw - 320px);
-        max-width: calc(100vw - 320px);
+        width: calc(100vw - var(--right-sidebar-width, 0px));
+        max-width: calc(100vw - var(--right-sidebar-width, 0px));
     }
 
     body.sidebar-home.sidebar-collapsed .main-feed,
     body.sidebar-home.sidebar-collapsed .category-header {
-        width: calc(100vw - 320px);
-        max-width: calc(100vw - 320px);
+        width: calc(100vw - var(--right-sidebar-width, 0px));
+        max-width: calc(100vw - var(--right-sidebar-width, 0px));
     }
 }
 
@@ -970,6 +973,10 @@ body.desktop-sidebar-open .quick-action-bar {
 .nexera-alert-banner.banner-static {
   position: relative;
   width: 100%;
+}
+
+body.has-desktop-app-bar .nexera-alert-banner.banner-static {
+  margin-top: var(--desktop-app-bar-height, 0px);
 }
 
 /* Center icon + text, keep close button on right */
@@ -1895,26 +1902,16 @@ body.desktop-sidebar-open .quick-action-bar {
 
 
 .category-scroll-left {
-    left: 250px;
+    left: var(--sidebar-collapsed-width, 72px);
     /* After left sidebar */
     background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
     padding-right: 2rem;
 }
 
 .category-scroll-right {
-    right: 0;
+    right: var(--right-sidebar-width, 0px);
     background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
     padding-left: 2rem;
-}
-
-/* Adjust right arrow when sidebar is visible */
-body.sidebar-home .category-scroll-right {
-    right: 320px;
-    /* Before right sidebar */
-}
-
-body.sidebar-collapsed .category-scroll-left {
-    left: 72px;
 }
 
 .category-scroll-btn:hover {
