@@ -1385,6 +1385,10 @@ function isMobileViewport() {
     return !!(MOBILE_VIEWPORT && MOBILE_VIEWPORT.matches);
 }
 
+function isDesktopViewport() {
+    return window.innerWidth > 768 && !isMobileViewport();
+}
+
 function shouldShowRightSidebar(viewId) {
     return ['feed', 'videos', 'discover', 'saved', 'messages', 'profile', 'live'].includes(viewId);
 }
@@ -1518,6 +1522,8 @@ const FEED_TYPE_TOGGLES = [
 ];
 
 let sidebarCollapsed = false;
+let desktopSidebarOpen = false;
+let quickActionBarTimer = null;
 
 function getFeedTypeToggleSlot() {
     return document.getElementById('feed-type-toggle-bar') || document.querySelector('.feed-type-toggle-bar');
@@ -1634,11 +1640,16 @@ function syncFeedTypeToggleState() {
 function applyDesktopSidebarState(collapsed, persist = true) {
     sidebarCollapsed = !!collapsed;
     if (!isMobileViewport()) {
+        document.body.classList.remove('sidebar-collapsed');
+        document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+            sidebar.classList.remove('collapsed');
+        });
+    } else {
         document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+        document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
+            sidebar.classList.toggle('collapsed', sidebarCollapsed);
+        });
     }
-    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
-        sidebar.classList.toggle('collapsed', sidebarCollapsed);
-    });
     if (persist && window.localStorage) {
         window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
     }
@@ -1648,11 +1659,25 @@ function setSidebarOverlayOpen(open) {
     document.body.classList.toggle('sidebar-overlay-open', !!open);
 }
 
+function setDesktopSidebarOpen(open) {
+    desktopSidebarOpen = !!open;
+    document.body.classList.toggle('desktop-sidebar-open', desktopSidebarOpen);
+    const backdrop = document.getElementById('desktop-sidebar-backdrop');
+    if (backdrop) {
+        backdrop.classList.toggle('is-visible', desktopSidebarOpen);
+    }
+    if (desktopSidebarOpen) {
+        hideQuickActionBar();
+    }
+}
+
 function initSidebarState() {
     if (window.localStorage) {
         sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
     }
     applyDesktopSidebarState(sidebarCollapsed, false);
+    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
+    setDesktopSidebarOpen(false);
 }
 
 function openSidebar() {
@@ -1660,7 +1685,7 @@ function openSidebar() {
         setSidebarOverlayOpen(true);
         return;
     }
-    applyDesktopSidebarState(false);
+    setDesktopSidebarOpen(true);
 }
 
 function closeSidebar() {
@@ -1668,7 +1693,7 @@ function closeSidebar() {
         setSidebarOverlayOpen(false);
         return;
     }
-    applyDesktopSidebarState(true);
+    setDesktopSidebarOpen(false);
 }
 
 function toggleSidebar() {
@@ -1676,7 +1701,7 @@ function toggleSidebar() {
         setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
         return;
     }
-    applyDesktopSidebarState(!sidebarCollapsed);
+    setDesktopSidebarOpen(!desktopSidebarOpen);
 }
 
 function bindSidebarEvents() {
@@ -1684,13 +1709,20 @@ function bindSidebarEvents() {
         item.addEventListener('click', function () {
             if (isMobileViewport()) {
                 setSidebarOverlayOpen(false);
+                return;
             }
+            setDesktopSidebarOpen(false);
         });
     });
 
     document.addEventListener('keydown', function (event) {
-        if (event.key === 'Escape' && document.body.classList.contains('sidebar-overlay-open')) {
-            setSidebarOverlayOpen(false);
+        if (event.key === 'Escape') {
+            if (document.body.classList.contains('sidebar-overlay-open')) {
+                setSidebarOverlayOpen(false);
+            }
+            if (document.body.classList.contains('desktop-sidebar-open')) {
+                setDesktopSidebarOpen(false);
+            }
         }
     });
 
@@ -1698,12 +1730,51 @@ function bindSidebarEvents() {
         MOBILE_VIEWPORT.addEventListener('change', function () {
             if (isMobileViewport()) {
                 document.body.classList.remove('sidebar-collapsed');
+                setDesktopSidebarOpen(false);
             } else {
                 setSidebarOverlayOpen(false);
                 applyDesktopSidebarState(sidebarCollapsed);
+                document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
             }
         });
     }
+}
+
+function showQuickActionBar() {
+    const bar = document.getElementById('quick-action-bar');
+    if (!bar) return;
+    bar.classList.add('is-visible');
+}
+
+function hideQuickActionBar() {
+    const bar = document.getElementById('quick-action-bar');
+    if (!bar) return;
+    bar.classList.remove('is-visible');
+}
+
+function initQuickActionBar() {
+    const bar = document.getElementById('quick-action-bar');
+    if (!bar) return;
+    bar.querySelectorAll('a').forEach(function (link) {
+        link.addEventListener('click', function () {
+            hideQuickActionBar();
+        });
+    });
+    document.addEventListener('mousemove', function (event) {
+        if (!isDesktopViewport() || desktopSidebarOpen) return;
+        if (event.clientX <= 5) {
+            showQuickActionBar();
+            if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
+            quickActionBarTimer = setTimeout(function () {
+                hideQuickActionBar();
+            }, 1200);
+        } else if (bar.classList.contains('is-visible')) {
+            if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
+            quickActionBarTimer = setTimeout(function () {
+                hideQuickActionBar();
+            }, 800);
+        }
+    });
 }
 
 window.Nexera.toggleSidebar = toggleSidebar;
@@ -2027,7 +2098,10 @@ function initApp(onReady) {
                         await hydrateFollowedCategories(user.uid, userProfile);
                         await hydrateFollowingState(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
-                        if (staffNav) staffNav.style.display = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient()) ? 'flex' : 'none';
+                        const quickStaffNav = document.getElementById('qa-nav-staff');
+                        const showStaff = (hasGlobalRole('staff') || hasGlobalRole('admin') || hasFounderClaimClient());
+                        if (staffNav) staffNav.style.display = showStaff ? 'flex' : 'none';
+                        if (quickStaffNav) quickStaffNav.style.display = showStaff ? 'flex' : 'none';
                     } else {
                         // Create new profile placeholder if it doesn't exist
                         userProfile.email = user.email || "";
@@ -2041,7 +2115,9 @@ function initApp(onReady) {
                         syncSavedVideosFromProfile(userProfile);
                         await syncPublicProfile(user.uid, userProfile);
                         const staffNav = document.getElementById('nav-staff');
+                        const quickStaffNav = document.getElementById('qa-nav-staff');
                         if (staffNav) staffNav.style.display = 'none';
+                        if (quickStaffNav) quickStaffNav.style.display = 'none';
                     }
                 } catch (e) {
                     console.error("Profile Load Error", e);
@@ -9216,6 +9292,25 @@ function isAccountNotification(notification = {}) {
         || ['password', 'login', 'signin', 'username', 'name', 'email', 'profile', 'security', 'session'].includes(accountEvent);
 }
 
+function resolveAccountNotificationPriority(notification = {}) {
+    const action = (notification.actionType || notification.eventType || '').toLowerCase();
+    const field = (notification.accountField || '').toLowerCase();
+    const high = ['password', 'email', 'security', 'login', 'signin', 'session'];
+    const medium = ['username', 'name', 'realname', 'real_name', 'real-name'];
+    const low = ['nickname', 'bio', 'region', 'links', 'photo', 'avatar', 'profile', 'photoURL', 'photoUrl'];
+    if (high.includes(action) || high.includes(field)) return 'high';
+    if (medium.includes(action) || medium.includes(field)) return 'medium';
+    if (low.includes(action) || low.includes(field)) return 'low';
+    return 'low';
+}
+
+function getAccountNotificationPriorityMeta(notification = {}) {
+    const value = (notification.priority || resolveAccountNotificationPriority(notification) || 'low').toLowerCase();
+    if (value === 'high') return { value: 'high', label: 'HIGH' };
+    if (value === 'medium') return { value: 'medium', label: 'MEDIUM' };
+    return { value: 'low', label: 'LOW' };
+}
+
 function formatAccountNotificationTitle(notification = {}) {
     const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
     const field = (notification.accountField || notification.field || notification.entityType || '').toLowerCase();
@@ -9230,23 +9325,25 @@ function formatAccountNotificationTitle(notification = {}) {
     return 'Account update';
 }
 
-function formatAccountNotificationBody(notification = {}) {
-    if (notification.body) return notification.body;
-    if (notification.description) return notification.description;
+function formatAccountNotificationBody(notification = {}, options = {}) {
+    const { includeLabel = true } = options;
+    const priorityMeta = getAccountNotificationPriorityMeta(notification);
+    const prefix = includeLabel ? `[${priorityMeta.label} PRIORITY] ` : '';
     const action = (notification.actionType || notification.eventType || notification.type || '').toLowerCase();
-    const fromValue = notification.from || notification.previousValue || notification.oldValue;
+    const field = (notification.accountField || '').toLowerCase();
     const toValue = notification.to || notification.newValue || notification.value;
-    if (action.includes('username')) return `Your username was updated${toValue ? ` to @${toValue}` : ''}.`;
-    if (action.includes('name')) return `Your display name was updated${toValue ? ` to ${toValue}` : ''}.`;
-    if (action.includes('email')) return `Your email address was updated${toValue ? ` to ${toValue}` : ''}.`;
-    if (action.includes('password')) return 'Your password was updated. If this wasn’t you, reset it immediately.';
-    if (action.includes('login') || action.includes('signin')) return 'We detected a new sign-in to your account.';
-    if (fromValue || toValue) {
-        const fromText = fromValue ? ` from ${fromValue}` : '';
-        const toText = toValue ? ` to ${toValue}` : '';
-        return `Account details were updated${fromText}${toText}.`;
-    }
-    return 'We updated your account information.';
+    if (action.includes('password')) return `${prefix}Your password was changed.`;
+    if (action.includes('email')) return `${prefix}Your email was changed${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('username')) return `${prefix}Your username was changed${toValue ? ` to @${toValue}` : ''}.`;
+    if (field.includes('nickname')) return `${prefix}Your nickname was updated.`;
+    if (field.includes('bio')) return `${prefix}Your bio was updated.`;
+    if (field.includes('region')) return `${prefix}Your region was updated.`;
+    if (field.includes('links')) return `${prefix}Your links were updated.`;
+    if (field.includes('photo') || field.includes('avatar')) return `${prefix}Your profile photo was updated.`;
+    if (action.includes('name')) return `${prefix}Your name was changed${toValue ? ` to ${toValue}` : ''}.`;
+    if (action.includes('login') || action.includes('signin') || action.includes('session')) return `${prefix}A new login was detected.`;
+    if (action.includes('profile')) return `${prefix}Your profile was updated.`;
+    return `${prefix}Your account was updated.`;
 }
 
 function formatAccountNotificationMeta(notification = {}) {
@@ -9269,6 +9366,7 @@ function formatAccountNotificationMeta(notification = {}) {
 }
 
 function buildAccountNotificationPayload(targetUid, payload = {}) {
+    const priority = (payload.priority || resolveAccountNotificationPriority(payload)).toLowerCase();
     return {
         targetUid,
         type: 'account',
@@ -9277,6 +9375,7 @@ function buildAccountNotificationPayload(targetUid, payload = {}) {
         title: payload.title || '',
         body: payload.body || '',
         accountField: payload.accountField || '',
+        priority,
         location: payload.location || '',
         region: payload.region || '',
         country: payload.country || '',
@@ -9304,11 +9403,13 @@ function preparePasswordChangeNotification(userId, options = {}) {
 
 async function queueAccountNotification(payload = {}) {
     if (!payload?.targetUid) return;
+    const priority = (payload.priority || resolveAccountNotificationPriority(payload)).toLowerCase();
     const body = {
         ...payload,
         type: payload.type || 'account',
         entityType: payload.entityType || 'account',
         createdAt: payload.createdAt || serverTimestamp(),
+        priority,
         read: payload.read ?? false
     };
     try {
@@ -9771,6 +9872,74 @@ function renderInboxNotifications(mode = 'posts') {
     });
 }
 
+function openAccountNotificationModal(notif = {}) {
+    if (!notif) return;
+    let modal = document.getElementById('account-notification-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'account-notification-modal';
+        modal.className = 'modal-overlay account-notification-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 class="modal-title">Account notification</h3>
+                    <button class="x-close-btn" type="button" aria-label="Close" onclick="window.closeAccountNotificationModal()">&times;</button>
+                </div>
+                <div id="account-notification-body" class="account-notification-body"></div>
+                <div class="modal-actions">
+                    <button type="button" class="create-btn-sidebar" style="width:auto;" onclick="window.closeAccountNotificationModal()">Close</button>
+                </div>
+            </div>`;
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) {
+                window.closeAccountNotificationModal();
+            }
+        });
+        document.body.appendChild(modal);
+    }
+    const body = modal.querySelector('#account-notification-body');
+    const timestamp = formatMessageHoverTimestamp(notif.createdAt) || 'Just now';
+    const fieldLabel = notif.accountField || notif.actionType || 'Account';
+    const previousValue = notif.from || notif.previousValue || notif.oldValue || '—';
+    const nextValue = notif.to || notif.newValue || notif.value || '—';
+    const details = [];
+    if (notif.location || notif.loginLocation) details.push({ label: 'Location', value: notif.location || notif.loginLocation });
+    if (notif.device || notif.userAgent) details.push({ label: 'Device', value: notif.device || notif.userAgent });
+    if (notif.ip) details.push({ label: 'IP', value: notif.ip });
+    body.innerHTML = `
+        <div class="account-notification-detail">
+            <div class="detail-label">Changed field</div>
+            <div class="detail-value">${escapeHtml(fieldLabel)}</div>
+        </div>
+        <div class="account-notification-detail">
+            <div class="detail-label">Previous value</div>
+            <div class="detail-value">${escapeHtml(previousValue)}</div>
+        </div>
+        <div class="account-notification-detail">
+            <div class="detail-label">New value</div>
+            <div class="detail-value">${escapeHtml(nextValue)}</div>
+        </div>
+        <div class="account-notification-detail">
+            <div class="detail-label">Timestamp</div>
+            <div class="detail-value">${escapeHtml(timestamp)}</div>
+        </div>
+        ${details.map(function (item) {
+            return `<div class="account-notification-detail"><div class="detail-label">${escapeHtml(item.label)}</div><div class="detail-value">${escapeHtml(item.value)}</div></div>`;
+        }).join('')}
+    `;
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    document.body.style.overflow = 'hidden';
+}
+
+window.closeAccountNotificationModal = function () {
+    const modal = document.getElementById('account-notification-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+    document.body.style.overflow = '';
+};
+
 function renderAccountNotifications() {
     const listEl = document.getElementById('inbox-list-account');
     const emptyEl = document.getElementById('inbox-empty-account');
@@ -9793,7 +9962,8 @@ function renderAccountNotifications() {
         const row = document.createElement('div');
         row.className = 'inbox-notification-item inbox-notification-item--content';
         const title = formatAccountNotificationTitle(notif);
-        const body = formatAccountNotificationBody(notif);
+        const priorityMeta = getAccountNotificationPriorityMeta(notif);
+        const body = formatAccountNotificationBody(notif, { includeLabel: false });
         const meta = formatAccountNotificationMeta(notif);
         const displayName = userProfile?.name || userProfile?.displayName || currentUser?.displayName || 'Account';
         const photoURL = currentUser?.photoURL || userProfile?.photoURL || '';
@@ -9809,13 +9979,14 @@ function renderAccountNotifications() {
                 <div class="conversation-avatar-slot">${renderAvatar(avatarData, { size: 42 })}</div>
                 <div class="inbox-notification-text">
                     <div><strong>${escapeHtml(title)}</strong></div>
-                    ${body ? `<div class=\"inbox-notification-meta\">${escapeHtml(body)}</div>` : ''}
+                    ${body ? `<div class=\"inbox-notification-meta\"><span class=\"notif-priority notif-priority-${priorityMeta.value}\">[${priorityMeta.label} PRIORITY]</span> ${escapeHtml(body)}</div>` : ''}
                     ${meta ? `<div class=\"inbox-notification-meta\">${escapeHtml(meta)}</div>` : ''}
                 </div>
             </div>
         `;
         row.onclick = function () {
             markNotificationRead(notif);
+            openAccountNotificationModal(notif);
         };
         fragment.appendChild(row);
     });
@@ -9861,8 +10032,6 @@ function setInboxMode(mode = 'messages', options = {}) {
         if (previousMode !== 'account') {
             void markAllAccountNotificationsRead();
         }
-    } else if (inboxMode === 'account') {
-        renderAccountNotifications();
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
@@ -19956,6 +20125,7 @@ document.addEventListener('DOMContentLoaded', function () {
     updateInboxTabsHeight();
     initSidebarState();
     bindSidebarEvents();
+    initQuickActionBar();
     loadFeedTypeState();
     mountFeedTypeToggleBar();
     syncMobileComposerState();
@@ -19980,6 +20150,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('resize', function () {
     updateInboxTabsHeight();
+    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
+    if (!isDesktopViewport()) {
+        hideQuickActionBar();
+        setDesktopSidebarOpen(false);
+    }
 });
 
 window.addEventListener('hashchange', function () {

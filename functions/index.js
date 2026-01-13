@@ -128,6 +128,18 @@ function normalizeAccountValue(value) {
   return value.toString();
 }
 
+function resolveAccountNotificationPriority({field = "", actionType = ""} = {}) {
+  const action = actionType.toLowerCase();
+  const key = field.toLowerCase();
+  const high = ["password", "email", "security", "login", "signin", "session"];
+  const medium = ["username", "realname", "name", "displayname"];
+  const low = ["nickname", "bio", "region", "links", "photo", "photourl", "avatar"];
+  if (high.includes(action) || high.includes(key)) return "high";
+  if (medium.includes(action) || medium.includes(key)) return "medium";
+  if (low.includes(action) || low.includes(key)) return "low";
+  return "low";
+}
+
 function pickOtherParticipantField(participants = [], values = [], targetUid = "") {
   if (!Array.isArray(values) || !Array.isArray(participants)) return [];
   const mapped = [];
@@ -242,6 +254,7 @@ exports.onUserProfileUpdate = onDocumentUpdated("users/{userId}", async (event) 
       entityType: "account",
       actionType,
       accountField: field,
+      priority: resolveAccountNotificationPriority({field, actionType}),
       from: beforeValue,
       to: afterValue,
       createdAt: FieldValue.serverTimestamp(),
