@@ -9861,6 +9861,8 @@ function setInboxMode(mode = 'messages', options = {}) {
         if (previousMode !== 'account') {
             void markAllAccountNotificationsRead();
         }
+    } else if (inboxMode === 'account') {
+        renderAccountNotifications();
     } else if (inboxMode !== 'messages') {
         renderInboxNotifications(inboxMode);
     }
