@@ -394,6 +394,8 @@ let recentLocations = [];
 let categoryVisibleCount = 10;
 let commentRootDisplayCount = {};
 let replyExpansionState = {};
+let lastCommentSendAt = 0;
+let lastCommentSignature = '';
 let currentEditPost = null;
 let goLiveController = null;
 let tagSuggestionPool = [];
@@ -4416,6 +4418,12 @@ function getPostHTML(post, options = {}) {
                 mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
             }
         }
+        if (mediaContent) {
+            mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+                ${mediaContent}
+                <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+            </div>`;
+        }
 
         let commentPreviewHtml = '';
         if (post.previewComment) {
@@ -4631,7 +4639,10 @@ function renderFeed(targetId = 'feed-content') {
 
 function ensureFeedScrollObserver() {
     const sentinel = document.getElementById('feed-scroll-sentinel');
-    if (!sentinel || feedPagination.done) return;
+    if (!sentinel || feedPagination.done) {
+        if (feedScrollObserver) feedScrollObserver.disconnect();
+        return;
+    }
     if (feedScrollObserver) {
         feedScrollObserver.disconnect();
     }
@@ -4795,6 +4806,31 @@ window.toggleLike = async function (postId, event) {
         loadFeedData();
     }
 }
+
+function triggerPostLikeBurst(postId) {
+    const shell = document.querySelector(`.post-media-shell[data-post-id="${postId}"]`);
+    if (!shell) return;
+    const burst = shell.querySelector('.post-like-burst');
+    if (!burst) return;
+    burst.classList.remove('is-active');
+    void burst.offsetWidth;
+    burst.classList.add('is-active');
+    setTimeout(function () {
+        burst.classList.remove('is-active');
+    }, 700);
+}
+
+window.handlePostDoubleTap = function (postId, event) {
+    if (event) event.stopPropagation();
+    if (!postId) return;
+    const post = allPosts.find(function (p) { return p.id === postId; });
+    if (!post || (currentUser && post.likedBy && post.likedBy.includes(currentUser.uid))) {
+        triggerPostLikeBurst(postId);
+        return;
+    }
+    window.toggleLike(postId);
+    triggerPostLikeBurst(postId);
+};
 
 window.toggleSave = async function (postId, event) {
     if (event) event.stopPropagation();
@@ -6514,6 +6550,12 @@ function renderThreadMainPost(postId) {
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
+    if (mediaContent) {
+        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+            ${mediaContent}
+            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+        </div>`;
+    }
 
     // UPDATE: Trust Badge Logic for Thread View to match Feed
     let trustBadge = "";
@@ -6577,15 +6619,27 @@ window.sendComment = async function () {
     if (!text && !fileInput.files[0]) return;
 
     const btn = document.getElementById('thread-send-btn');
+    const signature = `${text}::${fileInput.files[0]?.name || ''}`;
+    const now = Date.now();
+    if (signature === lastCommentSignature && now - lastCommentSendAt < 1500) return;
+    lastCommentSignature = signature;
+    lastCommentSendAt = now;
     btn.disabled = true;
     btn.textContent = "...";
+    btn.setAttribute('aria-busy', 'true');
+    btn.classList.add('comment-send-busy');
 
     let optimisticId = null;
     try {
         let mediaUrl = null;
         if (fileInput.files[0]) {
-            const path = `comments/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
-            mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            const path = `comment_media/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
+            try {
+                mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            } catch (err) {
+                alert('Unable to upload the image. Please try again.');
+                return;
+            }
         }
 
         const parentCommentId = normalizeReplyTarget(activeReplyId);
@@ -6617,10 +6671,6 @@ window.sendComment = async function () {
                 likes: 0
             }
         });
-        resetInputBox();
-        document.getElementById('attach-btn-text').textContent = "📎 Attach";
-        document.getElementById('attach-btn-text').style.color = "var(--text-muted)";
-        fileInput.value = "";
     } catch (e) {
         console.error(e);
         optimisticThreadComments = optimisticThreadComments.filter(function (c) { return c.id !== optimisticId; });
@@ -6628,6 +6678,9 @@ window.sendComment = async function () {
     } finally {
         btn.disabled = false;
         btn.textContent = "Reply";
+        btn.removeAttribute('aria-busy');
+        btn.classList.remove('comment-send-busy');
+        resetInputBox();
         const defaultSlot = document.getElementById('thread-input-default-slot');
         const inputArea = document.getElementById('thread-input-area');
         if (defaultSlot && inputArea && !defaultSlot.contains(inputArea)) {
@@ -7565,6 +7618,12 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
+    if (mediaContent) {
+        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+            ${mediaContent}
+            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+        </div>`;
+    }
 
     const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
     const bodyPreview = compact
@@ -8389,9 +8448,66 @@ window.setProfileFilter = function (category, uid) {
     if (uid === 'me') renderProfile(); else renderPublicProfile(uid);
 }
 window.moveInputToComment = function (commentId, authorName) { activeReplyId = commentId; const slot = document.getElementById(`reply-slot-${commentId}`); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (slot && inputArea) { slot.appendChild(inputArea); input.placeholder = `Replying to ${authorName}...`; if (cancelBtn) cancelBtn.style.display = 'inline-block'; input.focus(); } }
-window.resetInputBox = function () { activeReplyId = null; const defaultSlot = document.getElementById('thread-input-default-slot'); const inputArea = document.getElementById('thread-input-area'); const input = document.getElementById('thread-input'); const cancelBtn = document.getElementById('thread-cancel-btn'); if (defaultSlot && inputArea) { defaultSlot.appendChild(inputArea); input.placeholder = "Post your reply"; input.value = ""; if (cancelBtn) cancelBtn.style.display = 'none'; } }
+window.resetInputBox = function () {
+    activeReplyId = null;
+    const defaultSlot = document.getElementById('thread-input-default-slot');
+    const inputArea = document.getElementById('thread-input-area');
+    const input = document.getElementById('thread-input');
+    const cancelBtn = document.getElementById('thread-cancel-btn');
+    if (defaultSlot && inputArea) {
+        defaultSlot.appendChild(inputArea);
+        input.placeholder = "Post your reply";
+        input.value = "";
+        if (cancelBtn) cancelBtn.style.display = 'none';
+    }
+    clearCommentAttachment();
+};
 window.triggerFileSelect = function () { document.getElementById('thread-file').click(); }
-window.handleFileSelect = function (input) { const btn = document.getElementById('attach-btn-text'); if (input.files && input.files[0]) { btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "..."; btn.style.color = "var(--primary)"; } else { btn.innerHTML = `<i class="ph ph-paperclip"></i> Attach`; btn.style.color = "var(--text-muted)"; } }
+function updateCommentAttachmentPreview(file) {
+    const preview = document.getElementById('thread-image-preview');
+    if (!preview) return;
+    if (!file) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function (e) {
+        preview.innerHTML = `
+            <div class="comment-image-preview__inner">
+                <img src="${e.target.result}" alt="Selected comment image preview">
+                <button type="button" class="comment-image-preview__remove" onclick="window.clearCommentAttachment()"><i class="ph ph-x"></i></button>
+            </div>`;
+        preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+}
+window.clearCommentAttachment = function () {
+    const input = document.getElementById('thread-file');
+    const preview = document.getElementById('thread-image-preview');
+    if (input) input.value = '';
+    if (preview) {
+        preview.style.display = 'none';
+        preview.innerHTML = '';
+    }
+    const btn = document.getElementById('attach-btn-text');
+    if (btn) {
+        btn.textContent = "📎 Attach";
+        btn.style.color = "var(--text-muted)";
+    }
+};
+window.handleFileSelect = function (input) {
+    const btn = document.getElementById('attach-btn-text');
+    if (input.files && input.files[0]) {
+        if (btn) {
+            btn.innerHTML = `<i class="ph-fill ph-file-image" style="color:var(--primary);"></i> ` + input.files[0].name.substring(0, 15) + "...";
+            btn.style.color = "var(--primary)";
+        }
+        updateCommentAttachmentPreview(input.files[0]);
+    } else {
+        window.clearCommentAttachment();
+    }
+}
 window.previewPostImage = function (input) { if (input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function (e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
 window.clearPostImage = function () { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
 window.togglePostOption = function (type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type);['poll', 'gif', 'schedule', 'location'].forEach(function (t) { if (t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
@@ -9423,6 +9539,39 @@ async function markAllContentNotificationsRead(optionalBucket) {
     updateInboxNotificationCounts();
 }
 
+async function markAllAccountNotificationsRead() {
+    if (!currentUser) return;
+    const pending = accountNotifications.filter(function (notif) {
+        if (!notif || !notif.id || notifIsRead(notif)) return false;
+        return true;
+    });
+    if (!pending.length) return;
+    pending.forEach(function (notif) {
+        notif.read = true;
+        notif.isRead = true;
+        notif.readAt = new Date();
+    });
+    updateInboxNotificationCounts();
+    const updates = pending.slice();
+    for (let i = 0; i < updates.length; i += 450) {
+        const batch = writeBatch(db);
+        updates.slice(i, i + 450).forEach(function (notif) {
+            const notifRef = doc(db, 'users', currentUser.uid, 'notifications', notif.id);
+            batch.update(notifRef, {
+                read: true,
+                isRead: true,
+                readAt: serverTimestamp()
+            });
+        });
+        try {
+            await batch.commit();
+        } catch (err) {
+            console.warn('Failed to mark account notifications read', err?.message || err);
+        }
+    }
+    updateInboxNotificationCounts();
+}
+
 function renderContentNotificationList() {
     const listEl = document.getElementById('inbox-list-content');
     const emptyEl = document.getElementById('inbox-empty-content');
@@ -9646,15 +9795,18 @@ function renderAccountNotifications() {
         const title = formatAccountNotificationTitle(notif);
         const body = formatAccountNotificationBody(notif);
         const meta = formatAccountNotificationMeta(notif);
+        const displayName = userProfile?.name || userProfile?.displayName || currentUser?.displayName || 'Account';
+        const photoURL = currentUser?.photoURL || userProfile?.photoURL || '';
+        const avatarData = {
+            uid: currentUser?.uid || 'account',
+            username: displayName,
+            displayName: displayName,
+            photoURL: photoURL,
+            avatarColor: computeAvatarColor(displayName)
+        };
         row.innerHTML = `
             <div class="inbox-notification-actor">
-                <div class="conversation-avatar-slot">${renderAvatar({
-                    uid: 'account',
-                    username: 'account',
-                    displayName: 'Account',
-                    photoURL: '',
-                    avatarColor: 'var(--primary)'
-                }, { size: 42 })}</div>
+                <div class="conversation-avatar-slot">${renderAvatar(avatarData, { size: 42 })}</div>
                 <div class="inbox-notification-text">
                     <div><strong>${escapeHtml(title)}</strong></div>
                     ${body ? `<div class=\"inbox-notification-meta\">${escapeHtml(body)}</div>` : ''}
@@ -9703,8 +9855,11 @@ function setInboxMode(mode = 'messages', options = {}) {
     if (inboxMode === 'content') {
         renderContentNotificationList();
         syncInboxContentFilters();
-        if (previousMode !== 'content') {
-            void markAllContentNotificationsRead();
+        void markAllContentNotificationsRead();
+    } else if (inboxMode === 'account') {
+        renderAccountNotifications();
+        if (previousMode !== 'account') {
+            void markAllAccountNotificationsRead();
         }
     } else if (inboxMode === 'account') {
         renderAccountNotifications();
@@ -14564,6 +14719,7 @@ window.markConversationAsRead = async function (conversationId = activeConversat
     } catch (e) {
         console.warn('Unable to update mapping unread', e);
     }
+    updateInboxNotificationCounts();
 };
 
 function updateChatStartControls() {
@@ -16408,7 +16564,10 @@ function renderVideoFeed(videos = []) {
 function ensureVideoScrollObserver() {
     if (isInlineWatchOpen()) return;
     const sentinel = document.getElementById('video-feed-sentinel');
-    if (!sentinel || videosPagination.done) return;
+    if (!sentinel || videosPagination.done) {
+        if (videosScrollObserver) videosScrollObserver.disconnect();
+        return;
+    }
     if (videosScrollObserver) {
         videosScrollObserver.disconnect();
     }
