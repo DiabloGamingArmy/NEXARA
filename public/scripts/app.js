@@ -1706,9 +1706,6 @@ function bindSidebarEvents() {
             if (document.body.classList.contains('sidebar-overlay-open')) {
                 setSidebarOverlayOpen(false);
             }
-            if (document.body.classList.contains('desktop-sidebar-open')) {
-                setDesktopSidebarOpen(false);
-            }
         }
     });
 
@@ -20565,9 +20562,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
     updateInboxTabsHeight();
-    initSidebarState();
     bindSidebarEvents();
-    initQuickActionBar();
     loadFeedTypeState();
     mountFeedTypeToggleBar();
     syncMobileComposerState();
