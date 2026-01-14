@@ -1513,7 +1513,6 @@ async function syncPublicProfile(uid, profile = {}, options = {}) {
 }
 
 
-const SIDEBAR_COLLAPSED_KEY = 'nexera_sidebar_collapsed';
 const FEED_TYPE_STORAGE_KEY = 'nexera_feed_types';
 const FEED_TYPE_TOGGLES = [
     { key: 'threads', label: 'Threads' },
@@ -1521,11 +1520,6 @@ const FEED_TYPE_TOGGLES = [
     { key: 'livestreams', label: 'Livestreams' }
 ];
 
-let sidebarCollapsed = false;
-let desktopSidebarOpen = false;
-let desktopSidebarFocusTrap = null;
-let desktopSidebarFocusReturn = null;
-let quickActionBarTimer = null;
 
 function getFeedTypeToggleSlot() {
     return document.getElementById('feed-type-toggle-bar') || document.querySelector('.feed-type-toggle-bar');
@@ -1639,98 +1633,8 @@ function syncFeedTypeToggleState() {
     });
 }
 
-function applyDesktopSidebarState(collapsed, persist = true) {
-    sidebarCollapsed = !!collapsed;
-    document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
-    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
-        sidebar.classList.toggle('collapsed', sidebarCollapsed);
-    });
-    if (persist && window.localStorage) {
-        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? '1' : '0');
-    }
-}
-
 function setSidebarOverlayOpen(open) {
     document.body.classList.toggle('sidebar-overlay-open', !!open);
-}
-
-function releaseDesktopSidebarFocusTrap() {
-    if (desktopSidebarFocusTrap) {
-        document.removeEventListener('keydown', desktopSidebarFocusTrap);
-        desktopSidebarFocusTrap = null;
-    }
-    if (desktopSidebarFocusReturn && typeof desktopSidebarFocusReturn.focus === 'function') {
-        desktopSidebarFocusReturn.focus();
-    }
-    desktopSidebarFocusReturn = null;
-}
-
-function activateDesktopSidebarFocusTrap(sidebar) {
-    if (!sidebar) return;
-    const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex=\"-1\"])';
-    const focusable = Array.from(sidebar.querySelectorAll(focusableSelector)).filter(function (el) {
-        return !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden');
-    });
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    desktopSidebarFocusReturn = document.activeElement;
-    if (first) first.focus();
-    desktopSidebarFocusTrap = function (event) {
-        if (event.key !== 'Tab') return;
-        if (!first || !last) return;
-        if (event.shiftKey && document.activeElement === first) {
-            event.preventDefault();
-            last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault();
-            first.focus();
-        }
-    };
-    document.addEventListener('keydown', desktopSidebarFocusTrap);
-}
-
-function setDesktopSidebarOpen(open) {
-    desktopSidebarOpen = !!open;
-    document.body.classList.toggle('desktop-sidebar-open', desktopSidebarOpen);
-    document.querySelectorAll('.sidebar-left').forEach(function (sidebar) {
-        sidebar.classList.toggle('sidebar-overlay', desktopSidebarOpen);
-    });
-    const backdrop = document.getElementById('desktop-sidebar-backdrop');
-    if (backdrop) {
-        backdrop.classList.toggle('is-visible', desktopSidebarOpen);
-    }
-    if (desktopSidebarOpen) {
-        hideQuickActionBar();
-        const sidebar = document.querySelector('.sidebar-left');
-        if (sidebar) {
-            sidebar.setAttribute('aria-hidden', 'false');
-            activateDesktopSidebarFocusTrap(sidebar);
-        }
-    } else {
-        const sidebar = document.querySelector('.sidebar-left');
-        if (sidebar) sidebar.setAttribute('aria-hidden', 'true');
-        releaseDesktopSidebarFocusTrap();
-    }
-}
-
-function initSidebarState() {
-    if (isDesktopViewport()) {
-        applyDesktopSidebarState(true, false);
-        if (window.localStorage) {
-            window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '1');
-        }
-    } else {
-        if (window.localStorage) {
-            sidebarCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
-        }
-        applyDesktopSidebarState(sidebarCollapsed, false);
-    }
-    if (isDesktopViewport()) {
-        document.body.classList.add('has-desktop-app-bar');
-    } else {
-        document.body.classList.remove('has-desktop-app-bar');
-    }
-    setDesktopSidebarOpen(false);
 }
 
 function openSidebar() {
@@ -1738,7 +1642,6 @@ function openSidebar() {
         setSidebarOverlayOpen(true);
         return;
     }
-    setDesktopSidebarOpen(true);
 }
 
 function closeSidebar() {
@@ -1746,15 +1649,11 @@ function closeSidebar() {
         setSidebarOverlayOpen(false);
         return;
     }
-    setDesktopSidebarOpen(false);
 }
 
-function toggleSidebar() {
-    if (isMobileViewport()) {
-        setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
-        return;
-    }
-    setDesktopSidebarOpen(!desktopSidebarOpen);
+function toggleMobileSidebar() {
+    if (!isMobileViewport()) return;
+    setSidebarOverlayOpen(!document.body.classList.contains('sidebar-overlay-open'));
 }
 
 function bindSidebarEvents() {
@@ -1764,7 +1663,6 @@ function bindSidebarEvents() {
                 setSidebarOverlayOpen(false);
                 return;
             }
-            setDesktopSidebarOpen(false);
         });
     });
 
@@ -1773,64 +1671,17 @@ function bindSidebarEvents() {
             if (document.body.classList.contains('sidebar-overlay-open')) {
                 setSidebarOverlayOpen(false);
             }
-            if (document.body.classList.contains('desktop-sidebar-open')) {
-                setDesktopSidebarOpen(false);
-            }
         }
     });
 
     if (MOBILE_VIEWPORT && MOBILE_VIEWPORT.addEventListener) {
         MOBILE_VIEWPORT.addEventListener('change', function () {
-            if (isMobileViewport()) {
-                document.body.classList.remove('sidebar-collapsed');
-                setDesktopSidebarOpen(false);
-            } else {
-                setSidebarOverlayOpen(false);
-                applyDesktopSidebarState(sidebarCollapsed);
-                document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
-            }
+            setSidebarOverlayOpen(false);
         });
     }
 }
 
-function showQuickActionBar() {
-    const bar = document.getElementById('quick-action-bar');
-    if (!bar) return;
-    bar.classList.add('is-visible');
-}
-
-function hideQuickActionBar() {
-    const bar = document.getElementById('quick-action-bar');
-    if (!bar) return;
-    bar.classList.remove('is-visible');
-}
-
-function initQuickActionBar() {
-    const bar = document.getElementById('quick-action-bar');
-    if (!bar) return;
-    bar.querySelectorAll('a').forEach(function (link) {
-        link.addEventListener('click', function () {
-            hideQuickActionBar();
-        });
-    });
-    document.addEventListener('mousemove', function (event) {
-        if (!isDesktopViewport() || desktopSidebarOpen) return;
-        if (event.clientX <= 5) {
-            showQuickActionBar();
-            if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
-            quickActionBarTimer = setTimeout(function () {
-                hideQuickActionBar();
-            }, 1200);
-        } else if (bar.classList.contains('is-visible')) {
-            if (quickActionBarTimer) clearTimeout(quickActionBarTimer);
-            quickActionBarTimer = setTimeout(function () {
-                hideQuickActionBar();
-            }, 800);
-        }
-    });
-}
-
-window.Nexera.toggleSidebar = toggleSidebar;
+window.Nexera.toggleSidebar = toggleMobileSidebar;
 window.Nexera.openSidebar = openSidebar;
 window.Nexera.closeSidebar = closeSidebar;
 window.Nexera.mountFeedTypeToggleBar = mountFeedTypeToggleBar;
@@ -2178,7 +2029,7 @@ function initApp(onReady) {
 
                 // UI Transitions
                 if (authScreen) authScreen.style.display = 'none';
-                if (appLayout) appLayout.style.display = 'flex';
+                if (appLayout) appLayout.style.display = 'grid';
                 initCallInviteListener();
                 startActiveCallTracker();
                 markReady();
@@ -17363,11 +17214,9 @@ async function openInlineVideoWatch(video) {
     if (!videoWatchRestoreState) {
         videoWatchRestoreState = {
             nodes: Array.from(feed.childNodes),
-            scrollTop: feed.scrollTop,
-            sidebarCollapsed
+            scrollTop: feed.scrollTop
         };
     }
-    applyDesktopSidebarState(true, false);
     if (videosScrollObserver) {
         videosScrollObserver.disconnect();
     }
@@ -17400,7 +17249,6 @@ function restoreInlineVideoWatch() {
         feed.appendChild(node);
     });
     feed.scrollTop = videoWatchRestoreState.scrollTop || 0;
-    applyDesktopSidebarState(videoWatchRestoreState.sidebarCollapsed, false);
     feed.classList.remove('video-watch-open');
     document.body.classList.remove('video-watch-open');
     videoWatchRestoreState = null;
@@ -20648,9 +20496,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindMobileNav();
     bindMobileScrollHelper();
     updateInboxTabsHeight();
-    initSidebarState();
     bindSidebarEvents();
-    initQuickActionBar();
     loadFeedTypeState();
     mountFeedTypeToggleBar();
     syncMobileComposerState();
@@ -20675,10 +20521,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('resize', function () {
     updateInboxTabsHeight();
-    document.body.classList.toggle('has-desktop-app-bar', isDesktopViewport());
-    if (!isDesktopViewport()) {
-        hideQuickActionBar();
-        setDesktopSidebarOpen(false);
+    if (!isMobileViewport()) {
+        setSidebarOverlayOpen(false);
     }
 });
 
