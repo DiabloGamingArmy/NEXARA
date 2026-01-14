@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="grammarly-disable" content="true">
+  <title>Nexera | Page Not Found</title>
+  <!-- Tailwind for utilities -->
+  <link rel="stylesheet" href="/assets/tailwind.css">
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <!-- MOD: Sanitizer (use in script.js to safely render user content) -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/assets/css/base.css">
+  <link rel="icon"
+    href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
+  <link rel="shortcut icon"
+    href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
+  <link rel="apple-touch-icon"
+    href="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Ficon.png?alt=media&token=3db62710-7412-46bf-a981-ace4715e2bc6">
+</head>
+
+<body data-gramm="false">
+  <div id="auth-screen">
+    <img class="brand-logo brand-logo-auth" data-logo-variant="dark" alt="Nexera logo"
+      src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e">
+    <div class="auth-box">
+      <h2 class="nexera-gradient-text"
+        style="margin-bottom:1rem; font-weight:800; font-size:2rem; letter-spacing: -0.5px;">Signal lost.</h2>
+      <p id="not-found-message" style="color:var(--text-muted); margin-bottom: 1.5rem;">
+        We couldn't find that page.
+      </p>
+      <button id="not-found-home" class="create-btn-sidebar"
+        style="background: var(--primary); color:black;">Go Home</button>
+    </div>
+  </div>
+
+  <script src="/assets/js/notFound.js"></script>
+</body>
+
+</html>

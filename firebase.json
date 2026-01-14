@@ -1,0 +1,183 @@
+{
+  "firestore": {
+    "database": "(default)",
+    "location": "nam5",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ]
+    }
+  ],
+  "hosting": {
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "functions/**",
+      "firestore.rules",
+      "firestore.indexes.json",
+      "storage.rules",
+      "commentUtils.test.mjs",
+      "**/firebase-debug.log",
+      "**/firebase-debug.*.log"
+    ],
+    "headers": [
+      {
+        "source": "/scripts/app.js",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/main.js",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+        ]
+      },
+      {
+        "source": "/firebase-messaging-sw.js",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+          { "key": "Pragma", "value": "no-cache" },
+          { "key": "Expires", "value": "0" }
+        ]
+      },
+      {
+        "source": "**/*.@(js|mjs)",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/javascript; charset=UTF-8"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=300, s-maxage=600"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
+      },
+      {
+        "source": "**/*.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "**/*.@(css|png|jpg|jpeg|gif|svg|webp|ico|json|txt|woff|woff2|ttf|eot)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=86400"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/home",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/live",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/videos",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/videos/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/create-video",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/video/video-manager",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/messages",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/inbox",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/discover",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/saved",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/profile",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/staff",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/profile/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/messages/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/inbox/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/view-thread/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/video/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/post/**",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/not-found",
+        "destination": "/index.html"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}

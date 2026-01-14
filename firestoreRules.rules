@@ -1,0 +1,364 @@
+// --- NOTE: These rules are made for FIREBASE DATABASE, NOT FIREBASE STORAGE
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------
+    // Auth helpers
+    // -------------------------
+    function isSignedIn() { return request.auth != null; }
+
+    function hasFounderClaim() {
+      return isSignedIn() && request.auth.token.founder == true;
+    }
+
+    // -------------------------
+    // User roles
+    // -------------------------
+    function getAccountRoles(uid) {
+      return (exists(/databases/$(database)/documents/users/$(uid)) &&
+              (get(/databases/$(database)/documents/users/$(uid)).data.accountRoles is list))
+        ? get(/databases/$(database)/documents/users/$(uid)).data.accountRoles
+        : [];
+    }
+
+    function hasAccountRole(role) {
+      return isSignedIn() && (role in getAccountRoles(request.auth.uid));
+    }
+
+    function accountRolesUnchanged(userId) {
+      return !('accountRoles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/users/$(userId)) &&
+            request.resource.data.accountRoles == [])
+        || (exists(/databases/$(database)/documents/users/$(userId)) &&
+            request.resource.data.accountRoles ==
+              get(/databases/$(database)/documents/users/$(userId)).data.accountRoles);
+    }
+
+    // -------------------------
+    // Category membership + moderation
+    // -------------------------
+    function isCategoryMember(categoryId) {
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid)).data.status == 'active'
+      );
+    }
+
+    function isCategoryMod(categoryId) {
+      let memberPath = /databases/$(database)/documents/categories/$(categoryId)/members/$(request.auth.uid);
+      let m = exists(memberPath) ? get(memberPath).data : null;
+
+      return hasFounderClaim() || (
+        isSignedIn()
+        && exists(memberPath)
+        && (
+          ((m.roles is list) && (('owner' in m.roles) || ('mod' in m.roles)))
+          || (m.role in ['owner','mod'])
+        )
+      );
+    }
+
+    function memberRolesUnchanged(categoryId, uid) {
+      return !('roles' in request.resource.data)
+        || (!exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) &&
+            (request.resource.data.roles == ['member'] || request.resource.data.roles == ['owner']))
+        || (exists(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)) &&
+            request.resource.data.roles ==
+              get(/databases/$(database)/documents/categories/$(categoryId)/members/$(uid)).data.roles);
+    }
+
+    function isStaffAccount() {
+      return hasFounderClaim() || hasAccountRole('staff') || hasAccountRole('admin');
+    }
+
+    // -------------------------
+    // Conversations
+    // -------------------------
+    function isConversationParticipant(conversationId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/conversations/$(conversationId))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+    }
+
+    // Allow a signed-in user to get a conversation doc even if it doesn't exist yet.
+    // This is needed so ensureConversation() can safely call getDoc() when creating a new convo.
+    function canReadConversation(conversationId) {
+      let path = /databases/$(database)/documents/conversations/$(conversationId);
+
+      return isSignedIn() && (
+        // If the doc does NOT exist, there's nothing to leak, so allow get().
+        !exists(path)
+        ||
+        // If it DOES exist, only allow if the user is a participant.
+        (exists(path) && request.auth.uid in get(path).data.participants)
+      );
+    }
+
+    // -------------------------
+    // Users
+    // -------------------------
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow write: if (isSignedIn() && request.auth.uid == userId && accountRolesUnchanged(userId))
+                   || hasFounderClaim()
+                   || (isSignedIn()
+                       && exists(/databases/$(database)/documents/users/$(userId))
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followersCount'])
+                       && (request.resource.data.followersCount is number)
+                       && request.resource.data.followersCount >= 0);
+    }
+
+    match /users/{userId}/followers/{followerId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && request.auth.uid == followerId;
+    }
+
+    match /users/{userId}/following/{targetId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update, delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/categoryMemberships/{categoryId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/notifications/{notifId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if (request.auth == null) || (isSignedIn() && request.auth.uid == userId);
+      allow update: if isSignedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    // -------------------------
+    // Categories
+    // -------------------------
+    match /categories/{categoryId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+        && (
+          request.resource.data.type == 'community'
+          || (hasFounderClaim() && request.resource.data.type == 'official')
+        );
+
+      allow update: if isSignedIn()
+        && (
+          hasFounderClaim()
+          || (resource.data.type == 'community'
+              && request.resource.data.type == 'community'
+              && isCategoryMod(categoryId))
+        );
+
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && (
+          (uid == request.auth.uid
+            && memberRolesUnchanged(categoryId, uid)
+            && request.resource.data.status in ['active','left'])
+          || isCategoryMod(categoryId)
+        );
+      }
+    }
+
+    // -------------------------
+    // Trending categories (server-written)
+    // -------------------------
+    match /trendingCategories/{topicId} {
+      allow read: if true;
+      allow create, delete: if isSignedIn() && isStaffAccount();
+      allow update: if (isSignedIn() && isStaffAccount()) || request.auth == null;
+    }
+
+    match /reports/{type}/{reportId} {
+      allow create: if isSignedIn();
+      allow read: if isSignedIn() && isStaffAccount();
+      allow delete: if false;
+    }
+
+    // -------------------------
+    // Posts
+    // -------------------------
+    match /posts/{postId} {
+      allow read: if !('visibility' in resource.data)
+                  || resource.data.visibility != 'private'
+                  || (isSignedIn() && request.auth.uid == resource.data.userId);
+
+      allow create: if isSignedIn()
+        && request.auth.uid == request.resource.data.userId
+        && (request.resource.data.categoryId == null
+            || isCategoryMember(request.resource.data.categoryId));
+
+      // FIXED: Allow author to update all; allow others to update interactions
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['likes', 'likedBy', 'dislikes', 'dislikedBy', 'trustScore', 'reviewStatus'])
+      );
+     
+      allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+
+      // --- NESTED COMMENTS SECTION ---
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if isSignedIn();
+       
+        // FIXED: Split update to allow liking/replying by others
+        allow update: if isSignedIn() && (
+          request.auth.uid == resource.data.userId ||
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['likes', 'likedBy', 'dislikes', 'dislikedBy', 'replies', 'replyCount'])
+        );
+
+        allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+      }
+
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create, update, delete: if isSignedIn();
+      }
+    }
+
+    // -------------------------
+    // Conversations / DMs
+    // -------------------------
+    match /conversations/{cid} {
+      // Create: signed-in user, participants list >= 2, and creator is in it.
+      allow create: if isSignedIn()
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() >= 2
+        && request.auth.uid in request.resource.data.participants;
+
+      // Allow get() for:
+      // - Non-existent docs (so ensureConversation can probe),
+      // - Existing docs where the user is a participant.
+      allow get: if canReadConversation(cid);
+
+      // Do not allow listing all conversations directly.
+      allow list: if false;
+
+      // Only participants can mutate an existing conversation doc.
+      allow update, delete: if isConversationParticipant(cid);
+
+      match /messages/{mid} {
+        // Create message: participant sending as themselves
+        allow create: if isConversationParticipant(cid)
+          && request.auth.uid == request.resource.data.senderId;
+
+        // Read messages: any participant
+        allow read: if isConversationParticipant(cid);
+
+        // Update message: only original sender
+        allow update: if isConversationParticipant(cid)
+          && request.auth.uid == resource.data.senderId;
+
+        // Delete message: sender or any participant (e.g., clearing history)
+        allow delete: if isConversationParticipant(cid)
+          && (request.auth.uid == resource.data.senderId
+              || request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants);
+      }
+    }
+
+    match /users/{userId}/conversations/{conversationId} {
+      function convoParticipants() {
+        return exists(/databases/$(database)/documents/conversations/$(conversationId))
+          ? get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          : [];
+      }
+
+      allow read: if isSignedIn() && (request.auth.uid == userId);
+
+      allow create, update, delete: if isSignedIn()
+        && (request.auth.uid == userId
+            || (request.auth.uid in convoParticipants() && userId in convoParticipants()));
+    }
+
+    // -------------------------
+    // Videos
+    // -------------------------
+    match /videos/{vid} {
+      allow read: if true;
+
+      allow create, delete: if isSignedIn()
+        && request.auth.uid == request.resource.data.ownerId;
+
+      allow update: if isSignedIn()
+        && (
+          request.auth.uid == resource.data.ownerId
+          || (
+            request.resource.data.ownerId == resource.data.ownerId
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stats'])
+          )
+        );
+
+      match /likes/{uid} { allow read: if isSignedIn(); allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /dislikes/{uid} { allow read: if isSignedIn(); allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /saves/{uid} { allow read: if isSignedIn() && request.auth.uid == uid; allow write: if isSignedIn() && request.auth.uid == uid; }
+      match /comments/{cid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
+    }
+
+    // -------------------------
+    // Live sessions
+    // -------------------------
+    match /liveSessions/{sid} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+      match /chat/{mid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
+    }
+
+    // ------------------------------------------------
+    // Live streaming (hardened)
+    // ------------------------------------------------
+    function liveStreamOwner(streamId) {
+      return exists(/databases/$(database)/documents/liveStreams/$(streamId))
+        ? get(/databases/$(database)/documents/liveStreams/$(streamId)).data.uid
+        : request.resource.data.uid;
+    }
+
+    match /liveStreams/{streamId} {
+      allow read: if true; // public metadata only; secrets live in private subdocs
+
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isSignedIn() && liveStreamOwner(streamId) == request.auth.uid;
+
+      match /chat/{messageId} {
+        allow read, write: if isSignedIn();
+      }
+
+      match /private/{docId} {
+        allow read, write: if isSignedIn() && (
+          (exists(/databases/$(database)/documents/liveStreams/$(streamId))
+            && get(/databases/$(database)/documents/liveStreams/$(streamId)).data.uid == request.auth.uid)
+          || (exists(resource) && resource.data.uid == request.auth.uid)
+          || (request.resource.data.uid == request.auth.uid)
+        );
+      }
+    }
+
+    match /liveSessions/{sessionId}/chat/{messageId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // -------------------------
+    // Verification requests / moderation / admin logs
+    // -------------------------
+    match /verificationRequests/{rid} {
+      allow write: if isSignedIn() && request.auth.uid == request.resource.data.userId;
+      allow read: if isSignedIn() && isStaffAccount();
+    }
+
+    match /reports/{reportId} {
+      allow create: if isSignedIn();
+      allow read, update: if isSignedIn() && isStaffAccount();
+    }
+
+    match /adminLogs/{logId} {
+      allow read, write: if isSignedIn() && isStaffAccount();
+    }
+  }
+}
