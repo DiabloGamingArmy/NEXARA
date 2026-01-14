@@ -729,18 +729,13 @@
                 <span class="brand-wordmark nexera-gradient-text">Nexera</span>
             </div>
         </header>
-        <nav id="quick-action-bar" class="quick-action-bar" aria-label="Quick actions">
-            <a onclick="window.navigateTo('feed')" class="nav-item" aria-label="Home"><i class="ph-bold ph-house"></i></a>
-            <a onclick="window.navigateTo('live')" class="nav-item" aria-label="Live"><i class="ph-bold ph-broadcast"></i></a>
-            <a onclick="window.navigateTo('videos')" class="nav-item" aria-label="Videos"><i class="ph-bold ph-film-strip"></i></a>
-            <a onclick="window.openMessagesPage()" class="nav-item" aria-label="Inbox"><i class="ph-bold ph-chats"></i></a>
-            <a onclick="window.navigateTo('discover')" class="nav-item" aria-label="Discover"><i class="ph-bold ph-compass"></i></a>
-            <a onclick="window.navigateTo('saved')" class="nav-item" aria-label="Saved"><i class="ph-bold ph-bookmark"></i></a>
-            <a onclick="window.navigateTo('profile')" class="nav-item" aria-label="Profile"><i class="ph-bold ph-user"></i></a>
-            <a onclick="window.navigateTo('staff')" id="qa-nav-staff" class="nav-item" aria-label="Staff" style="display:none;"><i class="ph-bold ph-shield-star"></i></a>
-        </nav>
         <nav class="sidebar-left glass-panel">
             <div class="sidebar-header-row">
+                <div class="brand-nav" onclick="window.navigateTo('feed')">
+                    <img class="brand-logo brand-logo-nav" data-logo-variant="auto" alt="Nexera"
+                        src="https://firebasestorage.googleapis.com/v0/b/spike-streaming-service.firebasestorage.app/o/apps%2Fnexera%2Fassets%2Ficons%2Fwhiteicon.png?alt=media&token=366d09a9-61f6-4096-af08-a01a119c339e">
+                    <span class="brand-wordmark nexera-gradient-text">Nexera</span>
+                </div>
                 <button class="icon-pill sidebar-overlay-close" type="button" onclick="window.Nexera?.toggleSidebar?.()" aria-label="Close sidebar"><i class="ph ph-x"></i></button>
             </div>
             <div class="sidebar-nav-body">
@@ -1750,7 +1745,6 @@
     </aside>
     </div>
 
-    <div id="desktop-sidebar-backdrop" class="desktop-sidebar-backdrop sidebar-overlay-backdrop" onclick="window.Nexera?.closeSidebar?.()"></div>
     <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="window.Nexera?.closeSidebar?.()"></div>
 
     <nav id="mobile-bottom-nav" class="mobile-bottom-nav">
