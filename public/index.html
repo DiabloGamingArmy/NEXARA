@@ -725,15 +725,17 @@
 
         <main class="main-feed no-scrollbar">
             <div id="view-feed" class="view-section">
-                <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
-                    style="display: none;" onclick="window.scrollCategoryHeader(-1)">
-                    <i class="ph ph-caret-left"></i>
-                </button>
-                <div id="category-header" class="category-header"></div>
-                <button id="category-scroll-right" class="category-scroll-btn category-scroll-right"
-                    style="display: none;" onclick="window.scrollCategoryHeader(1)">
-                    <i class="ph ph-caret-right"></i>
-                </button>
+                <div class="category-bar">
+                    <button id="category-scroll-left" class="category-scroll-btn category-scroll-left"
+                        style="display: none;" onclick="window.scrollCategoryHeader(-1)">
+                        <i class="ph ph-caret-left"></i>
+                    </button>
+                    <div id="category-header" class="category-header"></div>
+                    <button id="category-scroll-right" class="category-scroll-btn category-scroll-right"
+                        style="display: none;" onclick="window.scrollCategoryHeader(1)">
+                        <i class="ph ph-caret-right"></i>
+                    </button>
+                </div>
                 <div id="feed-content" style="padding:1rem; max-width:800px; margin:0 auto;"></div>
             </div>
 

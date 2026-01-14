@@ -762,12 +762,6 @@ body.desktop-sidebar-open .quick-action-bar {
         transform: translateX(0);
     }
 
-    .category-header {
-        width: 100%;
-        max-width: 100%;
-        top: 0 !important;
-    }
-
     .sidebar-right {
         position: sticky;
         right: auto;
@@ -775,11 +769,6 @@ body.desktop-sidebar-open .quick-action-bar {
         height: calc(100vh - var(--desktop-app-bar-height, 56px));
         grid-row: 2;
         grid-column: 2;
-    }
-
-    .category-scroll-btn {
-        top: 0;
-        height: 48px;
     }
 }
 
@@ -1785,43 +1774,48 @@ body.desktop-sidebar-open .quick-action-bar {
     box-shadow: 0 0 0 4px rgba(0, 242, 234, 0.1);
 }
 
-.category-header {
-    display: flex;
-    gap: 8px;
-    padding-left: 16px;
-    padding-right: 16px;
+/* Wrapper is the sticky container so arrows and pills stick together */
+.category-bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
     height: 48px;
+    display: flex;
     align-items: center;
+    overflow: hidden;
+    background: rgba(6, 12, 20, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+}
+
+/* Category header is now NOT sticky; it scrolls horizontally inside the sticky bar */
+.category-header {
+    position: relative;
+    top: 0 !important;
+    flex: 1;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     overflow-x: auto;
     overflow-y: hidden;
-    flex-wrap: nowrap;
-    position: sticky;
-    top: var(--desktop-app-bar-height, 0px);
-    z-index: 6;
+    padding-left: 56px;
+    padding-right: 56px;
+    background: transparent;
+    box-shadow: none;
     scrollbar-width: none;
     touch-action: pan-x;
     overscroll-behavior-y: contain;
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    background: linear-gradient(180deg, rgba(6, 15, 26, 0.8) 0%, rgba(6, 12, 20, 0.55) 60%, rgba(6, 12, 20, 0) 100%);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
     -webkit-overflow-scrolling: touch;
 }
-
 
 .category-header::-webkit-scrollbar {
     display: none;
 }
 
 .category-header::before {
-    content: '';
-    position: absolute;
-    inset: -20px 0 0 0;
-    background: linear-gradient(180deg, rgba(0, 40, 70, 0.45) 0%, rgba(0, 20, 40, 0.3) 55%, rgba(0, 0, 0, 0));
-    filter: blur(18px);
-    opacity: 0.95;
-    pointer-events: none;
-    z-index: -1;
+    content: none !important;
 }
 
 .category-divider{
@@ -1846,7 +1840,12 @@ body.desktop-sidebar-open .quick-action-bar {
 .category-scroll-btn {
     position: absolute;
     top: 0;
-    z-index: 11;
+    height: 48px;
+    width: 48px;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
     color: var(--text-main);
@@ -1854,23 +1853,15 @@ body.desktop-sidebar-open .quick-action-bar {
     cursor: pointer;
     padding: 0;
     margin-top: 0;
-    height: 48px;
-    width: 48px;
     transition: opacity 0.3s ease;
 }
 
-
 .category-scroll-left {
     left: 0;
-    /* After left sidebar */
-    background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
-    padding-right: 0;
 }
 
 .category-scroll-right {
     right: 0;
-    background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
-    padding-left: 0;
 }
 
 .category-scroll-btn:hover {
