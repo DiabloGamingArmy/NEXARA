@@ -724,6 +724,12 @@ body.desktop-sidebar-open .quick-action-bar {
 }
 
 @media(min-width: 769px) {
+    .app-layout {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        column-gap: 24px;
+    }
+
     body {
         --desktop-app-bar-height: 56px;
     }
@@ -754,8 +760,12 @@ body.desktop-sidebar-open .quick-action-bar {
     }
 
     .sidebar-right {
-        top: var(--desktop-app-bar-height, 0px);
-        height: calc(100vh - var(--desktop-app-bar-height, 0px));
+        position: sticky;
+        right: auto;
+        top: var(--desktop-app-bar-height, 56px);
+        height: calc(100vh - var(--desktop-app-bar-height, 56px));
+        grid-row: 2;
+        grid-column: 2;
     }
 }
 
@@ -769,12 +779,10 @@ body.desktop-sidebar-open .quick-action-bar {
     }
 
 body.sidebar-home .main-feed {
-        flex: 0 0 calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
-        width: calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
-        max-width: calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
+        flex: 1 1 auto;
+        width: 100%;
+        max-width: 100%;
     }
-
-    /* Constrain category header width to fit between right sidebar */
 }
 
 /* Components */
@@ -1826,7 +1834,7 @@ body.sidebar-home .main-feed {
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
     position: fixed;
-    top: 1rem;
+    top: 0;
     z-index: 11;
     background: none;
     border: none;
@@ -1834,7 +1842,7 @@ body.sidebar-home .main-feed {
     font-size: 1.5rem;
     cursor: pointer;
     padding: 1.05rem;
-    margin-top: -1rem;
+    margin-top: 0;
     transition: opacity 0.3s ease;
 }
 

@@ -20587,6 +20587,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('resize', function () {
     updateInboxTabsHeight();
+    if (typeof window.updateCategoryScrollButtons === 'function') {
+        window.updateCategoryScrollButtons();
+    }
     if (isMobileViewport()) {
         setDesktopSidebarOpen(false);
     } else {
