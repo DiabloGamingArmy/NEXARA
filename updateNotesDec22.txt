@@ -1,0 +1,272 @@
+Update Notes (Dec 22) — Full Change History for This Conversation
+===============================================================
+
+Overview
+--------
+This document enumerates, in precise detail, every code change made during this conversation, in chronological order, including changes that were later reverted. The changes were limited to the following files in the `public/` web app plus this note file:
+
+- public/pages/admin.html
+- public/pages/feed.html
+- public/pages/login.html
+- public/pages/profile.html
+- public/scripts/GoLive.js
+- public/scripts/app.js
+- public/style.css
+- updateNotesDec22.txt
+
+Change Set 1 — “Fix view nesting so messages and videos render” (commit 875cbba)
+-------------------------------------------------------------------------------
+Purpose stated at the time: attempt to fix Messages/Videos content not rendering by changing Live Setup markup boundaries. This change set modified HTML structure, JavaScript wiring, and CSS across multiple pages.
+
+### HTML edits (public/pages/*.html)
+Files:
+- public/pages/admin.html
+- public/pages/feed.html
+- public/pages/login.html
+- public/pages/profile.html
+
+Detailed structural changes applied across all four files:
+1) **Live Setup container closure moved earlier**
+   - The closing tags for the Live Setup container hierarchy were inserted **before** the Messages and Videos view sections.
+   - This change was applied by moving or inserting closing `</div>` wrappers so that:
+     - The Live Setup markup stopped enclosing `#view-messages` and `#view-videos`.
+     - The Messages and Videos sections were intended to become top-level siblings to the Live Setup section rather than nested children.
+
+2) **Messages and Videos view placement changed**
+   - The `#view-messages` and `#view-videos` blocks were repositioned to follow immediately after the Live Setup section’s closing tags.
+   - This introduced large multi-hunk edits with significant insertions and deletions due to DOM reordering.
+
+3) **Markup duplication and reorder**
+   - The diff indicated multiple large edits per file (several hunks), reflecting repeated reordering of HTML blocks, not just a single-line fix.
+   - Some sections were removed and reinserted later in the file to ensure Messages/Videos appeared outside the Live Setup wrapper.
+
+Net effect (as attempted): The Messages and Videos views were intended to be un-nested from the Live Setup container by explicit closure of the Live Setup DOM tree prior to those sections.
+
+### JavaScript edits (public/scripts/GoLive.js)
+File:
+- public/scripts/GoLive.js
+
+Detailed changes included:
+1) **Added session cleanup hooks**
+   - Introduced logic to clean up the live session on exit from the Live Setup view.
+   - Added or modified functions to ensure the session was torn down when leaving the view.
+
+2) **Added/modified external encoder/session provisioning helpers**
+   - Added helpers intended to provision sessions without going live, and refactored some flow into helper functions.
+
+3) **Additional logging/status wiring**
+   - Extended and appended logging and status-related logic to support dock panels and external encoder display.
+
+Net effect (as attempted): additional logic to create sessions without going live, track dock/encoder state, and cleanup on exit.
+
+### JavaScript edits (public/scripts/app.js)
+File:
+- public/scripts/app.js
+
+Detailed change:
+1) **Navigation lifecycle hook change**
+   - Added a new hook/handler to trigger cleanup when navigating away from the Live Setup view.
+
+Net effect (as attempted): ensure live setup cleanup occurs on navigation away from that view.
+
+### CSS edits (public/style.css)
+File:
+- public/style.css
+
+Detailed changes:
+1) **Go Live dock + layout CSS**
+   - Added a set of dock-related class styles for layout, scroll, and visibility.
+   - Introduced styling for dock tabs and panels.
+
+2) **Additional layout adjustments**
+   - Added or adjusted layout styles intended for the Live Setup view and its inner panels.
+
+Net effect (as attempted): styling to support dock tabs/panels and layout adjustments.
+
+Change Set 2 — Revert of the above change set (commit 34bba46)
+---------------------------------------------------------------
+Purpose stated at the time: revert to the pre-change HTML/JS/CSS state because multiple pages broke and the request was to restore the original behavior.
+
+This revert commit **fully reversed** the modifications from Change Set 1, with the following precise impacts:
+
+### HTML reversions (public/pages/*.html)
+Files:
+- public/pages/admin.html
+- public/pages/feed.html
+- public/pages/login.html
+- public/pages/profile.html
+
+Reverted changes:
+1) **Restored original Live Setup container boundaries**
+   - Re-applied the original placement of Live Setup closing tags so that the DOM structure returned to its prior, known-good layout.
+
+2) **Restored original Messages/Videos view placement**
+   - Moved `#view-messages` and `#view-videos` sections back to their original locations in each file.
+
+3) **Removed large HTML reorderings**
+   - Deleted the reinserted and reordered chunks introduced in Change Set 1.
+
+### JavaScript reversions
+Files:
+- public/scripts/GoLive.js
+- public/scripts/app.js
+
+Reverted changes:
+1) **Removed new cleanup hooks**
+   - Deleted the new session cleanup wiring added in Change Set 1.
+
+2) **Removed new provisioning helpers**
+   - Reverted the added helper functions and logic intended to prepare external encoder sessions.
+
+3) **Removed added logging/status/dock wiring**
+   - Reverted additions related to dock/encoder status tracking introduced in Change Set 1.
+
+### CSS reversions
+File:
+- public/style.css
+
+Reverted changes:
+1) **Removed dock/layout additions**
+   - Deleted the styles added for dock tabs/panels and layout adjustments.
+
+Net effect: The codebase returned to the state immediately before Change Set 1.
+
+Change Set 3 — This document (updateNotesDec22.txt)
+---------------------------------------------------
+Purpose: Provide a complete, precise accounting of changes made during this conversation, including reverted changes.
+
+Change Set 4 — Re-adding missing View Containers (Fix for Blank Screens)
+-----------------------------------------------------------------------
+Purpose: The revert in Change Set 2 seemingly removed the container divs for '#view-videos' and '#view-messages', causing the app navigation to show blank screens for those sections. This change restores them.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Restored #view-videos container**
+   - Added the video view container structure with header and content area.
+
+2) **Restored #view-messages container**
+   - Added the messages view container with sidebar for conversations and main chat area logic scaffolding.
+
+3) **Restored #view-staff container**
+   - Added the staff dashboard view container.
+
+Net effect: Navigation to Videos, Messages, and Staff sections should now display the UI skeletons instead of a blank page.
+
+
+Change Set 5 — Fix for Duplicate Views and Layout Breakage
+----------------------------------------------------------
+Purpose: Change Set 4 inadvertently introduced duplicate view containers at the top of feed.html, while the original (and more complete) containers still existed at the bottom. This caused layout nesting issues, rendered the correct views inaccessible, and likely broke the Right Sidebar display.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Removed Duplicate View Containers**
+   - Removed the duplicate blocks for '#view-videos', '#view-messages', and '#view-staff' that were added in Change Set 4.
+   - The application now correctly uses the original, fully-implemented view containers located at the bottom of the file (lines 1090+).
+
+2) **Verified Sidebar and Main Layout**
+   - Confirmed presence of '.sidebar-right' (Trending/Time Capsule) in the HTML.
+   - Removing the invalid duplicate nesting should restore the sidebar's visibility on the Home page and fix the Profile page content rendering "underneath".
+
+Net effect: Messages view should look correct (complex UI), Profile content should render in place, and Sidebars should behave as intended.
+
+Change Set 6 — Fix for Discussion View Nesting and Branding Rename
+------------------------------------------------------------------
+Purpose: The user reported that clicking a post (Discussion View) was displaying the "Live Editor" interface. This was caused by the 'view-thread' container missing a closing </div> tag, which caused subsequent views (including the Live Editor) to be nested inside it.
+Additionally, the project name "Nexara" was corrected to "Nexera" in CSS and HTML files.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Fixed View Nesting (Structural Integrity)**
+   - Added a missing </div> tag to close the '#view-thread' container (around line 645).
+   - This ensures that '#view-public-profile', '#view-discover', '#view-live', and '#view-live-setup' are no longer children of '#view-thread'.
+
+### Branding Rename
+Files:
+- public/style.css
+- public/pages/feed.html
+- public/pages/profile.html
+- public/pages/login.html
+- public/pages/admin.html
+
+Detailed changes:
+1) **Renamed CSS Class**
+   - Changed '.nexara-gradient-text' to '.nexera-gradient-text' in style.css.
+   - Updated all references to this class in the HTML files.
+   - Updated comments to refer to "Nexera".
+
+Net effect: Discussion view should now show only the discussion interface (no Live Editor), and the branding text should use the correct class name.
+
+Change Set 7 — Fix for Live Config UI Leak
+------------------------------------------
+Purpose: The user reported that the "Live Config" UI (Go Live setup) was visible on multiple pages (Live, Videos, Messages, etc.) underneath the proper content.
+This was caused by a massive block of excessive closing tags (</div> and </section>) at the end of the '#view-live-setup' container, which closed the main layout prematurely and left the subsequent content "orphaned" in the DOM structure (or broke the parent-child relationship).
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Fixed View Structure (Live Setup)**
+   - Removed ~20 lines of redundant/invalid closing tags (</div>, </section>) around lines 1218-1237.
+   - Replaced them with exactly 3 closing </div> tags to properly close:
+     1. .go-live-views
+     2. #go-live-root
+     3. #view-live-setup
+   - This prevents the Live Setup view from "leaking" its display state to the rest of the app and ensures it respects 'display: none'.
+
+Net effect: The "Live Config" UI should now be hidden by default and only appear when explicitly navigated to (e.g. via "Go Live" button). Other pages like Videos and Profile should no longer show this UI at the top or bottom.
+
+Change Set 8 — Fix for Persistent Advanced View Leak
+----------------------------------------------------
+Purpose: User reported that the "Advanced Live View" was still visible everywhere.
+Cause: A rogue `</div>` tag at line 852 was closing the `.go-live-views` container prematurely. This caused the subsequent `basic-dock` and `#go-live-advanced-view` sections to be orphans outside of the main `go-live-root` and `view-live-setup` containers.
+Because they were outside the `go-live-root`, the CSS rules that normally hide them (e.g. valid nesting required) did not apply, and they rendered as default block elements at the bottom of the page (or wherever they fell).
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1) **Removed Premature Closing Tag**
+   - Deleted the `</div>` at line 852.
+   - This restores the parent-child relationship: `go-live-views` now correctly wraps both `#go-live-basic-view` and `#go-live-advanced-view`.
+
+Net effect: The "Advanced Live View" is now properly nested and should respect the `display: none` rules controlled by the UI state, disappearing from other pages.
+
+Change Set 9 — Layout Correction & Messages Fix
+-----------------------------------------------
+Purpose: User reported that Videos, Profile, Staff, and Messages content was not appearing in the correct "section" (main feed area) or was missing/blank entirely (Messages).
+Cause:
+1. **Misplaced HTML**: The container divs for Videos, Messages, Staff, and Profile were located at the very bottom of `feed.html`, physically outside the main flow.
+2. **Missing CSS**: The `messages-layout` class and its children (sidebar, thread) had NO CSS defined in `style.css`.
+
+### HTML edits (public/pages/feed.html)
+File:
+- public/pages/feed.html
+
+Detailed changes:
+1. **Relocated Views**:
+   - Moved `#view-videos`, `#view-messages`, `#view-conversation-settings`, `#view-staff`, and `#view-profile` from the bottom of the file (lines ~1226+) to the main content area (inside `.main-feed`, just before `#view-live-setup`).
+   - This ensures they share the correct flex/layout context of `.main-feed`.
+
+### CSS edits (public/style.css)
+File:
+- public/style.css
+
+Detailed changes:
+1. **Added Messages UI Styles**:
+   - Defined `.messages-layout`, `.messages-sidebar`, `.messages-thread`, `.conversation-list`, etc.
+   - Set fixed height logic (`calc(100vh - 80px)`) to ensure the chat window fits the screen and allows internal scrolling.
+
+Net effect:
+- Videos, Profile, and Staff views should now render correctly inside the main center column.
+- Messages page should now actually appear (not blank), have a proper sidebar/chat split, and scroll correctly.

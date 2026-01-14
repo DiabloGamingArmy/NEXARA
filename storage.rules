@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// Craft rules based on data in your Firestore database
+// allow write: if firestore.get(
+//    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /videos/{uid}/{videoId}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.size < 100 * 1024 * 1024 * 1024;
+    }
+
+    match /conversation_avatars/{cid}/{fileName} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    }
+
+    match /chats/{cid}/messages/{mid}/{fileName} {
+      allow read, write: if request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    }
+
+    match /dm_media/{cid}/{fileName} {
+      allow read, write: if request.auth != null
+        && exists(/databases/$(database)/documents/conversations/$(cid))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
