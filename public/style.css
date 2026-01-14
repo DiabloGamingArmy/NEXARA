@@ -1774,39 +1774,24 @@ body.desktop-sidebar-open .quick-action-bar {
     box-shadow: 0 0 0 4px rgba(0, 242, 234, 0.1);
 }
 
-/* Wrapper is the sticky container so arrows and pills stick together */
-.category-bar {
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    overflow: hidden;
-    background: rgba(6, 12, 20, 0.85);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-}
-
-/* Category header is now NOT sticky; it scrolls horizontally inside the sticky bar */
+/* Topic header styling */
 .category-header {
-    position: relative;
-    top: 0 !important;
-    flex: 1;
-    height: 48px;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    gap: 10px;
+    padding: 1rem;
     overflow-x: auto;
     overflow-y: hidden;
-    padding-left: 56px;
-    padding-right: 56px;
-    background: transparent;
-    box-shadow: none;
+    flex-wrap: nowrap;
+    position: sticky;
+    top: var(--desktop-app-bar-height, 0px);
+    z-index: 6;
     scrollbar-width: none;
     touch-action: pan-x;
     overscroll-behavior-y: contain;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background: linear-gradient(180deg, rgba(6, 15, 26, 0.8) 0%, rgba(6, 12, 20, 0.55) 60%, rgba(6, 12, 20, 0) 100%);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
     -webkit-overflow-scrolling: touch;
 }
 
@@ -1814,8 +1799,13 @@ body.desktop-sidebar-open .quick-action-bar {
     display: none;
 }
 
+/* Add subtle glow above the pills */
 .category-header::before {
-    content: none !important;
+    content: '';
+    position: absolute;
+    inset: -20px 0 0 0;
+    background: linear-gradient(180deg, rgba(0, 40, 70, 0.45) 0%, rgba(0, 20, 40, 0.3) 55%, rgba(0, 0, 0, 0));
+    filter: blur(18px);
 }
 
 .category-divider{
@@ -1838,30 +1828,37 @@ body.desktop-sidebar-open .quick-action-bar {
 
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
-    position: absolute;
-    top: 0;
-    height: 48px;
-    width: 48px;
-    z-index: 30;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    position: fixed;
+    top: 1rem;
+    z-index: 11;
+    font-size: 1.5rem;
+    padding: 1.05rem;
+    margin-top: -1rem;
     background: none;
     border: none;
     color: var(--text-main);
-    font-size: 1.5rem;
     cursor: pointer;
-    padding: 0;
-    margin-top: 0;
-    transition: opacity 0.3s ease;
+    transition: color 0.3s ease;
 }
 
 .category-scroll-left {
-    left: 0;
+    left: 250px;
+    background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
+    padding-right: 2rem;
 }
 
 .category-scroll-right {
     right: 0;
+    background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
+    padding-left: 2rem;
+}
+
+body.sidebar-collapsed .category-scroll-left {
+    left: 72px;
+}
+
+body.sidebar-home .category-scroll-right {
+    right: 320px;
 }
 
 .category-scroll-btn:hover {
