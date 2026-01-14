@@ -489,7 +489,7 @@ body.sidebar-home {
     width: 320px;
     border-left: 1px solid var(--border);
     display: none;
-    position: fixed;
+    position: relative;
     right: 0;
     top: 0;
     height: 100vh;
@@ -719,6 +719,10 @@ body.desktop-sidebar-open .quick-action-bar {
     background-size: 100% 100vh;
 }
 
+#view-feed {
+    position: relative;
+}
+
 .main-feed::-webkit-scrollbar {
     display: none;
 }
@@ -727,7 +731,7 @@ body.desktop-sidebar-open .quick-action-bar {
     .app-layout {
         display: grid;
         grid-template-columns: 1fr 320px;
-        column-gap: 24px;
+        gap: 24px;
     }
 
     body {
@@ -769,19 +773,14 @@ body.desktop-sidebar-open .quick-action-bar {
     }
 }
 
-@media(min-width: 1024px) {
-    body.sidebar-home .sidebar-right {
+@media(min-width: 769px) {
+    body.sidebar-home .sidebar-right,
+    body.sidebar-wide .sidebar-right {
         display: block;
     }
 
-    body:not(.sidebar-home) .sidebar-right {
+    body:not(.sidebar-home):not(.sidebar-wide) .sidebar-right {
         display: none !important;
-    }
-
-body.sidebar-home .main-feed {
-        flex: 1 1 auto;
-        width: 100%;
-        max-width: 100%;
     }
 }
 
@@ -1779,8 +1778,11 @@ body.sidebar-home .main-feed {
 
 .category-header {
     display: flex;
-    gap: 10px;
-    padding: 1rem;
+    gap: 8px;
+    padding-left: 16px;
+    padding-right: 16px;
+    height: 48px;
+    align-items: center;
     overflow-x: auto;
     overflow-y: hidden;
     flex-wrap: nowrap;
@@ -1833,7 +1835,7 @@ body.sidebar-home .main-feed {
 
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
-    position: fixed;
+    position: absolute;
     top: 0;
     z-index: 11;
     background: none;
@@ -1841,8 +1843,10 @@ body.sidebar-home .main-feed {
     color: var(--text-main);
     font-size: 1.5rem;
     cursor: pointer;
-    padding: 1.05rem;
+    padding: 0;
     margin-top: 0;
+    height: 48px;
+    width: 48px;
     transition: opacity 0.3s ease;
 }
 
@@ -1851,13 +1855,13 @@ body.sidebar-home .main-feed {
     left: 0;
     /* After left sidebar */
     background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
-    padding-right: 2rem;
+    padding-right: 0;
 }
 
 .category-scroll-right {
     right: 0;
     background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
-    padding-left: 2rem;
+    padding-left: 0;
 }
 
 .category-scroll-btn:hover {
