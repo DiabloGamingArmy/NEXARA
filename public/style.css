@@ -769,9 +769,9 @@ body.desktop-sidebar-open .quick-action-bar {
     }
 
 body.sidebar-home .main-feed {
-        flex: 0 0 calc(100vw - var(--right-sidebar-width, 0px));
-        width: calc(100vw - var(--right-sidebar-width, 0px));
-        max-width: calc(100vw - var(--right-sidebar-width, 0px));
+        flex: 0 0 calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
+        width: calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
+        max-width: calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
     }
 
     /* Constrain category header width to fit between right sidebar */
