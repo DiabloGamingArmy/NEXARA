@@ -3837,8 +3837,10 @@ window.navigateTo = function (viewId, pushToStack = true) {
     const targetView = document.getElementById('view-' + viewId);
     if (targetView) targetView.style.display = 'block';
 
+    const showRight = shouldShowRightSidebar(viewId);
     document.body.classList.toggle('sidebar-home', viewId === 'feed');
-    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(viewId));
+    document.body.classList.toggle('sidebar-wide', showRight);
+    document.body.classList.toggle('hide-right-sidebar', !showRight);
     if (isMobileViewport()) {
         setSidebarOverlayOpen(false);
     }
@@ -20546,8 +20548,10 @@ function refreshInboxLayout() {
 function syncSidebarHomeState() {
     const path = window.location.pathname || '/';
     const isHome = path === '/home' || path === '/' || path === '';
+    const showRight = shouldShowRightSidebar(currentViewId || 'feed');
     document.body.classList.toggle('sidebar-home', isHome);
-    document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(currentViewId || 'feed'));
+    document.body.classList.toggle('sidebar-wide', showRight);
+    document.body.classList.toggle('hide-right-sidebar', !showRight);
     if (isHome) {
         mountFeedTypeToggleBar();
         renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));

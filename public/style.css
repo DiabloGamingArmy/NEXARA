@@ -734,6 +734,10 @@ body.desktop-sidebar-open .quick-action-bar {
         gap: 24px;
     }
 
+    body.hide-right-sidebar .app-layout {
+        grid-template-columns: 1fr !important;
+    }
+
     body {
         --desktop-app-bar-height: 56px;
     }
@@ -761,6 +765,7 @@ body.desktop-sidebar-open .quick-action-bar {
     .category-header {
         width: 100%;
         max-width: 100%;
+        top: 0 !important;
     }
 
     .sidebar-right {
@@ -771,15 +776,19 @@ body.desktop-sidebar-open .quick-action-bar {
         grid-row: 2;
         grid-column: 2;
     }
+
+    .category-scroll-btn {
+        top: 0;
+        height: 48px;
+    }
 }
 
 @media(min-width: 769px) {
-    body.sidebar-home .sidebar-right,
-    body.sidebar-wide .sidebar-right {
+    .sidebar-right {
         display: block;
     }
 
-    body:not(.sidebar-home):not(.sidebar-wide) .sidebar-right {
+    body.hide-right-sidebar .sidebar-right {
         display: none !important;
     }
 }
