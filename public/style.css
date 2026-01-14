@@ -288,12 +288,9 @@ body {
     width: 100vw;
     min-height: 100vh;
     height: 100%;
-    --sidebar-collapsed-width: 72px;
+    --sidebar-width: 250px;
     --right-sidebar-width: 0px;
-}
-
-body.desktop-sidebar-open {
-    --sidebar-collapsed-width: 250px;
+    --desktop-app-bar-height: 0px;
 }
 
 body.sidebar-home {
@@ -402,6 +399,8 @@ body.sidebar-home {
     display: none;
     min-height: 100vh;
     width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
 }
 
 .desktop-app-bar {
@@ -416,10 +415,7 @@ body.sidebar-home {
     background: rgba(6, 12, 20, 0.75);
     border-bottom: 1px solid var(--border);
     min-height: var(--desktop-app-bar-height, 56px);
-}
-
-body.has-desktop-app-bar {
-    --desktop-app-bar-height: 56px;
+    grid-column: 1 / -1;
 }
 
 .desktop-hamburger {
@@ -443,24 +439,22 @@ body.has-desktop-app-bar {
 }
 
 .sidebar-left {
-    position: sticky;
-    top: 0;
-    height: 100vh;
+    position: fixed;
+    top: var(--desktop-app-bar-height, 0px);
+    height: calc(100vh - var(--desktop-app-bar-height, 0px));
     flex-shrink: 0;
     padding: 2rem 1.5rem;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+    display: block;
 }
 
 .sidebar-left {
-    width: 250px;
+    width: var(--sidebar-width);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-}
-
-.sidebar-left.sidebar-overlay {
-    width: 220px;
-    box-shadow: 12px 0 30px rgba(4, 10, 20, 0.5);
-    padding: 1.5rem 1rem;
 }
 
 .sidebar-header-row {
@@ -495,7 +489,7 @@ body.has-desktop-app-bar {
     width: 320px;
     border-left: 1px solid var(--border);
     display: none;
-    position: fixed;
+    position: relative;
     right: 0;
     top: 0;
     height: 100vh;
@@ -627,48 +621,6 @@ body.has-desktop-app-bar {
     display: none;
 }
 
-body.sidebar-collapsed .sidebar-left {
-    width: 72px;
-    padding: 1.5rem 0.75rem;
-}
-
-body.sidebar-collapsed .sidebar-left .brand-nav,
-body.sidebar-collapsed .sidebar-left .brand-wordmark,
-body.sidebar-collapsed .sidebar-left .btn-label,
-.sidebar-left.collapsed .brand-nav,
-.sidebar-left.collapsed .brand-wordmark,
-.sidebar-left.collapsed .btn-label {
-    display: none;
-}
-
-body.sidebar-collapsed .sidebar-left .nav-item,
-.sidebar-left.collapsed .nav-item {
-    justify-content: center;
-    gap: 0;
-    font-size: 0;
-    padding: 0.8rem 0;
-    padding-left: 0;
-    padding-right: 0;
-}
-
-body.sidebar-collapsed .sidebar-left .nav-item i,
-.sidebar-left.collapsed .nav-item i {
-    font-size: 1.2rem;
-    margin-right: 0;
-}
-
-body.sidebar-collapsed .sidebar-left .create-btn-sidebar,
-.sidebar-left.collapsed .create-btn-sidebar {
-    justify-content: center;
-    padding: 0.8rem 0;
-    font-size: 0;
-}
-
-body.sidebar-collapsed .sidebar-left .create-btn-sidebar i,
-.sidebar-left.collapsed .create-btn-sidebar i {
-    font-size: 1.2rem;
-}
-
 body.sidebar-overlay-open .sidebar-overlay-close,
 body.desktop-sidebar-open .sidebar-overlay-close {
     display: inline-flex;
@@ -683,72 +635,65 @@ body.desktop-sidebar-open .sidebar-overlay-close {
     z-index: 55;
 }
 
-body.sidebar-overlay-open .sidebar-backdrop {
+body.sidebar-overlay-open .sidebar-backdrop:not(.desktop-backdrop) {
     display: block;
 }
 
-.desktop-sidebar-backdrop {
+.desktop-backdrop {
     display: none;
     position: fixed;
     inset: 0;
-    background: rgba(6, 12, 20, 0.55);
-    z-index: 58;
+    background: rgba(6, 12, 20, 0.6);
+    backdrop-filter: blur(6px);
+    z-index: 55;
 }
 
-.sidebar-overlay-backdrop {
-    backdrop-filter: blur(10px);
-}
-
-.desktop-sidebar-backdrop.is-visible {
+body.desktop-sidebar-open .desktop-backdrop {
     display: block;
 }
 
 .quick-action-bar {
     position: fixed;
     left: 0;
-    top: var(--desktop-app-bar-height, 0px);
-    height: calc(100vh - var(--desktop-app-bar-height, 0px));
-    width: 64px;
-    background: rgba(8, 16, 26, 0.92);
+    top: var(--desktop-app-bar-height, 56px);
+    width: 72px;
+    height: calc(100vh - var(--desktop-app-bar-height, 56px));
+    background: var(--bg-card);
     border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 50;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    padding: 1rem 0.5rem;
-    gap: 10px;
-    transform: translateX(-110%);
-    transition: transform 0.2s ease;
-    z-index: 59;
+    gap: 20px;
+    padding: 20px 10px;
 }
 
-.quick-action-bar.is-visible {
+.quick-action-bar.visible {
     transform: translateX(0);
 }
 
 .quick-action-bar .nav-item {
     justify-content: center;
-    padding: 0.6rem;
     font-size: 0;
-}
-
-.quick-action-bar .nav-item:hover i {
-    color: var(--primary);
+    padding: 0.6rem;
 }
 
 .quick-action-bar .nav-item i {
-    font-size: 1rem;
+    font-size: 1.2rem;
     margin: 0;
 }
 
 body.desktop-sidebar-open .quick-action-bar {
-    transform: translateX(-110%);
-    pointer-events: none;
+    display: none;
 }
 
 @media(max-width: 768px) {
-    .desktop-app-bar,
-    .quick-action-bar,
-    .desktop-sidebar-backdrop {
+    .desktop-app-bar {
+        display: none !important;
+    }
+
+    .quick-action-bar {
         display: none !important;
     }
 }
@@ -762,6 +707,8 @@ body.desktop-sidebar-open .quick-action-bar {
     height: 100vh;
     border-right: 1px solid var(--border);
     min-width: 0;
+    grid-row: 2;
+    grid-column: 1;
     overflow-y: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -772,72 +719,68 @@ body.desktop-sidebar-open .quick-action-bar {
     background-size: 100% 100vh;
 }
 
+#view-feed {
+    position: relative;
+}
+
 .main-feed::-webkit-scrollbar {
     display: none;
 }
 
 @media(min-width: 769px) {
+    .app-layout {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 24px;
+    }
+
+    body {
+        --desktop-app-bar-height: 56px;
+    }
+
     .desktop-app-bar {
         display: flex;
     }
 
     .sidebar-left {
+        width: var(--sidebar-width);
         position: fixed;
-        top: var(--desktop-app-bar-height, 0px);
+        top: var(--desktop-app-bar-height, 56px);
         left: 0;
-        height: calc(100vh - var(--desktop-app-bar-height, 0px));
-        transform: translateX(-250px);
-        transition: transform 0.2s ease;
+        height: calc(100vh - var(--desktop-app-bar-height, 56px));
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
         z-index: 60;
-        pointer-events: none;
+        display: block;
     }
 
     body.desktop-sidebar-open .sidebar-left {
         transform: translateX(0);
-        pointer-events: auto;
     }
 
-    body.has-desktop-app-bar .main-feed {
-        margin-top: var(--desktop-app-bar-height, 0px);
-        height: calc(100vh - var(--desktop-app-bar-height, 0px));
+    .category-header {
+        width: 100%;
+        max-width: 100%;
     }
 
-    body.has-desktop-app-bar .sidebar-right {
-        top: var(--desktop-app-bar-height, 0px);
-        height: calc(100vh - var(--desktop-app-bar-height, 0px));
-    }
-
-    .desktop-sidebar-backdrop {
-        top: var(--desktop-app-bar-height, 0px);
-        height: calc(100vh - var(--desktop-app-bar-height, 0px));
+    .sidebar-right {
+        position: sticky;
+        right: auto;
+        top: var(--desktop-app-bar-height, 56px);
+        height: calc(100vh - var(--desktop-app-bar-height, 56px));
+        grid-row: 2;
+        grid-column: 2;
     }
 }
 
-@media(min-width: 1024px) {
-    body.sidebar-home .sidebar-right {
+@media(min-width: 769px) {
+    body.sidebar-home .sidebar-right,
+    body.sidebar-wide .sidebar-right {
         display: block;
     }
 
-    body:not(.sidebar-home) .sidebar-right {
+    body:not(.sidebar-home):not(.sidebar-wide) .sidebar-right {
         display: none !important;
-    }
-
-body.sidebar-home .main-feed {
-        flex: 0 0 calc(100vw - var(--right-sidebar-width, 0px));
-        width: calc(100vw - var(--right-sidebar-width, 0px));
-        max-width: calc(100vw - var(--right-sidebar-width, 0px));
-    }
-
-    /* Constrain category header width to fit between right sidebar */
-    body.sidebar-home .category-header {
-        width: calc(100vw - var(--right-sidebar-width, 0px));
-        max-width: calc(100vw - var(--right-sidebar-width, 0px));
-    }
-
-    body.sidebar-home.sidebar-collapsed .main-feed,
-    body.sidebar-home.sidebar-collapsed .category-header {
-        width: calc(100vw - var(--right-sidebar-width, 0px));
-        max-width: calc(100vw - var(--right-sidebar-width, 0px));
     }
 }
 
@@ -975,8 +918,10 @@ body.sidebar-home .main-feed {
   width: 100%;
 }
 
-body.has-desktop-app-bar .nexera-alert-banner.banner-static {
-  margin-top: var(--desktop-app-bar-height, 0px);
+@media(min-width: 769px) {
+    .nexera-alert-banner.banner-static {
+        margin-top: var(--desktop-app-bar-height, 0px);
+    }
 }
 
 /* Center icon + text, keep close button on right */
@@ -1833,8 +1778,11 @@ body.has-desktop-app-bar .nexera-alert-banner.banner-static {
 
 .category-header {
     display: flex;
-    gap: 10px;
-    padding: 1rem;
+    gap: 8px;
+    padding-left: 16px;
+    padding-right: 16px;
+    height: 48px;
+    align-items: center;
     overflow-x: auto;
     overflow-y: hidden;
     flex-wrap: nowrap;
@@ -1887,31 +1835,33 @@ body.has-desktop-app-bar .nexera-alert-banner.banner-static {
 
 /* Category scroll arrows - desktop only */
 .category-scroll-btn {
-    position: fixed;
-    top: 1rem;
+    position: absolute;
+    top: 0;
     z-index: 11;
     background: none;
     border: none;
     color: var(--text-main);
     font-size: 1.5rem;
     cursor: pointer;
-    padding: 1.05rem;
-    margin-top: -1rem;
+    padding: 0;
+    margin-top: 0;
+    height: 48px;
+    width: 48px;
     transition: opacity 0.3s ease;
 }
 
 
 .category-scroll-left {
-    left: var(--sidebar-collapsed-width, 72px);
+    left: 0;
     /* After left sidebar */
     background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
-    padding-right: 2rem;
+    padding-right: 0;
 }
 
 .category-scroll-right {
-    right: var(--right-sidebar-width, 0px);
+    right: 0;
     background: linear-gradient(270deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
-    padding-left: 2rem;
+    padding-left: 0;
 }
 
 .category-scroll-btn:hover {
