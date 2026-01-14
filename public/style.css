@@ -399,7 +399,7 @@ body.sidebar-home {
     display: none;
     min-height: 100vh;
     width: 100%;
-    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 1fr;
 }
 
@@ -439,13 +439,15 @@ body.sidebar-home {
 }
 
 .sidebar-left {
-    position: sticky;
+    position: fixed;
     top: var(--desktop-app-bar-height, 0px);
     height: calc(100vh - var(--desktop-app-bar-height, 0px));
     flex-shrink: 0;
     padding: 2rem 1.5rem;
-    grid-row: 2;
-    grid-column: 1;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+    display: block;
 }
 
 .sidebar-left {
@@ -619,7 +621,8 @@ body.sidebar-home {
     display: none;
 }
 
-body.sidebar-overlay-open .sidebar-overlay-close {
+body.sidebar-overlay-open .sidebar-overlay-close,
+body.desktop-sidebar-open .sidebar-overlay-close {
     display: inline-flex;
 }
 
@@ -632,12 +635,65 @@ body.sidebar-overlay-open .sidebar-overlay-close {
     z-index: 55;
 }
 
-body.sidebar-overlay-open .sidebar-backdrop {
+body.sidebar-overlay-open .sidebar-backdrop:not(.desktop-backdrop) {
     display: block;
+}
+
+.desktop-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(6, 12, 20, 0.6);
+    backdrop-filter: blur(6px);
+    z-index: 55;
+}
+
+body.desktop-sidebar-open .desktop-backdrop {
+    display: block;
+}
+
+.quick-action-bar {
+    position: fixed;
+    left: 0;
+    top: var(--desktop-app-bar-height, 56px);
+    width: 72px;
+    height: calc(100vh - var(--desktop-app-bar-height, 56px));
+    background: var(--bg-card);
+    border-right: 1px solid var(--border);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 20px 10px;
+}
+
+.quick-action-bar.visible {
+    transform: translateX(0);
+}
+
+.quick-action-bar .nav-item {
+    justify-content: center;
+    font-size: 0;
+    padding: 0.6rem;
+}
+
+.quick-action-bar .nav-item i {
+    font-size: 1.2rem;
+    margin: 0;
+}
+
+body.desktop-sidebar-open .quick-action-bar {
+    display: none;
 }
 
 @media(max-width: 768px) {
     .desktop-app-bar {
+        display: none !important;
+    }
+
+    .quick-action-bar {
         display: none !important;
     }
 }
@@ -652,7 +708,7 @@ body.sidebar-overlay-open .sidebar-backdrop {
     border-right: 1px solid var(--border);
     min-width: 0;
     grid-row: 2;
-    grid-column: 2;
+    grid-column: 1;
     overflow-y: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -676,14 +732,25 @@ body.sidebar-overlay-open .sidebar-backdrop {
         display: flex;
     }
 
-    .main-feed {
-        margin-top: var(--desktop-app-bar-height, 0px);
-        height: calc(100vh - var(--desktop-app-bar-height, 0px));
+    .sidebar-left {
+        width: var(--sidebar-width);
+        position: fixed;
+        top: var(--desktop-app-bar-height, 56px);
+        left: 0;
+        height: calc(100vh - var(--desktop-app-bar-height, 56px));
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        z-index: 60;
+        display: block;
+    }
+
+    body.desktop-sidebar-open .sidebar-left {
+        transform: translateX(0);
     }
 
     .category-header {
-        width: calc(100vw - var(--sidebar-width));
-        max-width: calc(100vw - var(--sidebar-width));
+        width: 100%;
+        max-width: 100%;
     }
 
     .sidebar-right {
@@ -708,11 +775,6 @@ body.sidebar-home .main-feed {
     }
 
     /* Constrain category header width to fit between right sidebar */
-    body.sidebar-home .category-header {
-        width: calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
-        max-width: calc(100vw - var(--sidebar-width) - var(--right-sidebar-width, 0px));
-    }
-
 }
 
 /* Components */
@@ -1778,7 +1840,7 @@ body.sidebar-home .main-feed {
 
 
 .category-scroll-left {
-    left: 250px;
+    left: 0;
     /* After left sidebar */
     background: linear-gradient(90deg, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0) 100%);
     padding-right: 2rem;

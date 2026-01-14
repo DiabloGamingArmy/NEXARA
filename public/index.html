@@ -710,6 +710,17 @@
                 <span class="btn-label">Post</span></button>
         </div>
         </nav>
+        <div class="sidebar-backdrop desktop-backdrop" onclick="window.Nexera?.closeSidebar?.()"></div>
+        <div id="quick-action-bar" class="quick-action-bar" aria-label="Quick actions">
+            <button type="button" class="nav-item" aria-label="Home" onclick="window.navigateTo('feed')"><i class="ph-bold ph-house"></i></button>
+            <button type="button" class="nav-item" aria-label="Live" onclick="window.navigateTo('live')"><i class="ph-bold ph-broadcast"></i></button>
+            <button type="button" class="nav-item" aria-label="Videos" onclick="window.navigateTo('videos')"><i class="ph-bold ph-film-strip"></i></button>
+            <button type="button" class="nav-item" aria-label="Inbox" onclick="window.openMessagesPage()"><i class="ph-bold ph-chats"></i></button>
+            <button type="button" class="nav-item" aria-label="Discover" onclick="window.navigateTo('discover')"><i class="ph-bold ph-compass"></i></button>
+            <button type="button" class="nav-item" aria-label="Saved" onclick="window.navigateTo('saved')"><i class="ph-bold ph-bookmark"></i></button>
+            <button type="button" class="nav-item" aria-label="Profile" onclick="window.navigateTo('profile')"><i class="ph-bold ph-user"></i></button>
+            <button type="button" class="nav-item" id="qa-nav-staff" aria-label="Staff" onclick="window.navigateTo('staff')" style="display:none;"><i class="ph-bold ph-shield-star"></i></button>
+        </div>
 
 
         <main class="main-feed no-scrollbar">
