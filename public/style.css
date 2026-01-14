@@ -1410,6 +1410,63 @@ body.has-desktop-app-bar .nexera-alert-banner.banner-static {
     position: relative;
 }
 
+.post-media-chip {
+    margin-top: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.post-audio-shell {
+    margin-top: 10px;
+}
+
+.post-audio-player {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 10px;
+}
+
+.post-doc-shell,
+.post-html-shell {
+    margin-top: 10px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.post-doc-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.25);
+}
+
+.post-doc-meta a {
+    margin-left: auto;
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.post-doc-frame,
+.post-html-frame {
+    width: 100%;
+    height: 320px;
+    border: 0;
+    background: #0b0b0b;
+}
+
 .post-like-burst {
     position: absolute;
     inset: 0;
@@ -3418,6 +3475,29 @@ body.light-mode .category-pill.active .topic-verified-icon {
     margin: 0 auto;
     border-radius: 12px;
     border: 1px solid var(--border);
+}
+
+.attachment-preview audio {
+    width: 100%;
+    margin: 12px 0;
+    border-radius: 12px;
+}
+
+.attachment-preview iframe {
+    width: 100%;
+    height: 220px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.doc-preview-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }
 
 .remove-attachment {

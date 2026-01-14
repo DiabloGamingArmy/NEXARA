@@ -390,6 +390,7 @@ let composerMentions = [];
 let composerPoll = { title: '', options: ['', ''] };
 let composerScheduledFor = '';
 let composerLocation = '';
+let composerAttachmentPreviewUrl = null;
 let recentLocations = [];
 let categoryVisibleCount = 10;
 let commentRootDisplayCount = {};
@@ -4542,24 +4543,14 @@ function getPostHTML(post, options = {}) {
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
         let mediaContent = '';
-        if (post.mediaUrl) {
-            if (post.type === 'video') {
-                const thumbnailUrl = getThumbnailUrl(post);
-                mediaContent = buildVideoPreviewShell({
-                    thumbnailUrl,
-                    label: 'Play video',
-                    onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-                });
-            } else {
-                const safeUrl = escapeHtml(post.mediaUrl);
-                mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
-            }
-        }
-        if (mediaContent) {
-            mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
-                ${mediaContent}
-                <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
-            </div>`;
+        const mediaBlock = buildPostMediaBlock(post);
+        if (mediaBlock.html) {
+            mediaContent = mediaBlock.allowShell
+                ? `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+                    ${mediaBlock.html}
+                    <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+                </div>`
+                : mediaBlock.html;
         }
 
         let commentPreviewHtml = '';
@@ -4677,8 +4668,8 @@ function renderFeed(targetId = 'feed-content') {
         if (savedSearchTerm) displayPosts = displayPosts.filter(function (post) { return post.title.toLowerCase().includes(savedSearchTerm); });
         if (savedFilter === 'Recent') displayPosts.sort(function (a, b) { return userProfile.savedPosts.indexOf(b.id) - userProfile.savedPosts.indexOf(a.id); });
         else if (savedFilter === 'Oldest') displayPosts.sort(function (a, b) { return userProfile.savedPosts.indexOf(a.id) - userProfile.savedPosts.indexOf(b.id); });
-        else if (savedFilter === 'Videos') displayPosts = displayPosts.filter(function (p) { return p.type === 'video'; });
-        else if (savedFilter === 'Images') displayPosts = displayPosts.filter(function (p) { return p.type === 'image'; });
+        else if (savedFilter === 'Videos') displayPosts = displayPosts.filter(function (p) { return resolvePostMediaType(p) === 'video'; });
+        else if (savedFilter === 'Images') displayPosts = displayPosts.filter(function (p) { return resolvePostMediaType(p) === 'image'; });
     } else if (currentCategory !== 'For You') {
         displayPosts = allPosts.filter(function (post) { return post.category === currentCategory; });
     }
@@ -4996,8 +4987,20 @@ window.toggleSave = async function (postId, event) {
 async function uploadFileToStorage(file, path) {
     if (!file) return null;
     const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, file);
+    const metadata = file.type ? { contentType: file.type } : undefined;
+    await uploadBytes(storageRef, file, metadata);
     return await getDownloadURL(storageRef);
+}
+
+function getPostContentTypeFromFile(file) {
+    const mime = (file?.type || '').toLowerCase();
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime === 'application/pdf') return 'pdf';
+    if (mime === 'text/html') return 'html';
+    if (mime.startsWith('text/')) return 'doc';
+    return 'file';
 }
 
 function normalizeTagValue(tag = '') {
@@ -5131,7 +5134,7 @@ function resetComposerState() {
     if (content) content.value = '';
     const fileInput = document.getElementById('postFile');
     if (fileInput) fileInput.value = '';
-    clearPostImage();
+    clearPostAttachment();
     syncComposerMode();
 }
 
@@ -5628,6 +5631,101 @@ function formatContent(text = '', tags = [], mentions = []) {
     return safe;
 }
 
+function resolvePostMediaType(post = {}) {
+    const raw = (post.contentType || post.type || '').toString().toLowerCase();
+    if (raw === 'video' || raw === 'image' || raw === 'audio' || raw === 'pdf' || raw === 'doc' || raw === 'html') return raw;
+    if (raw === 'photo') return 'image';
+    return post.mediaUrl ? 'image' : '';
+}
+
+function buildPostMediaSummary(type, label) {
+    if (!type) return '';
+    const iconMap = {
+        audio: 'ph-music-note',
+        pdf: 'ph-file-pdf',
+        doc: 'ph-file-text',
+        html: 'ph-code'
+    };
+    const icon = iconMap[type] || 'ph-file';
+    const safeLabel = escapeHtml(label || 'Attachment');
+    return `<div class="post-media-chip"><i class="ph ${icon}"></i><span>${safeLabel}</span></div>`;
+}
+
+function buildPostMediaBlock(post, { compact = false } = {}) {
+    const type = resolvePostMediaType(post);
+    const mediaUrl = post.mediaUrl || '';
+    const safeUrl = escapeHtml(mediaUrl);
+    const label = post.mediaName || post.title || 'Attachment';
+
+    if (!mediaUrl && type !== 'html') return { html: '', allowShell: false };
+    if (compact && ['audio', 'pdf', 'doc', 'html'].includes(type)) {
+        return { html: buildPostMediaSummary(type, label), allowShell: false };
+    }
+
+    if (type === 'video') {
+        const thumbnailUrl = getThumbnailUrl(post);
+        return {
+            html: buildVideoPreviewShell({
+                thumbnailUrl,
+                label: 'Play video',
+                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+            }),
+            allowShell: true
+        };
+    }
+
+    if (type === 'image' || (!type && mediaUrl)) {
+        return {
+            html: `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`,
+            allowShell: true
+        };
+    }
+
+    if (type === 'audio') {
+        return {
+            html: `
+                <div class="post-audio-shell" onclick="event.stopPropagation()">
+                    <audio class="post-audio-player" controls preload="metadata" src="${safeUrl}"></audio>
+                </div>`,
+            allowShell: false
+        };
+    }
+
+    if (type === 'pdf' || type === 'doc') {
+        const icon = type === 'pdf' ? 'ph-file-pdf' : 'ph-file-text';
+        const docSrc = type === 'pdf' ? `${safeUrl}#toolbar=0` : safeUrl;
+        return {
+            html: `
+                <div class="post-doc-shell" onclick="event.stopPropagation()">
+                    <div class="post-doc-meta">
+                        <i class="ph ${icon}"></i>
+                        <span>${escapeHtml(label)}</span>
+                        <a href="${safeUrl}" target="_blank" rel="noopener">Open</a>
+                    </div>
+                    <iframe class="post-doc-frame" src="${docSrc}" loading="lazy" title="Document preview"></iframe>
+                </div>`,
+            allowShell: false
+        };
+    }
+
+    if (type === 'html') {
+        return {
+            html: `
+                <div class="post-html-shell" onclick="event.stopPropagation()">
+                    <div class="post-doc-meta">
+                        <i class="ph ph-code"></i>
+                        <span>${escapeHtml(label)}</span>
+                        <a href="${safeUrl}" target="_blank" rel="noopener">Open</a>
+                    </div>
+                    <iframe class="post-html-frame" src="${safeUrl}" sandbox="allow-scripts" loading="lazy" title="HTML preview"></iframe>
+                </div>`,
+            allowShell: false
+        };
+    }
+
+    return { html: '', allowShell: false };
+}
+
 async function resolveMentionProfiles(mentions = []) {
     const handles = getMentionHandles(mentions);
     const cleaned = Array.from(new Set(handles));
@@ -5764,10 +5862,9 @@ window.createPost = async function () {
     const locationValue = (composerLocation || '').trim();
 
     let contentType = currentEditPost?.contentType || 'text';
-    if (fileInput.files[0]) {
-        const mime = fileInput.files[0].type;
-        if (mime.startsWith('video')) contentType = 'video';
-        else if (mime.startsWith('image')) contentType = 'image';
+    const selectedFile = fileInput.files[0];
+    if (selectedFile) {
+        contentType = getPostContentTypeFromFile(selectedFile) || 'text';
     }
 
     if (!title.trim() && !content.trim() && !fileInput.files[0]) {
@@ -5807,9 +5904,12 @@ window.createPost = async function () {
         const mentionUserIds = Array.from(seenNotify);
 
         let mediaUrl = currentEditPost?.mediaUrl || null;
-        if (fileInput.files[0]) {
-            const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
-            mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+        let mediaName = currentEditPost?.mediaName || null;
+        if (selectedFile) {
+            const safeType = contentType || 'files';
+            const path = `posts/${safeType}/${currentUser.uid}/${Date.now()}_${selectedFile.name}`;
+            mediaUrl = await uploadFileToStorage(selectedFile, path);
+            mediaName = selectedFile.name;
         }
 
         const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
@@ -5827,6 +5927,7 @@ window.createPost = async function () {
             contentType,
             content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: { tags, mentions } },
             mediaUrl,
+            mediaName,
             author: userProfile.name,
             userId: currentUser.uid,
             tags,
@@ -6674,24 +6775,14 @@ function renderThreadMainPost(postId) {
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
     let mediaContent = '';
-    if (post.mediaUrl) {
-        if (post.type === 'video') {
-            const thumbnailUrl = getThumbnailUrl(post);
-            mediaContent = buildVideoPreviewShell({
-                thumbnailUrl,
-                label: 'Play video',
-                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-            });
-        } else {
-            const safeUrl = escapeHtml(post.mediaUrl);
-            mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
-        }
-    }
-    if (mediaContent) {
-        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
-            ${mediaContent}
-            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
-        </div>`;
+    const mediaBlock = buildPostMediaBlock(post);
+    if (mediaBlock.html) {
+        mediaContent = mediaBlock.allowShell
+            ? `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+                ${mediaBlock.html}
+                <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+            </div>`
+            : mediaBlock.html;
     }
 
     // UPDATE: Trust Badge Logic for Thread View to match Feed
@@ -7731,35 +7822,18 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     const locationBadge = renderLocationBadge(post.location);
     const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     let mediaContent = '';
-    if (post.mediaUrl && compact) {
-        if (post.type === 'video') {
-            const thumbnailUrl = getThumbnailUrl(post);
-            mediaContent = buildVideoPreviewShell({
-                thumbnailUrl,
-                label: 'Play video',
-                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-            });
-        } else {
+    const mediaBlock = buildPostMediaBlock(post, { compact });
+    if (mediaBlock.html) {
+        if (compact && mediaBlock.allowShell && resolvePostMediaType(post) === 'image') {
             mediaContent = `<div class="profile-card-media"><img src="${escapeHtml(post.mediaUrl)}" alt="Post Content" loading="lazy" decoding="async"></div>`;
-        }
-    } else if (post.mediaUrl) {
-        if (post.type === 'video') {
-            const thumbnailUrl = getThumbnailUrl(post);
-            mediaContent = buildVideoPreviewShell({
-                thumbnailUrl,
-                label: 'Play video',
-                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-            });
         } else {
-            const safeUrl = escapeHtml(post.mediaUrl);
-            mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+            mediaContent = mediaBlock.allowShell
+                ? `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
+                    ${mediaBlock.html}
+                    <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
+                </div>`
+                : mediaBlock.html;
         }
-    }
-    if (mediaContent) {
-        mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
-            ${mediaContent}
-            <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
-        </div>`;
     }
 
     const cardClass = compact ? 'social-card profile-collage-card' : 'social-card';
@@ -8645,8 +8719,160 @@ window.handleFileSelect = function (input) {
         window.clearCommentAttachment();
     }
 }
-window.previewPostImage = function (input) { if (input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function (e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
-window.clearPostImage = function () { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
+function resetAttachmentPreviewUi() {
+    const imgContainer = document.getElementById('img-preview-container');
+    const imgTag = document.getElementById('img-preview-tag');
+    const audioContainer = document.getElementById('audio-preview-container');
+    const audioPlayer = document.getElementById('audio-preview-player');
+    const docContainer = document.getElementById('doc-preview-container');
+    const docFrame = document.getElementById('doc-preview-frame');
+    const docName = document.getElementById('doc-preview-name');
+    const htmlContainer = document.getElementById('html-preview-container');
+    const htmlFrame = document.getElementById('html-preview-frame');
+    const htmlName = document.getElementById('html-preview-name');
+
+    if (imgContainer) imgContainer.style.display = 'none';
+    if (audioContainer) audioContainer.style.display = 'none';
+    if (docContainer) docContainer.style.display = 'none';
+    if (htmlContainer) htmlContainer.style.display = 'none';
+
+    if (imgTag) imgTag.src = '';
+    if (audioPlayer) audioPlayer.src = '';
+    if (docFrame) docFrame.src = '';
+    if (htmlFrame) {
+        htmlFrame.src = '';
+        htmlFrame.srcdoc = '';
+    }
+    if (docName) docName.textContent = 'Document';
+    if (htmlName) htmlName.textContent = 'HTML preview';
+
+    if (composerAttachmentPreviewUrl) {
+        URL.revokeObjectURL(composerAttachmentPreviewUrl);
+        composerAttachmentPreviewUrl = null;
+    }
+}
+
+function showExistingAttachmentPreview(post) {
+    resetAttachmentPreviewUi();
+    if (!post?.mediaUrl) return;
+    const type = resolvePostMediaType(post);
+    const safeUrl = post.mediaUrl;
+    const label = post.mediaName || post.title || 'Attachment';
+
+    if (type === 'image') {
+        const imgContainer = document.getElementById('img-preview-container');
+        const imgTag = document.getElementById('img-preview-tag');
+        if (imgContainer && imgTag) {
+            imgTag.src = safeUrl;
+            imgContainer.style.display = 'block';
+        }
+        return;
+    }
+
+    if (type === 'audio') {
+        const audioContainer = document.getElementById('audio-preview-container');
+        const audioPlayer = document.getElementById('audio-preview-player');
+        if (audioContainer && audioPlayer) {
+            audioPlayer.src = safeUrl;
+            audioContainer.style.display = 'block';
+        }
+        return;
+    }
+
+    if (type === 'pdf' || type === 'doc') {
+        const docContainer = document.getElementById('doc-preview-container');
+        const docFrame = document.getElementById('doc-preview-frame');
+        const docName = document.getElementById('doc-preview-name');
+        if (docContainer && docFrame) {
+            docFrame.src = type === 'pdf' ? `${safeUrl}#toolbar=0` : safeUrl;
+            docContainer.style.display = 'block';
+        }
+        if (docName) docName.textContent = label;
+        return;
+    }
+
+    if (type === 'html') {
+        const htmlContainer = document.getElementById('html-preview-container');
+        const htmlFrame = document.getElementById('html-preview-frame');
+        const htmlName = document.getElementById('html-preview-name');
+        if (htmlContainer && htmlFrame) {
+            htmlFrame.src = safeUrl;
+            htmlContainer.style.display = 'block';
+        }
+        if (htmlName) htmlName.textContent = label;
+    }
+}
+
+window.previewPostAttachment = function (input) {
+    if (!input?.files?.[0]) return;
+    resetAttachmentPreviewUi();
+    const file = input.files[0];
+    const type = getPostContentTypeFromFile(file);
+
+    if (type === 'image') {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const imgContainer = document.getElementById('img-preview-container');
+            const imgTag = document.getElementById('img-preview-tag');
+            if (imgContainer && imgTag) {
+                imgTag.src = e.target.result;
+                imgContainer.style.display = 'block';
+            }
+        };
+        reader.readAsDataURL(file);
+        return;
+    }
+
+    if (type === 'audio') {
+        const audioContainer = document.getElementById('audio-preview-container');
+        const audioPlayer = document.getElementById('audio-preview-player');
+        if (audioContainer && audioPlayer) {
+            composerAttachmentPreviewUrl = URL.createObjectURL(file);
+            audioPlayer.src = composerAttachmentPreviewUrl;
+            audioContainer.style.display = 'block';
+        }
+        return;
+    }
+
+    if (type === 'pdf' || type === 'doc') {
+        const docContainer = document.getElementById('doc-preview-container');
+        const docFrame = document.getElementById('doc-preview-frame');
+        const docName = document.getElementById('doc-preview-name');
+        if (docContainer && docFrame) {
+            composerAttachmentPreviewUrl = URL.createObjectURL(file);
+            docFrame.src = type === 'pdf' ? `${composerAttachmentPreviewUrl}#toolbar=0` : composerAttachmentPreviewUrl;
+            docContainer.style.display = 'block';
+        }
+        if (docName) docName.textContent = file.name || 'Document';
+        return;
+    }
+
+    if (type === 'html') {
+        const htmlContainer = document.getElementById('html-preview-container');
+        const htmlFrame = document.getElementById('html-preview-frame');
+        const htmlName = document.getElementById('html-preview-name');
+        if (htmlContainer && htmlFrame) {
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                const content = e.target.result || '';
+                htmlFrame.srcdoc = `<base target=\"_blank\">${content}`;
+                htmlContainer.style.display = 'block';
+            };
+            reader.readAsText(file);
+        }
+        if (htmlName) htmlName.textContent = file.name || 'HTML preview';
+        return;
+    }
+};
+
+window.clearPostAttachment = function () {
+    const fileInput = document.getElementById('postFile');
+    if (fileInput) fileInput.value = '';
+    resetAttachmentPreviewUi();
+};
+
+window.previewPostImage = function (input) { window.previewPostAttachment(input); };
+window.clearPostImage = function () { window.clearPostAttachment(); };
 window.togglePostOption = function (type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type);['poll', 'gif', 'schedule', 'location'].forEach(function (t) { if (t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
 window.closeReview = function () { return document.getElementById('review-modal').style.display = 'none'; };
 function closePostOptionsDropdown() {
@@ -8730,12 +8956,9 @@ window.beginEditPost = function () {
     const mentionInput = document.getElementById('mention-input');
     if (mentionInput) mentionInput.value = '';
     if (post.mediaUrl) {
-        const preview = document.getElementById('img-preview-tag');
-        const previewContainer = document.getElementById('img-preview-container');
-        if (preview && previewContainer) {
-            preview.src = post.mediaUrl;
-            previewContainer.style.display = 'block';
-        }
+        showExistingAttachmentPreview(post);
+    } else {
+        resetAttachmentPreviewUi();
     }
     syncComposerMode();
     window.toggleCreateModal(true);

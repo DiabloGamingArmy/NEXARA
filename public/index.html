@@ -125,8 +125,28 @@
                     <div id="composer-mentions-list" class="mention-row"></div>
 
                     <div id="img-preview-container" class="attachment-preview">
-                        <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
+                        <button onclick="window.clearPostAttachment()" class="remove-attachment">&times;</button>
                         <img id="img-preview-tag" src="">
+                    </div>
+                    <div id="audio-preview-container" class="attachment-preview audio-attachment-preview">
+                        <button onclick="window.clearPostAttachment()" class="remove-attachment">&times;</button>
+                        <audio id="audio-preview-player" controls preload="metadata"></audio>
+                    </div>
+                    <div id="doc-preview-container" class="attachment-preview doc-attachment-preview">
+                        <button onclick="window.clearPostAttachment()" class="remove-attachment">&times;</button>
+                        <div class="doc-preview-meta">
+                            <i class="ph ph-file"></i>
+                            <span id="doc-preview-name">Document</span>
+                        </div>
+                        <iframe id="doc-preview-frame" title="Document preview" loading="lazy"></iframe>
+                    </div>
+                    <div id="html-preview-container" class="attachment-preview html-attachment-preview">
+                        <button onclick="window.clearPostAttachment()" class="remove-attachment">&times;</button>
+                        <div class="doc-preview-meta">
+                            <i class="ph ph-code"></i>
+                            <span id="html-preview-name">HTML preview</span>
+                        </div>
+                        <iframe id="html-preview-frame" title="HTML preview" sandbox="allow-scripts" loading="lazy"></iframe>
                     </div>
 
                     <div id="extra-options-area" class="extra-options-panel">
@@ -162,8 +182,8 @@
 
             <div class="x-footer">
                 <div class="x-toolbar">
-                    <input type="file" id="postFile" style="display: none;" accept="image/*"
-                        onchange="window.previewPostImage(this)">
+                    <input type="file" id="postFile" style="display: none;" accept="image/*,video/*,audio/*,application/pdf,text/plain,text/html"
+                        onchange="window.previewPostAttachment(this)">
                     <button class="x-tool-btn" onclick="document.getElementById('postFile').click()" title="Media"><i
                             class="ph ph-camera"></i></button>
                     <button class="x-tool-btn" onclick="window.togglePostOption('gif')" title="GIF"><i
@@ -255,8 +275,8 @@
                 </div>
             </div>
 
-            <input type="file" id="set-pic-file" class="form-input" accept="image/*" style="display:none;">
-            <input type="file" id="set-pic-camera" class="form-input" accept="image/*" capture="environment"
+            <input type="file" id="set-pic-file" class="form-input" accept="image/*,video/*,audio/*,application/pdf,text/plain,text/html" style="display:none;">
+            <input type="file" id="set-pic-camera" class="form-input" accept="image/*,video/*,audio/*,application/pdf,text/plain,text/html" capture="environment"
                 style="display:none;">
 
             <div class="settings-grid">
@@ -377,7 +397,7 @@
                     </div>
                     <div class="video-upload-thumb">
                         <label class="settings-label">Custom thumbnail (optional)</label>
-                        <input type="file" id="video-thumbnail" accept="image/*" class="form-input"
+                        <input type="file" id="video-thumbnail" accept="image/*,video/*,audio/*,application/pdf,text/plain,text/html" class="form-input"
                             onchange="window.handleThumbnailChange(event)">
                         <p class="video-upload-hint">We’ll grab the first frame if you skip this step.</p>
                     </div>
@@ -1041,7 +1061,7 @@
                                 onclick="window.saveConversationName()">Save name</button>
                             <div class="input-group" style="margin-top:10px;">
                                 <label class="settings-label" for="conversation-avatar-input">Conversation image</label>
-                                <input id="conversation-avatar-input" type="file" accept="image/*" class="form-input">
+                                <input id="conversation-avatar-input" type="file" accept="image/*,video/*,audio/*,application/pdf,text/plain,text/html" class="form-input">
                             </div>
                             <div id="conversation-avatar-preview" class="conversation-avatar-preview"></div>
                             <button class="icon-pill" onclick="window.uploadConversationAvatar()"><i
