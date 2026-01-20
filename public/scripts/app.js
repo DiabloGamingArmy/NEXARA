@@ -1,6 +1,6 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { setPersistence, browserLocalPersistence, inMemoryPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, limitToLast, startAt, startAfter, endAt, endBefore, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
@@ -1045,6 +1045,9 @@ let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
 let messageThreadCache = {};
+let messageThreadScrollHandler = null;
+let messageThreadScrollRegion = null;
+let messageThreadPagingState = {};
 let pendingMessageAttachments = [];
 let messageUploadState = {
     status: 'idle',
@@ -12258,31 +12261,33 @@ function scheduleMessagesRerender(conversationId, convo) {
     }, 0);
 }
 
-function renderMessages(msgs = [], convo = {}) {
-    const body = document.getElementById('message-thread');
-    const scrollRegion = getMessageScrollContainer();
-    if (!body || !scrollRegion) return;
-    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
-    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
-    body.innerHTML = '';
+function getMessageRenderSeed(msgs = []) {
+    if (!Array.isArray(msgs) || msgs.length === 0) {
+        return { lastTimestamp: null, lastDateDivider: null, lastSenderId: null };
+    }
+    const lastMsg = msgs[msgs.length - 1];
+    const lastTimestamp = toDateSafe(lastMsg.createdAt) || new Date();
+    const lastSenderId = (lastMsg.isSystem || lastMsg.type === 'system') ? null : (lastMsg.senderId || null);
+    return { lastTimestamp, lastDateDivider: lastTimestamp, lastSenderId };
+}
 
-    let lastTimestamp = null;
-    let lastDateDivider = null;
-    let lastSenderId = null;
+function buildMessageFragment(msgs = [], convo = {}, options = {}) {
+    let lastTimestamp = options.lastTimestamp || null;
+    let lastDateDivider = options.lastDateDivider || null;
+    let lastSenderId = options.lastSenderId || null;
     let latestSelfMessage = null;
     const missingSenders = new Set();
     const missingMedia = new Set();
     const missingCallIds = new Set();
     const fragment = document.createDocumentFragment();
-    const searchTerm = (conversationSearchTerm || '').toLowerCase();
-    conversationSearchHits = [];
-    const conversationId = convo.id || activeConversationId || '';
-    const callInviteIds = new Set(msgs.map(function (message) {
+    const searchTerm = (options.searchTerm || '').toLowerCase();
+    const searchHits = [];
+    const conversationId = options.conversationId || convo.id || activeConversationId || '';
+    const callInviteIds = options.callInviteIds || new Set(msgs.map(function (message) {
         if (message?.type !== 'call_invite') return null;
         const normalized = normalizeCallMessageFields(message);
         return normalized.callId || null;
     }).filter(Boolean));
-    renderPinnedMessages(convo, msgs);
 
     msgs.forEach(function (msg, idx) {
         const createdDate = toDateSafe(msg.createdAt) || new Date();
@@ -12400,7 +12405,7 @@ function renderMessages(msgs = [], convo = {}) {
         const hasSearchMatch = searchTerm && baseTextRaw.toLowerCase().includes(searchTerm);
         let textMarkup = escapeHtml(baseTextRaw);
         if (hasSearchMatch) {
-            conversationSearchHits.push(msg.id);
+            searchHits.push(msg.id);
             const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')})`, 'ig');
             textMarkup = escapeHtml(baseTextRaw).replace(regex, '<mark>$1</mark>');
         }
@@ -12578,8 +12583,18 @@ function renderMessages(msgs = [], convo = {}) {
         }
     }
 
-    body.appendChild(fragment);
+    return {
+        fragment,
+        missingSenders,
+        missingMedia,
+        missingCallIds,
+        searchHits,
+        state: { lastTimestamp, lastDateDivider, lastSenderId }
+    };
+}
 
+function handleMessageRenderDependencies(convo = {}, msgs = [], missingCallIds = new Set(), missingSenders = new Set(), missingMedia = new Set()) {
+    const conversationId = convo.id || activeConversationId || '';
     if (missingCallIds.size && conversationId) {
         Promise.all(Array.from(missingCallIds).map(function (callId) {
             return ensureCallDocCached(callId);
@@ -12604,6 +12619,88 @@ function renderMessages(msgs = [], convo = {}) {
             }
         });
     }
+}
+
+function renderMessages(msgs = [], convo = {}, options = {}) {
+    const body = document.getElementById('message-thread');
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion) return;
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
+    const previousScrollTop = scrollRegion.scrollTop;
+    const previousScrollHeight = scrollRegion.scrollHeight;
+    body.innerHTML = '';
+
+    const searchTerm = (conversationSearchTerm || '').toLowerCase();
+    conversationSearchHits = [];
+    const conversationId = convo.id || activeConversationId || '';
+    const callInviteIds = new Set(msgs.map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
+    renderPinnedMessages(convo, msgs);
+
+    const fragmentData = buildMessageFragment(msgs, convo, {
+        searchTerm,
+        conversationId,
+        callInviteIds
+    });
+    conversationSearchHits = fragmentData.searchHits;
+    body.appendChild(fragmentData.fragment);
+    handleMessageRenderDependencies(convo, msgs, fragmentData.missingCallIds, fragmentData.missingSenders, fragmentData.missingMedia);
+
+    if (options.preserveScrollPosition) {
+        scrollRegion.scrollTop = previousScrollTop + (scrollRegion.scrollHeight - previousScrollHeight);
+    } else if (shouldStickToBottom) {
+        scrollMessagesToBottom();
+        const media = scrollRegion.querySelectorAll('img, video');
+        media.forEach(function (node) {
+            const handler = function () { scrollMessagesToBottom(); };
+            if (node.tagName === 'IMG') {
+                if (!node.complete) node.addEventListener('load', handler, { once: true });
+            } else {
+                node.addEventListener('loadedmetadata', handler, { once: true });
+            }
+        });
+    } else {
+        scrollRegion.scrollTop = Math.max(0, scrollRegion.scrollHeight - previousOffset);
+    }
+    if (forceConversationScroll) {
+        forceConversationScroll = false;
+    }
+}
+
+function appendMessagesToThread(convoId, newMessages = [], convo = {}, seedMessages = []) {
+    const body = document.getElementById('message-thread');
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion || !newMessages.length) return;
+    if (conversationSearchTerm) {
+        renderMessages(messageThreadCache[convoId] || [], convo);
+        return;
+    }
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
+    const conversationId = convo.id || convoId || activeConversationId || '';
+    const seedState = getMessageRenderSeed(seedMessages);
+    const callInviteIds = new Set((messageThreadCache[convoId] || []).map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
+
+    const fragmentData = buildMessageFragment(newMessages, convo, {
+        searchTerm: '',
+        conversationId,
+        callInviteIds,
+        lastTimestamp: seedState.lastTimestamp,
+        lastDateDivider: seedState.lastDateDivider,
+        lastSenderId: seedState.lastSenderId
+    });
+
+    body.appendChild(fragmentData.fragment);
+    handleMessageRenderDependencies(convo, messageThreadCache[convoId] || [], fragmentData.missingCallIds, fragmentData.missingSenders, fragmentData.missingMedia);
+
     if (shouldStickToBottom) {
         scrollMessagesToBottom();
         const media = scrollRegion.querySelectorAll('img, video');
@@ -13335,21 +13432,118 @@ async function fetchConversation(conversationId) {
     return null;
 }
 
-async function listenToMessages(convoId) {
+function insertMessageSorted(cache = [], msg = {}) {
+    const ts = getMessageTimestampMs(msg) || 0;
+    let insertIndex = cache.findIndex(function (item) { return (getMessageTimestampMs(item) || 0) > ts; });
+    if (insertIndex === -1) insertIndex = cache.length;
+    cache.splice(insertIndex, 0, msg);
+    return insertIndex;
+}
+
+function upsertMessageInCache(cache = [], msg = {}) {
+    const existingIndex = cache.findIndex(function (item) { return item.id === msg.id; });
+    if (existingIndex === -1) {
+        return { index: insertMessageSorted(cache, msg), type: 'added' };
+    }
+    const prev = cache[existingIndex];
+    const prevTs = getMessageTimestampMs(prev) || 0;
+    const nextTs = getMessageTimestampMs(msg) || prevTs;
+    cache[existingIndex] = { ...prev, ...msg };
+    if (nextTs !== prevTs) {
+        cache.splice(existingIndex, 1);
+        return { index: insertMessageSorted(cache, { ...prev, ...msg }), type: 'moved' };
+    }
+    return { index: existingIndex, type: 'modified' };
+}
+
+function removeMessageFromCache(cache = [], msgId) {
+    const index = cache.findIndex(function (item) { return item.id === msgId; });
+    if (index === -1) return null;
+    cache.splice(index, 1);
+    return index;
+}
+
+async function listenToLatestMessages(convoId, pageSize = 50) {
     if (messagesUnsubscribe) messagesUnsubscribe();
-    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    const msgRef = query(
+        collection(db, 'conversations', convoId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        limitToLast(pageSize)
+    );
     messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
-        const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
-        messageThreadCache[convoId] = msgs;
+        const changes = snap.docChanges();
+        if (!changes.length) return;
+        const previousMessages = (messageThreadCache[convoId] || []).slice();
+        const nextMessages = messageThreadCache[convoId] || [];
+        const addedMessages = [];
+        let requiresFullRender = false;
+
+        changes.forEach(function (change) {
+            const msg = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added') {
+                if (nextMessages.find(function (item) { return item.id === msg.id; })) return;
+                const insertIndex = insertMessageSorted(nextMessages, msg);
+                addedMessages.push(msg);
+                // If the add lands in the middle, fall back to a full re-render.
+                if (insertIndex < previousMessages.length) {
+                    requiresFullRender = true;
+                }
+            } else if (change.type === 'modified') {
+                const result = upsertMessageInCache(nextMessages, msg);
+                requiresFullRender = true;
+                if (result.type === 'added') {
+                    addedMessages.push(msg);
+                }
+            } else if (change.type === 'removed') {
+                removeMessageFromCache(nextMessages, msg.id);
+                requiresFullRender = true;
+            }
+        });
+
+        messageThreadCache[convoId] = nextMessages;
         const details = conversationDetailsCache[convoId] || {};
-        renderMessages(msgs, details);
+        // Incrementally append only when new items arrive at the tail.
+        const sortedAdds = addedMessages.slice().sort(function (a, b) {
+            return (getMessageTimestampMs(a) || 0) - (getMessageTimestampMs(b) || 0);
+        });
+
+        const shouldAppend = !requiresFullRender
+            && sortedAdds.length > 0
+            && !conversationSearchTerm
+            && (previousMessages.length === 0
+                || (getMessageTimestampMs(sortedAdds[0]) || 0) >= (getMessageTimestampMs(previousMessages[previousMessages.length - 1]) || 0));
+
+        if (shouldAppend && previousMessages.length) {
+            appendMessagesToThread(convoId, sortedAdds, details, previousMessages);
+        } else {
+            renderMessages(nextMessages, details);
+        }
+
         renderTypingIndicator(details);
-        markMessagesDelivered(convoId, msgs);
-        markConversationAsRead(convoId);
+        if (addedMessages.length) {
+            markMessagesDelivered(convoId, sortedAdds);
+            const hasIncoming = sortedAdds.some(function (msg) { return msg.senderId && msg.senderId !== currentUser?.uid; });
+            if (hasIncoming) {
+                markConversationAsRead(convoId);
+            }
+        }
     }, function (err) {
         handleSnapshotError('Messages thread', err);
         handleConversationAccessLoss(convoId);
     }));
+}
+
+async function fetchOlderMessages(convoId, beforeCreatedAt, pageSize = 50) {
+    if (!beforeCreatedAt) return [];
+    const msgRef = query(
+        collection(db, 'conversations', convoId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        endBefore(beforeCreatedAt),
+        limitToLast(pageSize)
+    );
+    const snap = await getDocs(msgRef);
+    // Return older messages in ascending order for clean prepend logic.
+    return snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
 }
 
 async function openConversation(conversationId) {
@@ -13376,6 +13570,13 @@ async function openConversation(conversationId) {
     const header = document.getElementById('message-header');
     if (header) header.textContent = 'Loading conversation...';
     forceConversationScroll = true;
+    messageThreadCache[conversationId] = [];
+    messageThreadPagingState[conversationId] = { loading: false, exhausted: false };
+    if (messageThreadScrollRegion && messageThreadScrollHandler) {
+        messageThreadScrollRegion.removeEventListener('scroll', messageThreadScrollHandler);
+        messageThreadScrollRegion = null;
+        messageThreadScrollHandler = null;
+    }
 
     let convo = null;
     try {
@@ -13406,7 +13607,42 @@ async function openConversation(conversationId) {
     listenToConversationDetails(conversationId);
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
-    await listenToMessages(conversationId);
+    await listenToLatestMessages(conversationId);
+    const scrollRegion = getMessageScrollContainer();
+    if (scrollRegion) {
+        messageThreadScrollRegion = scrollRegion;
+        messageThreadScrollHandler = function () {
+            if (activeConversationId !== conversationId) return;
+            if (scrollRegion.scrollTop > 120) return;
+            const paging = messageThreadPagingState[conversationId] || { loading: false, exhausted: false };
+            if (paging.loading || paging.exhausted) return;
+            const currentMessages = messageThreadCache[conversationId] || [];
+            const oldest = currentMessages[0];
+            if (!oldest || !oldest.createdAt) return;
+            paging.loading = true;
+            messageThreadPagingState[conversationId] = paging;
+            // Fetch older history when the user scrolls near the top, and preserve scroll offset.
+            fetchOlderMessages(conversationId, oldest.createdAt).then(function (olderMessages) {
+                if (!olderMessages.length) {
+                    paging.exhausted = true;
+                    return;
+                }
+                const existingIds = new Set(currentMessages.map(function (msg) { return msg.id; }));
+                const deduped = olderMessages.filter(function (msg) { return !existingIds.has(msg.id); });
+                if (!deduped.length) {
+                    paging.exhausted = true;
+                    return;
+                }
+                messageThreadCache[conversationId] = deduped.concat(currentMessages);
+                renderMessages(messageThreadCache[conversationId], conversationDetailsCache[conversationId] || {}, { preserveScrollPosition: true });
+            }).catch(function (err) {
+                console.warn('Unable to fetch older messages', err?.message || err);
+            }).finally(function () {
+                paging.loading = false;
+            });
+        };
+        scrollRegion.addEventListener('scroll', messageThreadScrollHandler, { passive: true });
+    }
     refreshInboxLayout();
     window.activeConversationId = activeConversationId;
     window.__nexeraDebug = window.__nexeraDebug || {};
