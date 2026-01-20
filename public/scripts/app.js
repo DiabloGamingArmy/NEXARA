@@ -1044,6 +1044,10 @@ let conversationMappings = [];
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
+let conversationListRenderState = { count: 0, topId: null };
+let conversationDetailsPrefetchQueue = [];
+let conversationDetailsPrefetchPending = new Set();
+let conversationDetailsPrefetchActive = false;
 let messageThreadCache = {};
 let messageThreadScrollHandler = null;
 let messageThreadScrollRegion = null;
@@ -9931,46 +9935,19 @@ function applyCallConversationIndicators(item, mapping, details, highlightData, 
     }
 }
 
-function renderConversationList() {
-    const listEl = document.getElementById('conversation-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    const emptyEl = document.getElementById('conversation-list-empty');
-    const pinnedEl = document.getElementById('pinned-conversations');
+function getConversationMappingTimestampMs(mapping = {}) {
+    const tsSource = mapping.lastMessageAt || mapping.createdAt;
+    return tsSource?.toMillis ? tsSource.toMillis() : tsSource?.seconds ? tsSource.seconds * 1000 : 0;
+}
+
+function getConversationListRenderData() {
     const currentUid = currentUser?.uid || '';
-
-    if (conversationMappings.length === 0) {
-        const emptyText = conversationListFilter === 'requests'
-            ? 'No message requests yet.'
-            : 'Start a conversation';
-        if (emptyEl) {
-            emptyEl.textContent = emptyText;
-            emptyEl.style.display = 'block';
-        } else {
-            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
-        }
-        updateInboxNavBadge();
-        try {
-            const path = (location.pathname || '').toLowerCase();
-            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
-            if (!isHome) {
-                releaseInitialSplashOnce('inbox-initial-ready');
-            }
-        } catch (e) {}
-        return;
-    }
-    if (emptyEl) emptyEl.style.display = 'none';
-
     const orderedMappings = conversationMappings
         .slice()
         .sort(function (a, b) {
             if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
             if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-            const aTsSource = a.lastMessageAt || a.createdAt;
-            const bTsSource = b.lastMessageAt || b.createdAt;
-            const aTs = aTsSource?.toMillis ? aTsSource.toMillis() : aTsSource?.seconds ? aTsSource.seconds * 1000 : 0;
-            const bTs = bTsSource?.toMillis ? bTsSource.toMillis() : bTsSource?.seconds ? bTsSource.seconds * 1000 : 0;
-            return bTs - aTs;
+            return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
         });
 
     const search = (conversationListSearchTerm || '').toLowerCase();
@@ -9997,119 +9974,232 @@ function renderConversationList() {
     const pinned = filtered.filter(function (mapping) { return mapping.pinned; });
     const unpinned = filtered.filter(function (mapping) { return !mapping.pinned; });
     const visible = unpinned.slice(0, conversationListVisibleCount);
-    uiDebugLog('conversation list', {
-        total: orderedMappings.length,
-        filtered: filtered.length,
-        filter: conversationListFilter,
-        searchActive: !!search
-    });
 
-    const highlightData = getActiveCallHighlightData();
-    const renderRow = function (mapping, targetEl) {
-        const details = conversationDetailsCache[mapping.id] || {};
-        const participants = details.participants || mapping.otherParticipantIds || [];
-        const meta = deriveOtherParticipantMeta(participants, currentUid, details);
-        const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
-        if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
-            resolveUserProfile(otherId).then(function () {
-                if (currentViewId === 'messages') renderConversationList();
-            });
-        }
-        const otherProfile = otherId ? getCachedUser(otherId) : null;
-        const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
-        const isGroup = (participants || []).length > 2 || details.type === 'group';
-        const mergedConvo = {
-            ...details,
-            participants,
-            participantNames: details.participantNames || details.participantUsernames || participantLabels,
-            participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
-            title: details.title || null
-        };
-        const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
-        const convoAvatar = getConversationAvatarUrl(details);
-        let avatarUser = {
-            uid: mapping.id || otherId || 'conversation',
-            username: name,
-            displayName: name,
-            photoURL: convoAvatar,
-            avatarColor: computeAvatarColor(name)
-        };
-        if (!isGroup && otherId) {
-            avatarUser = {
-                ...otherProfile,
-                uid: otherId,
-                username: otherProfile?.username || name,
-                displayName: resolveDisplayName(otherProfile) || name,
-                photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
-                avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
-            };
-        } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
-            avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
-        }
-        const avatarHtml = renderAvatar(avatarUser, { size: 42 });
-
-        const item = document.createElement('div');
-        item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
-        const unread = mapping.unreadCount || 0;
-        const muteState = resolveMuteState(mapping.id, mapping);
-        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
-        updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
-        const unreadLabel = unread > 10 ? '10+' : `${unread}`;
-        const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
-        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
-        const highlightData = getActiveCallHighlightData();
-        const activeCallEntry = getActiveCallForConversation(mapping.id);
-        const isCallHostConversation = !!activeCallEntry;
-        const previewMarkup = isCallHostConversation
-            ? `<span class="active-call-pill">Active Call</span>`
-            : previewText;
-        const tsSource = mapping.lastMessageAt || mapping.createdAt;
-        const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
-        item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
-            <div class="conversation-body">
-                <div class="conversation-title-row">
-                    <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
-                    ${flagHtml}
-                </div>
-                <div class="conversation-preview">${previewMarkup}</div>
-            </div>`;
-        applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
-        item.onclick = function () {
-            const convoId = mapping.id;
-            const wasActiveConversation = (activeConversationId === convoId);
-            const wasCallViewOpen = !!isCallViewOpen;
-
-            openConversation(convoId);
-
-            const hostCall = getActiveCallForConversation(convoId);
-            const isCurrentActiveCallThread = !!hostCall
-                && !!activeCallSession
-                && activeCallSession.status === 'active'
-                && activeCallSession.callId === hostCall.id
-                && activeCallSession.conversationId === convoId;
-
-            if (!isCurrentActiveCallThread) return;
-
-            if (!wasActiveConversation) {
-                openCallView();
-                return;
-            }
-
-            if (wasCallViewOpen) {
-                closeCallView();
-            } else {
-                openCallView();
-            }
-        };
-        targetEl.appendChild(item);
+    return {
+        currentUid,
+        orderedMappings,
+        filtered,
+        pinned,
+        unpinned,
+        visible,
+        search
     };
+}
+
+function getConversationListTopId(renderData) {
+    if (!renderData) return null;
+    if (renderData.pinned.length) return renderData.pinned[0].id;
+    if (renderData.visible.length) return renderData.visible[0].id;
+    return renderData.filtered[0]?.id || null;
+}
+
+function buildConversationRowElement(mapping, currentUid) {
+    const details = conversationDetailsCache[mapping.id] || {};
+    const participants = details.participants || mapping.otherParticipantIds || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUid, details);
+    const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+    if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
+        resolveUserProfile(otherId).then(function () {
+            if (currentViewId === 'messages') renderConversationList();
+        });
+    }
+    const otherProfile = otherId ? getCachedUser(otherId) : null;
+    const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
+    const isGroup = (participants || []).length > 2 || details.type === 'group';
+    const mergedConvo = {
+        ...details,
+        participants,
+        participantNames: details.participantNames || details.participantUsernames || participantLabels,
+        participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
+        title: details.title || null
+    };
+    const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
+    const convoAvatar = getConversationAvatarUrl(details);
+    let avatarUser = {
+        uid: mapping.id || otherId || 'conversation',
+        username: name,
+        displayName: name,
+        photoURL: convoAvatar,
+        avatarColor: computeAvatarColor(name)
+    };
+    if (!isGroup && otherId) {
+        avatarUser = {
+            ...otherProfile,
+            uid: otherId,
+            username: otherProfile?.username || name,
+            displayName: resolveDisplayName(otherProfile) || name,
+            photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
+            avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
+        };
+    } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
+        avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
+    }
+    const avatarHtml = renderAvatar(avatarUser, { size: 42 });
+
+    const item = document.createElement('div');
+    item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
+    item.dataset.conversationId = mapping.id;
+    const unread = mapping.unreadCount || 0;
+    const muteState = resolveMuteState(mapping.id, mapping);
+    const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
+    updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
+    const unreadLabel = unread > 10 ? '10+' : `${unread}`;
+    const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
+    const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
+    const highlightData = getActiveCallHighlightData();
+    const activeCallEntry = getActiveCallForConversation(mapping.id);
+    const isCallHostConversation = !!activeCallEntry;
+    const previewMarkup = isCallHostConversation
+        ? `<span class="active-call-pill">Active Call</span>`
+        : previewText;
+    const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
+    item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
+        <div class="conversation-body">
+            <div class="conversation-title-row">
+                <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                ${flagHtml}
+            </div>
+            <div class="conversation-preview">${previewMarkup}</div>
+        </div>`;
+    applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
+    item.onclick = function () {
+        const convoId = mapping.id;
+        const wasActiveConversation = (activeConversationId === convoId);
+        const wasCallViewOpen = !!isCallViewOpen;
+
+        openConversation(convoId);
+
+        const hostCall = getActiveCallForConversation(convoId);
+        const isCurrentActiveCallThread = !!hostCall
+            && !!activeCallSession
+            && activeCallSession.status === 'active'
+            && activeCallSession.callId === hostCall.id
+            && activeCallSession.conversationId === convoId;
+
+        if (!isCurrentActiveCallThread) return;
+
+        if (!wasActiveConversation) {
+            openCallView();
+            return;
+        }
+
+        if (wasCallViewOpen) {
+            closeCallView();
+        } else {
+            openCallView();
+        }
+    };
+    return item;
+}
+
+function updateConversationListEmptyState(renderData, listEl, emptyEl) {
+    if (!listEl) return false;
+    if (conversationMappings.length === 0) {
+        const emptyText = conversationListFilter === 'requests'
+            ? 'No message requests yet.'
+            : 'Start a conversation';
+        if (emptyEl) {
+            emptyEl.textContent = emptyText;
+            emptyEl.style.display = 'block';
+        } else {
+            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
+        }
+        updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
+        return true;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    return false;
+}
+
+function updateConversationListItem(mapping, renderData) {
+    const listEl = document.getElementById('conversation-list');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    const emptyEl = document.getElementById('conversation-list-empty');
+    if (!listEl || !mapping?.id) return;
+
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) {
+        conversationListRenderState.count = conversationMappings.length;
+        conversationListRenderState.topId = null;
+        return;
+    }
+
+    const isPinned = renderData.pinned.some(function (item) { return item.id === mapping.id; });
+    const isVisible = renderData.visible.some(function (item) { return item.id === mapping.id; });
+    const pinnedRow = pinnedEl ? pinnedEl.querySelector(`[data-conversation-id="${mapping.id}"]`) : null;
+    const listRow = listEl.querySelector(`[data-conversation-id="${mapping.id}"]`);
+
+    if (!isPinned && !isVisible) {
+        if (pinnedRow) pinnedRow.remove();
+        if (listRow) listRow.remove();
+        if (pinnedEl && !renderData.pinned.length) {
+            pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
+        }
+        return;
+    }
+
+    const currentUid = renderData.currentUid || currentUser?.uid || '';
+    const nextRow = buildConversationRowElement(mapping, currentUid);
+    if (isPinned) {
+        if (pinnedEl) {
+            if (!pinnedEl.querySelector('.inbox-section-label')) {
+                pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            }
+            if (pinnedRow) {
+                pinnedRow.replaceWith(nextRow);
+            } else {
+                pinnedEl.appendChild(nextRow);
+            }
+            pinnedEl.style.display = 'block';
+        }
+        if (listRow) listRow.remove();
+        return;
+    }
+
+    if (pinnedRow) pinnedRow.remove();
+    if (listRow) {
+        listRow.replaceWith(nextRow);
+    } else {
+        listEl.appendChild(nextRow);
+    }
+}
+
+function renderConversationList() {
+    const listEl = document.getElementById('conversation-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const emptyEl = document.getElementById('conversation-list-empty');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    const renderData = getConversationListRenderData();
+    const currentUid = renderData.currentUid;
+
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) return;
+
+    const pinned = renderData.pinned;
+    const unpinned = renderData.unpinned;
+    const visible = renderData.visible;
+    uiDebugLog('conversation list', {
+        total: renderData.orderedMappings.length,
+        filtered: renderData.filtered.length,
+        filter: conversationListFilter,
+        searchActive: !!renderData.search
+    });
 
     if (pinnedEl) {
         pinnedEl.innerHTML = '';
         if (pinned.length) {
             pinnedEl.style.display = 'block';
             pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
-            pinned.forEach(function (mapping) { renderRow(mapping, pinnedEl); });
+            pinned.forEach(function (mapping) {
+                pinnedEl.appendChild(buildConversationRowElement(mapping, currentUid));
+            });
         } else {
             pinnedEl.style.display = 'none';
         }
@@ -10133,7 +10223,9 @@ function renderConversationList() {
         return;
     }
 
-    visible.forEach(function (mapping) { renderRow(mapping, listEl); });
+    visible.forEach(function (mapping) {
+        listEl.appendChild(buildConversationRowElement(mapping, currentUid));
+    });
     if (listEl.dataset.scrollBound !== 'true') {
         listEl.addEventListener('scroll', function () {
             const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 24;
@@ -10144,6 +10236,8 @@ function renderConversationList() {
         });
         listEl.dataset.scrollBound = 'true';
     }
+    conversationListRenderState.count = conversationMappings.length;
+    conversationListRenderState.topId = getConversationListTopId(renderData);
     updateInboxNavBadge();
     try {
         const path = (location.pathname || '').toLowerCase();
@@ -13861,37 +13955,117 @@ function initCallInviteListener() {
 
 window.startDmCall = startDmCall;
 
+function queueConversationDetailsPrefetch(conversationIds = []) {
+    conversationIds.filter(Boolean).forEach(function (id) {
+        if (conversationDetailsCache[id]) return;
+        if (conversationDetailsPrefetchPending.has(id)) return;
+        conversationDetailsPrefetchPending.add(id);
+        conversationDetailsPrefetchQueue.push(id);
+    });
+    if (!conversationDetailsPrefetchActive) {
+        processConversationDetailsPrefetchQueue();
+    }
+}
+
+async function processConversationDetailsPrefetchQueue() {
+    if (conversationDetailsPrefetchActive) return;
+    conversationDetailsPrefetchActive = true;
+    while (conversationDetailsPrefetchQueue.length) {
+        const nextId = conversationDetailsPrefetchQueue.shift();
+        conversationDetailsPrefetchPending.delete(nextId);
+        if (!nextId || conversationDetailsCache[nextId]) continue;
+        try {
+            await fetchConversation(nextId);
+        } catch (e) {
+            console.warn('Unable to prefetch conversation', nextId, e?.message || e);
+        }
+    }
+    conversationDetailsPrefetchActive = false;
+}
+
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
     bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
     conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
-        conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const changes = snap.docChanges();
+        if (!changes.length) return;
+        const previousRenderData = getConversationListRenderData();
+        const previousTopId = getConversationListTopId(previousRenderData);
+        const previousCount = conversationMappings.length;
+        const changedIds = new Set();
+        const mappingsToReconcile = [];
+        const userIdsToRefresh = new Set();
 
-        const missingDetails = conversationMappings
-            .map(function (m) { return m.id; })
-            .filter(function (id) { return !conversationDetailsCache[id]; });
+        changes.forEach(function (change) {
+            const mapping = { id: change.doc.id, ...change.doc.data() };
+            const existingIndex = conversationMappings.findIndex(function (item) { return item.id === mapping.id; });
+            const existing = existingIndex >= 0 ? conversationMappings[existingIndex] : null;
 
-        await Promise.all(missingDetails.map(async function (id) {
-            try { await fetchConversation(id); } catch (e) { console.warn('Unable to prefetch conversation', id, e?.message || e); }
-        }));
+            if (change.type === 'added') {
+                if (existing) {
+                    conversationMappings[existingIndex] = { ...existing, ...mapping };
+                } else {
+                    conversationMappings.push(mapping);
+                }
+                queueConversationDetailsPrefetch([mapping.id]);
+                mappingsToReconcile.push(mapping);
+                changedIds.add(mapping.id);
+            } else if (change.type === 'modified') {
+                if (existing) {
+                    conversationMappings[existingIndex] = { ...existing, ...mapping };
+                } else {
+                    conversationMappings.push(mapping);
+                    queueConversationDetailsPrefetch([mapping.id]);
+                }
+                mappingsToReconcile.push(conversationMappings[existingIndex] || mapping);
+                changedIds.add(mapping.id);
+            } else if (change.type === 'removed') {
+                if (existingIndex >= 0) {
+                    conversationMappings.splice(existingIndex, 1);
+                }
+                changedIds.add(mapping.id);
+            }
 
-        const userIds = new Set();
-        conversationMappings.forEach(function (mapping) {
-            const details = conversationDetailsCache[mapping.id] || {};
-            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
-                const cached = getCachedUser(uid, { allowStale: true });
-                if (!cached || isUserCacheStale(cached)) userIds.add(uid);
-            });
+            if (change.type !== 'removed') {
+                const details = conversationDetailsCache[mapping.id] || {};
+                (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
+                    const cached = getCachedUser(uid, { allowStale: true });
+                    if (!cached || isUserCacheStale(cached)) userIdsToRefresh.add(uid);
+                });
+            }
         });
-        await refreshUserProfiles(Array.from(userIds), { force: true });
 
-        await Promise.all(conversationMappings.map(function (mapping) {
+        conversationMappings.sort(function (a, b) {
+            return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
+        });
+
+        if (userIdsToRefresh.size) {
+            await refreshUserProfiles(Array.from(userIdsToRefresh), { force: false });
+        }
+
+        await Promise.all(mappingsToReconcile.map(function (mapping) {
             return reconcileConversationMapping(mapping).catch(function () { });
         }));
 
-        renderConversationList();
+        const nextRenderData = getConversationListRenderData();
+        const nextTopId = getConversationListTopId(nextRenderData);
+        const nextCount = conversationMappings.length;
+
+        if (nextCount !== previousCount || nextTopId !== previousTopId) {
+            renderConversationList();
+        } else {
+            Array.from(changedIds).forEach(function (id) {
+                const mapping = conversationMappings.find(function (item) { return item.id === id; });
+                if (mapping) {
+                    updateConversationListItem(mapping, nextRenderData);
+                }
+            });
+            conversationListRenderState.count = nextCount;
+            conversationListRenderState.topId = nextTopId;
+            updateInboxNavBadge();
+        }
 
         if (activeConversationId && !conversationMappings.some(function (m) { return m.id === activeConversationId; })) {
             handleConversationAccessLoss(activeConversationId, 'You no longer have access to this conversation.');
@@ -14018,8 +14192,13 @@ async function reconcileConversationMapping(mapping = {}) {
     const participants = details.participants || mapping.otherParticipantIds || [];
     const otherIds = participants.filter(function (uid) { return uid !== currentUser.uid; });
     if (!otherIds.length) return;
-
-    await refreshUserProfiles(otherIds, { force: true });
+    const staleIds = otherIds.filter(function (uid) {
+        const cached = getCachedUser(uid, { allowStale: true });
+        return !cached || isUserCacheStale(cached);
+    });
+    if (staleIds.length) {
+        await refreshUserProfiles(staleIds, { force: false });
+    }
 
     const names = otherIds.map(function (uid) {
         const cached = getCachedUser(uid) || {};
