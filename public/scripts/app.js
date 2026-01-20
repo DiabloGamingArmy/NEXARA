@@ -20085,18 +20085,32 @@ window.openLiveSession = function (sessionId) {
 };
 
 function listenLiveChat(sessionId) {
-    const chatRef = query(collection(db, 'liveStreams', sessionId, 'chat'), orderBy('createdAt'));
-    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function (snap) {
+    const chatRef = query(
+        collection(db, 'liveStreams', sessionId, 'chat'),
+        orderBy('createdAt', 'asc'),
+        limitToLast(200)
+    );
+    const renderedIds = new Set();
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, { includeMetadataChanges: false }, function (snap) {
         try {
             const chatEl = document.getElementById('live-chat');
             if (!chatEl) return;
-            chatEl.innerHTML = '';
-            snap.docs.forEach(function (docSnap) {
-                const data = docSnap.data();
+            const shouldStick = isNearBottom(chatEl);
+            snap.docChanges().forEach(function (change) {
+                if (change.type !== 'added') return;
+                if (renderedIds.has(change.doc.id)) return;
+                renderedIds.add(change.doc.id);
+                const data = change.doc.data();
+                const sender = data.senderId ? (getCachedUser(data.senderId) || {}) : {};
+                const senderLabel = resolveDisplayName(sender) || sender.username || 'user';
                 const row = document.createElement('div');
-                row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
+                row.dataset.chatId = change.doc.id;
+                row.textContent = `${senderLabel}: ${data.text || ''}`;
                 chatEl.appendChild(row);
             });
+            if (shouldStick) {
+                chatEl.scrollTop = chatEl.scrollHeight;
+            }
         } catch (e) {
             console.error('Live chat snapshot failed', e);
         }
