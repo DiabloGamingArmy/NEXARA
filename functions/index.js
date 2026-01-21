@@ -254,43 +254,40 @@ exports.onUserProfileUpdate = onDocumentUpdated("users/{userId}", async (event) 
   await Promise.all(notifications.map((notif) => notifRef.add(notif)));
 });
 
-exports.onPostReaction = onDocumentUpdated("posts/{postId}", async (event) => {
-  const before = event.data?.before?.data() || {};
-  const after = event.data?.after?.data() || {};
-  const ownerId = after.userId || before.userId;
-  if (!ownerId) return;
-
-  const beforeLiked = new Set(Array.isArray(before.likedBy) ? before.likedBy : []);
-  const afterLiked = new Set(Array.isArray(after.likedBy) ? after.likedBy : []);
-  const addedLikes = [...afterLiked].filter((uid) => !beforeLiked.has(uid));
-
-  const beforeDisliked = new Set(Array.isArray(before.dislikedBy) ? before.dislikedBy : []);
-  const afterDisliked = new Set(Array.isArray(after.dislikedBy) ? after.dislikedBy : []);
-  const addedDislikes = [...afterDisliked].filter((uid) => !beforeDisliked.has(uid));
-
-  if (!addedLikes.length && !addedDislikes.length) return;
-
-  const preview = buildPostPreview(after);
-  const tasks = [];
-  addedLikes.forEach((actorId) => tasks.push(createContentNotification({
+exports.onPostLike = onDocumentCreated("posts/{postId}/likes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
     actorId,
-    targetUserId: ownerId,
-    contentId: event.params.postId,
+    targetUserId: postData.userId,
+    contentId: postId,
     contentType: "post",
     actionType: "like",
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
-  })));
-  addedDislikes.forEach((actorId) => tasks.push(createContentNotification({
+  });
+});
+
+exports.onPostDislike = onDocumentCreated("posts/{postId}/dislikes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
     actorId,
-    targetUserId: ownerId,
-    contentId: event.params.postId,
+    targetUserId: postData.userId,
+    contentId: postId,
     contentType: "post",
     actionType: "dislike",
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
-  })));
-  await Promise.all(tasks);
+  });
 });
 
 exports.onPostCommentNotification = onDocumentCreated("posts/{postId}/comments/{commentId}", async (event) => {

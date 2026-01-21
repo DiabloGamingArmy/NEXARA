@@ -681,6 +681,55 @@ function getPostOptionsButton(post, context = 'feed', iconSize = '1.1rem') {
     return `<button class="post-options-btn" onclick="event.stopPropagation(); window.openPostOptions(event, '${post.id}', '${ownerId}', '${context}')" aria-label="Post options"><i class="ph ph-dots-three" style="font-size:${iconSize};"></i></button>`;
 }
 
+function getPostLikeCount(post = {}) {
+    if (Number.isFinite(post.likeCount)) return post.likeCount;
+    return Number.isFinite(post.likes) ? post.likes : 0;
+}
+
+function getPostDislikeCount(post = {}) {
+    if (Number.isFinite(post.dislikeCount)) return post.dislikeCount;
+    return Number.isFinite(post.dislikes) ? post.dislikes : 0;
+}
+
+function getPostReactionState(postId) {
+    if (!postId) return { liked: false, disliked: false, loaded: false };
+    return postReactionCache[postId] || { liked: false, disliked: false, loaded: false };
+}
+
+function setPostReactionState(postId, { liked = false, disliked = false } = {}) {
+    if (!postId) return;
+    postReactionCache[postId] = { liked: !!liked, disliked: !!disliked, loaded: true };
+}
+
+async function fetchPostReactionState(postId) {
+    if (!currentUser || !postId) return { liked: false, disliked: false, loaded: false };
+    try {
+        const likeRef = doc(db, 'posts', postId, 'likes', currentUser.uid);
+        const dislikeRef = doc(db, 'posts', postId, 'dislikes', currentUser.uid);
+        const [likeSnap, dislikeSnap] = await Promise.all([getDoc(likeRef), getDoc(dislikeRef)]);
+        const next = { liked: likeSnap.exists(), disliked: dislikeSnap.exists(), loaded: true };
+        postReactionCache[postId] = next;
+        refreshSinglePostUI(postId);
+        return next;
+    } catch (e) {
+        console.warn('Unable to fetch reaction state', e?.message || e);
+        return { liked: false, disliked: false, loaded: false };
+    }
+}
+
+function ensurePostReactionState(postId) {
+    if (!postId) return { liked: false, disliked: false, loaded: false };
+    if (!currentUser) return { liked: false, disliked: false, loaded: true };
+    const cached = getPostReactionState(postId);
+    if (cached.loaded) return cached;
+    if (!postReactionPromises[postId]) {
+        postReactionPromises[postId] = fetchPostReactionState(postId)
+            .catch(function () { })
+            .finally(function () { delete postReactionPromises[postId]; });
+    }
+    return cached;
+}
+
 function renderPostActions(post, {
     isLiked = false,
     isDisliked = false,
@@ -696,8 +745,8 @@ function renderPostActions(post, {
     showLabels = true
 } = {}) {
     const actions = [];
-    const likeCount = post.likes || 0;
-    const dislikeCount = post.dislikes || 0;
+    const likeCount = getPostLikeCount(post);
+    const dislikeCount = getPostDislikeCount(post);
     const computedReview = reviewDisplay || getReviewDisplay(window.myReviewCache ? window.myReviewCache[post.id] : null);
 
     const prefix = idPrefix ? `${idPrefix}-` : '';
@@ -777,8 +826,8 @@ function renderDiscussionActionsMobile(post, {
     isSaved = false,
     reviewDisplay = null
 } = {}) {
-    const likeCount = post.likes || 0;
-    const dislikeCount = post.dislikes || 0;
+    const likeCount = getPostLikeCount(post);
+    const dislikeCount = getPostDislikeCount(post);
     const commentCount = typeof post.comments === 'number' ? post.comments : (Array.isArray(post.comments) ? post.comments.length : (post.commentCount ?? post.commentsCount ?? 0));
     const shareCount = typeof post.shares === 'number' ? post.shares : (post.shareCount ?? 0);
     const saveCount = typeof post.saves === 'number' ? post.saves : (post.saveCount ?? 0);
@@ -1042,6 +1091,11 @@ let activeConversationId = null;
 let conversationsCache = [];
 let activeMessageUpload = null;
 let conversationMappings = [];
+let conversationMappingSources = {};
+let conversationPagingCursor = null;
+let conversationPagingHasMore = true;
+let conversationPagingLoading = false;
+const CONVERSATION_PAGE_SIZE = 50;
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
@@ -1074,6 +1128,8 @@ let conversationSearchHits = [];
 let conversationSearchIndex = 0;
 let messageActionsMenuEl = null;
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
+let postReactionCache = {};
+let postReactionPromises = {};
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosFeedLoaded = false;
@@ -4571,8 +4627,9 @@ function getPostHTML(post, options = {}) {
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
-        const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
-        const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+        const reactionState = viewerUid ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+        const isLiked = !!reactionState.liked;
+        const isDisliked = !!reactionState.disliked;
         const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(post.id)) : false;
         const isSelfPost = viewerUid ? post.userId === viewerUid : false;
         const isFollowingUser = followedUsers.has(post.userId);
@@ -4885,8 +4942,9 @@ function refreshSinglePostUI(postId) {
     const saveBtn = document.getElementById(`post-save-btn-${postId}`);
     const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
-    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
-    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const reactionState = viewerUid ? ensurePostReactionState(postId) : { liked: false, disliked: false };
+    const isLiked = !!reactionState.liked;
+    const isDisliked = !!reactionState.disliked;
     const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
@@ -4903,8 +4961,8 @@ function refreshSinglePostUI(postId) {
         btn.setAttribute('aria-label', aria);
     }
 
-    renderActionButton(likeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
-    renderActionButton(dislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
+    renderActionButton(likeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: getPostLikeCount(post), activeColor: isLiked ? '#00f2ea' : 'inherit' });
+    renderActionButton(dislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: getPostDislikeCount(post), activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
     renderActionButton(saveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', activeColor: isSaved ? '#00f2ea' : 'inherit' });
     if (reviewBtn) {
         applyReviewButtonState(reviewBtn, myReview);
@@ -4913,9 +4971,9 @@ function refreshSinglePostUI(postId) {
     document.querySelectorAll(`[data-post-id="${postId}"]`).forEach(function (btn) {
         const action = btn.dataset.action;
         if (action === 'like') {
-            renderActionButton(btn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
+            renderActionButton(btn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: getPostLikeCount(post), activeColor: isLiked ? '#00f2ea' : 'inherit' });
         } else if (action === 'dislike') {
-            renderActionButton(btn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
+            renderActionButton(btn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: getPostDislikeCount(post), activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
         } else if (action === 'save') {
             renderActionButton(btn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', activeColor: isSaved ? '#00f2ea' : 'inherit' });
         } else if (action === 'review') {
@@ -4945,8 +5003,8 @@ function refreshSinglePostUI(postId) {
     }
 
     if (threadTitle && threadTitle.dataset.postId === postId) {
-        updateThreadAction(threadLikeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, color: isLiked ? '#00f2ea' : 'inherit' });
-        updateThreadAction(threadDislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, color: isDisliked ? '#ff3d3d' : 'inherit' });
+        updateThreadAction(threadLikeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: getPostLikeCount(post), color: isLiked ? '#00f2ea' : 'inherit' });
+        updateThreadAction(threadDislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: getPostDislikeCount(post), color: isDisliked ? '#ff3d3d' : 'inherit' });
         updateThreadAction(threadSaveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', count: threadSaveCount, color: isSaved ? '#00f2ea' : 'inherit' });
         if (threadReviewBtn) {
             applyReviewButtonState(threadReviewBtn, myReview);
@@ -4962,43 +5020,64 @@ window.toggleLike = async function (postId, event) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
 
-    const wasLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const hadDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-
-    // Optimistic Update
-    if (wasLiked) {
-        post.likes = Math.max(0, (post.likes || 0) - 1); // Prevent negative likes
-        post.likedBy = post.likedBy.filter(function (uid) { return uid !== currentUser.uid; });
-    } else {
-        post.likes = (post.likes || 0) + 1;
-        if (!post.likedBy) post.likedBy = [];
-        post.likedBy.push(currentUser.uid);
-        if (hadDisliked) {
-            post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
-            post.dislikedBy = (post.dislikedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
-        }
+    let reactionState = ensurePostReactionState(postId);
+    if (!reactionState.loaded) {
+        reactionState = await fetchPostReactionState(postId);
     }
+    const wasLiked = reactionState.liked;
+    const hadDisliked = reactionState.disliked;
+    const previousLikeCount = getPostLikeCount(post);
+    const previousDislikeCount = getPostDislikeCount(post);
+
+    const nextLiked = !wasLiked;
+    const nextDisliked = wasLiked ? hadDisliked : false;
+    const nextLikeCount = wasLiked ? Math.max(0, previousLikeCount - 1) : previousLikeCount + 1;
+    const nextDislikeCount = (!wasLiked && hadDisliked) ? Math.max(0, previousDislikeCount - 1) : previousDislikeCount;
+
+    post.likeCount = nextLikeCount;
+    post.dislikeCount = nextDislikeCount;
+    setPostReactionState(postId, { liked: nextLiked, disliked: nextDisliked });
 
     recordTagAffinity(post.tags, wasLiked ? -1 : 1);
 
     refreshSinglePostUI(postId);
     const postRef = doc(db, 'posts', postId);
+    const likeRef = doc(db, 'posts', postId, 'likes', currentUser.uid);
+    const dislikeRef = doc(db, 'posts', postId, 'dislikes', currentUser.uid);
 
     try {
-        if (wasLiked) {
-            await updateDoc(postRef, { likes: increment(-1), likedBy: arrayRemove(currentUser.uid) });
-        } else {
-            const updatePayload = { likes: increment(1), likedBy: arrayUnion(currentUser.uid) };
-            if (hadDisliked) {
-                updatePayload.dislikes = increment(-1);
-                updatePayload.dislikedBy = arrayRemove(currentUser.uid);
+        await runTransaction(db, async function (tx) {
+            const [postSnap, likeSnap, dislikeSnap] = await Promise.all([
+                tx.get(postRef),
+                tx.get(likeRef),
+                tx.get(dislikeRef)
+            ]);
+            if (!postSnap.exists()) throw new Error('Post not found');
+            const postData = postSnap.data() || {};
+            let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+            let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+            const hasLike = likeSnap.exists();
+            const hasDislike = dislikeSnap.exists();
+
+            if (hasLike) {
+                tx.delete(likeRef);
+                likeCount = Math.max(0, likeCount - 1);
+            } else {
+                tx.set(likeRef, { createdAt: serverTimestamp() });
+                likeCount += 1;
+                if (hasDislike) {
+                    tx.delete(dislikeRef);
+                    dislikeCount = Math.max(0, dislikeCount - 1);
+                }
             }
-            await updateDoc(postRef, updatePayload);
-        }
+            tx.update(postRef, { likeCount, dislikeCount });
+        });
     } catch (e) {
         console.error("Like error:", e);
-        // Revert on error would go here, or just reload on demand
-        loadFeedData();
+        post.likeCount = previousLikeCount;
+        post.dislikeCount = previousDislikeCount;
+        setPostReactionState(postId, { liked: wasLiked, disliked: hadDisliked });
+        refreshSinglePostUI(postId);
     }
 }
 
@@ -5015,11 +5094,15 @@ function triggerPostLikeBurst(postId) {
     }, 700);
 }
 
-window.handlePostDoubleTap = function (postId, event) {
+window.handlePostDoubleTap = async function (postId, event) {
     if (event) event.stopPropagation();
     if (!postId) return;
     const post = allPosts.find(function (p) { return p.id === postId; });
-    if (!post || (currentUser && post.likedBy && post.likedBy.includes(currentUser.uid))) {
+    let reactionState = ensurePostReactionState(postId);
+    if (!reactionState.loaded) {
+        reactionState = await fetchPostReactionState(postId);
+    }
+    if (!post || reactionState.liked) {
         triggerPostLikeBurst(postId);
         return;
     }
@@ -5893,10 +5976,8 @@ window.createPost = async function () {
             poll: pollPayload,
             scheduledFor,
             location: locationValue,
-            likes: currentEditPost ? currentEditPost.likes || 0 : 0,
-            likedBy: currentEditPost ? currentEditPost.likedBy || [] : [],
-            dislikes: currentEditPost ? currentEditPost.dislikes || 0 : 0,
-            dislikedBy: currentEditPost ? currentEditPost.dislikedBy || [] : [],
+            likeCount: currentEditPost ? getPostLikeCount(currentEditPost) : 0,
+            dislikeCount: currentEditPost ? getPostDislikeCount(currentEditPost) : 0,
             trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
             timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
         };
@@ -6827,8 +6908,9 @@ function renderThreadMainPost(postId) {
     if (!post) return;
     const viewerUid = getViewerUid();
 
-    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
-    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const reactionState = viewerUid ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+    const isLiked = !!reactionState.liked;
+    const isDisliked = !!reactionState.disliked;
     const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const isFollowingUser = followedUsers.has(post.userId);
     const isFollowingTopic = followedCategories.has(post.category);
@@ -7265,38 +7347,64 @@ window.toggleDislike = async function (postId, event) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
 
-    const wasDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const hadLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-
-    if (wasDisliked) {
-        post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
-        post.dislikedBy = (post.dislikedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
-    } else {
-        post.dislikes = (post.dislikes || 0) + 1;
-        if (!post.dislikedBy) post.dislikedBy = [];
-        post.dislikedBy.push(currentUser.uid);
-        if (hadLiked) {
-            post.likes = Math.max(0, (post.likes || 0) - 1);
-            post.likedBy = (post.likedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
-        }
+    let reactionState = ensurePostReactionState(postId);
+    if (!reactionState.loaded) {
+        reactionState = await fetchPostReactionState(postId);
     }
+    const wasDisliked = reactionState.disliked;
+    const hadLiked = reactionState.liked;
+    const previousLikeCount = getPostLikeCount(post);
+    const previousDislikeCount = getPostDislikeCount(post);
+
+    const nextDisliked = !wasDisliked;
+    const nextLiked = wasDisliked ? hadLiked : false;
+    const nextDislikeCount = wasDisliked ? Math.max(0, previousDislikeCount - 1) : previousDislikeCount + 1;
+    const nextLikeCount = (!wasDisliked && hadLiked) ? Math.max(0, previousLikeCount - 1) : previousLikeCount;
+
+    post.likeCount = nextLikeCount;
+    post.dislikeCount = nextDislikeCount;
+    setPostReactionState(postId, { liked: nextLiked, disliked: nextDisliked });
 
     recordTagAffinity(post.tags, wasDisliked ? 1 : -1);
 
     refreshSinglePostUI(postId);
     const postRef = doc(db, 'posts', postId);
+    const dislikeRef = doc(db, 'posts', postId, 'dislikes', currentUser.uid);
+    const likeRef = doc(db, 'posts', postId, 'likes', currentUser.uid);
     try {
-        if (wasDisliked) {
-            await updateDoc(postRef, { dislikes: increment(-1), dislikedBy: arrayRemove(currentUser.uid) });
-        } else {
-            const updatePayload = { dislikes: increment(1), dislikedBy: arrayUnion(currentUser.uid) };
-            if (hadLiked) {
-                updatePayload.likes = increment(-1);
-                updatePayload.likedBy = arrayRemove(currentUser.uid);
+        await runTransaction(db, async function (tx) {
+            const [postSnap, dislikeSnap, likeSnap] = await Promise.all([
+                tx.get(postRef),
+                tx.get(dislikeRef),
+                tx.get(likeRef)
+            ]);
+            if (!postSnap.exists()) throw new Error('Post not found');
+            const postData = postSnap.data() || {};
+            let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+            let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+            const hasDislike = dislikeSnap.exists();
+            const hasLike = likeSnap.exists();
+
+            if (hasDislike) {
+                tx.delete(dislikeRef);
+                dislikeCount = Math.max(0, dislikeCount - 1);
+            } else {
+                tx.set(dislikeRef, { createdAt: serverTimestamp() });
+                dislikeCount += 1;
+                if (hasLike) {
+                    tx.delete(likeRef);
+                    likeCount = Math.max(0, likeCount - 1);
+                }
             }
-            await updateDoc(postRef, updatePayload);
-        }
-    } catch (e) { console.error('Dislike error:', e); }
+            tx.update(postRef, { likeCount, dislikeCount });
+        });
+    } catch (e) {
+        console.error('Dislike error:', e);
+        post.likeCount = previousLikeCount;
+        post.dislikeCount = previousDislikeCount;
+        setPostReactionState(postId, { liked: hadLiked, disliked: wasDisliked });
+        refreshSinglePostUI(postId);
+    }
 }
 
 window.toggleCommentDislike = async function (commentId, event) {
@@ -7621,7 +7729,7 @@ async function renderDiscoverResults() {
         }
 
         if (discoverPostsSort === 'popular') {
-            filteredPosts.sort(function (a, b) { return (b.likes || 0) - (a.likes || 0); });
+            filteredPosts.sort(function (a, b) { return getPostLikeCount(b) - getPostLikeCount(a); });
         } else {
             filteredPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
         }
@@ -7636,8 +7744,9 @@ async function renderDiscoverResults() {
             filteredPosts.forEach(function (post) {
                 const author = userCache[post.userId] || { name: post.author };
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
-                const isLiked = post.likedBy && currentUser && post.likedBy.includes(currentUser.uid);
-                const isDisliked = post.dislikedBy && currentUser && post.dislikedBy.includes(currentUser.uid);
+                const reactionState = currentUser ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+                const isLiked = !!reactionState.liked;
+                const isDisliked = !!reactionState.disliked;
                 const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
                 const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
                 const reviewDisplay = getReviewDisplay(myReview);
@@ -7899,8 +8008,9 @@ function getProfileContentSources(uid) {
 
 function renderProfilePostCard(post, context = 'profile', { compact = false, idPrefix = 'post' } = {}) {
     const date = formatDateTime(post.timestamp) || 'Just now';
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser?.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser?.uid);
+    const reactionState = currentUser ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+    const isLiked = !!reactionState.liked;
+    const isDisliked = !!reactionState.disliked;
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
     const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
     const reviewDisplay = getReviewDisplay(myReview);
@@ -8120,7 +8230,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
     const userPosts = sources.posts;
-    const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
+    const likesTotal = userPosts.reduce(function (acc, p) { return acc + getPostLikeCount(p); }, 0);
 
     const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
 
@@ -8188,7 +8298,7 @@ function renderProfile() {
     const followersCount = userProfile.followersCount || 0;
     const regionHtml = userProfile.region ? `<div class="real-name-subtext"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(userProfile.region)}</div>` : '';
     const realNameHtml = userProfile.realName ? `<div class="real-name-subtext">${escapeHtml(userProfile.realName)}</div>` : '';
-    const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
+    const likesTotal = userPosts.reduce(function (acc, p) { return acc + getPostLikeCount(p); }, 0);
 
     document.getElementById('view-profile').innerHTML = `
         ${showReturnBar ? `
@@ -10428,6 +10538,48 @@ function updateConversationListEmptyState(renderData, listEl, emptyEl) {
     return false;
 }
 
+function insertConversationRowInOrder(container, row, orderIds) {
+    if (!container || !row || !orderIds?.length) return;
+    const rowId = row.dataset.conversationId;
+    const startIndex = orderIds.indexOf(rowId);
+    if (startIndex < 0) {
+        container.appendChild(row);
+        return;
+    }
+    let insertBefore = null;
+    for (let i = startIndex + 1; i < orderIds.length; i += 1) {
+        const nextNode = container.querySelector(`[data-conversation-id="${orderIds[i]}"]`);
+        if (nextNode) {
+            insertBefore = nextNode;
+            break;
+        }
+    }
+    if (insertBefore) {
+        container.insertBefore(row, insertBefore);
+    } else {
+        container.appendChild(row);
+    }
+}
+
+function updateConversationListOrder(renderData) {
+    const listEl = document.getElementById('conversation-list');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    if (pinnedEl && renderData?.pinned?.length) {
+        const pinnedOrder = renderData.pinned.map(function (item) { return item.id; });
+        pinnedOrder.forEach(function (id) {
+            const row = pinnedEl.querySelector(`[data-conversation-id="${id}"]`);
+            if (row) insertConversationRowInOrder(pinnedEl, row, pinnedOrder);
+        });
+    }
+    if (listEl && renderData?.visible?.length) {
+        const listOrder = renderData.visible.map(function (item) { return item.id; });
+        listOrder.forEach(function (id) {
+            const row = listEl.querySelector(`[data-conversation-id="${id}"]`);
+            if (row) insertConversationRowInOrder(listEl, row, listOrder);
+        });
+    }
+}
+
 function updateConversationListItem(mapping, renderData) {
     const listEl = document.getElementById('conversation-list');
     const pinnedEl = document.getElementById('pinned-conversations');
@@ -10462,11 +10614,8 @@ function updateConversationListItem(mapping, renderData) {
             if (!pinnedEl.querySelector('.inbox-section-label')) {
                 pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
             }
-            if (pinnedRow) {
-                pinnedRow.replaceWith(nextRow);
-            } else {
-                pinnedEl.appendChild(nextRow);
-            }
+            if (pinnedRow) pinnedRow.replaceWith(nextRow);
+            insertConversationRowInOrder(pinnedEl, nextRow, renderData.pinned.map(function (item) { return item.id; }));
             pinnedEl.style.display = 'block';
         }
         if (listRow) listRow.remove();
@@ -10474,23 +10623,27 @@ function updateConversationListItem(mapping, renderData) {
     }
 
     if (pinnedRow) pinnedRow.remove();
-    if (listRow) {
-        listRow.replaceWith(nextRow);
-    } else {
-        listEl.appendChild(nextRow);
-    }
+    if (listRow) listRow.replaceWith(nextRow);
+    insertConversationRowInOrder(listEl, nextRow, renderData.visible.map(function (item) { return item.id; }));
 }
 
 function renderConversationList() {
     const listEl = document.getElementById('conversation-list');
     if (!listEl) return;
-    listEl.innerHTML = '';
     const emptyEl = document.getElementById('conversation-list-empty');
     const pinnedEl = document.getElementById('pinned-conversations');
     const renderData = getConversationListRenderData();
     const currentUid = renderData.currentUid;
 
-    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) return;
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) {
+        if (pinnedEl) {
+            pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
+        }
+        listEl.innerHTML = '';
+        updateConversationLoadMoreState(renderData);
+        return;
+    }
 
     const pinned = renderData.pinned;
     const unpinned = renderData.unpinned;
@@ -10503,15 +10656,17 @@ function renderConversationList() {
     });
 
     if (pinnedEl) {
-        pinnedEl.innerHTML = '';
         if (pinned.length) {
             pinnedEl.style.display = 'block';
-            pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            if (!pinnedEl.querySelector('.inbox-section-label')) {
+                pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            }
             pinned.forEach(function (mapping) {
-                pinnedEl.appendChild(buildConversationRowElement(mapping, currentUid));
+                updateConversationListItem(mapping, renderData);
             });
         } else {
             pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
         }
     }
 
@@ -10530,12 +10685,25 @@ function renderConversationList() {
                 releaseInitialSplashOnce('inbox-initial-ready');
             }
         } catch (e) {}
+        updateConversationLoadMoreState(renderData);
         return;
     }
 
     visible.forEach(function (mapping) {
-        listEl.appendChild(buildConversationRowElement(mapping, currentUid));
+        updateConversationListItem(mapping, renderData);
     });
+    Array.from(listEl.querySelectorAll('.conversation-item')).forEach(function (node) {
+        if (!renderData.visible.some(function (mapping) { return mapping.id === node.dataset.conversationId; })) {
+            node.remove();
+        }
+    });
+    if (pinnedEl && pinned.length) {
+        Array.from(pinnedEl.querySelectorAll('.conversation-item')).forEach(function (node) {
+            if (!renderData.pinned.some(function (mapping) { return mapping.id === node.dataset.conversationId; })) {
+                node.remove();
+            }
+        });
+    }
     if (listEl.dataset.scrollBound !== 'true') {
         listEl.addEventListener('scroll', function () {
             const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 24;
@@ -10549,6 +10717,7 @@ function renderConversationList() {
     conversationListRenderState.count = conversationMappings.length;
     conversationListRenderState.topId = getConversationListTopId(renderData);
     updateInboxNavBadge();
+    updateConversationLoadMoreState(renderData);
     try {
         const path = (location.pathname || '').toLowerCase();
         const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
@@ -14293,11 +14462,125 @@ async function processConversationDetailsPrefetchQueue() {
     conversationDetailsPrefetchActive = false;
 }
 
+function upsertConversationMapping(mapping = {}, source = 'realtime') {
+    if (!mapping?.id) return null;
+    const existingIndex = conversationMappings.findIndex(function (item) { return item.id === mapping.id; });
+    if (existingIndex >= 0) {
+        conversationMappings[existingIndex] = { ...conversationMappings[existingIndex], ...mapping };
+    } else {
+        conversationMappings.push(mapping);
+    }
+    const existingSource = conversationMappingSources[mapping.id] || {};
+    conversationMappingSources[mapping.id] = { ...existingSource, [source]: true };
+    return conversationMappings[existingIndex >= 0 ? existingIndex : conversationMappings.length - 1];
+}
+
+function markConversationMappingSource(id, source, isActive) {
+    if (!id) return;
+    const existingSource = conversationMappingSources[id] || {};
+    conversationMappingSources[id] = { ...existingSource, [source]: isActive };
+}
+
+function sortConversationMappings() {
+    conversationMappings.sort(function (a, b) {
+        return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
+    });
+}
+
+function getConversationLoadMoreButton() {
+    return document.getElementById('conversation-list-load-more');
+}
+
+function ensureConversationLoadMoreButton() {
+    const listEl = document.getElementById('conversation-list');
+    if (!listEl || !listEl.parentElement) return null;
+    let btn = getConversationLoadMoreButton();
+    if (btn) return btn;
+    btn = document.createElement('button');
+    btn.id = 'conversation-list-load-more';
+    btn.className = 'inbox-load-more';
+    btn.type = 'button';
+    btn.textContent = 'Load more';
+    btn.onclick = function () { fetchMoreConversations().catch(function () {}); };
+    listEl.parentElement.insertBefore(btn, listEl.nextSibling);
+    return btn;
+}
+
+function updateConversationLoadMoreState(renderData = {}) {
+    const btn = ensureConversationLoadMoreButton();
+    if (!btn) return;
+    const hasSearch = !!renderData.search;
+    const isEmpty = conversationMappings.length === 0;
+    const shouldShow = (conversationPagingHasMore || conversationPagingLoading) && !hasSearch && !isEmpty;
+    btn.style.display = shouldShow ? 'block' : 'none';
+    btn.disabled = conversationPagingLoading;
+    btn.textContent = conversationPagingLoading ? 'Loading…' : 'Load more';
+}
+
+async function fetchMoreConversations(cursor = conversationPagingCursor, pageSize = CONVERSATION_PAGE_SIZE) {
+    if (!requireAuth()) return [];
+    if (conversationPagingLoading || !conversationPagingHasMore) return [];
+    conversationPagingLoading = true;
+    updateConversationLoadMoreState(getConversationListRenderData());
+    try {
+        const baseQuery = query(
+            collection(db, `users/${currentUser.uid}/conversations`),
+            orderBy('lastMessageAt', 'desc')
+        );
+        const nextQuery = cursor
+            ? query(baseQuery, startAfter(cursor), limit(pageSize))
+            : query(baseQuery, limit(pageSize));
+        const snap = await getDocs(nextQuery);
+        const mappingsToReconcile = [];
+        const userIdsToRefresh = new Set();
+
+        snap.forEach(function (docSnap) {
+            const mapping = { id: docSnap.id, ...docSnap.data() };
+            const merged = upsertConversationMapping(mapping, 'paged');
+            mappingsToReconcile.push(merged || mapping);
+            queueConversationDetailsPrefetch([mapping.id]);
+            const details = conversationDetailsCache[mapping.id] || {};
+            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
+                const cached = getCachedUser(uid, { allowStale: true });
+                if (!cached || isUserCacheStale(cached)) userIdsToRefresh.add(uid);
+            });
+        });
+
+        if (userIdsToRefresh.size) {
+            await refreshUserProfiles(Array.from(userIdsToRefresh), { force: false });
+        }
+
+        await Promise.all(mappingsToReconcile.map(function (mapping) {
+            return reconcileConversationMapping(mapping).catch(function () { });
+        }));
+
+        if (snap.docs.length) {
+            conversationPagingCursor = snap.docs[snap.docs.length - 1];
+        }
+        conversationPagingHasMore = snap.docs.length === pageSize;
+
+        sortConversationMappings();
+        conversationListVisibleCount = Math.max(conversationListVisibleCount, conversationMappings.length);
+        renderConversationList();
+        return mappingsToReconcile;
+    } catch (e) {
+        console.warn('Unable to load more conversations', e?.message || e);
+        return [];
+    } finally {
+        conversationPagingLoading = false;
+        updateConversationLoadMoreState(getConversationListRenderData());
+    }
+}
+
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
     bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
-    const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
+    const convRef = query(
+        collection(db, `users/${currentUser.uid}/conversations`),
+        orderBy('lastMessageAt', 'desc'),
+        limit(CONVERSATION_PAGE_SIZE)
+    );
     conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
         const changes = snap.docChanges();
         if (!changes.length) return;
@@ -14308,33 +14591,33 @@ async function initConversations(autoOpen = true) {
         const mappingsToReconcile = [];
         const userIdsToRefresh = new Set();
 
+        if (snap.docs.length) {
+            conversationPagingCursor = snap.docs[snap.docs.length - 1];
+            conversationPagingHasMore = snap.docs.length === CONVERSATION_PAGE_SIZE;
+        } else {
+            conversationPagingCursor = null;
+            conversationPagingHasMore = false;
+        }
+
         changes.forEach(function (change) {
             const mapping = { id: change.doc.id, ...change.doc.data() };
             const existingIndex = conversationMappings.findIndex(function (item) { return item.id === mapping.id; });
             const existing = existingIndex >= 0 ? conversationMappings[existingIndex] : null;
 
             if (change.type === 'added') {
-                if (existing) {
-                    conversationMappings[existingIndex] = { ...existing, ...mapping };
-                } else {
-                    conversationMappings.push(mapping);
-                }
+                upsertConversationMapping(mapping, 'realtime');
                 queueConversationDetailsPrefetch([mapping.id]);
                 mappingsToReconcile.push(mapping);
                 changedIds.add(mapping.id);
             } else if (change.type === 'modified') {
-                if (existing) {
-                    conversationMappings[existingIndex] = { ...existing, ...mapping };
-                } else {
-                    conversationMappings.push(mapping);
+                upsertConversationMapping(mapping, 'realtime');
+                if (!existing) {
                     queueConversationDetailsPrefetch([mapping.id]);
                 }
                 mappingsToReconcile.push(conversationMappings[existingIndex] || mapping);
                 changedIds.add(mapping.id);
             } else if (change.type === 'removed') {
-                if (existingIndex >= 0) {
-                    conversationMappings.splice(existingIndex, 1);
-                }
+                markConversationMappingSource(mapping.id, 'realtime', false);
                 changedIds.add(mapping.id);
             }
 
@@ -14347,9 +14630,7 @@ async function initConversations(autoOpen = true) {
             }
         });
 
-        conversationMappings.sort(function (a, b) {
-            return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
-        });
+        sortConversationMappings();
 
         if (userIdsToRefresh.size) {
             await refreshUserProfiles(Array.from(userIdsToRefresh), { force: false });
@@ -14364,7 +14645,16 @@ async function initConversations(autoOpen = true) {
         const nextCount = conversationMappings.length;
 
         if (nextCount !== previousCount || nextTopId !== previousTopId) {
-            renderConversationList();
+            Array.from(changedIds).forEach(function (id) {
+                const mapping = conversationMappings.find(function (item) { return item.id === id; });
+                if (mapping) {
+                    updateConversationListItem(mapping, nextRenderData);
+                }
+            });
+            updateConversationListOrder(nextRenderData);
+            conversationListRenderState.count = nextCount;
+            conversationListRenderState.topId = nextTopId;
+            updateInboxNavBadge();
         } else {
             Array.from(changedIds).forEach(function (id) {
                 const mapping = conversationMappings.find(function (item) { return item.id === id; });
@@ -14384,6 +14674,7 @@ async function initConversations(autoOpen = true) {
         if (autoOpen && !activeConversationId && conversationMappings.length > 0) {
             openConversation(conversationMappings[0].id);
         }
+        updateConversationLoadMoreState(nextRenderData);
     }, function (err) {
         handleSnapshotError('Conversation list', err);
     }));

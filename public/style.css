@@ -10568,6 +10568,31 @@ body.go-live-open {
     margin-top: 10px;
 }
 
+.inbox-load-more {
+    margin-top: 10px;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.inbox-load-more:hover {
+    background: var(--bg-body);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+    transform: translateY(-1px);
+}
+
+.inbox-load-more:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
 /* Conversation Settings */
 .messages-settings-shell {
     padding: 1rem;
