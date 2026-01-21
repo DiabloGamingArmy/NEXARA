@@ -23,6 +23,32 @@ import { createVideoRepository } from "/scripts/data/videoRepository.js";
 import { attachPlayback, destroyPlayback, getHlsUrl, getLegacyMp4Url, getThumbnailUrl } from "/scripts/media/videoManager.js";
 import { createVirtualVideoList } from "/scripts/ui/virtualVideoList.js";
 
+function getCallable(name) {
+    return httpsCallable(functions, name);
+}
+
+async function callSecureFunction(name, payload = {}) {
+    try {
+        const callable = getCallable(name);
+        const res = await callable(payload);
+        return res?.data;
+    } catch (error) {
+        const code = error?.code || '';
+        if (code === 'failed-precondition') {
+            toast('App Check verification failed. Refresh the page and try again.', 'error');
+        } else if (code === 'resource-exhausted') {
+            toast('Slow down — you are sending requests too quickly.', 'warning');
+        } else if (code === 'unauthenticated') {
+            toast('Please sign in to continue.', 'error');
+        } else if (code === 'permission-denied') {
+            toast('You do not have permission to perform this action.', 'error');
+        } else {
+            toast('Request failed. Please try again.', 'error');
+        }
+        throw error;
+    }
+}
+
 window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
 window.__NEXERA_BOOT_TS = Date.now();
 let bootCompleted = false;
@@ -5041,37 +5067,8 @@ window.toggleLike = async function (postId, event) {
     recordTagAffinity(post.tags, wasLiked ? -1 : 1);
 
     refreshSinglePostUI(postId);
-    const postRef = doc(db, 'posts', postId);
-    const likeRef = doc(db, 'posts', postId, 'likes', currentUser.uid);
-    const dislikeRef = doc(db, 'posts', postId, 'dislikes', currentUser.uid);
-
     try {
-        await runTransaction(db, async function (tx) {
-            const [postSnap, likeSnap, dislikeSnap] = await Promise.all([
-                tx.get(postRef),
-                tx.get(likeRef),
-                tx.get(dislikeRef)
-            ]);
-            if (!postSnap.exists()) throw new Error('Post not found');
-            const postData = postSnap.data() || {};
-            let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
-            let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
-            const hasLike = likeSnap.exists();
-            const hasDislike = dislikeSnap.exists();
-
-            if (hasLike) {
-                tx.delete(likeRef);
-                likeCount = Math.max(0, likeCount - 1);
-            } else {
-                tx.set(likeRef, { createdAt: serverTimestamp() });
-                likeCount += 1;
-                if (hasDislike) {
-                    tx.delete(dislikeRef);
-                    dislikeCount = Math.max(0, dislikeCount - 1);
-                }
-            }
-            tx.update(postRef, { likeCount, dislikeCount });
-        });
+        await callSecureFunction('toggleLike', { postId, action: wasLiked ? 'unlike' : 'like' });
     } catch (e) {
         console.error("Like error:", e);
         post.likeCount = previousLikeCount;
@@ -6415,16 +6412,11 @@ window.submitReview = async function () {
         window.closeReview();
 
         // 4. Backend Update
-        await addDoc(collection(db, 'posts', activePostId, 'reviews'), {
-            userId: currentUser.uid,
+        await callSecureFunction('createReview', {
+            postId: activePostId,
             rating,
-            note,
-            timestamp: serverTimestamp()
+            text: note
         });
-
-        const postRef = doc(db, 'posts', activePostId);
-        const scoreChange = (rating === 'verified') ? 1 : -1;
-        await updateDoc(postRef, { trustScore: increment(scoreChange) });
 
     } catch (e) {
         console.error("Review failed", e);
@@ -6445,7 +6437,7 @@ window.removeReview = async function () {
     window.closeReview(); // Close modal
 
     try {
-        await deleteDoc(doc(db, 'posts', activePostId, 'reviews', window.currentReviewId));
+        await callSecureFunction('removeReview', { postId: activePostId });
     } catch (e) {
         console.error(e);
     }
@@ -7060,16 +7052,14 @@ window.sendComment = async function () {
 
         payload.timestamp = serverTimestamp();
 
-        await addDoc(collection(db, 'posts', activePostId, 'comments'), payload);
-
-        const postRef = doc(db, 'posts', activePostId);
-        await updateDoc(postRef, {
-            previewComment: {
-                text: text.substring(0, 80) + (text.length > 80 ? '...' : ''),
-                author: userProfile.name,
-                likes: 0
-            }
+        const result = await callSecureFunction('createComment', {
+            postId: activePostId,
+            text,
+            assetIds: mediaUrl ? [mediaUrl] : []
         });
+        if (result?.moderation?.status === 'blocked') {
+            toast('Your comment is under review.', 'warning');
+        }
     } catch (e) {
         console.error(e);
         optimisticThreadComments = optimisticThreadComments.filter(function (c) { return c.id !== optimisticId; });
@@ -7368,36 +7358,8 @@ window.toggleDislike = async function (postId, event) {
     recordTagAffinity(post.tags, wasDisliked ? 1 : -1);
 
     refreshSinglePostUI(postId);
-    const postRef = doc(db, 'posts', postId);
-    const dislikeRef = doc(db, 'posts', postId, 'dislikes', currentUser.uid);
-    const likeRef = doc(db, 'posts', postId, 'likes', currentUser.uid);
     try {
-        await runTransaction(db, async function (tx) {
-            const [postSnap, dislikeSnap, likeSnap] = await Promise.all([
-                tx.get(postRef),
-                tx.get(dislikeRef),
-                tx.get(likeRef)
-            ]);
-            if (!postSnap.exists()) throw new Error('Post not found');
-            const postData = postSnap.data() || {};
-            let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
-            let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
-            const hasDislike = dislikeSnap.exists();
-            const hasLike = likeSnap.exists();
-
-            if (hasDislike) {
-                tx.delete(dislikeRef);
-                dislikeCount = Math.max(0, dislikeCount - 1);
-            } else {
-                tx.set(dislikeRef, { createdAt: serverTimestamp() });
-                dislikeCount += 1;
-                if (hasLike) {
-                    tx.delete(likeRef);
-                    likeCount = Math.max(0, likeCount - 1);
-                }
-            }
-            tx.update(postRef, { likeCount, dislikeCount });
-        });
+        await callSecureFunction('toggleDislike', { postId, action: wasDisliked ? 'undislike' : 'dislike' });
     } catch (e) {
         console.error('Dislike error:', e);
         post.likeCount = previousLikeCount;
@@ -20755,7 +20717,7 @@ window.sendLiveChat = async function (sessionId) {
     const input = document.getElementById('live-chat-input');
     if (!input || !input.value.trim()) return;
     try {
-        await addDoc(collection(db, 'liveSessions', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
+        await callSecureFunction('sendLiveChatMessage', { sessionId, text: input.value });
         input.value = '';
     } catch (e) {
         console.error('Failed to send live chat', e);

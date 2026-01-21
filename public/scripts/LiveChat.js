@@ -8,9 +8,8 @@ import {
     orderBy,
     limitToLast,
     onSnapshot,
-    addDoc,
-    serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 
 export function initLiveChat(streamId, currentUser) {
     const messagesEl = document.getElementById("live-chat-messages");
@@ -20,6 +19,8 @@ export function initLiveChat(streamId, currentUser) {
     if (!streamId || !messagesEl) return null;
 
     const db = getFirestore();
+    const functions = getFunctions();
+    const sendLiveChatMessage = httpsCallable(functions, "sendLiveChatMessage");
 
     const chatQuery = query(
         collection(db, "liveSessions", streamId, "chat"),
@@ -51,12 +52,12 @@ export function initLiveChat(streamId, currentUser) {
     const sendMessage = async () => {
         if (!inputEl || !inputEl.value.trim()) return;
 
-        await addDoc(collection(db, "liveSessions", streamId, "chat"), {
-            uid: currentUser?.uid || "",
-            displayName: currentUser?.displayName || "",
-            message: inputEl.value.trim(),
-            createdAt: serverTimestamp(),
-        });
+        try {
+            await sendLiveChatMessage({ sessionId: streamId, text: inputEl.value.trim() });
+        } catch (error) {
+            console.error("Live chat send failed", error);
+            return;
+        }
 
         inputEl.value = "";
         messagesEl.scrollTop = messagesEl.scrollHeight;
