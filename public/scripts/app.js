@@ -1381,6 +1381,9 @@ let threadComments = [];
 let optimisticThreadComments = [];
 let commentFilterMode = 'popularity';
 let commentFilterQuery = '';
+let commentThreadScrollHandler = null;
+let commentThreadScrollContainer = null;
+let commentThreadPagingState = {};
 
 // --- Navigation Stack ---
 let navStack = [];
@@ -3922,6 +3925,11 @@ window.navigateTo = function (viewId, pushToStack = true) {
         if (threadUnsubscribe) threadUnsubscribe();
         if (activePostId) ListenerRegistry.unregister(`comments:${activePostId}`);
         threadUnsubscribe = null;
+        if (commentThreadScrollContainer && commentThreadScrollHandler) {
+            commentThreadScrollContainer.removeEventListener('scroll', commentThreadScrollHandler);
+            commentThreadScrollContainer = null;
+            commentThreadScrollHandler = null;
+        }
     }
 
     if (viewId !== 'messages') {
@@ -6412,23 +6420,46 @@ window.openThread = async function (postId) {
 function attachThreadComments(postId) {
     const container = document.getElementById('thread-stream');
     if (!container) return;
+    container.innerHTML = '';
+    commentThreadPagingState[postId] = { loading: false, exhausted: false };
+    if (commentThreadScrollContainer && commentThreadScrollHandler) {
+        commentThreadScrollContainer.removeEventListener('scroll', commentThreadScrollHandler);
+        commentThreadScrollContainer = null;
+        commentThreadScrollHandler = null;
+    }
 
-    const commentsRef = collection(db, 'posts', postId, 'comments');
-    const q = query(commentsRef, orderBy('timestamp', 'asc'));
-
-    if (threadUnsubscribe) threadUnsubscribe();
-
-    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function (snapshot) {
-        const comments = snapshot.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
-        const missingCommentUsers = comments.filter(function (c) { return !userCache[c.userId]; }).map(function (c) { return ({ userId: c.userId }); });
-        if (missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
-        threadComments = comments;
-        pruneOptimisticMatches(comments);
-        renderThreadComments();
-    }, function (error) {
-        console.error('Comments load error', error);
-        container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
-    }));
+    listenToLatestComments(postId);
+    commentThreadScrollContainer = container;
+    commentThreadScrollHandler = function () {
+        if (activePostId !== postId) return;
+        if (container.scrollTop > 120) return;
+        const paging = commentThreadPagingState[postId] || { loading: false, exhausted: false };
+        if (paging.loading || paging.exhausted) return;
+        const currentComments = threadComments || [];
+        const oldest = currentComments[0];
+        if (!oldest || !oldest.timestamp) return;
+        paging.loading = true;
+        commentThreadPagingState[postId] = paging;
+        fetchOlderComments(postId, oldest.timestamp).then(function (olderComments) {
+            if (!olderComments.length) {
+                paging.exhausted = true;
+                return;
+            }
+            const existingIds = new Set(currentComments.map(function (c) { return c.id; }));
+            const deduped = olderComments.filter(function (c) { return !existingIds.has(c.id); });
+            if (!deduped.length) {
+                paging.exhausted = true;
+                return;
+            }
+            threadComments = deduped.concat(currentComments);
+            renderThreadComments(undefined, { preserveScrollPosition: true });
+        }).catch(function (error) {
+            console.error('Older comments fetch failed', error);
+        }).finally(function () {
+            paging.loading = false;
+        });
+    };
+    container.addEventListener('scroll', commentThreadScrollHandler, { passive: true });
 }
 
 function mergeOptimisticComments(base = []) {
@@ -6446,6 +6477,98 @@ function pruneOptimisticMatches(serverComments = []) {
         const key = `${opt.userId || ''}::${(opt.text || '').trim()}`;
         return !serverKeys.has(key);
     });
+}
+
+function getCommentTimestampMs(comment = {}) {
+    const date = toDateSafe(comment.timestamp);
+    return date ? date.getTime() : 0;
+}
+
+function insertCommentSorted(cache = [], comment = {}) {
+    const ts = getCommentTimestampMs(comment);
+    let insertIndex = cache.findIndex(function (item) { return getCommentTimestampMs(item) > ts; });
+    if (insertIndex === -1) insertIndex = cache.length;
+    cache.splice(insertIndex, 0, comment);
+    return insertIndex;
+}
+
+function upsertCommentInCache(cache = [], comment = {}) {
+    const existingIndex = cache.findIndex(function (item) { return item.id === comment.id; });
+    if (existingIndex === -1) {
+        return { index: insertCommentSorted(cache, comment), type: 'added' };
+    }
+    const prev = cache[existingIndex];
+    const prevTs = getCommentTimestampMs(prev);
+    const nextTs = getCommentTimestampMs(comment) || prevTs;
+    cache[existingIndex] = { ...prev, ...comment };
+    if (nextTs !== prevTs) {
+        cache.splice(existingIndex, 1);
+        return { index: insertCommentSorted(cache, { ...prev, ...comment }), type: 'moved' };
+    }
+    return { index: existingIndex, type: 'modified' };
+}
+
+function removeCommentFromCache(cache = [], commentId) {
+    const index = cache.findIndex(function (item) { return item.id === commentId; });
+    if (index === -1) return null;
+    cache.splice(index, 1);
+    return index;
+}
+
+function listenToLatestComments(postId, pageSize = 50) {
+    const commentsRef = collection(db, 'posts', postId, 'comments');
+    const q = query(commentsRef, orderBy('timestamp', 'asc'), limitToLast(pageSize));
+
+    if (threadUnsubscribe) threadUnsubscribe();
+
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function (snapshot) {
+        const changes = snapshot.docChanges();
+        if (!changes.length) return;
+        const nextComments = threadComments || [];
+        const addedComments = [];
+        let requiresRender = false;
+
+        changes.forEach(function (change) {
+            const comment = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added') {
+                if (nextComments.find(function (c) { return c.id === comment.id; })) return;
+                insertCommentSorted(nextComments, comment);
+                addedComments.push(comment);
+                requiresRender = true;
+            } else if (change.type === 'modified') {
+                upsertCommentInCache(nextComments, comment);
+                requiresRender = true;
+            } else if (change.type === 'removed') {
+                removeCommentFromCache(nextComments, comment.id);
+                requiresRender = true;
+            }
+        });
+
+        threadComments = nextComments;
+        pruneOptimisticMatches(nextComments);
+        const missingCommentUsers = addedComments.filter(function (c) { return !userCache[c.userId]; }).map(function (c) { return ({ userId: c.userId }); });
+        if (missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
+        if (requiresRender) renderThreadComments();
+    }, function (error) {
+        console.error('Comments load error', error);
+        const container = document.getElementById('thread-stream');
+        if (container) {
+            container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
+        }
+    }));
+}
+
+async function fetchOlderComments(postId, beforeTimestamp, pageSize = 50) {
+    if (!beforeTimestamp) return [];
+    const commentsRef = collection(db, 'posts', postId, 'comments');
+    const q = query(
+        commentsRef,
+        orderBy('timestamp', 'asc'),
+        endBefore(beforeTimestamp),
+        limitToLast(pageSize)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
 }
 
 function getCommentSortComparator() {
@@ -6563,9 +6686,12 @@ const renderCommentHtml = function (c, isReply) {
     </div>`;
 };
 
-function renderThreadComments(comments = mergeOptimisticComments(threadComments)) {
+function renderThreadComments(comments = mergeOptimisticComments(threadComments), options = {}) {
     const container = document.getElementById('thread-stream');
     if (!container) return;
+    const preserveScrollPosition = options.preserveScrollPosition;
+    const previousScrollTop = container.scrollTop;
+    const previousScrollHeight = container.scrollHeight;
 
     const filtered = filterAndSortComments(comments);
     currentThreadComments = filtered;
@@ -6668,6 +6794,10 @@ function renderThreadComments(comments = mergeOptimisticComments(threadComments)
             const input = document.getElementById('thread-input');
             if (input) input.focus();
         }
+    }
+
+    if (preserveScrollPosition) {
+        container.scrollTop = previousScrollTop + (container.scrollHeight - previousScrollHeight);
     }
 }
 
@@ -20360,7 +20490,13 @@ function renderStaffConsole() {
 
 function listenVerificationRequests() {
     if (staffRequestsUnsub) return;
-    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function (snap) {
+    const requestsRef = query(
+        collection(db, 'verificationRequests'),
+        where('status', '==', 'pending'),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+    );
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(requestsRef, function (snap) {
         const container = document.getElementById('verification-requests');
         if (!container) return;
         container.innerHTML = '';
@@ -20387,7 +20523,8 @@ window.denyVerification = async function (requestId) {
 
 function listenReports() {
     if (staffReportsUnsub) return;
-    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function (snap) {
+    const reportsRef = query(collection(db, 'reports'), orderBy('createdAt', 'desc'), limit(50));
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(reportsRef, function (snap) {
         const container = document.getElementById('reports-queue');
         if (!container) return;
         container.innerHTML = '';
@@ -20403,7 +20540,8 @@ function listenReports() {
 
 function listenAdminLogs() {
     if (staffLogsUnsub) return;
-    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function (snap) {
+    const logsRef = query(collection(db, 'adminLogs'), orderBy('createdAt', 'desc'), limit(50));
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(logsRef, function (snap) {
         const container = document.getElementById('admin-logs');
         if (!container) return;
         container.innerHTML = '';
