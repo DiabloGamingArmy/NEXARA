@@ -21,7 +21,8 @@ export function validateChatAttachment(file, options = {}) {
         return { ok: false, message: 'Only image and video attachments are allowed.' };
     }
 
-    const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : CHAT_IMAGE_MAX_BYTES;
+    const inferredMaxBytes = type.startsWith('video/') ? CHAT_VIDEO_MAX_BYTES : CHAT_IMAGE_MAX_BYTES;
+    const maxBytes = Number.isFinite(options.maxBytes) ? options.maxBytes : inferredMaxBytes;
     if (file.size > maxBytes) {
         return { ok: false, message: `Attachments must be under ${formatUploadFileSize(maxBytes)}.` };
     }

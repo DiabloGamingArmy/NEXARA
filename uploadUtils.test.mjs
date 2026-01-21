@@ -3,7 +3,8 @@ import {
     buildChatMediaPath,
     sanitizeFileName,
     validateChatAttachment,
-    CHAT_IMAGE_MAX_BYTES
+    CHAT_IMAGE_MAX_BYTES,
+    CHAT_VIDEO_MAX_BYTES
 } from './public/assets/js/upload-utils.js';
 
 const fakeFile = (overrides = {}) => ({
@@ -28,6 +29,11 @@ assert.equal(
 );
 assert.equal(
     validateChatAttachment(fakeFile({ size: CHAT_IMAGE_MAX_BYTES + 1 }), { maxBytes: CHAT_IMAGE_MAX_BYTES }).ok,
+    false
+);
+assert.deepEqual(validateChatAttachment(fakeFile({ type: 'video/mp4', size: CHAT_VIDEO_MAX_BYTES })), { ok: true });
+assert.equal(
+    validateChatAttachment(fakeFile({ type: 'video/mp4', size: CHAT_VIDEO_MAX_BYTES + 1 })).ok,
     false
 );
 
