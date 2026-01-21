@@ -295,6 +295,18 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      match /likes/{uid} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && request.auth.uid == uid;
+        allow update: if false;
+      }
+
+      match /dislikes/{uid} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && request.auth.uid == uid;
+        allow update: if false;
+      }
+
       match /reviews/{reviewId} {
         allow read: if canReadPost(postId)
           && (
