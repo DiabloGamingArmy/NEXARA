@@ -1375,7 +1375,6 @@ window.Nexera.releaseSplash = function (reason = 'release') {
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
-let staffTrendingSyncBound = false;
 let activeOptionsPost = null;
 let threadComments = [];
 let optimisticThreadComments = [];
@@ -20148,67 +20147,6 @@ function renderStaffConsole() {
     listenVerificationRequests();
     listenReports();
     listenAdminLogs();
-    bindTrendingCategoriesSync();
-}
-
-async function syncTrendingCategories() {
-    const categoriesSnap = await getDocs(collection(db, 'categories'));
-    const scores = [];
-
-    for (const docSnap of categoriesSnap.docs) {
-        const data = docSnap.data() || {};
-        const slug = data.slug || docSnap.id;
-        if (!slug) continue;
-        const memberCount = Number(data.memberCount || 0) || 0;
-        let postCount = 0;
-        let commentCount = 0;
-
-        const postsSnap = await getDocs(query(collection(db, 'posts'), where('categoryId', '==', slug)));
-        postsSnap.forEach(function (postDoc) {
-            postCount += 1;
-            const postData = postDoc.data() || {};
-            const postComments = Number(postData.comments || postData.commentCount || postData.stats?.comments || 0) || 0;
-            commentCount += postComments;
-        });
-
-        const popularity = Math.round((postCount * 5) + (memberCount * 2) + commentCount);
-        scores.push({ slug, popularity });
-    }
-
-    scores.sort(function (a, b) { return b.popularity - a.popularity; });
-    const topScores = scores.slice(0, 10);
-    const batch = writeBatch(db);
-    const now = serverTimestamp();
-
-    topScores.forEach(function (entry) {
-        const ref = doc(db, 'trendingCategories', entry.slug);
-        batch.set(ref, {
-            slug: entry.slug,
-            popularity: entry.popularity,
-            updatedAt: now
-        }, { merge: true });
-    });
-
-    await batch.commit();
-}
-
-// Staff-only sync helper to seed trendingCategories from categories.
-function bindTrendingCategoriesSync() {
-    const btn = document.getElementById('sync-trending-categories');
-    if (!btn || staffTrendingSyncBound) return;
-    staffTrendingSyncBound = true;
-    btn.addEventListener('click', async function () {
-        btn.disabled = true;
-        try {
-            await syncTrendingCategories();
-            alert('Trending categories synced successfully.');
-        } catch (err) {
-            console.error('Error syncing trending categories:', err);
-            alert('Failed to sync trending categories. Check console for details.');
-        } finally {
-            btn.disabled = false;
-        }
-    });
 }
 
 function listenVerificationRequests() {
