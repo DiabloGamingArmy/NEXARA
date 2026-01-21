@@ -556,6 +556,8 @@ exports.livekitCreateToken = onCallV2(
     if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
     const data = request.data || {};
     const roomName = String(data?.roomName || "").trim();
+    const sessionId = String(data?.sessionId || "").trim();
+    const canPublish = data?.canPublish !== false;
     let conversationId = String(data?.conversationId || "").trim();
     if (!conversationId && data?.metadata) {
       try {
@@ -563,8 +565,8 @@ exports.livekitCreateToken = onCallV2(
         conversationId = String(parsed?.conversationId || "").trim();
       } catch (error) {}
     }
-    if (!roomName || !conversationId) {
-      throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
+    if (!roomName || (!conversationId && !sessionId)) {
+      throw new HttpsError("invalid-argument", "roomName and conversationId/sessionId are required.");
     }
 
     const apiKey = LIVEKIT_API_KEY.value();
@@ -585,13 +587,14 @@ exports.livekitCreateToken = onCallV2(
       identity: auth.uid,
       name: displayName,
     });
-    token.addGrant({room: roomName, roomJoin: true, canPublish: true, canSubscribe: true});
+    token.addGrant({room: roomName, roomJoin: true, canPublish, canSubscribe: true});
 
     return {
       url: livekitUrl,
       token: await token.toJwt(),
       roomName,
-      conversationId,
+      conversationId: conversationId || null,
+      sessionId: sessionId || null,
     };
   },
 );
