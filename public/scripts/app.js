@@ -3218,13 +3218,25 @@ async function fetchFeedBatch({ reset = false } = {}) {
         const { items, lastDoc, done } = await feedRepository.fetchNext({ limit: FEED_BATCH_SIZE });
         feedPagination.lastDoc = lastDoc || feedPagination.lastDoc;
         feedPagination.done = done;
-        return items.map(function (docSnap) {
+        const normalized = items.map(function (docSnap) {
             const data = docSnap.data();
             return normalizePostData(docSnap.id, data);
         });
+        return normalized.filter(canDisplayPostInFeed);
     } finally {
         feedPagination.loading = false;
     }
+}
+
+function isPendingPostForViewer(post, viewerUid) {
+    return post?.moderation?.status === 'pending' && !!viewerUid && post.userId === viewerUid;
+}
+
+function canDisplayPostInFeed(post) {
+    const status = post?.moderation?.status;
+    if (status === 'blocked') return false;
+    if (status === 'pending') return !!currentUser && post.userId === currentUser.uid;
+    return true;
 }
 
 async function loadFeedData({ showSplashDuringLoad = false } = {}) {
@@ -4896,6 +4908,7 @@ function getPostHTML(post, options = {}) {
         const scheduledChip = isPostScheduledInFuture(post) && viewerUid && post.userId === viewerUid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
         const verification = getVerificationState(post);
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
+        const underReviewChip = isPendingPostForViewer(post, viewerUid) ? '<span class="verification-chip moderation-pending">Under review</span>' : '';
 
         let mediaContent = '';
         let blockStack = '';
@@ -4969,6 +4982,7 @@ function getPostHTML(post, options = {}) {
                 <div class="card-content" onclick="window.openThread('${post.id}')">
                     <div class="category-badge">${post.category}</div>
                     ${verificationChip}
+                    ${underReviewChip}
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
                 <p class="post-body-text">${formattedBody}</p>
                 ${tagListHtml}
@@ -7476,6 +7490,7 @@ function renderThreadMainPost(postId) {
     const verification = getVerificationState(post);
     const verificationBanner = verification && verification.bannerText ? `<div class="verification-banner ${verification.className}"><i class="ph ph-warning"></i><div>${verification.bannerText}</div></div>` : '';
     const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
+    const underReviewChip = isPendingPostForViewer(post, viewerUid) ? '<span class="verification-chip moderation-pending">Under review</span>' : '';
     const followButtons = isSelfPost ? '' : `
                                 <button class="follow-btn js-follow-user-${post.userId} ${isFollowingUser ? 'following' : ''}" onclick="event.stopPropagation(); window.toggleFollowUser('${post.userId}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingUser ? 'Following' : '<i class="ph-bold ph-plus"></i> User'}</button>
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
@@ -7551,7 +7566,7 @@ function renderThreadMainPost(postId) {
             ${pollBlock}
             ${mediaContent}
             ${blockStack}
-            <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}</div>
+            <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}${underReviewChip}</div>
                         ${actionsHtml}
         </div>`;
 

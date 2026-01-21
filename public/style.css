@@ -8778,6 +8778,12 @@ body.video-viewer-inline-open .nexera-alert-banner {
     border: 1px solid rgba(255, 61, 61, 0.35);
 }
 
+.verification-chip.moderation-pending {
+    background: rgba(255, 196, 0, 0.12);
+    color: #ffd36a;
+    border: 1px solid rgba(255, 196, 0, 0.35);
+}
+
 .verification-banner {
     padding: 12px;
     border-radius: 12px;

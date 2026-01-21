@@ -291,7 +291,13 @@ async function moderateTextContent(text, contextLabel) {
     const endpoint = AI_LOGIC_ENDPOINT.value();
     const apiKey = AI_LOGIC_API_KEY.value();
     if (!endpoint || !apiKey) {
-      return {status: "pending", labels: ["unscored"], scoreMap: {}, modelVersion: "unconfigured", reviewRequired: true};
+      return {
+        status: "approved",
+        labels: ["unscored", "unconfigured"],
+        scoreMap: {},
+        modelVersion: "unconfigured",
+        reviewRequired: false,
+      };
     }
     const response = await fetch(endpoint, {
       method: "POST",
@@ -332,7 +338,13 @@ async function moderateAssetContent(metadata) {
     const endpoint = AI_LOGIC_ENDPOINT.value();
     const apiKey = AI_LOGIC_API_KEY.value();
     if (!endpoint || !apiKey) {
-      return {status: "pending", labels: ["unscored"], scoreMap: {}, modelVersion: "unconfigured", reviewRequired: true};
+      return {
+        status: "approved",
+        labels: ["unscored", "unconfigured"],
+        scoreMap: {},
+        modelVersion: "unconfigured",
+        reviewRequired: false,
+      };
     }
     const response = await fetch(endpoint, {
       method: "POST",
@@ -1422,6 +1434,49 @@ exports.adminModerateContent = onCallV2({enforceAppCheck: true}, async (request)
     },
   }, {merge: true});
   return {ok: true};
+});
+
+exports.adminBackfillPendingPosts = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  if (!isStaffClaims(auth)) throw new HttpsError("permission-denied", "Admin privileges required.");
+  const data = request.data || {};
+  const days = Math.min(Math.max(Number(data.days) || 14, 1), 90);
+  const maxUpdates = Math.min(Math.max(Number(data.limit) || 200, 1), 500);
+  const since = admin.firestore.Timestamp.fromMillis(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const snapshot = await db.collection("posts")
+    .where("moderation.status", "==", "pending")
+    .where("createdAt", ">=", since)
+    .orderBy("createdAt", "desc")
+    .limit(maxUpdates)
+    .get();
+
+  if (snapshot.empty) return {ok: true, updated: 0};
+
+  const batch = db.batch();
+  let updated = 0;
+  snapshot.forEach((docSnap) => {
+    const postData = docSnap.data() || {};
+    const moderation = postData.moderation || {};
+    const labels = Array.isArray(moderation.labels) ? moderation.labels : [];
+    const nextLabels = Array.from(new Set([...labels, "backfilled"]));
+    batch.set(docSnap.ref, {
+      moderation: {
+        ...moderation,
+        status: "approved",
+        labels: nextLabels,
+        reviewRequired: false,
+        reviewedAt: FieldValue.serverTimestamp(),
+        reviewedBy: auth.uid,
+      },
+    }, {merge: true});
+    updated += 1;
+  });
+
+  await batch.commit();
+  return {ok: true, updated};
 });
 
 exports.adminSetUserDisabled = onCallV2({enforceAppCheck: true}, async (request) => {

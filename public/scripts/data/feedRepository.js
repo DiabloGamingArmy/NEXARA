@@ -9,12 +9,11 @@ export function createFeedRepository({ pageSize = 10 } = {}) {
         if (done) return { items: [], lastDoc, done: true };
         const constraints = [
             where('visibility', '==', 'public'),
-            where('moderation.status', '==', 'approved'),
-            orderBy('createdAt', 'desc'),
+            orderBy('timestamp', 'desc'),
             limit(pageLimit)
         ];
         if (lastDoc) {
-            constraints.splice(3, 0, startAfter(lastDoc));
+            constraints.splice(2, 0, startAfter(lastDoc));
         }
         const snapshot = await getDocs(query(collection(db, 'posts'), ...constraints));
         lastDoc = snapshot.docs[snapshot.docs.length - 1] || lastDoc;
