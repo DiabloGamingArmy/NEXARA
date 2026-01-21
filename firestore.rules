@@ -173,6 +173,21 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
+    // -------------------------
+    // Stories
+    // -------------------------
+    match /stories/{storyId} {
+      allow read: if resource.data.visibility == 'public'
+        || (isSignedIn() && request.auth.uid == resource.data.ownerId);
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerId;
+      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.ownerId;
+    }
+
+    match /storyFeeds/{viewerUid}/items/{ownerUid} {
+      allow read: if isSignedIn() && request.auth.uid == viewerUid;
+      allow write: if false;
+    }
+
     // App-wide UI config (banner, etc.)
     match /app_config/{docId} {
       allow read: if true;
@@ -379,43 +394,28 @@ service cloud.firestore {
     // -------------------------
     // Live sessions
     // -------------------------
-    match /liveSessions/{sid} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
-      match /chat/{mid} { allow read: if isSignedIn(); allow write: if isSignedIn(); }
-    }
-
-    // ------------------------------------------------
-    // Live streaming (hardened)
-    // ------------------------------------------------
-    function liveStreamOwner(streamId) {
-      return exists(/databases/$(database)/documents/liveStreams/$(streamId))
-        ? get(/databases/$(database)/documents/liveStreams/$(streamId)).data.uid
-        : request.resource.data.uid;
-    }
-
-    match /liveStreams/{streamId} {
-      allow read: if true; // public metadata only; secrets live in private subdocs
-
-      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if isSignedIn() && liveStreamOwner(streamId) == request.auth.uid;
+    match /liveSessions/{sessionId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.hostId == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && (
+          (exists(resource) && resource.data.hostId == request.auth.uid)
+          || request.resource.data.hostId == request.auth.uid
+        );
 
       match /chat/{messageId} {
         allow read, write: if isSignedIn();
       }
 
       match /private/{docId} {
-        allow read, write: if isSignedIn() && (
-          (exists(/databases/$(database)/documents/liveStreams/$(streamId))
-            && get(/databases/$(database)/documents/liveStreams/$(streamId)).data.uid == request.auth.uid)
-          || (exists(resource) && resource.data.uid == request.auth.uid)
-          || (request.resource.data.uid == request.auth.uid)
-        );
+        allow read, write: if isSignedIn()
+          && (
+            (exists(/databases/$(database)/documents/liveSessions/$(sessionId))
+              && get(/databases/$(database)/documents/liveSessions/$(sessionId)).data.hostId == request.auth.uid)
+            || (exists(resource) && resource.data.uid == request.auth.uid)
+            || (request.resource.data.uid == request.auth.uid)
+          );
       }
-    }
-
-    match /liveSessions/{sessionId}/chat/{messageId} {
-      allow read, write: if isSignedIn();
     }
 
     // -------------------------

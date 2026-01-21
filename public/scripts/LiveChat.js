@@ -6,6 +6,7 @@ import {
     collection,
     query,
     orderBy,
+    limitToLast,
     onSnapshot,
     addDoc,
     serverTimestamp,
@@ -21,15 +22,19 @@ export function initLiveChat(streamId, currentUser) {
     const db = getFirestore();
 
     const chatQuery = query(
-        collection(db, "liveStreams", streamId, "chat"),
-        orderBy("createdAt")
+        collection(db, "liveSessions", streamId, "chat"),
+        orderBy("createdAt", "asc"),
+        limitToLast(200)
     );
 
+    const renderedIds = new Set();
     const unsubscribe = onSnapshot(chatQuery, snap => {
-        messagesEl.innerHTML = "";
-
-        snap.forEach(docSnap => {
-            const data = docSnap.data() || {};
+        const shouldStick = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight <= 80;
+        snap.docChanges().forEach(change => {
+            if (change.type !== "added") return;
+            if (renderedIds.has(change.doc.id)) return;
+            renderedIds.add(change.doc.id);
+            const data = change.doc.data() || {};
             const row = document.createElement("div");
             row.className = "live-chat-row";
             row.innerHTML = `
@@ -38,14 +43,15 @@ export function initLiveChat(streamId, currentUser) {
             `;
             messagesEl.appendChild(row);
         });
-
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        if (shouldStick) {
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
     });
 
     const sendMessage = async () => {
         if (!inputEl || !inputEl.value.trim()) return;
 
-        await addDoc(collection(db, "liveStreams", streamId, "chat"), {
+        await addDoc(collection(db, "liveSessions", streamId, "chat"), {
             uid: currentUser?.uid || "",
             displayName: currentUser?.displayName || "",
             message: inputEl.value.trim(),
