@@ -12,9 +12,12 @@ const {defineSecret} = require("firebase-functions/params");
 const {onCall: onCallV2, HttpsError} = require("firebase-functions/v2/https");
 const {onCall, onRequest} = require("firebase-functions/https");
 const {onDocumentCreated, onDocumentDeleted, onDocumentUpdated} = require("firebase-functions/v2/firestore");
+const {onObjectFinalized} = require("firebase-functions/v2/storage");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const {AccessToken} = require("livekit-server-sdk");
+const AI_LOGIC_ENDPOINT = defineSecret("AI_LOGIC_ENDPOINT");
+const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
 
 // For cost control, you can set the maximum number of containers that can be
 // running at the same time. This helps mitigate the impact of unexpected
@@ -55,6 +58,104 @@ const {FieldValue} = admin.firestore;
 const LIVEKIT_API_KEY = defineSecret("LIVEKIT_API_KEY");
 const LIVEKIT_API_SECRET = defineSecret("LIVEKIT_API_SECRET");
 const LIVEKIT_URL = defineSecret("LIVEKIT_URL");
+const AI_LOGIC_ENDPOINT = defineSecret("AI_LOGIC_ENDPOINT");
+const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
+
+const RATE_LIMITS = {
+  liveChat: {limit: 5, windowMs: 10 * 1000},
+  comments: {limit: 3, windowMs: 30 * 1000},
+  reviews: {limit: 1, windowMs: 10 * 60 * 1000},
+  likes: {limit: 20, windowMs: 60 * 1000},
+};
+
+function assertAppCheckV2(request) {
+  if (!request.app) {
+    throw new HttpsError("failed-precondition", "Missing or invalid App Check token.");
+  }
+}
+
+function assertAppCheckV1(context) {
+  if (!context.app) {
+    throw new HttpsError("failed-precondition", "Missing or invalid App Check token.");
+  }
+}
+
+async function enforceRateLimit(uid, bucketKey, {limit, windowMs}) {
+  const now = Date.now();
+  const resetAt = now + windowMs;
+  const docId = `${uid}_${bucketKey}`;
+  const ref = db.collection("rateLimits").doc(docId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    let count = 0;
+    let windowResetAt = resetAt;
+    if (snap.exists) {
+      const data = snap.data() || {};
+      if (data.resetAt && data.resetAt > now) {
+        count = data.count || 0;
+        windowResetAt = data.resetAt;
+      }
+    }
+    if (count >= limit) {
+      throw new HttpsError("resource-exhausted", "Rate limit exceeded. Try again soon.");
+    }
+    tx.set(ref, {count: count + 1, resetAt: windowResetAt}, {merge: true});
+  });
+}
+
+function normalizeText(value = "", maxLen = 1000) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return trimmed.slice(0, maxLen);
+}
+
+function isStaffClaims(auth) {
+  return auth?.token?.admin === true || auth?.token?.staff === true || auth?.token?.founder === true;
+}
+
+async function moderateTextContent(text, contextLabel) {
+  const payload = {
+    input: text,
+    context: contextLabel,
+  };
+  if (!text) {
+    return {status: "approved", labels: [], scoreMap: {}, modelVersion: "none", reviewRequired: false};
+  }
+  try {
+    const endpoint = AI_LOGIC_ENDPOINT.value();
+    const apiKey = AI_LOGIC_API_KEY.value();
+    if (!endpoint || !apiKey) {
+      return {status: "pending", labels: ["unscored"], scoreMap: {}, modelVersion: "unconfigured", reviewRequired: true};
+    }
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      logger.warn("AI Logic moderation failed", {status: response.status});
+      return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+    }
+    const data = await response.json();
+    const labels = Array.isArray(data.labels) ? data.labels : [];
+    const scoreMap = data.scoreMap || {};
+    const blocked = data.blocked === true || labels.includes("blocked");
+    const pending = data.pending === true || labels.includes("review");
+    return {
+      status: blocked ? "blocked" : (pending ? "pending" : "approved"),
+      labels,
+      scoreMap,
+      modelVersion: data.modelVersion || "ai-logic",
+      reviewRequired: pending || blocked,
+    };
+  } catch (error) {
+    logger.warn("AI Logic moderation exception", {error: error?.message || error});
+    return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+  }
+}
 
 async function resolveActorProfile(actorId) {
   if (!actorId) return {actorName: "Someone", actorPhotoUrl: ""};
@@ -254,43 +355,40 @@ exports.onUserProfileUpdate = onDocumentUpdated("users/{userId}", async (event) 
   await Promise.all(notifications.map((notif) => notifRef.add(notif)));
 });
 
-exports.onPostReaction = onDocumentUpdated("posts/{postId}", async (event) => {
-  const before = event.data?.before?.data() || {};
-  const after = event.data?.after?.data() || {};
-  const ownerId = after.userId || before.userId;
-  if (!ownerId) return;
-
-  const beforeLiked = new Set(Array.isArray(before.likedBy) ? before.likedBy : []);
-  const afterLiked = new Set(Array.isArray(after.likedBy) ? after.likedBy : []);
-  const addedLikes = [...afterLiked].filter((uid) => !beforeLiked.has(uid));
-
-  const beforeDisliked = new Set(Array.isArray(before.dislikedBy) ? before.dislikedBy : []);
-  const afterDisliked = new Set(Array.isArray(after.dislikedBy) ? after.dislikedBy : []);
-  const addedDislikes = [...afterDisliked].filter((uid) => !beforeDisliked.has(uid));
-
-  if (!addedLikes.length && !addedDislikes.length) return;
-
-  const preview = buildPostPreview(after);
-  const tasks = [];
-  addedLikes.forEach((actorId) => tasks.push(createContentNotification({
+exports.onPostLike = onDocumentCreated("posts/{postId}/likes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
     actorId,
-    targetUserId: ownerId,
-    contentId: event.params.postId,
+    targetUserId: postData.userId,
+    contentId: postId,
     contentType: "post",
     actionType: "like",
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
-  })));
-  addedDislikes.forEach((actorId) => tasks.push(createContentNotification({
+  });
+});
+
+exports.onPostDislike = onDocumentCreated("posts/{postId}/dislikes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
     actorId,
-    targetUserId: ownerId,
-    contentId: event.params.postId,
+    targetUserId: postData.userId,
+    contentId: postId,
     contentType: "post",
     actionType: "dislike",
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
-  })));
-  await Promise.all(tasks);
+  });
 });
 
 exports.onPostCommentNotification = onDocumentCreated("posts/{postId}/comments/{commentId}", async (event) => {
@@ -479,8 +577,9 @@ exports.onConversationMessage = onDocumentCreated("conversations/{conversationId
 
 exports.createUploadSession = onCall((data, context) => {
   if (!context.auth) {
-    throw new Error("Unauthorized");
+    throw new HttpsError("unauthenticated", "Sign-in required.");
   }
+  assertAppCheckV1(context);
   const uploadId = `${Date.now()}`;
   const storagePath = `videos/${context.auth.uid}/${uploadId}`;
   return {
@@ -491,10 +590,329 @@ exports.createUploadSession = onCall((data, context) => {
   };
 });
 
-exports.notifyMention = onCallV2(async (request) => {
+exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const text = normalizeText(data.text || "", 1200);
+  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 3) : [];
+  if (!postId || !text) throw new HttpsError("invalid-argument", "postId and text are required.");
+  await enforceRateLimit(auth.uid, `comment:${postId}:30s`, RATE_LIMITS.comments);
+
+  const postRef = db.collection("posts").doc(postId);
+  const postSnap = await postRef.get();
+  if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+  const postData = postSnap.data() || {};
+  if (postData.visibility === "private" && postData.userId !== auth.uid) {
+    throw new HttpsError("permission-denied", "You cannot comment on this post.");
+  }
+
+  const moderation = await moderateTextContent(text, "comment");
+  let authorName = "User";
+  try {
+    const userSnap = await db.collection("users").doc(auth.uid).get();
+    if (userSnap.exists) {
+      const userData = userSnap.data() || {};
+      authorName = userData.name || userData.displayName || userData.username || authorName;
+    }
+  } catch (error) {}
+  const payload = {
+    userId: auth.uid,
+    text,
+    mediaUrl: assetIds[0] || "",
+    assets: assetIds,
+    createdAt: FieldValue.serverTimestamp(),
+    timestamp: FieldValue.serverTimestamp(),
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+  };
+
+  const commentRef = await postRef.collection("comments").add(payload);
+  if (moderation.status !== "blocked") {
+    await postRef.set({
+      previewComment: {
+        text: text.substring(0, 80) + (text.length > 80 ? "..." : ""),
+        author: authorName,
+        likes: 0,
+      },
+    }, {merge: true});
+  }
+  return {ok: true, commentId: commentRef.id, moderation: payload.moderation};
+});
+
+exports.sendLiveChatMessage = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const sessionId = String(data.sessionId || "").trim();
+  const text = normalizeText(data.text || "", 500);
+  if (!sessionId || !text) throw new HttpsError("invalid-argument", "sessionId and text are required.");
+  await enforceRateLimit(auth.uid, `livechat:${sessionId}:10s`, RATE_LIMITS.liveChat);
+
+  const sessionRef = db.collection("liveSessions").doc(sessionId);
+  const sessionSnap = await sessionRef.get();
+  if (!sessionSnap.exists) throw new HttpsError("not-found", "Session not found.");
+
+  const moderation = await moderateTextContent(text, "livechat");
+  let displayName = auth.token?.name || auth.token?.displayName || "";
+  if (!displayName) {
+    try {
+      const userSnap = await db.collection("users").doc(auth.uid).get();
+      const userData = userSnap.exists ? userSnap.data() : {};
+      displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
+    } catch (error) {
+      displayName = auth.uid;
+    }
+  }
+  const payload = {
+    senderId: auth.uid,
+    displayName,
+    text,
+    createdAt: FieldValue.serverTimestamp(),
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+  };
+
+  const chatRef = await sessionRef.collection("chat").add(payload);
+  return {ok: true, chatId: chatRef.id, moderation: payload.moderation};
+});
+
+exports.createReview = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const rating = String(data.rating || "").trim();
+  const note = normalizeText(data.text || "", 1200);
+  if (!postId || !rating || !note) throw new HttpsError("invalid-argument", "postId, rating, and text are required.");
+  if (!["verified", "citation", "misleading"].includes(rating)) {
+    throw new HttpsError("invalid-argument", "Invalid rating.");
+  }
+  await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
+
+  const postRef = db.collection("posts").doc(postId);
+  const postSnap = await postRef.get();
+  if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+
+  const moderation = await moderateTextContent(note, "review");
+  const reviewRef = postRef.collection("reviews").doc();
+  await db.runTransaction(async (tx) => {
+    const postSnap = await tx.get(postRef);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    tx.set(reviewRef, {
+      userId: auth.uid,
+      rating,
+      note,
+      timestamp: FieldValue.serverTimestamp(),
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+    });
+    const scoreChange = rating === "verified" ? 1 : -1;
+    tx.update(postRef, {trustScore: FieldValue.increment(scoreChange)});
+  });
+  return {ok: true, reviewId: reviewRef.id, moderation: moderation};
+});
+
+exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  if (!postId) throw new HttpsError("invalid-argument", "postId is required.");
+  await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
+
+  const postRef = db.collection("posts").doc(postId);
+  const reviewsRef = postRef.collection("reviews");
+  const snap = await reviewsRef.where("userId", "==", auth.uid).limit(1).get();
+  if (snap.empty) return {ok: true, removed: false};
+  const reviewDoc = snap.docs[0];
+  const rating = reviewDoc.data()?.rating || "";
+  await db.runTransaction(async (tx) => {
+    tx.delete(reviewsRef.doc(reviewDoc.id));
+    if (rating) {
+      const scoreChange = rating === "verified" ? -1 : 1;
+      tx.update(postRef, {trustScore: FieldValue.increment(scoreChange)});
+    }
+  });
+  return {ok: true, removed: true};
+});
+
+exports.toggleLike = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["like", "unlike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  await enforceRateLimit(auth.uid, `like:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  await db.runTransaction(async (tx) => {
+    const [postSnap, likeSnap, dislikeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(likeRef),
+      tx.get(dislikeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+
+    const hasLike = likeSnap.exists;
+    const hasDislike = dislikeSnap.exists;
+    if (action === "like" && !hasLike) {
+      tx.set(likeRef, {createdAt: FieldValue.serverTimestamp()});
+      likeCount += 1;
+      if (hasDislike) {
+        tx.delete(dislikeRef);
+        dislikeCount = Math.max(0, dislikeCount - 1);
+      }
+    } else if (action === "unlike" && hasLike) {
+      tx.delete(likeRef);
+      likeCount = Math.max(0, likeCount - 1);
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+  });
+  return {ok: true};
+});
+
+exports.toggleDislike = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["dislike", "undislike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  await enforceRateLimit(auth.uid, `dislike:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  await db.runTransaction(async (tx) => {
+    const [postSnap, dislikeSnap, likeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(dislikeRef),
+      tx.get(likeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+    const hasDislike = dislikeSnap.exists;
+    const hasLike = likeSnap.exists;
+
+    if (action === "dislike" && !hasDislike) {
+      tx.set(dislikeRef, {createdAt: FieldValue.serverTimestamp()});
+      dislikeCount += 1;
+      if (hasLike) {
+        tx.delete(likeRef);
+        likeCount = Math.max(0, likeCount - 1);
+      }
+    } else if (action === "undislike" && hasDislike) {
+      tx.delete(dislikeRef);
+      dislikeCount = Math.max(0, dislikeCount - 1);
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+  });
+  return {ok: true};
+});
+
+exports.adminModerateContent = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  if (!isStaffClaims(auth)) throw new HttpsError("permission-denied", "Admin privileges required.");
+  const data = request.data || {};
+  const path = String(data.path || "").trim();
+  const status = String(data.status || "").trim();
+  if (!path || !["approved", "pending", "blocked"].includes(status)) {
+    throw new HttpsError("invalid-argument", "Invalid moderation request.");
+  }
+  const docRef = db.doc(path);
+  await docRef.set({
+    moderation: {
+      status,
+      reviewedBy: auth.uid,
+      reviewedAt: FieldValue.serverTimestamp(),
+    },
+  }, {merge: true});
+  return {ok: true};
+});
+
+exports.adminSetUserDisabled = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  if (!isStaffClaims(auth)) throw new HttpsError("permission-denied", "Admin privileges required.");
+  const data = request.data || {};
+  const targetUid = String(data.uid || "").trim();
+  const disabled = data.disabled === true;
+  if (!targetUid) throw new HttpsError("invalid-argument", "uid is required.");
+  await admin.auth().updateUser(targetUid, {disabled});
+  await db.collection("users").doc(targetUid).set({
+    disabled,
+    disabledAt: FieldValue.serverTimestamp(),
+    disabledBy: auth.uid,
+  }, {merge: true});
+  return {ok: true};
+});
+
+exports.onAssetUpload = onObjectFinalized(async (event) => {
+  const object = event.data;
+  const filePath = object.name || "";
+  if (!filePath) return;
+  if (!filePath.startsWith("comment_media/") && !filePath.startsWith("posts/")) return;
+  const assetId = filePath.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const assetRef = db.collection("assets").doc(assetId);
+  await assetRef.set({
+    path: filePath,
+    contentType: object.contentType || "",
+    size: object.size ? Number(object.size) : null,
+    status: "processing",
+    moderation: {
+      status: "pending",
+      labels: [],
+      scoreMap: {},
+      modelVersion: "ai-logic",
+      reviewRequired: true,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  }, {merge: true});
+});
+
+exports.notifyMention = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
   const data = request.data || {};
   const auth = request.auth;
-  if (!auth || !auth.uid) throw new Error("unauthenticated");
+  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
 
   const actorId = auth.uid;
   const targetUserId = (data.targetUserId || "").toString();
@@ -550,12 +968,16 @@ exports.livekitCreateToken = onCallV2(
       "https://spike-streaming-service.web.app",
       "https://spike-streaming-service.firebaseapp.com",
     ],
+    enforceAppCheck: true,
   },
   async (request) => {
+    assertAppCheckV2(request);
     const auth = request.auth;
     if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
     const data = request.data || {};
     const roomName = String(data?.roomName || "").trim();
+    const sessionId = String(data?.sessionId || "").trim();
+    const canPublish = data?.canPublish !== false;
     let conversationId = String(data?.conversationId || "").trim();
     if (!conversationId && data?.metadata) {
       try {
@@ -563,8 +985,8 @@ exports.livekitCreateToken = onCallV2(
         conversationId = String(parsed?.conversationId || "").trim();
       } catch (error) {}
     }
-    if (!roomName || !conversationId) {
-      throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
+    if (!roomName || (!conversationId && !sessionId)) {
+      throw new HttpsError("invalid-argument", "roomName and conversationId/sessionId are required.");
     }
 
     const apiKey = LIVEKIT_API_KEY.value();
@@ -585,13 +1007,14 @@ exports.livekitCreateToken = onCallV2(
       identity: auth.uid,
       name: displayName,
     });
-    token.addGrant({room: roomName, roomJoin: true, canPublish: true, canSubscribe: true});
+    token.addGrant({room: roomName, roomJoin: true, canPublish, canSubscribe: true});
 
     return {
       url: livekitUrl,
       token: await token.toJwt(),
       roomName,
-      conversationId,
+      conversationId: conversationId || null,
+      sessionId: sessionId || null,
     };
   },
 );

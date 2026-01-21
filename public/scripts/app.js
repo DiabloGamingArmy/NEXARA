@@ -1,6 +1,6 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { setPersistence, browserLocalPersistence, inMemoryPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, limitToLast, startAt, startAfter, endAt, endBefore, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
@@ -22,6 +22,32 @@ import { createFeedRepository } from "/scripts/data/feedRepository.js";
 import { createVideoRepository } from "/scripts/data/videoRepository.js";
 import { attachPlayback, destroyPlayback, getHlsUrl, getLegacyMp4Url, getThumbnailUrl } from "/scripts/media/videoManager.js";
 import { createVirtualVideoList } from "/scripts/ui/virtualVideoList.js";
+
+function getCallable(name) {
+    return httpsCallable(functions, name);
+}
+
+async function callSecureFunction(name, payload = {}) {
+    try {
+        const callable = getCallable(name);
+        const res = await callable(payload);
+        return res?.data;
+    } catch (error) {
+        const code = error?.code || '';
+        if (code === 'failed-precondition') {
+            toast('App Check verification failed. Refresh the page and try again.', 'error');
+        } else if (code === 'resource-exhausted') {
+            toast('Slow down — you are sending requests too quickly.', 'warning');
+        } else if (code === 'unauthenticated') {
+            toast('Please sign in to continue.', 'error');
+        } else if (code === 'permission-denied') {
+            toast('You do not have permission to perform this action.', 'error');
+        } else {
+            toast('Request failed. Please try again.', 'error');
+        }
+        throw error;
+    }
+}
 
 window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
 window.__NEXERA_BOOT_TS = Date.now();
@@ -205,6 +231,7 @@ let livekitCreateLocalAudioTrack = null;
 let livekitCreateLocalVideoTrack = null;
 let livekitCreateLocalScreenTracks = null;
 let livekitLoadStatus = 'idle';
+let liveSessionRoom = null;
 
 const LIVEKIT_CLIENT_VERSION = "2.5.1";
 const LIVEKIT_CDN_URLS = [
@@ -680,6 +707,55 @@ function getPostOptionsButton(post, context = 'feed', iconSize = '1.1rem') {
     return `<button class="post-options-btn" onclick="event.stopPropagation(); window.openPostOptions(event, '${post.id}', '${ownerId}', '${context}')" aria-label="Post options"><i class="ph ph-dots-three" style="font-size:${iconSize};"></i></button>`;
 }
 
+function getPostLikeCount(post = {}) {
+    if (Number.isFinite(post.likeCount)) return post.likeCount;
+    return Number.isFinite(post.likes) ? post.likes : 0;
+}
+
+function getPostDislikeCount(post = {}) {
+    if (Number.isFinite(post.dislikeCount)) return post.dislikeCount;
+    return Number.isFinite(post.dislikes) ? post.dislikes : 0;
+}
+
+function getPostReactionState(postId) {
+    if (!postId) return { liked: false, disliked: false, loaded: false };
+    return postReactionCache[postId] || { liked: false, disliked: false, loaded: false };
+}
+
+function setPostReactionState(postId, { liked = false, disliked = false } = {}) {
+    if (!postId) return;
+    postReactionCache[postId] = { liked: !!liked, disliked: !!disliked, loaded: true };
+}
+
+async function fetchPostReactionState(postId) {
+    if (!currentUser || !postId) return { liked: false, disliked: false, loaded: false };
+    try {
+        const likeRef = doc(db, 'posts', postId, 'likes', currentUser.uid);
+        const dislikeRef = doc(db, 'posts', postId, 'dislikes', currentUser.uid);
+        const [likeSnap, dislikeSnap] = await Promise.all([getDoc(likeRef), getDoc(dislikeRef)]);
+        const next = { liked: likeSnap.exists(), disliked: dislikeSnap.exists(), loaded: true };
+        postReactionCache[postId] = next;
+        refreshSinglePostUI(postId);
+        return next;
+    } catch (e) {
+        console.warn('Unable to fetch reaction state', e?.message || e);
+        return { liked: false, disliked: false, loaded: false };
+    }
+}
+
+function ensurePostReactionState(postId) {
+    if (!postId) return { liked: false, disliked: false, loaded: false };
+    if (!currentUser) return { liked: false, disliked: false, loaded: true };
+    const cached = getPostReactionState(postId);
+    if (cached.loaded) return cached;
+    if (!postReactionPromises[postId]) {
+        postReactionPromises[postId] = fetchPostReactionState(postId)
+            .catch(function () { })
+            .finally(function () { delete postReactionPromises[postId]; });
+    }
+    return cached;
+}
+
 function renderPostActions(post, {
     isLiked = false,
     isDisliked = false,
@@ -695,8 +771,8 @@ function renderPostActions(post, {
     showLabels = true
 } = {}) {
     const actions = [];
-    const likeCount = post.likes || 0;
-    const dislikeCount = post.dislikes || 0;
+    const likeCount = getPostLikeCount(post);
+    const dislikeCount = getPostDislikeCount(post);
     const computedReview = reviewDisplay || getReviewDisplay(window.myReviewCache ? window.myReviewCache[post.id] : null);
 
     const prefix = idPrefix ? `${idPrefix}-` : '';
@@ -776,8 +852,8 @@ function renderDiscussionActionsMobile(post, {
     isSaved = false,
     reviewDisplay = null
 } = {}) {
-    const likeCount = post.likes || 0;
-    const dislikeCount = post.dislikes || 0;
+    const likeCount = getPostLikeCount(post);
+    const dislikeCount = getPostDislikeCount(post);
     const commentCount = typeof post.comments === 'number' ? post.comments : (Array.isArray(post.comments) ? post.comments.length : (post.commentCount ?? post.commentsCount ?? 0));
     const shareCount = typeof post.shares === 'number' ? post.shares : (post.shareCount ?? 0);
     const saveCount = typeof post.saves === 'number' ? post.saves : (post.saveCount ?? 0);
@@ -1041,10 +1117,22 @@ let activeConversationId = null;
 let conversationsCache = [];
 let activeMessageUpload = null;
 let conversationMappings = [];
+let conversationMappingSources = {};
+let conversationPagingCursor = null;
+let conversationPagingHasMore = true;
+let conversationPagingLoading = false;
+const CONVERSATION_PAGE_SIZE = 50;
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
+let conversationListRenderState = { count: 0, topId: null };
+let conversationDetailsPrefetchQueue = [];
+let conversationDetailsPrefetchPending = new Set();
+let conversationDetailsPrefetchActive = false;
 let messageThreadCache = {};
+let messageThreadScrollHandler = null;
+let messageThreadScrollRegion = null;
+let messageThreadPagingState = {};
 let pendingMessageAttachments = [];
 let messageUploadState = {
     status: 'idle',
@@ -1066,6 +1154,8 @@ let conversationSearchHits = [];
 let conversationSearchIndex = 0;
 let messageActionsMenuEl = null;
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
+let postReactionCache = {};
+let postReactionPromises = {};
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosFeedLoaded = false;
@@ -1368,12 +1458,14 @@ window.Nexera.releaseSplash = function (reason = 'release') {
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
-let staffTrendingSyncBound = false;
 let activeOptionsPost = null;
 let threadComments = [];
 let optimisticThreadComments = [];
 let commentFilterMode = 'popularity';
 let commentFilterQuery = '';
+let commentThreadScrollHandler = null;
+let commentThreadScrollContainer = null;
+let commentThreadPagingState = {};
 
 // --- Navigation Stack ---
 let navStack = [];
@@ -2297,6 +2389,181 @@ function resolveCategoryNameBySlug(slug) {
     return match?.name || formatSlugLabel(slug);
 }
 
+async function mintLiveSessionToken(session = {}, { canPublish = false } = {}) {
+    const roomName = session.roomName || (session.id ? `live_${session.id}` : '');
+    const sessionId = session.sessionId || session.id || '';
+    if (!roomName || !sessionId) {
+        throw new Error('Missing roomName/sessionId for live session token.');
+    }
+    const tokenFn = httpsCallable(functions, 'livekitCreateToken');
+    const response = await tokenFn({
+        roomName,
+        sessionId,
+        canPublish: !!canPublish,
+        metadata: JSON.stringify({
+            sessionId,
+            kind: 'live-session'
+        })
+    });
+    return response?.data || {};
+}
+
+async function connectToLiveSessionRoom(session = {}, { canPublish = false } = {}) {
+    const livekitModule = await ensureLiveKitLoaded();
+    if (!livekitModule || !LivekitRoom) {
+        throw new Error('LiveKit client unavailable.');
+    }
+    if (liveSessionRoom) {
+        try { await liveSessionRoom.disconnect(); } catch (e) {}
+        liveSessionRoom = null;
+    }
+    const tokenPayload = await mintLiveSessionToken(session, { canPublish });
+    if (!tokenPayload?.token || !tokenPayload?.url) {
+        throw new Error('LiveKit token unavailable.');
+    }
+    const room = new LivekitRoom({ adaptiveStream: true, autoSubscribe: true });
+    liveSessionRoom = room;
+    const videoEl = document.getElementById('live-webrtc-video');
+    const audioEl = document.createElement('audio');
+    audioEl.autoplay = true;
+    const playerShell = document.getElementById('live-player');
+    if (playerShell && !playerShell.querySelector('audio')) {
+        playerShell.appendChild(audioEl);
+    }
+    const attachTrack = function (track) {
+        if (!track) return;
+        if (track.kind === 'video' && videoEl) {
+            track.attach(videoEl);
+        } else if (track.kind === 'audio') {
+            track.attach(audioEl);
+        }
+    };
+    room.on(LivekitRoomEvent?.TrackSubscribed, function (track, publication, participant) {
+        attachTrack(track);
+    });
+    room.on(LivekitRoomEvent?.Disconnected, function () {
+        if (liveSessionRoom === room) liveSessionRoom = null;
+    });
+    await room.connect(tokenPayload.url, tokenPayload.token);
+    room.participants.forEach(function (participant) {
+        participant.getTracks?.().forEach(function (publication) {
+            const track = publication?.track;
+            if (track?.kind === 'video') {
+                attachTrack(track);
+            }
+        });
+    });
+    return room;
+}
+
+window.mintLiveSessionToken = mintLiveSessionToken;
+
+async function fetchStoryFeed(viewerUid) {
+    if (!viewerUid) return [];
+    const feedRef = query(
+        collection(db, 'storyFeeds', viewerUid, 'items'),
+        orderBy('latestStoryAt', 'desc'),
+        limit(20)
+    );
+    const snap = await getDocs(feedRef);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function fetchStoriesForOwner(ownerUid) {
+    if (!ownerUid) return [];
+    const now = Timestamp.now();
+    const storiesRef = query(
+        collection(db, 'stories'),
+        where('ownerId', '==', ownerUid),
+        where('expiresAt', '>', now),
+        orderBy('expiresAt', 'asc'),
+        orderBy('createdAt', 'asc'),
+        limit(50)
+    );
+    const snap = await getDocs(storiesRef);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function createStoryDocument(payload = {}) {
+    if (!currentUser?.uid) return null;
+    const ownerId = payload.ownerId || currentUser.uid;
+    if (!payload.storagePath || !payload.mediaType) return null;
+    const expiresAt = Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
+    // Note: Firestore TTL should be configured on expiresAt to auto-delete story docs.
+    const data = {
+        ownerId,
+        mediaType: payload.mediaType,
+        storagePath: payload.storagePath,
+        createdAt: serverTimestamp(),
+        expiresAt,
+        visibility: payload.visibility || 'public',
+        caption: payload.caption || null
+    };
+    const ref = await addDoc(collection(db, 'stories'), data);
+    return ref.id;
+}
+
+async function resolveStoryMediaUrl(story = {}) {
+    if (!story?.storagePath) return null;
+    try {
+        const url = await getDownloadURL(ref(storage, story.storagePath));
+        return url;
+    } catch (e) {
+        console.warn('Unable to resolve story media url', e?.message || e);
+        return null;
+    }
+}
+
+async function openStoryViewer(ownerUid) {
+    const stories = await fetchStoriesForOwner(ownerUid);
+    if (!stories.length) {
+        toast('No active stories yet.', 'info');
+        return;
+    }
+    const first = stories[0];
+    const mediaUrl = await resolveStoryMediaUrl(first);
+    if (!mediaUrl) return;
+    const kind = (first.mediaType || '').includes('video') ? 'video' : 'image';
+    openFullscreenMedia(mediaUrl, kind);
+}
+
+let storyFeedLoadToken = 0;
+async function loadStoriesAndLiveBar() {
+    const container = document.getElementById('stories-live-bar-slot');
+    if (!container) return;
+    const viewerUid = currentUser?.uid || '';
+    const token = ++storyFeedLoadToken;
+    let feedItems = [];
+    try {
+        feedItems = await fetchStoryFeed(viewerUid);
+    } catch (e) {
+        console.warn('Unable to fetch story feed', e?.message || e);
+    }
+    if (token !== storyFeedLoadToken) return;
+    const stories = feedItems.map(function (item) {
+        const ownerUid = item.ownerUid || item.id;
+        const cached = ownerUid ? (getCachedUser(ownerUid) || {}) : {};
+        const label = resolveDisplayName(cached) || cached.username || 'User';
+        return {
+            id: ownerUid,
+            ownerUid,
+            label
+        };
+    });
+    renderStoriesAndLiveBar(container, {
+        stories,
+        onStorySelect: function (story) {
+            const ownerUid = story.ownerUid || story.id;
+            if (!ownerUid) return;
+            openStoryViewer(ownerUid);
+        }
+    });
+}
+
 // Trending topics now come from the staff-populated "trendingCategories" collection.
 async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
     const items = [];
@@ -2949,7 +3216,12 @@ async function loadHomeVideos() {
 
 async function loadHomeLiveSessions() {
     try {
-        const snapshot = await getDocs(query(collection(db, 'liveStreams'), orderBy('createdAt', 'desc'), limit(5)));
+        const snapshot = await getDocs(query(
+            collection(db, 'liveSessions'),
+            where('status', '==', 'live'),
+            orderBy('startedAt', 'desc'),
+            limit(5)
+        ));
         homeLiveSessionsCache = snapshot.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
     } catch (error) {
         console.warn('Home livestream load failed', error?.message || error);
@@ -3735,6 +4007,11 @@ window.navigateTo = function (viewId, pushToStack = true) {
         if (threadUnsubscribe) threadUnsubscribe();
         if (activePostId) ListenerRegistry.unregister(`comments:${activePostId}`);
         threadUnsubscribe = null;
+        if (commentThreadScrollContainer && commentThreadScrollHandler) {
+            commentThreadScrollContainer.removeEventListener('scroll', commentThreadScrollHandler);
+            commentThreadScrollContainer = null;
+            commentThreadScrollHandler = null;
+        }
     }
 
     if (viewId !== 'messages') {
@@ -4376,8 +4653,9 @@ function getPostHTML(post, options = {}) {
 
         const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 42 });
 
-        const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
-        const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+        const reactionState = viewerUid ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+        const isLiked = !!reactionState.liked;
+        const isDisliked = !!reactionState.disliked;
         const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(post.id)) : false;
         const isSelfPost = viewerUid ? post.userId === viewerUid : false;
         const isFollowingUser = followedUsers.has(post.userId);
@@ -4690,8 +4968,9 @@ function refreshSinglePostUI(postId) {
     const saveBtn = document.getElementById(`post-save-btn-${postId}`);
     const reviewBtn = document.querySelector(`#post-card-${postId} .review-action`);
 
-    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
-    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const reactionState = viewerUid ? ensurePostReactionState(postId) : { liked: false, disliked: false };
+    const isLiked = !!reactionState.liked;
+    const isDisliked = !!reactionState.disliked;
     const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const myReview = window.myReviewCache ? window.myReviewCache[postId] : null;
 
@@ -4708,8 +4987,8 @@ function refreshSinglePostUI(postId) {
         btn.setAttribute('aria-label', aria);
     }
 
-    renderActionButton(likeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
-    renderActionButton(dislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
+    renderActionButton(likeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: getPostLikeCount(post), activeColor: isLiked ? '#00f2ea' : 'inherit' });
+    renderActionButton(dislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: getPostDislikeCount(post), activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
     renderActionButton(saveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', activeColor: isSaved ? '#00f2ea' : 'inherit' });
     if (reviewBtn) {
         applyReviewButtonState(reviewBtn, myReview);
@@ -4718,9 +4997,9 @@ function refreshSinglePostUI(postId) {
     document.querySelectorAll(`[data-post-id="${postId}"]`).forEach(function (btn) {
         const action = btn.dataset.action;
         if (action === 'like') {
-            renderActionButton(btn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, activeColor: isLiked ? '#00f2ea' : 'inherit' });
+            renderActionButton(btn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: getPostLikeCount(post), activeColor: isLiked ? '#00f2ea' : 'inherit' });
         } else if (action === 'dislike') {
-            renderActionButton(btn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
+            renderActionButton(btn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: getPostDislikeCount(post), activeColor: isDisliked ? '#ff3d3d' : 'inherit' });
         } else if (action === 'save') {
             renderActionButton(btn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', activeColor: isSaved ? '#00f2ea' : 'inherit' });
         } else if (action === 'review') {
@@ -4750,8 +5029,8 @@ function refreshSinglePostUI(postId) {
     }
 
     if (threadTitle && threadTitle.dataset.postId === postId) {
-        updateThreadAction(threadLikeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: post.likes || 0, color: isLiked ? '#00f2ea' : 'inherit' });
-        updateThreadAction(threadDislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: post.dislikes || 0, color: isDisliked ? '#ff3d3d' : 'inherit' });
+        updateThreadAction(threadLikeBtn, { iconClass: `${isLiked ? 'ph-fill' : 'ph'} ph-thumbs-up`, label: 'Like', count: getPostLikeCount(post), color: isLiked ? '#00f2ea' : 'inherit' });
+        updateThreadAction(threadDislikeBtn, { iconClass: `${isDisliked ? 'ph-fill' : 'ph'} ph-thumbs-down`, label: 'Dislike', count: getPostDislikeCount(post), color: isDisliked ? '#ff3d3d' : 'inherit' });
         updateThreadAction(threadSaveBtn, { iconClass: `${isSaved ? 'ph-fill' : 'ph'} ph-bookmark-simple`, label: isSaved ? 'Saved' : 'Save', count: threadSaveCount, color: isSaved ? '#00f2ea' : 'inherit' });
         if (threadReviewBtn) {
             applyReviewButtonState(threadReviewBtn, myReview);
@@ -4767,43 +5046,35 @@ window.toggleLike = async function (postId, event) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
 
-    const wasLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-    const hadDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-
-    // Optimistic Update
-    if (wasLiked) {
-        post.likes = Math.max(0, (post.likes || 0) - 1); // Prevent negative likes
-        post.likedBy = post.likedBy.filter(function (uid) { return uid !== currentUser.uid; });
-    } else {
-        post.likes = (post.likes || 0) + 1;
-        if (!post.likedBy) post.likedBy = [];
-        post.likedBy.push(currentUser.uid);
-        if (hadDisliked) {
-            post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
-            post.dislikedBy = (post.dislikedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
-        }
+    let reactionState = ensurePostReactionState(postId);
+    if (!reactionState.loaded) {
+        reactionState = await fetchPostReactionState(postId);
     }
+    const wasLiked = reactionState.liked;
+    const hadDisliked = reactionState.disliked;
+    const previousLikeCount = getPostLikeCount(post);
+    const previousDislikeCount = getPostDislikeCount(post);
+
+    const nextLiked = !wasLiked;
+    const nextDisliked = wasLiked ? hadDisliked : false;
+    const nextLikeCount = wasLiked ? Math.max(0, previousLikeCount - 1) : previousLikeCount + 1;
+    const nextDislikeCount = (!wasLiked && hadDisliked) ? Math.max(0, previousDislikeCount - 1) : previousDislikeCount;
+
+    post.likeCount = nextLikeCount;
+    post.dislikeCount = nextDislikeCount;
+    setPostReactionState(postId, { liked: nextLiked, disliked: nextDisliked });
 
     recordTagAffinity(post.tags, wasLiked ? -1 : 1);
 
     refreshSinglePostUI(postId);
-    const postRef = doc(db, 'posts', postId);
-
     try {
-        if (wasLiked) {
-            await updateDoc(postRef, { likes: increment(-1), likedBy: arrayRemove(currentUser.uid) });
-        } else {
-            const updatePayload = { likes: increment(1), likedBy: arrayUnion(currentUser.uid) };
-            if (hadDisliked) {
-                updatePayload.dislikes = increment(-1);
-                updatePayload.dislikedBy = arrayRemove(currentUser.uid);
-            }
-            await updateDoc(postRef, updatePayload);
-        }
+        await callSecureFunction('toggleLike', { postId, action: wasLiked ? 'unlike' : 'like' });
     } catch (e) {
         console.error("Like error:", e);
-        // Revert on error would go here, or just reload on demand
-        loadFeedData();
+        post.likeCount = previousLikeCount;
+        post.dislikeCount = previousDislikeCount;
+        setPostReactionState(postId, { liked: wasLiked, disliked: hadDisliked });
+        refreshSinglePostUI(postId);
     }
 }
 
@@ -4820,11 +5091,15 @@ function triggerPostLikeBurst(postId) {
     }, 700);
 }
 
-window.handlePostDoubleTap = function (postId, event) {
+window.handlePostDoubleTap = async function (postId, event) {
     if (event) event.stopPropagation();
     if (!postId) return;
     const post = allPosts.find(function (p) { return p.id === postId; });
-    if (!post || (currentUser && post.likedBy && post.likedBy.includes(currentUser.uid))) {
+    let reactionState = ensurePostReactionState(postId);
+    if (!reactionState.loaded) {
+        reactionState = await fetchPostReactionState(postId);
+    }
+    if (!post || reactionState.liked) {
         triggerPostLikeBurst(postId);
         return;
     }
@@ -5698,10 +5973,8 @@ window.createPost = async function () {
             poll: pollPayload,
             scheduledFor,
             location: locationValue,
-            likes: currentEditPost ? currentEditPost.likes || 0 : 0,
-            likedBy: currentEditPost ? currentEditPost.likedBy || [] : [],
-            dislikes: currentEditPost ? currentEditPost.dislikes || 0 : 0,
-            dislikedBy: currentEditPost ? currentEditPost.dislikedBy || [] : [],
+            likeCount: currentEditPost ? getPostLikeCount(currentEditPost) : 0,
+            dislikeCount: currentEditPost ? getPostDislikeCount(currentEditPost) : 0,
             trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
             timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
         };
@@ -6139,16 +6412,11 @@ window.submitReview = async function () {
         window.closeReview();
 
         // 4. Backend Update
-        await addDoc(collection(db, 'posts', activePostId, 'reviews'), {
-            userId: currentUser.uid,
+        await callSecureFunction('createReview', {
+            postId: activePostId,
             rating,
-            note,
-            timestamp: serverTimestamp()
+            text: note
         });
-
-        const postRef = doc(db, 'posts', activePostId);
-        const scoreChange = (rating === 'verified') ? 1 : -1;
-        await updateDoc(postRef, { trustScore: increment(scoreChange) });
 
     } catch (e) {
         console.error("Review failed", e);
@@ -6169,7 +6437,7 @@ window.removeReview = async function () {
     window.closeReview(); // Close modal
 
     try {
-        await deleteDoc(doc(db, 'posts', activePostId, 'reviews', window.currentReviewId));
+        await callSecureFunction('removeReview', { postId: activePostId });
     } catch (e) {
         console.error(e);
     }
@@ -6225,23 +6493,46 @@ window.openThread = async function (postId) {
 function attachThreadComments(postId) {
     const container = document.getElementById('thread-stream');
     if (!container) return;
+    container.innerHTML = '';
+    commentThreadPagingState[postId] = { loading: false, exhausted: false };
+    if (commentThreadScrollContainer && commentThreadScrollHandler) {
+        commentThreadScrollContainer.removeEventListener('scroll', commentThreadScrollHandler);
+        commentThreadScrollContainer = null;
+        commentThreadScrollHandler = null;
+    }
 
-    const commentsRef = collection(db, 'posts', postId, 'comments');
-    const q = query(commentsRef, orderBy('timestamp', 'asc'));
-
-    if (threadUnsubscribe) threadUnsubscribe();
-
-    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function (snapshot) {
-        const comments = snapshot.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
-        const missingCommentUsers = comments.filter(function (c) { return !userCache[c.userId]; }).map(function (c) { return ({ userId: c.userId }); });
-        if (missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
-        threadComments = comments;
-        pruneOptimisticMatches(comments);
-        renderThreadComments();
-    }, function (error) {
-        console.error('Comments load error', error);
-        container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
-    }));
+    listenToLatestComments(postId);
+    commentThreadScrollContainer = container;
+    commentThreadScrollHandler = function () {
+        if (activePostId !== postId) return;
+        if (container.scrollTop > 120) return;
+        const paging = commentThreadPagingState[postId] || { loading: false, exhausted: false };
+        if (paging.loading || paging.exhausted) return;
+        const currentComments = threadComments || [];
+        const oldest = currentComments[0];
+        if (!oldest || !oldest.timestamp) return;
+        paging.loading = true;
+        commentThreadPagingState[postId] = paging;
+        fetchOlderComments(postId, oldest.timestamp).then(function (olderComments) {
+            if (!olderComments.length) {
+                paging.exhausted = true;
+                return;
+            }
+            const existingIds = new Set(currentComments.map(function (c) { return c.id; }));
+            const deduped = olderComments.filter(function (c) { return !existingIds.has(c.id); });
+            if (!deduped.length) {
+                paging.exhausted = true;
+                return;
+            }
+            threadComments = deduped.concat(currentComments);
+            renderThreadComments(undefined, { preserveScrollPosition: true });
+        }).catch(function (error) {
+            console.error('Older comments fetch failed', error);
+        }).finally(function () {
+            paging.loading = false;
+        });
+    };
+    container.addEventListener('scroll', commentThreadScrollHandler, { passive: true });
 }
 
 function mergeOptimisticComments(base = []) {
@@ -6259,6 +6550,98 @@ function pruneOptimisticMatches(serverComments = []) {
         const key = `${opt.userId || ''}::${(opt.text || '').trim()}`;
         return !serverKeys.has(key);
     });
+}
+
+function getCommentTimestampMs(comment = {}) {
+    const date = toDateSafe(comment.timestamp);
+    return date ? date.getTime() : 0;
+}
+
+function insertCommentSorted(cache = [], comment = {}) {
+    const ts = getCommentTimestampMs(comment);
+    let insertIndex = cache.findIndex(function (item) { return getCommentTimestampMs(item) > ts; });
+    if (insertIndex === -1) insertIndex = cache.length;
+    cache.splice(insertIndex, 0, comment);
+    return insertIndex;
+}
+
+function upsertCommentInCache(cache = [], comment = {}) {
+    const existingIndex = cache.findIndex(function (item) { return item.id === comment.id; });
+    if (existingIndex === -1) {
+        return { index: insertCommentSorted(cache, comment), type: 'added' };
+    }
+    const prev = cache[existingIndex];
+    const prevTs = getCommentTimestampMs(prev);
+    const nextTs = getCommentTimestampMs(comment) || prevTs;
+    cache[existingIndex] = { ...prev, ...comment };
+    if (nextTs !== prevTs) {
+        cache.splice(existingIndex, 1);
+        return { index: insertCommentSorted(cache, { ...prev, ...comment }), type: 'moved' };
+    }
+    return { index: existingIndex, type: 'modified' };
+}
+
+function removeCommentFromCache(cache = [], commentId) {
+    const index = cache.findIndex(function (item) { return item.id === commentId; });
+    if (index === -1) return null;
+    cache.splice(index, 1);
+    return index;
+}
+
+function listenToLatestComments(postId, pageSize = 50) {
+    const commentsRef = collection(db, 'posts', postId, 'comments');
+    const q = query(commentsRef, orderBy('timestamp', 'asc'), limitToLast(pageSize));
+
+    if (threadUnsubscribe) threadUnsubscribe();
+
+    threadUnsubscribe = ListenerRegistry.register(`comments:${postId}`, onSnapshot(q, function (snapshot) {
+        const changes = snapshot.docChanges();
+        if (!changes.length) return;
+        const nextComments = threadComments || [];
+        const addedComments = [];
+        let requiresRender = false;
+
+        changes.forEach(function (change) {
+            const comment = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added') {
+                if (nextComments.find(function (c) { return c.id === comment.id; })) return;
+                insertCommentSorted(nextComments, comment);
+                addedComments.push(comment);
+                requiresRender = true;
+            } else if (change.type === 'modified') {
+                upsertCommentInCache(nextComments, comment);
+                requiresRender = true;
+            } else if (change.type === 'removed') {
+                removeCommentFromCache(nextComments, comment.id);
+                requiresRender = true;
+            }
+        });
+
+        threadComments = nextComments;
+        pruneOptimisticMatches(nextComments);
+        const missingCommentUsers = addedComments.filter(function (c) { return !userCache[c.userId]; }).map(function (c) { return ({ userId: c.userId }); });
+        if (missingCommentUsers.length > 0) fetchMissingProfiles(missingCommentUsers);
+        if (requiresRender) renderThreadComments();
+    }, function (error) {
+        console.error('Comments load error', error);
+        const container = document.getElementById('thread-stream');
+        if (container) {
+            container.innerHTML = `<div class="empty-state"><p>Unable to load comments right now.</p></div>`;
+        }
+    }));
+}
+
+async function fetchOlderComments(postId, beforeTimestamp, pageSize = 50) {
+    if (!beforeTimestamp) return [];
+    const commentsRef = collection(db, 'posts', postId, 'comments');
+    const q = query(
+        commentsRef,
+        orderBy('timestamp', 'asc'),
+        endBefore(beforeTimestamp),
+        limitToLast(pageSize)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
 }
 
 function getCommentSortComparator() {
@@ -6376,9 +6759,12 @@ const renderCommentHtml = function (c, isReply) {
     </div>`;
 };
 
-function renderThreadComments(comments = mergeOptimisticComments(threadComments)) {
+function renderThreadComments(comments = mergeOptimisticComments(threadComments), options = {}) {
     const container = document.getElementById('thread-stream');
     if (!container) return;
+    const preserveScrollPosition = options.preserveScrollPosition;
+    const previousScrollTop = container.scrollTop;
+    const previousScrollHeight = container.scrollHeight;
 
     const filtered = filterAndSortComments(comments);
     currentThreadComments = filtered;
@@ -6482,6 +6868,10 @@ function renderThreadComments(comments = mergeOptimisticComments(threadComments)
             if (input) input.focus();
         }
     }
+
+    if (preserveScrollPosition) {
+        container.scrollTop = previousScrollTop + (container.scrollHeight - previousScrollHeight);
+    }
 }
 
 window.updateCommentFilterMode = function (mode = 'popularity') {
@@ -6510,8 +6900,9 @@ function renderThreadMainPost(postId) {
     if (!post) return;
     const viewerUid = getViewerUid();
 
-    const isLiked = viewerUid ? (post.likedBy && post.likedBy.includes(viewerUid)) : false;
-    const isDisliked = viewerUid ? (post.dislikedBy && post.dislikedBy.includes(viewerUid)) : false;
+    const reactionState = viewerUid ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+    const isLiked = !!reactionState.liked;
+    const isDisliked = !!reactionState.disliked;
     const isSaved = viewerUid ? (userProfile.savedPosts && userProfile.savedPosts.includes(postId)) : false;
     const isFollowingUser = followedUsers.has(post.userId);
     const isFollowingTopic = followedCategories.has(post.category);
@@ -6661,16 +7052,14 @@ window.sendComment = async function () {
 
         payload.timestamp = serverTimestamp();
 
-        await addDoc(collection(db, 'posts', activePostId, 'comments'), payload);
-
-        const postRef = doc(db, 'posts', activePostId);
-        await updateDoc(postRef, {
-            previewComment: {
-                text: text.substring(0, 80) + (text.length > 80 ? '...' : ''),
-                author: userProfile.name,
-                likes: 0
-            }
+        const result = await callSecureFunction('createComment', {
+            postId: activePostId,
+            text,
+            assetIds: mediaUrl ? [mediaUrl] : []
         });
+        if (result?.moderation?.status === 'blocked') {
+            toast('Your comment is under review.', 'warning');
+        }
     } catch (e) {
         console.error(e);
         optimisticThreadComments = optimisticThreadComments.filter(function (c) { return c.id !== optimisticId; });
@@ -6948,38 +7337,36 @@ window.toggleDislike = async function (postId, event) {
     const post = allPosts.find(function (p) { return p.id === postId; });
     if (!post) return;
 
-    const wasDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser.uid);
-    const hadLiked = post.likedBy && post.likedBy.includes(currentUser.uid);
-
-    if (wasDisliked) {
-        post.dislikes = Math.max(0, (post.dislikes || 0) - 1);
-        post.dislikedBy = (post.dislikedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
-    } else {
-        post.dislikes = (post.dislikes || 0) + 1;
-        if (!post.dislikedBy) post.dislikedBy = [];
-        post.dislikedBy.push(currentUser.uid);
-        if (hadLiked) {
-            post.likes = Math.max(0, (post.likes || 0) - 1);
-            post.likedBy = (post.likedBy || []).filter(function (uid) { return uid !== currentUser.uid; });
-        }
+    let reactionState = ensurePostReactionState(postId);
+    if (!reactionState.loaded) {
+        reactionState = await fetchPostReactionState(postId);
     }
+    const wasDisliked = reactionState.disliked;
+    const hadLiked = reactionState.liked;
+    const previousLikeCount = getPostLikeCount(post);
+    const previousDislikeCount = getPostDislikeCount(post);
+
+    const nextDisliked = !wasDisliked;
+    const nextLiked = wasDisliked ? hadLiked : false;
+    const nextDislikeCount = wasDisliked ? Math.max(0, previousDislikeCount - 1) : previousDislikeCount + 1;
+    const nextLikeCount = (!wasDisliked && hadLiked) ? Math.max(0, previousLikeCount - 1) : previousLikeCount;
+
+    post.likeCount = nextLikeCount;
+    post.dislikeCount = nextDislikeCount;
+    setPostReactionState(postId, { liked: nextLiked, disliked: nextDisliked });
 
     recordTagAffinity(post.tags, wasDisliked ? 1 : -1);
 
     refreshSinglePostUI(postId);
-    const postRef = doc(db, 'posts', postId);
     try {
-        if (wasDisliked) {
-            await updateDoc(postRef, { dislikes: increment(-1), dislikedBy: arrayRemove(currentUser.uid) });
-        } else {
-            const updatePayload = { dislikes: increment(1), dislikedBy: arrayUnion(currentUser.uid) };
-            if (hadLiked) {
-                updatePayload.likes = increment(-1);
-                updatePayload.likedBy = arrayRemove(currentUser.uid);
-            }
-            await updateDoc(postRef, updatePayload);
-        }
-    } catch (e) { console.error('Dislike error:', e); }
+        await callSecureFunction('toggleDislike', { postId, action: wasDisliked ? 'undislike' : 'dislike' });
+    } catch (e) {
+        console.error('Dislike error:', e);
+        post.likeCount = previousLikeCount;
+        post.dislikeCount = previousDislikeCount;
+        setPostReactionState(postId, { liked: hadLiked, disliked: wasDisliked });
+        refreshSinglePostUI(postId);
+    }
 }
 
 window.toggleCommentDislike = async function (commentId, event) {
@@ -7304,7 +7691,7 @@ async function renderDiscoverResults() {
         }
 
         if (discoverPostsSort === 'popular') {
-            filteredPosts.sort(function (a, b) { return (b.likes || 0) - (a.likes || 0); });
+            filteredPosts.sort(function (a, b) { return getPostLikeCount(b) - getPostLikeCount(a); });
         } else {
             filteredPosts.sort(function (a, b) { return (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0); });
         }
@@ -7319,8 +7706,9 @@ async function renderDiscoverResults() {
             filteredPosts.forEach(function (post) {
                 const author = userCache[post.userId] || { name: post.author };
                 const body = typeof post.content === 'string' ? post.content : (post.content?.text || '');
-                const isLiked = post.likedBy && currentUser && post.likedBy.includes(currentUser.uid);
-                const isDisliked = post.dislikedBy && currentUser && post.dislikedBy.includes(currentUser.uid);
+                const reactionState = currentUser ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+                const isLiked = !!reactionState.liked;
+                const isDisliked = !!reactionState.disliked;
                 const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
                 const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
                 const reviewDisplay = getReviewDisplay(myReview);
@@ -7516,7 +7904,7 @@ async function primeProfileMedia(uid, profile, isSelfView, containerId) {
             }));
         }
         if (!liveSessionsCache.some(function (session) { return (session.hostId || session.author) === uid; })) {
-            const liveQuery = query(collection(db, 'liveStreams'), where('hostId', '==', uid), limit(10));
+        const liveQuery = query(collection(db, 'liveSessions'), where('hostId', '==', uid), limit(10));
             tasks.push(getDocs(liveQuery).then(function (snap) {
                 const additions = snap.docs.map(function (d) {
                     const data = d.data();
@@ -7582,8 +7970,9 @@ function getProfileContentSources(uid) {
 
 function renderProfilePostCard(post, context = 'profile', { compact = false, idPrefix = 'post' } = {}) {
     const date = formatDateTime(post.timestamp) || 'Just now';
-    const isLiked = post.likedBy && post.likedBy.includes(currentUser?.uid);
-    const isDisliked = post.dislikedBy && post.dislikedBy.includes(currentUser?.uid);
+    const reactionState = currentUser ? ensurePostReactionState(post.id) : { liked: false, disliked: false };
+    const isLiked = !!reactionState.liked;
+    const isDisliked = !!reactionState.disliked;
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
     const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
     const reviewDisplay = getReviewDisplay(myReview);
@@ -7803,7 +8192,7 @@ function renderPublicProfile(uid, profileData = userCache[uid]) {
     const isFollowing = followedUsers.has(uid);
     const isSelfView = currentUser && currentUser.uid === uid;
     const userPosts = sources.posts;
-    const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
+    const likesTotal = userPosts.reduce(function (acc, p) { return acc + getPostLikeCount(p); }, 0);
 
     const followCta = isSelfView ? '' : `<button onclick=\"window.toggleFollowUser('${uid}', event)\" class=\"create-btn-sidebar js-follow-user-${uid}\" style=\"width: auto; padding: 0.6rem 2rem; margin-top: 0; background: ${isFollowing ? 'transparent' : 'var(--primary)'}; border: 1px solid var(--primary); color: ${isFollowing ? 'var(--primary)' : 'black'};\">${isFollowing ? 'Following' : 'Follow'}</button>`;
 
@@ -7871,7 +8260,7 @@ function renderProfile() {
     const followersCount = userProfile.followersCount || 0;
     const regionHtml = userProfile.region ? `<div class="real-name-subtext"><i class=\"ph ph-map-pin\"></i> ${escapeHtml(userProfile.region)}</div>` : '';
     const realNameHtml = userProfile.realName ? `<div class="real-name-subtext">${escapeHtml(userProfile.realName)}</div>` : '';
-    const likesTotal = userPosts.reduce(function (acc, p) { return acc + (p.likes || 0); }, 0);
+    const likesTotal = userPosts.reduce(function (acc, p) { return acc + getPostLikeCount(p); }, 0);
 
     document.getElementById('view-profile').innerHTML = `
         ${showReturnBar ? `
@@ -9928,46 +10317,19 @@ function applyCallConversationIndicators(item, mapping, details, highlightData, 
     }
 }
 
-function renderConversationList() {
-    const listEl = document.getElementById('conversation-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    const emptyEl = document.getElementById('conversation-list-empty');
-    const pinnedEl = document.getElementById('pinned-conversations');
+function getConversationMappingTimestampMs(mapping = {}) {
+    const tsSource = mapping.lastMessageAt || mapping.createdAt;
+    return tsSource?.toMillis ? tsSource.toMillis() : tsSource?.seconds ? tsSource.seconds * 1000 : 0;
+}
+
+function getConversationListRenderData() {
     const currentUid = currentUser?.uid || '';
-
-    if (conversationMappings.length === 0) {
-        const emptyText = conversationListFilter === 'requests'
-            ? 'No message requests yet.'
-            : 'Start a conversation';
-        if (emptyEl) {
-            emptyEl.textContent = emptyText;
-            emptyEl.style.display = 'block';
-        } else {
-            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
-        }
-        updateInboxNavBadge();
-        try {
-            const path = (location.pathname || '').toLowerCase();
-            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
-            if (!isHome) {
-                releaseInitialSplashOnce('inbox-initial-ready');
-            }
-        } catch (e) {}
-        return;
-    }
-    if (emptyEl) emptyEl.style.display = 'none';
-
     const orderedMappings = conversationMappings
         .slice()
         .sort(function (a, b) {
             if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
             if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-            const aTsSource = a.lastMessageAt || a.createdAt;
-            const bTsSource = b.lastMessageAt || b.createdAt;
-            const aTs = aTsSource?.toMillis ? aTsSource.toMillis() : aTsSource?.seconds ? aTsSource.seconds * 1000 : 0;
-            const bTs = bTsSource?.toMillis ? bTsSource.toMillis() : bTsSource?.seconds ? bTsSource.seconds * 1000 : 0;
-            return bTs - aTs;
+            return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
         });
 
     const search = (conversationListSearchTerm || '').toLowerCase();
@@ -9994,121 +10356,279 @@ function renderConversationList() {
     const pinned = filtered.filter(function (mapping) { return mapping.pinned; });
     const unpinned = filtered.filter(function (mapping) { return !mapping.pinned; });
     const visible = unpinned.slice(0, conversationListVisibleCount);
+
+    return {
+        currentUid,
+        orderedMappings,
+        filtered,
+        pinned,
+        unpinned,
+        visible,
+        search
+    };
+}
+
+function getConversationListTopId(renderData) {
+    if (!renderData) return null;
+    if (renderData.pinned.length) return renderData.pinned[0].id;
+    if (renderData.visible.length) return renderData.visible[0].id;
+    return renderData.filtered[0]?.id || null;
+}
+
+function buildConversationRowElement(mapping, currentUid) {
+    const details = conversationDetailsCache[mapping.id] || {};
+    const participants = details.participants || mapping.otherParticipantIds || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUid, details);
+    const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+    if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
+        resolveUserProfile(otherId).then(function () {
+            if (currentViewId === 'messages') renderConversationList();
+        });
+    }
+    const otherProfile = otherId ? getCachedUser(otherId) : null;
+    const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
+    const isGroup = (participants || []).length > 2 || details.type === 'group';
+    const mergedConvo = {
+        ...details,
+        participants,
+        participantNames: details.participantNames || details.participantUsernames || participantLabels,
+        participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
+        title: details.title || null
+    };
+    const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
+    const convoAvatar = getConversationAvatarUrl(details);
+    let avatarUser = {
+        uid: mapping.id || otherId || 'conversation',
+        username: name,
+        displayName: name,
+        photoURL: convoAvatar,
+        avatarColor: computeAvatarColor(name)
+    };
+    if (!isGroup && otherId) {
+        avatarUser = {
+            ...otherProfile,
+            uid: otherId,
+            username: otherProfile?.username || name,
+            displayName: resolveDisplayName(otherProfile) || name,
+            photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
+            avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
+        };
+    } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
+        avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
+    }
+    const avatarHtml = renderAvatar(avatarUser, { size: 42 });
+
+    const item = document.createElement('div');
+    item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
+    item.dataset.conversationId = mapping.id;
+    const unread = mapping.unreadCount || 0;
+    const muteState = resolveMuteState(mapping.id, mapping);
+    const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
+    updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
+    const unreadLabel = unread > 10 ? '10+' : `${unread}`;
+    const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
+    const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
+    const highlightData = getActiveCallHighlightData();
+    const activeCallEntry = getActiveCallForConversation(mapping.id);
+    const isCallHostConversation = !!activeCallEntry;
+    const previewMarkup = isCallHostConversation
+        ? `<span class="active-call-pill">Active Call</span>`
+        : previewText;
+    const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
+    item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
+        <div class="conversation-body">
+            <div class="conversation-title-row">
+                <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                ${flagHtml}
+            </div>
+            <div class="conversation-preview">${previewMarkup}</div>
+        </div>`;
+    applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
+    item.onclick = function () {
+        const convoId = mapping.id;
+        const wasActiveConversation = (activeConversationId === convoId);
+        const wasCallViewOpen = !!isCallViewOpen;
+
+        openConversation(convoId);
+
+        const hostCall = getActiveCallForConversation(convoId);
+        const isCurrentActiveCallThread = !!hostCall
+            && !!activeCallSession
+            && activeCallSession.status === 'active'
+            && activeCallSession.callId === hostCall.id
+            && activeCallSession.conversationId === convoId;
+
+        if (!isCurrentActiveCallThread) return;
+
+        if (!wasActiveConversation) {
+            openCallView();
+            return;
+        }
+
+        if (wasCallViewOpen) {
+            closeCallView();
+        } else {
+            openCallView();
+        }
+    };
+    return item;
+}
+
+function updateConversationListEmptyState(renderData, listEl, emptyEl) {
+    if (!listEl) return false;
+    if (conversationMappings.length === 0) {
+        const emptyText = conversationListFilter === 'requests'
+            ? 'No message requests yet.'
+            : 'Start a conversation';
+        if (emptyEl) {
+            emptyEl.textContent = emptyText;
+            emptyEl.style.display = 'block';
+        } else {
+            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
+        }
+        updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
+        return true;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    return false;
+}
+
+function insertConversationRowInOrder(container, row, orderIds) {
+    if (!container || !row || !orderIds?.length) return;
+    const rowId = row.dataset.conversationId;
+    const startIndex = orderIds.indexOf(rowId);
+    if (startIndex < 0) {
+        container.appendChild(row);
+        return;
+    }
+    let insertBefore = null;
+    for (let i = startIndex + 1; i < orderIds.length; i += 1) {
+        const nextNode = container.querySelector(`[data-conversation-id="${orderIds[i]}"]`);
+        if (nextNode) {
+            insertBefore = nextNode;
+            break;
+        }
+    }
+    if (insertBefore) {
+        container.insertBefore(row, insertBefore);
+    } else {
+        container.appendChild(row);
+    }
+}
+
+function updateConversationListOrder(renderData) {
+    const listEl = document.getElementById('conversation-list');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    if (pinnedEl && renderData?.pinned?.length) {
+        const pinnedOrder = renderData.pinned.map(function (item) { return item.id; });
+        pinnedOrder.forEach(function (id) {
+            const row = pinnedEl.querySelector(`[data-conversation-id="${id}"]`);
+            if (row) insertConversationRowInOrder(pinnedEl, row, pinnedOrder);
+        });
+    }
+    if (listEl && renderData?.visible?.length) {
+        const listOrder = renderData.visible.map(function (item) { return item.id; });
+        listOrder.forEach(function (id) {
+            const row = listEl.querySelector(`[data-conversation-id="${id}"]`);
+            if (row) insertConversationRowInOrder(listEl, row, listOrder);
+        });
+    }
+}
+
+function updateConversationListItem(mapping, renderData) {
+    const listEl = document.getElementById('conversation-list');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    const emptyEl = document.getElementById('conversation-list-empty');
+    if (!listEl || !mapping?.id) return;
+
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) {
+        conversationListRenderState.count = conversationMappings.length;
+        conversationListRenderState.topId = null;
+        return;
+    }
+
+    const isPinned = renderData.pinned.some(function (item) { return item.id === mapping.id; });
+    const isVisible = renderData.visible.some(function (item) { return item.id === mapping.id; });
+    const pinnedRow = pinnedEl ? pinnedEl.querySelector(`[data-conversation-id="${mapping.id}"]`) : null;
+    const listRow = listEl.querySelector(`[data-conversation-id="${mapping.id}"]`);
+
+    if (!isPinned && !isVisible) {
+        if (pinnedRow) pinnedRow.remove();
+        if (listRow) listRow.remove();
+        if (pinnedEl && !renderData.pinned.length) {
+            pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
+        }
+        return;
+    }
+
+    const currentUid = renderData.currentUid || currentUser?.uid || '';
+    const nextRow = buildConversationRowElement(mapping, currentUid);
+    if (isPinned) {
+        if (pinnedEl) {
+            if (!pinnedEl.querySelector('.inbox-section-label')) {
+                pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            }
+            if (pinnedRow) pinnedRow.replaceWith(nextRow);
+            insertConversationRowInOrder(pinnedEl, nextRow, renderData.pinned.map(function (item) { return item.id; }));
+            pinnedEl.style.display = 'block';
+        }
+        if (listRow) listRow.remove();
+        return;
+    }
+
+    if (pinnedRow) pinnedRow.remove();
+    if (listRow) listRow.replaceWith(nextRow);
+    insertConversationRowInOrder(listEl, nextRow, renderData.visible.map(function (item) { return item.id; }));
+}
+
+function renderConversationList() {
+    const listEl = document.getElementById('conversation-list');
+    if (!listEl) return;
+    const emptyEl = document.getElementById('conversation-list-empty');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    const renderData = getConversationListRenderData();
+    const currentUid = renderData.currentUid;
+
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) {
+        if (pinnedEl) {
+            pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
+        }
+        listEl.innerHTML = '';
+        updateConversationLoadMoreState(renderData);
+        return;
+    }
+
+    const pinned = renderData.pinned;
+    const unpinned = renderData.unpinned;
+    const visible = renderData.visible;
     uiDebugLog('conversation list', {
-        total: orderedMappings.length,
-        filtered: filtered.length,
+        total: renderData.orderedMappings.length,
+        filtered: renderData.filtered.length,
         filter: conversationListFilter,
-        searchActive: !!search
+        searchActive: !!renderData.search
     });
 
-    const highlightData = getActiveCallHighlightData();
-    const renderRow = function (mapping, targetEl) {
-        const details = conversationDetailsCache[mapping.id] || {};
-        const participants = details.participants || mapping.otherParticipantIds || [];
-        const meta = deriveOtherParticipantMeta(participants, currentUid, details);
-        const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
-        if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
-            resolveUserProfile(otherId).then(function () {
-                if (currentViewId === 'messages') renderConversationList();
-            });
-        }
-        const otherProfile = otherId ? getCachedUser(otherId) : null;
-        const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
-        const isGroup = (participants || []).length > 2 || details.type === 'group';
-        const mergedConvo = {
-            ...details,
-            participants,
-            participantNames: details.participantNames || details.participantUsernames || participantLabels,
-            participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
-            title: details.title || null
-        };
-        const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
-        const convoAvatar = getConversationAvatarUrl(details);
-        let avatarUser = {
-            uid: mapping.id || otherId || 'conversation',
-            username: name,
-            displayName: name,
-            photoURL: convoAvatar,
-            avatarColor: computeAvatarColor(name)
-        };
-        if (!isGroup && otherId) {
-            avatarUser = {
-                ...otherProfile,
-                uid: otherId,
-                username: otherProfile?.username || name,
-                displayName: resolveDisplayName(otherProfile) || name,
-                photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
-                avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
-            };
-        } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
-            avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
-        }
-        const avatarHtml = renderAvatar(avatarUser, { size: 42 });
-
-        const item = document.createElement('div');
-        item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
-        const unread = mapping.unreadCount || 0;
-        const muteState = resolveMuteState(mapping.id, mapping);
-        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
-        updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
-        const unreadLabel = unread > 10 ? '10+' : `${unread}`;
-        const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
-        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
-        const highlightData = getActiveCallHighlightData();
-        const activeCallEntry = getActiveCallForConversation(mapping.id);
-        const isCallHostConversation = !!activeCallEntry;
-        const previewMarkup = isCallHostConversation
-            ? `<span class="active-call-pill">Active Call</span>`
-            : previewText;
-        const tsSource = mapping.lastMessageAt || mapping.createdAt;
-        const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
-        item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
-            <div class="conversation-body">
-                <div class="conversation-title-row">
-                    <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
-                    ${flagHtml}
-                </div>
-                <div class="conversation-preview">${previewMarkup}</div>
-            </div>`;
-        applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
-        item.onclick = function () {
-            const convoId = mapping.id;
-            const wasActiveConversation = (activeConversationId === convoId);
-            const wasCallViewOpen = !!isCallViewOpen;
-
-            openConversation(convoId);
-
-            const hostCall = getActiveCallForConversation(convoId);
-            const isCurrentActiveCallThread = !!hostCall
-                && !!activeCallSession
-                && activeCallSession.status === 'active'
-                && activeCallSession.callId === hostCall.id
-                && activeCallSession.conversationId === convoId;
-
-            if (!isCurrentActiveCallThread) return;
-
-            if (!wasActiveConversation) {
-                openCallView();
-                return;
-            }
-
-            if (wasCallViewOpen) {
-                closeCallView();
-            } else {
-                openCallView();
-            }
-        };
-        targetEl.appendChild(item);
-    };
-
     if (pinnedEl) {
-        pinnedEl.innerHTML = '';
         if (pinned.length) {
             pinnedEl.style.display = 'block';
-            pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
-            pinned.forEach(function (mapping) { renderRow(mapping, pinnedEl); });
+            if (!pinnedEl.querySelector('.inbox-section-label')) {
+                pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            }
+            pinned.forEach(function (mapping) {
+                updateConversationListItem(mapping, renderData);
+            });
         } else {
             pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
         }
     }
 
@@ -10127,10 +10647,25 @@ function renderConversationList() {
                 releaseInitialSplashOnce('inbox-initial-ready');
             }
         } catch (e) {}
+        updateConversationLoadMoreState(renderData);
         return;
     }
 
-    visible.forEach(function (mapping) { renderRow(mapping, listEl); });
+    visible.forEach(function (mapping) {
+        updateConversationListItem(mapping, renderData);
+    });
+    Array.from(listEl.querySelectorAll('.conversation-item')).forEach(function (node) {
+        if (!renderData.visible.some(function (mapping) { return mapping.id === node.dataset.conversationId; })) {
+            node.remove();
+        }
+    });
+    if (pinnedEl && pinned.length) {
+        Array.from(pinnedEl.querySelectorAll('.conversation-item')).forEach(function (node) {
+            if (!renderData.pinned.some(function (mapping) { return mapping.id === node.dataset.conversationId; })) {
+                node.remove();
+            }
+        });
+    }
     if (listEl.dataset.scrollBound !== 'true') {
         listEl.addEventListener('scroll', function () {
             const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 24;
@@ -10141,7 +10676,10 @@ function renderConversationList() {
         });
         listEl.dataset.scrollBound = 'true';
     }
+    conversationListRenderState.count = conversationMappings.length;
+    conversationListRenderState.topId = getConversationListTopId(renderData);
     updateInboxNavBadge();
+    updateConversationLoadMoreState(renderData);
     try {
         const path = (location.pathname || '').toLowerCase();
         const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
@@ -12258,31 +12796,33 @@ function scheduleMessagesRerender(conversationId, convo) {
     }, 0);
 }
 
-function renderMessages(msgs = [], convo = {}) {
-    const body = document.getElementById('message-thread');
-    const scrollRegion = getMessageScrollContainer();
-    if (!body || !scrollRegion) return;
-    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
-    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
-    body.innerHTML = '';
+function getMessageRenderSeed(msgs = []) {
+    if (!Array.isArray(msgs) || msgs.length === 0) {
+        return { lastTimestamp: null, lastDateDivider: null, lastSenderId: null };
+    }
+    const lastMsg = msgs[msgs.length - 1];
+    const lastTimestamp = toDateSafe(lastMsg.createdAt) || new Date();
+    const lastSenderId = (lastMsg.isSystem || lastMsg.type === 'system') ? null : (lastMsg.senderId || null);
+    return { lastTimestamp, lastDateDivider: lastTimestamp, lastSenderId };
+}
 
-    let lastTimestamp = null;
-    let lastDateDivider = null;
-    let lastSenderId = null;
+function buildMessageFragment(msgs = [], convo = {}, options = {}) {
+    let lastTimestamp = options.lastTimestamp || null;
+    let lastDateDivider = options.lastDateDivider || null;
+    let lastSenderId = options.lastSenderId || null;
     let latestSelfMessage = null;
     const missingSenders = new Set();
     const missingMedia = new Set();
     const missingCallIds = new Set();
     const fragment = document.createDocumentFragment();
-    const searchTerm = (conversationSearchTerm || '').toLowerCase();
-    conversationSearchHits = [];
-    const conversationId = convo.id || activeConversationId || '';
-    const callInviteIds = new Set(msgs.map(function (message) {
+    const searchTerm = (options.searchTerm || '').toLowerCase();
+    const searchHits = [];
+    const conversationId = options.conversationId || convo.id || activeConversationId || '';
+    const callInviteIds = options.callInviteIds || new Set(msgs.map(function (message) {
         if (message?.type !== 'call_invite') return null;
         const normalized = normalizeCallMessageFields(message);
         return normalized.callId || null;
     }).filter(Boolean));
-    renderPinnedMessages(convo, msgs);
 
     msgs.forEach(function (msg, idx) {
         const createdDate = toDateSafe(msg.createdAt) || new Date();
@@ -12400,7 +12940,7 @@ function renderMessages(msgs = [], convo = {}) {
         const hasSearchMatch = searchTerm && baseTextRaw.toLowerCase().includes(searchTerm);
         let textMarkup = escapeHtml(baseTextRaw);
         if (hasSearchMatch) {
-            conversationSearchHits.push(msg.id);
+            searchHits.push(msg.id);
             const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')})`, 'ig');
             textMarkup = escapeHtml(baseTextRaw).replace(regex, '<mark>$1</mark>');
         }
@@ -12578,8 +13118,18 @@ function renderMessages(msgs = [], convo = {}) {
         }
     }
 
-    body.appendChild(fragment);
+    return {
+        fragment,
+        missingSenders,
+        missingMedia,
+        missingCallIds,
+        searchHits,
+        state: { lastTimestamp, lastDateDivider, lastSenderId }
+    };
+}
 
+function handleMessageRenderDependencies(convo = {}, msgs = [], missingCallIds = new Set(), missingSenders = new Set(), missingMedia = new Set()) {
+    const conversationId = convo.id || activeConversationId || '';
     if (missingCallIds.size && conversationId) {
         Promise.all(Array.from(missingCallIds).map(function (callId) {
             return ensureCallDocCached(callId);
@@ -12604,6 +13154,88 @@ function renderMessages(msgs = [], convo = {}) {
             }
         });
     }
+}
+
+function renderMessages(msgs = [], convo = {}, options = {}) {
+    const body = document.getElementById('message-thread');
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion) return;
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
+    const previousScrollTop = scrollRegion.scrollTop;
+    const previousScrollHeight = scrollRegion.scrollHeight;
+    body.innerHTML = '';
+
+    const searchTerm = (conversationSearchTerm || '').toLowerCase();
+    conversationSearchHits = [];
+    const conversationId = convo.id || activeConversationId || '';
+    const callInviteIds = new Set(msgs.map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
+    renderPinnedMessages(convo, msgs);
+
+    const fragmentData = buildMessageFragment(msgs, convo, {
+        searchTerm,
+        conversationId,
+        callInviteIds
+    });
+    conversationSearchHits = fragmentData.searchHits;
+    body.appendChild(fragmentData.fragment);
+    handleMessageRenderDependencies(convo, msgs, fragmentData.missingCallIds, fragmentData.missingSenders, fragmentData.missingMedia);
+
+    if (options.preserveScrollPosition) {
+        scrollRegion.scrollTop = previousScrollTop + (scrollRegion.scrollHeight - previousScrollHeight);
+    } else if (shouldStickToBottom) {
+        scrollMessagesToBottom();
+        const media = scrollRegion.querySelectorAll('img, video');
+        media.forEach(function (node) {
+            const handler = function () { scrollMessagesToBottom(); };
+            if (node.tagName === 'IMG') {
+                if (!node.complete) node.addEventListener('load', handler, { once: true });
+            } else {
+                node.addEventListener('loadedmetadata', handler, { once: true });
+            }
+        });
+    } else {
+        scrollRegion.scrollTop = Math.max(0, scrollRegion.scrollHeight - previousOffset);
+    }
+    if (forceConversationScroll) {
+        forceConversationScroll = false;
+    }
+}
+
+function appendMessagesToThread(convoId, newMessages = [], convo = {}, seedMessages = []) {
+    const body = document.getElementById('message-thread');
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion || !newMessages.length) return;
+    if (conversationSearchTerm) {
+        renderMessages(messageThreadCache[convoId] || [], convo);
+        return;
+    }
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
+    const conversationId = convo.id || convoId || activeConversationId || '';
+    const seedState = getMessageRenderSeed(seedMessages);
+    const callInviteIds = new Set((messageThreadCache[convoId] || []).map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
+
+    const fragmentData = buildMessageFragment(newMessages, convo, {
+        searchTerm: '',
+        conversationId,
+        callInviteIds,
+        lastTimestamp: seedState.lastTimestamp,
+        lastDateDivider: seedState.lastDateDivider,
+        lastSenderId: seedState.lastSenderId
+    });
+
+    body.appendChild(fragmentData.fragment);
+    handleMessageRenderDependencies(convo, messageThreadCache[convoId] || [], fragmentData.missingCallIds, fragmentData.missingSenders, fragmentData.missingMedia);
+
     if (shouldStickToBottom) {
         scrollMessagesToBottom();
         const media = scrollRegion.querySelectorAll('img, video');
@@ -13335,21 +13967,118 @@ async function fetchConversation(conversationId) {
     return null;
 }
 
-async function listenToMessages(convoId) {
+function insertMessageSorted(cache = [], msg = {}) {
+    const ts = getMessageTimestampMs(msg) || 0;
+    let insertIndex = cache.findIndex(function (item) { return (getMessageTimestampMs(item) || 0) > ts; });
+    if (insertIndex === -1) insertIndex = cache.length;
+    cache.splice(insertIndex, 0, msg);
+    return insertIndex;
+}
+
+function upsertMessageInCache(cache = [], msg = {}) {
+    const existingIndex = cache.findIndex(function (item) { return item.id === msg.id; });
+    if (existingIndex === -1) {
+        return { index: insertMessageSorted(cache, msg), type: 'added' };
+    }
+    const prev = cache[existingIndex];
+    const prevTs = getMessageTimestampMs(prev) || 0;
+    const nextTs = getMessageTimestampMs(msg) || prevTs;
+    cache[existingIndex] = { ...prev, ...msg };
+    if (nextTs !== prevTs) {
+        cache.splice(existingIndex, 1);
+        return { index: insertMessageSorted(cache, { ...prev, ...msg }), type: 'moved' };
+    }
+    return { index: existingIndex, type: 'modified' };
+}
+
+function removeMessageFromCache(cache = [], msgId) {
+    const index = cache.findIndex(function (item) { return item.id === msgId; });
+    if (index === -1) return null;
+    cache.splice(index, 1);
+    return index;
+}
+
+async function listenToLatestMessages(convoId, pageSize = 50) {
     if (messagesUnsubscribe) messagesUnsubscribe();
-    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    const msgRef = query(
+        collection(db, 'conversations', convoId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        limitToLast(pageSize)
+    );
     messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
-        const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
-        messageThreadCache[convoId] = msgs;
+        const changes = snap.docChanges();
+        if (!changes.length) return;
+        const previousMessages = (messageThreadCache[convoId] || []).slice();
+        const nextMessages = messageThreadCache[convoId] || [];
+        const addedMessages = [];
+        let requiresFullRender = false;
+
+        changes.forEach(function (change) {
+            const msg = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added') {
+                if (nextMessages.find(function (item) { return item.id === msg.id; })) return;
+                const insertIndex = insertMessageSorted(nextMessages, msg);
+                addedMessages.push(msg);
+                // If the add lands in the middle, fall back to a full re-render.
+                if (insertIndex < previousMessages.length) {
+                    requiresFullRender = true;
+                }
+            } else if (change.type === 'modified') {
+                const result = upsertMessageInCache(nextMessages, msg);
+                requiresFullRender = true;
+                if (result.type === 'added') {
+                    addedMessages.push(msg);
+                }
+            } else if (change.type === 'removed') {
+                removeMessageFromCache(nextMessages, msg.id);
+                requiresFullRender = true;
+            }
+        });
+
+        messageThreadCache[convoId] = nextMessages;
         const details = conversationDetailsCache[convoId] || {};
-        renderMessages(msgs, details);
+        // Incrementally append only when new items arrive at the tail.
+        const sortedAdds = addedMessages.slice().sort(function (a, b) {
+            return (getMessageTimestampMs(a) || 0) - (getMessageTimestampMs(b) || 0);
+        });
+
+        const shouldAppend = !requiresFullRender
+            && sortedAdds.length > 0
+            && !conversationSearchTerm
+            && (previousMessages.length === 0
+                || (getMessageTimestampMs(sortedAdds[0]) || 0) >= (getMessageTimestampMs(previousMessages[previousMessages.length - 1]) || 0));
+
+        if (shouldAppend && previousMessages.length) {
+            appendMessagesToThread(convoId, sortedAdds, details, previousMessages);
+        } else {
+            renderMessages(nextMessages, details);
+        }
+
         renderTypingIndicator(details);
-        markMessagesDelivered(convoId, msgs);
-        markConversationAsRead(convoId);
+        if (addedMessages.length) {
+            markMessagesDelivered(convoId, sortedAdds);
+            const hasIncoming = sortedAdds.some(function (msg) { return msg.senderId && msg.senderId !== currentUser?.uid; });
+            if (hasIncoming) {
+                markConversationAsRead(convoId);
+            }
+        }
     }, function (err) {
         handleSnapshotError('Messages thread', err);
         handleConversationAccessLoss(convoId);
     }));
+}
+
+async function fetchOlderMessages(convoId, beforeCreatedAt, pageSize = 50) {
+    if (!beforeCreatedAt) return [];
+    const msgRef = query(
+        collection(db, 'conversations', convoId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        endBefore(beforeCreatedAt),
+        limitToLast(pageSize)
+    );
+    const snap = await getDocs(msgRef);
+    // Return older messages in ascending order for clean prepend logic.
+    return snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
 }
 
 async function openConversation(conversationId) {
@@ -13376,6 +14105,13 @@ async function openConversation(conversationId) {
     const header = document.getElementById('message-header');
     if (header) header.textContent = 'Loading conversation...';
     forceConversationScroll = true;
+    messageThreadCache[conversationId] = [];
+    messageThreadPagingState[conversationId] = { loading: false, exhausted: false };
+    if (messageThreadScrollRegion && messageThreadScrollHandler) {
+        messageThreadScrollRegion.removeEventListener('scroll', messageThreadScrollHandler);
+        messageThreadScrollRegion = null;
+        messageThreadScrollHandler = null;
+    }
 
     let convo = null;
     try {
@@ -13406,7 +14142,42 @@ async function openConversation(conversationId) {
     listenToConversationDetails(conversationId);
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
-    await listenToMessages(conversationId);
+    await listenToLatestMessages(conversationId);
+    const scrollRegion = getMessageScrollContainer();
+    if (scrollRegion) {
+        messageThreadScrollRegion = scrollRegion;
+        messageThreadScrollHandler = function () {
+            if (activeConversationId !== conversationId) return;
+            if (scrollRegion.scrollTop > 120) return;
+            const paging = messageThreadPagingState[conversationId] || { loading: false, exhausted: false };
+            if (paging.loading || paging.exhausted) return;
+            const currentMessages = messageThreadCache[conversationId] || [];
+            const oldest = currentMessages[0];
+            if (!oldest || !oldest.createdAt) return;
+            paging.loading = true;
+            messageThreadPagingState[conversationId] = paging;
+            // Fetch older history when the user scrolls near the top, and preserve scroll offset.
+            fetchOlderMessages(conversationId, oldest.createdAt).then(function (olderMessages) {
+                if (!olderMessages.length) {
+                    paging.exhausted = true;
+                    return;
+                }
+                const existingIds = new Set(currentMessages.map(function (msg) { return msg.id; }));
+                const deduped = olderMessages.filter(function (msg) { return !existingIds.has(msg.id); });
+                if (!deduped.length) {
+                    paging.exhausted = true;
+                    return;
+                }
+                messageThreadCache[conversationId] = deduped.concat(currentMessages);
+                renderMessages(messageThreadCache[conversationId], conversationDetailsCache[conversationId] || {}, { preserveScrollPosition: true });
+            }).catch(function (err) {
+                console.warn('Unable to fetch older messages', err?.message || err);
+            }).finally(function () {
+                paging.loading = false;
+            });
+        };
+        scrollRegion.addEventListener('scroll', messageThreadScrollHandler, { passive: true });
+    }
     refreshInboxLayout();
     window.activeConversationId = activeConversationId;
     window.__nexeraDebug = window.__nexeraDebug || {};
@@ -13625,37 +14396,238 @@ function initCallInviteListener() {
 
 window.startDmCall = startDmCall;
 
+function queueConversationDetailsPrefetch(conversationIds = []) {
+    conversationIds.filter(Boolean).forEach(function (id) {
+        if (conversationDetailsCache[id]) return;
+        if (conversationDetailsPrefetchPending.has(id)) return;
+        conversationDetailsPrefetchPending.add(id);
+        conversationDetailsPrefetchQueue.push(id);
+    });
+    if (!conversationDetailsPrefetchActive) {
+        processConversationDetailsPrefetchQueue();
+    }
+}
+
+async function processConversationDetailsPrefetchQueue() {
+    if (conversationDetailsPrefetchActive) return;
+    conversationDetailsPrefetchActive = true;
+    while (conversationDetailsPrefetchQueue.length) {
+        const nextId = conversationDetailsPrefetchQueue.shift();
+        conversationDetailsPrefetchPending.delete(nextId);
+        if (!nextId || conversationDetailsCache[nextId]) continue;
+        try {
+            await fetchConversation(nextId);
+        } catch (e) {
+            console.warn('Unable to prefetch conversation', nextId, e?.message || e);
+        }
+    }
+    conversationDetailsPrefetchActive = false;
+}
+
+function upsertConversationMapping(mapping = {}, source = 'realtime') {
+    if (!mapping?.id) return null;
+    const existingIndex = conversationMappings.findIndex(function (item) { return item.id === mapping.id; });
+    if (existingIndex >= 0) {
+        conversationMappings[existingIndex] = { ...conversationMappings[existingIndex], ...mapping };
+    } else {
+        conversationMappings.push(mapping);
+    }
+    const existingSource = conversationMappingSources[mapping.id] || {};
+    conversationMappingSources[mapping.id] = { ...existingSource, [source]: true };
+    return conversationMappings[existingIndex >= 0 ? existingIndex : conversationMappings.length - 1];
+}
+
+function markConversationMappingSource(id, source, isActive) {
+    if (!id) return;
+    const existingSource = conversationMappingSources[id] || {};
+    conversationMappingSources[id] = { ...existingSource, [source]: isActive };
+}
+
+function sortConversationMappings() {
+    conversationMappings.sort(function (a, b) {
+        return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
+    });
+}
+
+function getConversationLoadMoreButton() {
+    return document.getElementById('conversation-list-load-more');
+}
+
+function ensureConversationLoadMoreButton() {
+    const listEl = document.getElementById('conversation-list');
+    if (!listEl || !listEl.parentElement) return null;
+    let btn = getConversationLoadMoreButton();
+    if (btn) return btn;
+    btn = document.createElement('button');
+    btn.id = 'conversation-list-load-more';
+    btn.className = 'inbox-load-more';
+    btn.type = 'button';
+    btn.textContent = 'Load more';
+    btn.onclick = function () { fetchMoreConversations().catch(function () {}); };
+    listEl.parentElement.insertBefore(btn, listEl.nextSibling);
+    return btn;
+}
+
+function updateConversationLoadMoreState(renderData = {}) {
+    const btn = ensureConversationLoadMoreButton();
+    if (!btn) return;
+    const hasSearch = !!renderData.search;
+    const isEmpty = conversationMappings.length === 0;
+    const shouldShow = (conversationPagingHasMore || conversationPagingLoading) && !hasSearch && !isEmpty;
+    btn.style.display = shouldShow ? 'block' : 'none';
+    btn.disabled = conversationPagingLoading;
+    btn.textContent = conversationPagingLoading ? 'Loading…' : 'Load more';
+}
+
+async function fetchMoreConversations(cursor = conversationPagingCursor, pageSize = CONVERSATION_PAGE_SIZE) {
+    if (!requireAuth()) return [];
+    if (conversationPagingLoading || !conversationPagingHasMore) return [];
+    conversationPagingLoading = true;
+    updateConversationLoadMoreState(getConversationListRenderData());
+    try {
+        const baseQuery = query(
+            collection(db, `users/${currentUser.uid}/conversations`),
+            orderBy('lastMessageAt', 'desc')
+        );
+        const nextQuery = cursor
+            ? query(baseQuery, startAfter(cursor), limit(pageSize))
+            : query(baseQuery, limit(pageSize));
+        const snap = await getDocs(nextQuery);
+        const mappingsToReconcile = [];
+        const userIdsToRefresh = new Set();
+
+        snap.forEach(function (docSnap) {
+            const mapping = { id: docSnap.id, ...docSnap.data() };
+            const merged = upsertConversationMapping(mapping, 'paged');
+            mappingsToReconcile.push(merged || mapping);
+            queueConversationDetailsPrefetch([mapping.id]);
+            const details = conversationDetailsCache[mapping.id] || {};
+            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
+                const cached = getCachedUser(uid, { allowStale: true });
+                if (!cached || isUserCacheStale(cached)) userIdsToRefresh.add(uid);
+            });
+        });
+
+        if (userIdsToRefresh.size) {
+            await refreshUserProfiles(Array.from(userIdsToRefresh), { force: false });
+        }
+
+        await Promise.all(mappingsToReconcile.map(function (mapping) {
+            return reconcileConversationMapping(mapping).catch(function () { });
+        }));
+
+        if (snap.docs.length) {
+            conversationPagingCursor = snap.docs[snap.docs.length - 1];
+        }
+        conversationPagingHasMore = snap.docs.length === pageSize;
+
+        sortConversationMappings();
+        conversationListVisibleCount = Math.max(conversationListVisibleCount, conversationMappings.length);
+        renderConversationList();
+        return mappingsToReconcile;
+    } catch (e) {
+        console.warn('Unable to load more conversations', e?.message || e);
+        return [];
+    } finally {
+        conversationPagingLoading = false;
+        updateConversationLoadMoreState(getConversationListRenderData());
+    }
+}
+
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
     bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
-    const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
+    const convRef = query(
+        collection(db, `users/${currentUser.uid}/conversations`),
+        orderBy('lastMessageAt', 'desc'),
+        limit(CONVERSATION_PAGE_SIZE)
+    );
     conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
-        conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const changes = snap.docChanges();
+        if (!changes.length) return;
+        const previousRenderData = getConversationListRenderData();
+        const previousTopId = getConversationListTopId(previousRenderData);
+        const previousCount = conversationMappings.length;
+        const changedIds = new Set();
+        const mappingsToReconcile = [];
+        const userIdsToRefresh = new Set();
 
-        const missingDetails = conversationMappings
-            .map(function (m) { return m.id; })
-            .filter(function (id) { return !conversationDetailsCache[id]; });
+        if (snap.docs.length) {
+            conversationPagingCursor = snap.docs[snap.docs.length - 1];
+            conversationPagingHasMore = snap.docs.length === CONVERSATION_PAGE_SIZE;
+        } else {
+            conversationPagingCursor = null;
+            conversationPagingHasMore = false;
+        }
 
-        await Promise.all(missingDetails.map(async function (id) {
-            try { await fetchConversation(id); } catch (e) { console.warn('Unable to prefetch conversation', id, e?.message || e); }
-        }));
+        changes.forEach(function (change) {
+            const mapping = { id: change.doc.id, ...change.doc.data() };
+            const existingIndex = conversationMappings.findIndex(function (item) { return item.id === mapping.id; });
+            const existing = existingIndex >= 0 ? conversationMappings[existingIndex] : null;
 
-        const userIds = new Set();
-        conversationMappings.forEach(function (mapping) {
-            const details = conversationDetailsCache[mapping.id] || {};
-            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
-                const cached = getCachedUser(uid, { allowStale: true });
-                if (!cached || isUserCacheStale(cached)) userIds.add(uid);
-            });
+            if (change.type === 'added') {
+                upsertConversationMapping(mapping, 'realtime');
+                queueConversationDetailsPrefetch([mapping.id]);
+                mappingsToReconcile.push(mapping);
+                changedIds.add(mapping.id);
+            } else if (change.type === 'modified') {
+                upsertConversationMapping(mapping, 'realtime');
+                if (!existing) {
+                    queueConversationDetailsPrefetch([mapping.id]);
+                }
+                mappingsToReconcile.push(conversationMappings[existingIndex] || mapping);
+                changedIds.add(mapping.id);
+            } else if (change.type === 'removed') {
+                markConversationMappingSource(mapping.id, 'realtime', false);
+                changedIds.add(mapping.id);
+            }
+
+            if (change.type !== 'removed') {
+                const details = conversationDetailsCache[mapping.id] || {};
+                (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
+                    const cached = getCachedUser(uid, { allowStale: true });
+                    if (!cached || isUserCacheStale(cached)) userIdsToRefresh.add(uid);
+                });
+            }
         });
-        await refreshUserProfiles(Array.from(userIds), { force: true });
 
-        await Promise.all(conversationMappings.map(function (mapping) {
+        sortConversationMappings();
+
+        if (userIdsToRefresh.size) {
+            await refreshUserProfiles(Array.from(userIdsToRefresh), { force: false });
+        }
+
+        await Promise.all(mappingsToReconcile.map(function (mapping) {
             return reconcileConversationMapping(mapping).catch(function () { });
         }));
 
-        renderConversationList();
+        const nextRenderData = getConversationListRenderData();
+        const nextTopId = getConversationListTopId(nextRenderData);
+        const nextCount = conversationMappings.length;
+
+        if (nextCount !== previousCount || nextTopId !== previousTopId) {
+            Array.from(changedIds).forEach(function (id) {
+                const mapping = conversationMappings.find(function (item) { return item.id === id; });
+                if (mapping) {
+                    updateConversationListItem(mapping, nextRenderData);
+                }
+            });
+            updateConversationListOrder(nextRenderData);
+            conversationListRenderState.count = nextCount;
+            conversationListRenderState.topId = nextTopId;
+            updateInboxNavBadge();
+        } else {
+            Array.from(changedIds).forEach(function (id) {
+                const mapping = conversationMappings.find(function (item) { return item.id === id; });
+                if (mapping) {
+                    updateConversationListItem(mapping, nextRenderData);
+                }
+            });
+            conversationListRenderState.count = nextCount;
+            conversationListRenderState.topId = nextTopId;
+            updateInboxNavBadge();
+        }
 
         if (activeConversationId && !conversationMappings.some(function (m) { return m.id === activeConversationId; })) {
             handleConversationAccessLoss(activeConversationId, 'You no longer have access to this conversation.');
@@ -13664,6 +14636,7 @@ async function initConversations(autoOpen = true) {
         if (autoOpen && !activeConversationId && conversationMappings.length > 0) {
             openConversation(conversationMappings[0].id);
         }
+        updateConversationLoadMoreState(nextRenderData);
     }, function (err) {
         handleSnapshotError('Conversation list', err);
     }));
@@ -13782,8 +14755,13 @@ async function reconcileConversationMapping(mapping = {}) {
     const participants = details.participants || mapping.otherParticipantIds || [];
     const otherIds = participants.filter(function (uid) { return uid !== currentUser.uid; });
     if (!otherIds.length) return;
-
-    await refreshUserProfiles(otherIds, { force: true });
+    const staleIds = otherIds.filter(function (uid) {
+        const cached = getCachedUser(uid, { allowStale: true });
+        return !cached || isUserCacheStale(cached);
+    });
+    if (staleIds.length) {
+        await refreshUserProfiles(staleIds, { force: false });
+    }
 
     const names = otherIds.map(function (uid) {
         const cached = getCachedUser(uid) || {};
@@ -19014,8 +19992,9 @@ function mapSessionFromBackend(data = {}, config = {}) {
     const ingestEndpoint = data.ingestEndpoint || data.inputEndpoint;
     const rtmpsIngestUrl = data.rtmpsIngestUrl || (ingestEndpoint ? `rtmps://${ingestEndpoint}:443/app/` : '');
     return {
-        uid: data.uid || currentUser?.uid || auth?.currentUser?.uid,
+        hostId: data.hostId || data.uid || currentUser?.uid || auth?.currentUser?.uid,
         sessionId: data.sessionId,
+        roomName: data.roomName || (data.sessionId ? `live_${data.sessionId}` : ''),
         channelArn: data.channelArn,
         playbackUrl: data.playbackUrl,
         visibility: data.visibility ?? (config.privacy || 'public').toLowerCase(),
@@ -19026,7 +20005,8 @@ function mapSessionFromBackend(data = {}, config = {}) {
         autoRecord: data.autoRecord ?? config.autoRecord ?? false,
         inputMode: config.videoMode || data.inputMode || 'camera',
         audioMode: config.audioMode || data.audioMode || 'mic',
-        isLive: Boolean(data.isLive),
+        status: data.status || (data.isLive ? 'live' : 'starting'),
+        egressMode: data.egressMode || 'hls',
         ingestEndpoint,
         rtmpsIngestUrl,
         streamKey: data.streamKey,
@@ -19304,8 +20284,8 @@ class GoLiveSetupController {
     async markSessionLive(sessionId) {
         if (!sessionId) return;
         try {
-            await updateDoc(doc(db, 'liveStreams', sessionId), {
-                isLive: true,
+            await updateDoc(doc(db, 'liveSessions', sessionId), {
+                status: 'live',
                 startedAt: serverTimestamp(),
                 endedAt: null,
             });
@@ -19317,8 +20297,8 @@ class GoLiveSetupController {
     async markSessionEnded(sessionId) {
         if (!sessionId) return;
         try {
-            await updateDoc(doc(db, 'liveStreams', sessionId), {
-                isLive: false,
+            await updateDoc(doc(db, 'liveSessions', sessionId), {
+                status: 'ended',
                 endedAt: serverTimestamp(),
             });
         } catch (error) {
@@ -19332,11 +20312,11 @@ class GoLiveSetupController {
         if (!uid) return;
         try {
             await setDoc(
-                doc(db, 'liveStreams', session.sessionId, 'private', 'keys'),
+                doc(db, 'liveSessions', session.sessionId, 'private', 'keys'),
                 { uid, streamKey: session.streamKey, updatedAt: serverTimestamp() },
                 { merge: true }
             );
-            await updateDoc(doc(db, 'liveStreams', session.sessionId), { streamKey: deleteField() });
+            await updateDoc(doc(db, 'liveSessions', session.sessionId), { streamKey: deleteField() });
         } catch (error) {
             console.error('[GoLive]', 'Failed to persist private stream key', error);
         }
@@ -19345,7 +20325,8 @@ class GoLiveSetupController {
     async persistSession(session) {
         if (!session?.sessionId) return;
         try {
-            const uid = session.uid || currentUser?.uid || auth?.currentUser?.uid || null;
+            const uid = session.hostId || session.uid || currentUser?.uid || auth?.currentUser?.uid || null;
+            const roomName = session.roomName || (session.sessionId ? `live_${session.sessionId}` : '');
             const settings = {
                 inputMode: session.inputMode || this.inputMode || 'camera',
                 audioMode: session.audioMode || this.audioMode || 'mic',
@@ -19358,7 +20339,8 @@ class GoLiveSetupController {
             };
             const payload = {
                 sessionId: session.sessionId,
-                uid,
+                hostId: uid,
+                roomName,
                 channelArn: session.channelArn,
                 playbackUrl: session.playbackUrl,
                 visibility: settings.visibility,
@@ -19367,14 +20349,20 @@ class GoLiveSetupController {
                 tags: settings.tags,
                 ingestEndpoint: session.ingestEndpoint,
                 rtmpsIngestUrl: session.rtmpsIngestUrl,
-                isLive: Boolean(session.isLive),
+                status: session.status || (session.isLive ? 'live' : 'starting'),
+                egressMode: session.egressMode || 'hls',
                 settings,
                 ui: { mode: this.uiMode, updatedAt: serverTimestamp() },
                 createdAt: serverTimestamp(),
             };
-            await setDoc(doc(db, 'liveStreams', session.sessionId), payload, { merge: true });
-            await updateDoc(doc(db, 'liveStreams', session.sessionId), { streamKey: deleteField() });
+            await setDoc(doc(db, 'liveSessions', session.sessionId), payload, { merge: true });
+            await updateDoc(doc(db, 'liveSessions', session.sessionId), { streamKey: deleteField() });
             await this.persistPrivateStreamKey(session);
+            if (window.mintLiveSessionToken) {
+                window.mintLiveSessionToken({ id: session.sessionId, roomName }, { canPublish: true }).catch(function (err) {
+                    console.warn('[GoLive] LiveKit token mint failed', err?.message || err);
+                });
+            }
         } catch (error) {
             console.error('[GoLive]', 'Failed to persist session details', error);
         }
@@ -19581,10 +20569,10 @@ function renderLiveSetup() {
 function renderLiveSessions() {
     if (liveSessionsUnsubscribe) { renderLiveDirectoryFromCache(); return; }
     const liveRef = query(
-        collection(db, 'liveStreams'),
-        where('isLive', '==', true),
+        collection(db, 'liveSessions'),
+        where('status', '==', 'live'),
         orderBy('startedAt', 'desc'),
-        orderBy('createdAt', 'desc')
+        limit(50)
     );
     liveSessionsUnsubscribe = ListenerRegistry.register('live:sessions', onSnapshot(liveRef, function (snap) {
         try {
@@ -19618,15 +20606,20 @@ window.createLiveSession = async function () {
     const tags = (document.getElementById('live-tags').value || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
     const streamEmbedURL = document.getElementById('live-url').value;
     try {
-        await addDoc(collection(db, 'liveStreams'), {
+        const roomName = `live_${currentUser.uid}_${Date.now()}`;
+        await addDoc(collection(db, 'liveSessions'), {
             hostId: currentUser.uid,
+            roomName,
             title,
             category,
             tags,
-            streamEmbedURL,
-            isLive: true,
-            createdAt: serverTimestamp(),
+            visibility: 'public',
+            status: 'live',
             startedAt: serverTimestamp(),
+            endedAt: null,
+            egressMode: 'hls',
+            playbackUrl: streamEmbedURL || null,
+            createdAt: serverTimestamp()
         });
         toggleGoLiveModal(false);
     } catch (e) {
@@ -19638,23 +20631,31 @@ window.openLiveSession = function (sessionId) {
     if (activeLiveSessionId && activeLiveSessionId !== sessionId) {
         ListenerRegistry.unregister(`live:chat:${activeLiveSessionId}`);
     }
+    if (liveSessionRoom) {
+        liveSessionRoom.disconnect().catch(function () {});
+        liveSessionRoom = null;
+    }
     activeLiveSessionId = sessionId;
     const container = document.getElementById('live-directory-grid') || document.getElementById('live-grid-container');
     if (!container) return;
     const sessionData = liveSessionsCache.find(function (session) { return session.id === sessionId; });
-    const streamUrl = sessionData?.streamEmbedURL || sessionData?.streamUrl || sessionData?.playbackUrl;
+    const egressMode = sessionData?.egressMode || 'hls';
+    const streamUrl = sessionData?.playbackUrl || sessionData?.streamEmbedURL || sessionData?.streamUrl;
     const sessionCard = document.createElement('div');
     sessionCard.className = 'social-card';
-    if (!sessionData || !streamUrl) {
+    if (!sessionData || (!streamUrl && egressMode !== 'webrtc')) {
         sessionCard.innerHTML = '<div style="padding:1rem;"><div class="empty-state">Stream is offline or unavailable.</div></div>';
         container.prepend(sessionCard);
         return;
     }
     const tags = (sessionData.tags || []).join(', ');
-    sessionCard.innerHTML = `<div style="padding:1rem;">
-        <div id="live-player" style="margin-bottom:10px;">
+    const playerMarkup = egressMode === 'webrtc'
+        ? '<div id="live-player" style="margin-bottom:10px;"><video id="live-webrtc-video" autoplay playsinline controls style="width:100%;max-height:320px;"></video></div>'
+        : `<div id="live-player" style="margin-bottom:10px;">
             <video src="${escapeHtml(streamUrl)}" controls autoplay playsinline style="width:100%;max-height:320px;" type="application/x-mpegURL"></video>
-        </div>
+        </div>`;
+    sessionCard.innerHTML = `<div style="padding:1rem;">
+        ${playerMarkup}
         <div style="margin-bottom:8px;">
             <div style="font-weight:700;">${escapeHtml(sessionData.title || 'Live Session')}</div>
             <div style="color:var(--text-muted);">${escapeHtml(sessionData.category || 'Live')}${tags ? ` • ${escapeHtml(tags)}` : ''}</div>
@@ -19666,22 +20667,41 @@ window.openLiveSession = function (sessionId) {
         </div>
     </div>`;
     container.prepend(sessionCard);
+    if (egressMode === 'webrtc' && sessionData.roomName) {
+        connectToLiveSessionRoom(sessionData, { canPublish: false }).catch(function (err) {
+            console.warn('Live session join failed', err?.message || err);
+        });
+    }
     listenLiveChat(sessionId);
 };
 
 function listenLiveChat(sessionId) {
-    const chatRef = query(collection(db, 'liveStreams', sessionId, 'chat'), orderBy('createdAt'));
-    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function (snap) {
+    const chatRef = query(
+        collection(db, 'liveSessions', sessionId, 'chat'),
+        orderBy('createdAt', 'asc'),
+        limitToLast(200)
+    );
+    const renderedIds = new Set();
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, { includeMetadataChanges: false }, function (snap) {
         try {
             const chatEl = document.getElementById('live-chat');
             if (!chatEl) return;
-            chatEl.innerHTML = '';
-            snap.docs.forEach(function (docSnap) {
-                const data = docSnap.data();
+            const shouldStick = isNearBottom(chatEl);
+            snap.docChanges().forEach(function (change) {
+                if (change.type !== 'added') return;
+                if (renderedIds.has(change.doc.id)) return;
+                renderedIds.add(change.doc.id);
+                const data = change.doc.data();
+                const sender = data.senderId ? (getCachedUser(data.senderId) || {}) : {};
+                const senderLabel = resolveDisplayName(sender) || sender.username || 'user';
                 const row = document.createElement('div');
-                row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
+                row.dataset.chatId = change.doc.id;
+                row.textContent = `${senderLabel}: ${data.text || ''}`;
                 chatEl.appendChild(row);
             });
+            if (shouldStick) {
+                chatEl.scrollTop = chatEl.scrollHeight;
+            }
         } catch (e) {
             console.error('Live chat snapshot failed', e);
         }
@@ -19697,7 +20717,7 @@ window.sendLiveChat = async function (sessionId) {
     const input = document.getElementById('live-chat-input');
     if (!input || !input.value.trim()) return;
     try {
-        await addDoc(collection(db, 'liveStreams', sessionId, 'chat'), { senderId: currentUser.uid, text: input.value, createdAt: serverTimestamp() });
+        await callSecureFunction('sendLiveChatMessage', { sessionId, text: input.value });
         input.value = '';
     } catch (e) {
         console.error('Failed to send live chat', e);
@@ -19719,72 +20739,17 @@ function renderStaffConsole() {
     listenVerificationRequests();
     listenReports();
     listenAdminLogs();
-    bindTrendingCategoriesSync();
-}
-
-async function syncTrendingCategories() {
-    const categoriesSnap = await getDocs(collection(db, 'categories'));
-    const scores = [];
-
-    for (const docSnap of categoriesSnap.docs) {
-        const data = docSnap.data() || {};
-        const slug = data.slug || docSnap.id;
-        if (!slug) continue;
-        const memberCount = Number(data.memberCount || 0) || 0;
-        let postCount = 0;
-        let commentCount = 0;
-
-        const postsSnap = await getDocs(query(collection(db, 'posts'), where('categoryId', '==', slug)));
-        postsSnap.forEach(function (postDoc) {
-            postCount += 1;
-            const postData = postDoc.data() || {};
-            const postComments = Number(postData.comments || postData.commentCount || postData.stats?.comments || 0) || 0;
-            commentCount += postComments;
-        });
-
-        const popularity = Math.round((postCount * 5) + (memberCount * 2) + commentCount);
-        scores.push({ slug, popularity });
-    }
-
-    scores.sort(function (a, b) { return b.popularity - a.popularity; });
-    const topScores = scores.slice(0, 10);
-    const batch = writeBatch(db);
-    const now = serverTimestamp();
-
-    topScores.forEach(function (entry) {
-        const ref = doc(db, 'trendingCategories', entry.slug);
-        batch.set(ref, {
-            slug: entry.slug,
-            popularity: entry.popularity,
-            updatedAt: now
-        }, { merge: true });
-    });
-
-    await batch.commit();
-}
-
-// Staff-only sync helper to seed trendingCategories from categories.
-function bindTrendingCategoriesSync() {
-    const btn = document.getElementById('sync-trending-categories');
-    if (!btn || staffTrendingSyncBound) return;
-    staffTrendingSyncBound = true;
-    btn.addEventListener('click', async function () {
-        btn.disabled = true;
-        try {
-            await syncTrendingCategories();
-            alert('Trending categories synced successfully.');
-        } catch (err) {
-            console.error('Error syncing trending categories:', err);
-            alert('Failed to sync trending categories. Check console for details.');
-        } finally {
-            btn.disabled = false;
-        }
-    });
 }
 
 function listenVerificationRequests() {
     if (staffRequestsUnsub) return;
-    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(collection(db, 'verificationRequests'), function (snap) {
+    const requestsRef = query(
+        collection(db, 'verificationRequests'),
+        where('status', '==', 'pending'),
+        orderBy('createdAt', 'desc'),
+        limit(50)
+    );
+    staffRequestsUnsub = ListenerRegistry.register('staff:verificationRequests', onSnapshot(requestsRef, function (snap) {
         const container = document.getElementById('verification-requests');
         if (!container) return;
         container.innerHTML = '';
@@ -19811,7 +20776,8 @@ window.denyVerification = async function (requestId) {
 
 function listenReports() {
     if (staffReportsUnsub) return;
-    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(collection(db, 'reports'), function (snap) {
+    const reportsRef = query(collection(db, 'reports'), orderBy('createdAt', 'desc'), limit(50));
+    staffReportsUnsub = ListenerRegistry.register('staff:reports', onSnapshot(reportsRef, function (snap) {
         const container = document.getElementById('reports-queue');
         if (!container) return;
         container.innerHTML = '';
@@ -19827,7 +20793,8 @@ function listenReports() {
 
 function listenAdminLogs() {
     if (staffLogsUnsub) return;
-    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(collection(db, 'adminLogs'), function (snap) {
+    const logsRef = query(collection(db, 'adminLogs'), orderBy('createdAt', 'desc'), limit(50));
+    staffLogsUnsub = ListenerRegistry.register('staff:adminLogs', onSnapshot(logsRef, function (snap) {
         const container = document.getElementById('admin-logs');
         if (!container) return;
         container.innerHTML = '';
@@ -19942,7 +20909,7 @@ function syncSidebarHomeState() {
     document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(currentViewId || 'feed'));
     if (isHome) {
         mountFeedTypeToggleBar();
-        renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
+        loadStoriesAndLiveBar();
     }
     uiDebugLog('sidebar home sync', { path, isHome });
 }
@@ -19966,7 +20933,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindVideoDestinationField();
     enhanceInboxLayout();
     syncInboxContentFilters();
-    renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
+    loadStoriesAndLiveBar();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
