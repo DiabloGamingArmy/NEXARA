@@ -66,6 +66,23 @@ const RATE_LIMITS = {
   comments: {limit: 3, windowMs: 30 * 1000},
   reviews: {limit: 1, windowMs: 10 * 60 * 1000},
   likes: {limit: 20, windowMs: 60 * 1000},
+  assets: {limit: 10, windowMs: 60 * 1000},
+};
+
+const ASSET_POLICIES = {
+  avatar: {maxBytes: 5 * 1024 * 1024, allowedPrefixes: ["image/"]},
+  image: {maxBytes: 25 * 1024 * 1024, allowedPrefixes: ["image/"]},
+  audio: {maxBytes: 200 * 1024 * 1024, allowedPrefixes: ["audio/"]},
+  document: {
+    maxBytes: 100 * 1024 * 1024,
+    allowedPrefixes: [
+      "application/pdf",
+      "text/plain",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ],
+  },
+  video: {maxBytes: 2 * 1024 * 1024 * 1024, allowedPrefixes: ["video/"]},
 };
 
 function assertAppCheckV2(request) {
@@ -113,6 +130,21 @@ function isStaffClaims(auth) {
   return auth?.token?.admin === true || auth?.token?.staff === true || auth?.token?.founder === true;
 }
 
+function isAllowedContentType(kind, contentType) {
+  if (!kind || !contentType) return false;
+  const policy = ASSET_POLICIES[kind];
+  if (!policy) return false;
+  return policy.allowedPrefixes.some((prefix) => contentType.startsWith(prefix));
+}
+
+function validateAssetPolicy(kind, contentType, sizeBytes) {
+  const policy = ASSET_POLICIES[kind];
+  if (!policy) return {ok: false, reason: "unsupported-kind"};
+  if (!isAllowedContentType(kind, contentType)) return {ok: false, reason: "invalid-type"};
+  if (sizeBytes > policy.maxBytes) return {ok: false, reason: "oversize"};
+  return {ok: true};
+}
+
 async function moderateTextContent(text, contextLabel) {
   const payload = {
     input: text,
@@ -153,6 +185,47 @@ async function moderateTextContent(text, contextLabel) {
     };
   } catch (error) {
     logger.warn("AI Logic moderation exception", {error: error?.message || error});
+    return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+  }
+}
+
+async function moderateAssetContent(metadata) {
+  const payload = {
+    input: metadata,
+    context: "asset",
+  };
+  try {
+    const endpoint = AI_LOGIC_ENDPOINT.value();
+    const apiKey = AI_LOGIC_API_KEY.value();
+    if (!endpoint || !apiKey) {
+      return {status: "pending", labels: ["unscored"], scoreMap: {}, modelVersion: "unconfigured", reviewRequired: true};
+    }
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      logger.warn("AI Logic asset moderation failed", {status: response.status});
+      return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+    }
+    const data = await response.json();
+    const labels = Array.isArray(data.labels) ? data.labels : [];
+    const scoreMap = data.scoreMap || {};
+    const blocked = data.blocked === true || labels.includes("blocked");
+    const pending = data.pending === true || labels.includes("review");
+    return {
+      status: blocked ? "blocked" : (pending ? "pending" : "approved"),
+      labels,
+      scoreMap,
+      modelVersion: data.modelVersion || "ai-logic",
+      reviewRequired: pending || blocked,
+    };
+  } catch (error) {
+    logger.warn("AI Logic asset moderation exception", {error: error?.message || error});
     return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
   }
 }
@@ -590,6 +663,74 @@ exports.createUploadSession = onCall((data, context) => {
   };
 });
 
+exports.createAsset = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const kind = String(data.kind || "").trim().toLowerCase();
+  const visibility = String(data.visibility || "private").trim().toLowerCase();
+  if (!ASSET_POLICIES[kind]) throw new HttpsError("invalid-argument", "Unsupported asset kind.");
+  if (!["public", "followers", "private"].includes(visibility)) {
+    throw new HttpsError("invalid-argument", "Invalid visibility.");
+  }
+  await enforceRateLimit(auth.uid, `asset:create:${kind}:60s`, RATE_LIMITS.assets);
+  const assetRef = db.collection("assets").doc();
+  const storagePathOriginal = `uploads/${auth.uid}/${assetRef.id}/original`;
+  await assetRef.set({
+    ownerId: auth.uid,
+    createdAt: FieldValue.serverTimestamp(),
+    status: "uploading",
+    visibility,
+    kind,
+    storagePathOriginal,
+    contentType: data.contentType || "",
+    sizeBytes: Number(data.sizeBytes || 0) || 0,
+    variants: {},
+    moderation: {
+      status: "pending",
+      labels: [],
+      scoreMap: {},
+      modelVersion: "ai-logic",
+    },
+  }, {merge: true});
+  return {assetId: assetRef.id, storagePathOriginal};
+});
+
+exports.getAssetDownloadUrl = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const assetId = String(data.assetId || "").trim();
+  const variant = String(data.variant || "original").trim();
+  if (!assetId) throw new HttpsError("invalid-argument", "assetId is required.");
+  const assetSnap = await db.collection("assets").doc(assetId).get();
+  if (!assetSnap.exists) throw new HttpsError("not-found", "Asset not found.");
+  const asset = assetSnap.data() || {};
+  const isOwner = asset.ownerId === auth.uid;
+  const isStaff = isStaffClaims(auth);
+  if (asset.moderation?.status === "blocked" && !isOwner && !isStaff) {
+    throw new HttpsError("permission-denied", "Asset is blocked.");
+  }
+  const visibility = asset.visibility || "private";
+  if (visibility === "private" && !isOwner && !isStaff) {
+    throw new HttpsError("permission-denied", "Asset is private.");
+  }
+  if (visibility === "followers" && !isOwner && !isStaff) {
+    const followerSnap = await db.collection("users").doc(asset.ownerId).collection("followers").doc(auth.uid).get();
+    if (!followerSnap.exists) throw new HttpsError("permission-denied", "Asset is restricted.");
+  }
+  const path = variant === "original" ? asset.storagePathOriginal : asset.variants?.[variant];
+  if (!path) throw new HttpsError("not-found", "Asset variant unavailable.");
+  const expiresAt = Date.now() + 15 * 60 * 1000;
+  const [url] = await admin.storage().bucket().file(path).getSignedUrl({
+    action: "read",
+    expires: expiresAt,
+  });
+  return {url, expiresAt};
+});
+
 exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
@@ -609,6 +750,16 @@ exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_END
     throw new HttpsError("permission-denied", "You cannot comment on this post.");
   }
 
+  let mediaAssetId = "";
+  let mediaPath = "";
+  if (assetIds.length) {
+    const assetSnap = await db.collection("assets").doc(assetIds[0]).get();
+    if (!assetSnap.exists) throw new HttpsError("not-found", "Asset not found.");
+    const asset = assetSnap.data() || {};
+    if (asset.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Asset ownership mismatch.");
+    mediaAssetId = assetIds[0];
+    mediaPath = asset.storagePathOriginal || "";
+  }
   const moderation = await moderateTextContent(text, "comment");
   let authorName = "User";
   try {
@@ -621,7 +772,8 @@ exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_END
   const payload = {
     userId: auth.uid,
     text,
-    mediaUrl: assetIds[0] || "",
+    mediaAssetId,
+    mediaPath,
     assets: assetIds,
     createdAt: FieldValue.serverTimestamp(),
     timestamp: FieldValue.serverTimestamp(),
@@ -885,28 +1037,76 @@ exports.adminSetUserDisabled = onCallV2({enforceAppCheck: true}, async (request)
   return {ok: true};
 });
 
-exports.onAssetUpload = onObjectFinalized(async (event) => {
-  const object = event.data;
-  const filePath = object.name || "";
-  if (!filePath) return;
-  if (!filePath.startsWith("comment_media/") && !filePath.startsWith("posts/")) return;
-  const assetId = filePath.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const assetRef = db.collection("assets").doc(assetId);
-  await assetRef.set({
-    path: filePath,
-    contentType: object.contentType || "",
-    size: object.size ? Number(object.size) : null,
-    status: "processing",
-    moderation: {
-      status: "pending",
-      labels: [],
-      scoreMap: {},
-      modelVersion: "ai-logic",
-      reviewRequired: true,
-    },
-    createdAt: FieldValue.serverTimestamp(),
-  }, {merge: true});
-});
+exports.onAssetFinalize = onObjectFinalized(
+  {secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]},
+  async (event) => {
+    const object = event.data;
+    const filePath = object.name || "";
+    if (!filePath) return;
+    const match = filePath.match(/^uploads\/([^/]+)\/([^/]+)\/original$/);
+    if (!match) return;
+    const [, uid, assetId] = match;
+    const assetRef = db.collection("assets").doc(assetId);
+    const assetSnap = await assetRef.get();
+    if (!assetSnap.exists) {
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+    const asset = assetSnap.data() || {};
+    if (asset.ownerId !== uid) {
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+    const contentType = object.contentType || "";
+    const sizeBytes = object.size ? Number(object.size) : 0;
+    const kind = asset.kind || "document";
+    const policyCheck = validateAssetPolicy(kind, contentType, sizeBytes);
+    if (!policyCheck.ok) {
+      await assetRef.set({
+        status: "blocked",
+        contentType,
+        sizeBytes,
+        moderation: {
+          status: "blocked",
+          labels: [policyCheck.reason],
+          scoreMap: {},
+          modelVersion: "policy",
+          reviewRequired: true,
+        },
+      }, {merge: true});
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+
+    await assetRef.set({
+      status: "processing",
+      contentType,
+      sizeBytes,
+      storagePathOriginal: filePath,
+    }, {merge: true});
+
+    const moderation = await moderateAssetContent({
+      contentType,
+      sizeBytes,
+      path: filePath,
+      kind,
+    });
+    if (moderation.status === "blocked") {
+      await assetRef.set({
+        status: "blocked",
+        moderation,
+      }, {merge: true});
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+
+    await assetRef.set({
+      status: "ready",
+      moderation,
+      variants: asset.variants || {},
+    }, {merge: true});
+  }
+);
 
 exports.notifyMention = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);

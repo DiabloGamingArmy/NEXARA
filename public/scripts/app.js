@@ -49,6 +49,70 @@ async function callSecureFunction(name, payload = {}) {
     }
 }
 
+function getAssetCacheKey(assetId = '', variant = 'original') {
+    return `${assetId || 'asset'}:${variant || 'original'}`;
+}
+
+function getCachedAssetUrl(assetId, variant) {
+    const key = getAssetCacheKey(assetId, variant);
+    const cached = assetUrlCache[key];
+    if (!cached) return '';
+    if (cached.expiresAt && cached.expiresAt < Date.now()) {
+        delete assetUrlCache[key];
+        return '';
+    }
+    return cached.url || '';
+}
+
+async function fetchAssetUrl(assetId, variant) {
+    if (!assetId) return '';
+    const key = getAssetCacheKey(assetId, variant);
+    if (assetUrlPromises[key]) return assetUrlPromises[key];
+    assetUrlPromises[key] = callSecureFunction('getAssetDownloadUrl', { assetId, variant }).then(function (data) {
+        if (data?.url) {
+            assetUrlCache[key] = { url: data.url, expiresAt: data.expiresAt || Date.now() + 10 * 60 * 1000 };
+            return data.url;
+        }
+        return '';
+    }).finally(function () {
+        delete assetUrlPromises[key];
+    });
+    return assetUrlPromises[key];
+}
+
+function resolveAssetUrl(assetId, variant, onResolved) {
+    if (!assetId) return '';
+    const cached = getCachedAssetUrl(assetId, variant);
+    if (cached) return cached;
+    fetchAssetUrl(assetId, variant).then(function (url) {
+        if (url && typeof onResolved === 'function') onResolved(url);
+    }).catch(function () {});
+    return '';
+}
+
+function getPostMediaUrl(post) {
+    if (!post) return '';
+    if (post.mediaUrl && typeof post.mediaUrl === 'string' && post.mediaUrl.startsWith('http')) return post.mediaUrl;
+    const assetId = post.mediaAssetId || post.assetId || '';
+    if (!assetId) return '';
+    return resolveAssetUrl(assetId, 'original', function (url) {
+        post.mediaUrl = url;
+        if (currentViewId === 'feed') renderFeed();
+        if (activePostId && activePostId === post.id) renderThreadMainPost(post.id);
+    });
+}
+
+function getCommentMediaUrl(comment) {
+    if (!comment) return '';
+    if (comment.mediaUrl && typeof comment.mediaUrl === 'string' && comment.mediaUrl.startsWith('http')) return comment.mediaUrl;
+    const assetId = comment.mediaAssetId || '';
+    if (!assetId) return '';
+    return resolveAssetUrl(assetId, 'original', function (url) {
+        comment.mediaUrl = url;
+        renderThreadComments();
+    });
+}
+
 window.__NEXERA_BOOT_STAGE = 'appjs-evaluating';
 window.__NEXERA_BOOT_TS = Date.now();
 let bootCompleted = false;
@@ -952,7 +1016,13 @@ function resolveAvatarData(userLike = {}, uidOverride = '') {
     const uid = uidOverride || userLike.uid || userLike.id || '';
     const avatarColor = ensureAvatarColor(userLike, uid);
     const initial = resolveAvatarInitial(userLike);
-    return { photoURL: userLike.photoURL || '', avatarColor, initial };
+    let photoURL = userLike.photoURL || '';
+    if (!photoURL && userLike.photoAssetId) {
+        photoURL = resolveAssetUrl(userLike.photoAssetId, 'original', function (url) {
+            userLike.photoURL = url;
+        });
+    }
+    return { photoURL, avatarColor, initial };
 }
 
 function renderAvatar(userLike = {}, options = {}) {
@@ -1012,6 +1082,7 @@ function normalizeUserProfileData(data = {}, uid = '') {
         verified: isUserVerified({ ...data, accountRoles }),
         locationHistory,
         photoPath: data.photoPath || '',
+        photoAssetId: data.photoAssetId || '',
         savedPosts: Array.isArray(data.savedPosts) ? data.savedPosts : [],
         savedVideos: Array.isArray(data.savedVideos) ? data.savedVideos : []
     };
@@ -1156,6 +1227,8 @@ let messageActionsMenuEl = null;
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 let postReactionCache = {};
 let postReactionPromises = {};
+let assetUrlCache = {};
+let assetUrlPromises = {};
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosFeedLoaded = false;
@@ -4683,7 +4756,8 @@ function getPostHTML(post, options = {}) {
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
         let mediaContent = '';
-        if (post.mediaUrl) {
+        const resolvedMediaUrl = getPostMediaUrl(post);
+        if (resolvedMediaUrl) {
             if (post.type === 'video') {
                 const thumbnailUrl = getThumbnailUrl(post);
                 mediaContent = buildVideoPreviewShell({
@@ -4692,7 +4766,7 @@ function getPostHTML(post, options = {}) {
                     onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
                 });
             } else {
-                const safeUrl = escapeHtml(post.mediaUrl);
+                const safeUrl = escapeHtml(resolvedMediaUrl);
                 mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
             }
         }
@@ -5131,11 +5205,37 @@ window.toggleSave = async function (postId, event) {
 }
 
 // --- Creation & Upload ---
-async function uploadFileToStorage(file, path) {
+function getAssetKindForFile(file, fallback = 'document') {
+    const type = (file?.type || '').toLowerCase();
+    if (type.startsWith('image/')) return 'image';
+    if (type.startsWith('video/')) return 'video';
+    if (type.startsWith('audio/')) return 'audio';
+    if (type === 'application/pdf' || type === 'text/plain') return 'document';
+    return fallback;
+}
+
+async function uploadFileToStorage(file, { kind, visibility = 'private', onProgress } = {}) {
     if (!file) return null;
-    const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, file);
-    return await getDownloadURL(storageRef);
+    const resolvedKind = kind || getAssetKindForFile(file);
+    const asset = await callSecureFunction('createAsset', {
+        kind: resolvedKind,
+        visibility,
+        contentType: file.type || '',
+        sizeBytes: file.size || 0
+    });
+    const storagePath = asset?.storagePathOriginal;
+    if (!storagePath || !asset?.assetId) throw new Error('Asset creation failed');
+    const storageRef = ref(storage, storagePath);
+    await new Promise(function (resolve, reject) {
+        const task = uploadBytesResumable(storageRef, file);
+        task.on('state_changed', function (snapshot) {
+            if (typeof onProgress === 'function' && snapshot.totalBytes) {
+                const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                onProgress(progress);
+            }
+        }, reject, resolve);
+    });
+    return { assetId: asset.assetId, storagePathOriginal: storagePath };
 }
 
 function normalizeTagValue(tag = '') {
@@ -5944,10 +6044,15 @@ window.createPost = async function () {
         });
         const mentionUserIds = Array.from(seenNotify);
 
-        let mediaUrl = currentEditPost?.mediaUrl || null;
+        let mediaAssetId = currentEditPost?.mediaAssetId || '';
+        let mediaPath = currentEditPost?.mediaPath || '';
         if (fileInput.files[0]) {
-            const path = `posts/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
-            mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+            const upload = await uploadFileToStorage(fileInput.files[0], {
+                kind: getAssetKindForFile(fileInput.files[0]),
+                visibility: 'public'
+            });
+            mediaAssetId = upload?.assetId || '';
+            mediaPath = upload?.storagePathOriginal || '';
         }
 
         const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
@@ -5963,8 +6068,9 @@ window.createPost = async function () {
             categoryType: categoryDoc ? categoryDoc.type : null,
             visibility,
             contentType,
-            content: { text: content, mediaUrl, linkUrl: null, profileUid: null, meta: { tags, mentions } },
-            mediaUrl,
+            content: { text: content, mediaPath, linkUrl: null, profileUid: null, meta: { tags, mentions } },
+            mediaPath,
+            mediaAssetId,
             author: userProfile.name,
             userId: currentUser.uid,
             tags,
@@ -6149,17 +6255,20 @@ window.saveSettings = async function () {
 
     let photoURL = userProfile.photoURL;
     let photoPath = userProfile.photoPath || '';
+    let photoAssetId = userProfile.photoAssetId || '';
     const newPhoto = (fileInput && fileInput.files[0]) || (cameraInput && cameraInput.files[0]);
     if (newPhoto) {
-        const path = `users/${currentUser.uid}/pfp_${Date.now()}`;
-        photoURL = await uploadFileToStorage(newPhoto, path);
-        photoPath = path;
+        const upload = await uploadFileToStorage(newPhoto, { kind: 'avatar', visibility: 'public' });
+        photoPath = upload?.storagePathOriginal || '';
+        photoAssetId = upload?.assetId || '';
+        photoURL = '';
     } else if (manualPhoto) {
         photoURL = manualPhoto;
         photoPath = '';
+        photoAssetId = '';
     }
 
-    const updates = { displayName: name, name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath };
+    const updates = { displayName: name, name, realName, nickname, username, bio, links, phone, gender, email, region, theme, photoURL, photoPath, photoAssetId };
     userProfile = { ...userProfile, ...updates };
     storeUserInCache(currentUser.uid, userProfile);
 
@@ -6691,9 +6800,10 @@ const renderCommentHtml = function (c, isReply) {
 
     const parentCommentId = c.parentCommentId || c.parentId;
 
-    const mediaHtml = c.mediaUrl
-        ? `<div onclick="window.openFullscreenMedia('${c.mediaUrl}', 'image')">
-         <img src="${c.mediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;">
+    const commentMediaUrl = getCommentMediaUrl(c);
+    const mediaHtml = commentMediaUrl
+        ? `<div onclick="window.openFullscreenMedia('${commentMediaUrl}', 'image')">
+         <img src="${commentMediaUrl}" style="max-width:200px; border-radius:8px; margin-top:5px; cursor:pointer;">
        </div>`
         : "";
 
@@ -6928,7 +7038,8 @@ function renderThreadMainPost(postId) {
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
     let mediaContent = '';
-    if (post.mediaUrl) {
+    const resolvedMediaUrl = getPostMediaUrl(post);
+    if (resolvedMediaUrl) {
         if (post.type === 'video') {
             const thumbnailUrl = getThumbnailUrl(post);
             mediaContent = buildVideoPreviewShell({
@@ -6937,7 +7048,7 @@ function renderThreadMainPost(postId) {
                 onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
             });
         } else {
-            const safeUrl = escapeHtml(post.mediaUrl);
+            const safeUrl = escapeHtml(resolvedMediaUrl);
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
@@ -7022,11 +7133,13 @@ window.sendComment = async function () {
 
     let optimisticId = null;
     try {
-        let mediaUrl = null;
+        let mediaAssetId = '';
+        let mediaPath = '';
         if (fileInput.files[0]) {
-            const path = `comment_media/${currentUser.uid}/${Date.now()}_${fileInput.files[0].name}`;
             try {
-                mediaUrl = await uploadFileToStorage(fileInput.files[0], path);
+                const upload = await uploadFileToStorage(fileInput.files[0], { kind: getAssetKindForFile(fileInput.files[0]), visibility: 'public' });
+                mediaAssetId = upload?.assetId || '';
+                mediaPath = upload?.storagePathOriginal || '';
             } catch (err) {
                 alert('Unable to upload the image. Please try again.');
                 return;
@@ -7034,7 +7147,7 @@ window.sendComment = async function () {
         }
 
         const parentCommentId = normalizeReplyTarget(activeReplyId);
-        const payload = buildReplyRecord({ text, mediaUrl, parentCommentId, userId: currentUser.uid });
+        const payload = buildReplyRecord({ text, mediaUrl: '', parentCommentId, userId: currentUser.uid });
 
         const optimisticTimestamp = { seconds: Math.floor(Date.now() / 1000) };
         optimisticId = `optimistic-${Date.now()}`;
@@ -7045,7 +7158,9 @@ window.sendComment = async function () {
             likes: 0,
             dislikes: 0,
             likedBy: [],
-            dislikedBy: []
+            dislikedBy: [],
+            mediaAssetId,
+            mediaPath
         };
         optimisticThreadComments.unshift(optimisticComment);
         renderThreadComments();
@@ -7055,7 +7170,7 @@ window.sendComment = async function () {
         const result = await callSecureFunction('createComment', {
             postId: activePostId,
             text,
-            assetIds: mediaUrl ? [mediaUrl] : []
+            assetIds: mediaAssetId ? [mediaAssetId] : []
         });
         if (result?.moderation?.status === 'blocked') {
             toast('Your comment is under review.', 'warning');
@@ -7983,7 +8098,8 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     const locationBadge = renderLocationBadge(post.location);
     const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     let mediaContent = '';
-    if (post.mediaUrl && compact) {
+    const resolvedMediaUrl = getPostMediaUrl(post);
+    if (resolvedMediaUrl && compact) {
         if (post.type === 'video') {
             const thumbnailUrl = getThumbnailUrl(post);
             mediaContent = buildVideoPreviewShell({
@@ -7992,9 +8108,9 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
                 onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
             });
         } else {
-            mediaContent = `<div class="profile-card-media"><img src="${escapeHtml(post.mediaUrl)}" alt="Post Content" loading="lazy" decoding="async"></div>`;
+            mediaContent = `<div class="profile-card-media"><img src="${escapeHtml(resolvedMediaUrl)}" alt="Post Content" loading="lazy" decoding="async"></div>`;
         }
-    } else if (post.mediaUrl) {
+    } else if (resolvedMediaUrl) {
         if (post.type === 'video') {
             const thumbnailUrl = getThumbnailUrl(post);
             mediaContent = buildVideoPreviewShell({
@@ -8003,7 +8119,7 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
                 onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
             });
         } else {
-            const safeUrl = escapeHtml(post.mediaUrl);
+            const safeUrl = escapeHtml(resolvedMediaUrl);
             mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
         }
     }
@@ -8981,11 +9097,12 @@ window.beginEditPost = function () {
     if (tagInput) tagInput.value = '';
     const mentionInput = document.getElementById('mention-input');
     if (mentionInput) mentionInput.value = '';
-    if (post.mediaUrl) {
+    const resolvedMediaUrl = getPostMediaUrl(post);
+    if (resolvedMediaUrl) {
         const preview = document.getElementById('img-preview-tag');
         const previewContainer = document.getElementById('img-preview-container');
         if (preview && previewContainer) {
-            preview.src = post.mediaUrl;
+            preview.src = resolvedMediaUrl;
             previewContainer.style.display = 'block';
         }
     }

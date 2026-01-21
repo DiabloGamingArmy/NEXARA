@@ -23,6 +23,25 @@ service cloud.firestore {
         );
     }
 
+    function canReadAsset(assetId) {
+      let assetPath = /databases/$(database)/documents/assets/$(assetId);
+      return exists(assetPath)
+        && (
+          get(assetPath).data.visibility == 'public'
+          || (isSignedIn() && request.auth.uid == get(assetPath).data.ownerId)
+          || (get(assetPath).data.visibility == 'followers'
+              && isSignedIn()
+              && exists(/databases/$(database)/documents/users/$(get(assetPath).data.ownerId)/followers/$(request.auth.uid)))
+          || isStaffAccount()
+        )
+        && (
+          !('moderation' in get(assetPath).data)
+          || get(assetPath).data.moderation.status != 'blocked'
+          || (isSignedIn() && request.auth.uid == get(assetPath).data.ownerId)
+          || isStaffAccount()
+        );
+    }
+
     // -------------------------
     // User roles
     // -------------------------
@@ -295,18 +314,6 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      match /likes/{uid} {
-        allow read: if isSignedIn();
-        allow create, delete: if isSignedIn() && request.auth.uid == uid;
-        allow update: if false;
-      }
-
-      match /dislikes/{uid} {
-        allow read: if isSignedIn();
-        allow create, delete: if isSignedIn() && request.auth.uid == uid;
-        allow update: if false;
-      }
-
       match /reviews/{reviewId} {
         allow read: if canReadPost(postId)
           && (
@@ -464,7 +471,7 @@ service cloud.firestore {
     }
 
     match /assets/{assetId} {
-      allow read: if isSignedIn() && isStaffAccount();
+      allow read: if canReadAsset(assetId);
       allow write: if false;
     }
 
