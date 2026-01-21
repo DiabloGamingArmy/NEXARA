@@ -13,6 +13,52 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.founder == true;
     }
 
+    function getPostLikeCount(data) {
+      return ('likeCount' in data && data.likeCount is int) ? data.likeCount : 0;
+    }
+
+    function getPostDislikeCount(data) {
+      return ('dislikeCount' in data && data.dislikeCount is int) ? data.dislikeCount : 0;
+    }
+
+    function isValidCounterDelta(beforeValue, afterValue) {
+      return afterValue is int
+        && afterValue >= 0
+        && (afterValue == beforeValue
+            || afterValue == beforeValue + 1
+            || afterValue == beforeValue - 1);
+    }
+
+    function hasPostLikeAfter(postId, uid) {
+      return existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(uid));
+    }
+
+    function hasPostDislikeAfter(postId, uid) {
+      return existsAfter(/databases/$(database)/documents/posts/$(postId)/dislikes/$(uid));
+    }
+
+    function isValidPostReactionUpdate(postId) {
+      let beforeLike = getPostLikeCount(resource.data);
+      let afterLike = getPostLikeCount(request.resource.data);
+      let beforeDislike = getPostDislikeCount(resource.data);
+      let afterDislike = getPostDislikeCount(request.resource.data);
+
+      return request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'dislikeCount'])
+        && isValidCounterDelta(beforeLike, afterLike)
+        && isValidCounterDelta(beforeDislike, afterDislike)
+        && (
+          afterLike == beforeLike
+          || (afterLike > beforeLike && hasPostLikeAfter(postId, request.auth.uid))
+          || (afterLike < beforeLike && !hasPostLikeAfter(postId, request.auth.uid))
+        )
+        && (
+          afterDislike == beforeDislike
+          || (afterDislike > beforeDislike && hasPostDislikeAfter(postId, request.auth.uid))
+          || (afterDislike < beforeDislike && !hasPostDislikeAfter(postId, request.auth.uid))
+        );
+    }
+
     // -------------------------
     // User roles
     // -------------------------
@@ -255,11 +301,12 @@ service cloud.firestore {
         && (request.resource.data.categoryId == null
             || isCategoryMember(request.resource.data.categoryId));
 
-      // FIXED: Allow author to update all; allow others to update interactions
+      // FIXED: Allow author to update all; allow others to update reactions or review metadata
       allow update: if isSignedIn() && (
-        request.auth.uid == resource.data.userId ||
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['likes', 'likedBy', 'dislikes', 'dislikedBy', 'trustScore', 'reviewStatus'])
+        request.auth.uid == resource.data.userId
+        || request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['trustScore', 'reviewStatus'])
+        || isValidPostReactionUpdate(postId)
       );
      
       allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
@@ -277,6 +324,18 @@ service cloud.firestore {
         );
 
         allow delete: if isSignedIn() && request.auth.uid == resource.data.userId;
+      }
+
+      match /likes/{uid} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && request.auth.uid == uid;
+        allow update: if false;
+      }
+
+      match /dislikes/{uid} {
+        allow read: if isSignedIn();
+        allow create, delete: if isSignedIn() && request.auth.uid == uid;
+        allow update: if false;
       }
 
       match /reviews/{reviewId} {
