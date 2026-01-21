@@ -5,30 +5,92 @@ rules_version = '2';
 //    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
 service firebase.storage {
   match /b/{bucket}/o {
-    match /videos/{uid}/{videoId}/{fileName} {
-      allow read: if true;
-      allow write: if request.auth != null
-        && request.auth.uid == uid
-        && request.resource.size < 100 * 1024 * 1024 * 1024;
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    match /conversation_avatars/{cid}/{fileName} {
-      allow read: if true;
-      allow write: if request.auth != null
-        && exists(/databases/$(database)/documents/conversations/$(cid))
-        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    function assetDoc(assetId) {
+      return firestore.get(/databases/(default)/documents/assets/$(assetId));
     }
 
-    match /chats/{cid}/messages/{mid}/{fileName} {
-      allow read, write: if request.auth != null
-        && exists(/databases/$(database)/documents/conversations/$(cid))
-        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    function assetExists(assetId) {
+      return firestore.exists(/databases/(default)/documents/assets/$(assetId));
     }
 
-    match /dm_media/{cid}/{fileName} {
-      allow read, write: if request.auth != null
-        && exists(/databases/$(database)/documents/conversations/$(cid))
-        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(cid)).data.participants;
+    function assetOwner(assetId) {
+      return assetDoc(assetId).data.ownerId;
+    }
+
+    function assetVisibility(assetId) {
+      return assetDoc(assetId).data.visibility;
+    }
+
+    function assetModerationStatus(assetId) {
+      return assetDoc(assetId).data.moderation.status;
+    }
+
+    function isStaff() {
+      return isSignedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && ('accountRoles' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data)
+        && (('staff' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.accountRoles)
+            || ('admin' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.accountRoles));
+    }
+
+    function isFollower(ownerId) {
+      return isSignedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(ownerId)/followers/$(request.auth.uid));
+    }
+
+    function canReadAsset(assetId) {
+      return assetExists(assetId)
+        && (
+          assetVisibility(assetId) == 'public'
+          || (isSignedIn() && assetOwner(assetId) == request.auth.uid)
+          || (assetVisibility(assetId) == 'followers' && isFollower(assetOwner(assetId)))
+          || isStaff()
+        )
+        && (
+          assetModerationStatus(assetId) != 'blocked'
+          || (isSignedIn() && assetOwner(assetId) == request.auth.uid)
+          || isStaff()
+        );
+    }
+
+    function isImage() { return request.resource.contentType.matches('image/.*'); }
+    function isAudio() { return request.resource.contentType.matches('audio/.*'); }
+    function isVideo() { return request.resource.contentType.matches('video/.*'); }
+    function isDocument() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'text/plain',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      ];
+    }
+
+    function validAssetUpload(assetId) {
+      return assetExists(assetId)
+        && isSignedIn()
+        && assetOwner(assetId) == request.auth.uid
+        && assetDoc(assetId).data.status == 'uploading'
+        && (
+          (assetDoc(assetId).data.kind == 'avatar' && isImage() && request.resource.size <= 5 * 1024 * 1024)
+          || (assetDoc(assetId).data.kind == 'image' && isImage() && request.resource.size <= 25 * 1024 * 1024)
+          || (assetDoc(assetId).data.kind == 'audio' && isAudio() && request.resource.size <= 200 * 1024 * 1024)
+          || (assetDoc(assetId).data.kind == 'document' && isDocument() && request.resource.size <= 100 * 1024 * 1024)
+          || (assetDoc(assetId).data.kind == 'video' && isVideo() && request.resource.size <= 2 * 1024 * 1024 * 1024)
+        );
+    }
+
+    match /uploads/{uid}/{assetId}/original {
+      allow read: if canReadAsset(assetId);
+      allow write: if validAssetUpload(assetId) && request.auth.uid == uid;
+    }
+
+    match /uploads/{uid}/{assetId}/variants/{variantName} {
+      allow read: if canReadAsset(assetId);
+      allow write: if false;
     }
 
     match /{allPaths=**} {
