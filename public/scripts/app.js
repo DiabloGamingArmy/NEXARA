@@ -1,6 +1,6 @@
 // UI-only: inbox content filters, video modal mounting, and profile cover controls.
 import { setPersistence, browserLocalPersistence, inMemoryPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, startAt, startAfter, endAt, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, arrayUnion, arrayRemove, increment, where, getDocs, collectionGroup, limit, limitToLast, startAt, startAfter, endAt, endBefore, Timestamp, runTransaction, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 import { ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getMessaging, getToken, onMessage, deleteToken as deleteFcmToken, isSupported as isMessagingSupported } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging.js";
@@ -1044,7 +1044,14 @@ let conversationMappings = [];
 let conversationDetailsCache = {};
 let conversationSettingsId = null;
 let conversationSettingsSearchResults = [];
+let conversationListRenderState = { count: 0, topId: null };
+let conversationDetailsPrefetchQueue = [];
+let conversationDetailsPrefetchPending = new Set();
+let conversationDetailsPrefetchActive = false;
 let messageThreadCache = {};
+let messageThreadScrollHandler = null;
+let messageThreadScrollRegion = null;
+let messageThreadPagingState = {};
 let pendingMessageAttachments = [];
 let messageUploadState = {
     status: 'idle',
@@ -1368,7 +1375,6 @@ window.Nexera.releaseSplash = function (reason = 'release') {
 let staffRequestsUnsub = null;
 let staffReportsUnsub = null;
 let staffLogsUnsub = null;
-let staffTrendingSyncBound = false;
 let activeOptionsPost = null;
 let threadComments = [];
 let optimisticThreadComments = [];
@@ -2295,6 +2301,112 @@ function resolveCategoryNameBySlug(slug) {
     if (!slug) return 'Unknown';
     const match = categories.find(function (cat) { return cat.slug === slug || cat.id === slug; });
     return match?.name || formatSlugLabel(slug);
+}
+
+async function fetchStoryFeed(viewerUid) {
+    if (!viewerUid) return [];
+    const feedRef = query(
+        collection(db, 'storyFeeds', viewerUid, 'items'),
+        orderBy('latestStoryAt', 'desc'),
+        limit(20)
+    );
+    const snap = await getDocs(feedRef);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function fetchStoriesForOwner(ownerUid) {
+    if (!ownerUid) return [];
+    const now = Timestamp.now();
+    const storiesRef = query(
+        collection(db, 'stories'),
+        where('ownerId', '==', ownerUid),
+        where('expiresAt', '>', now),
+        orderBy('expiresAt', 'asc'),
+        orderBy('createdAt', 'asc'),
+        limit(50)
+    );
+    const snap = await getDocs(storiesRef);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function createStoryDocument(payload = {}) {
+    if (!currentUser?.uid) return null;
+    const ownerId = payload.ownerId || currentUser.uid;
+    if (!payload.storagePath || !payload.mediaType) return null;
+    const expiresAt = Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
+    // Note: Firestore TTL should be configured on expiresAt to auto-delete story docs.
+    const data = {
+        ownerId,
+        mediaType: payload.mediaType,
+        storagePath: payload.storagePath,
+        createdAt: serverTimestamp(),
+        expiresAt,
+        visibility: payload.visibility || 'public',
+        caption: payload.caption || null
+    };
+    const ref = await addDoc(collection(db, 'stories'), data);
+    return ref.id;
+}
+
+async function resolveStoryMediaUrl(story = {}) {
+    if (!story?.storagePath) return null;
+    try {
+        const url = await getDownloadURL(ref(storage, story.storagePath));
+        return url;
+    } catch (e) {
+        console.warn('Unable to resolve story media url', e?.message || e);
+        return null;
+    }
+}
+
+async function openStoryViewer(ownerUid) {
+    const stories = await fetchStoriesForOwner(ownerUid);
+    if (!stories.length) {
+        toast('No active stories yet.', 'info');
+        return;
+    }
+    const first = stories[0];
+    const mediaUrl = await resolveStoryMediaUrl(first);
+    if (!mediaUrl) return;
+    const kind = (first.mediaType || '').includes('video') ? 'video' : 'image';
+    openFullscreenMedia(mediaUrl, kind);
+}
+
+let storyFeedLoadToken = 0;
+async function loadStoriesAndLiveBar() {
+    const container = document.getElementById('stories-live-bar-slot');
+    if (!container) return;
+    const viewerUid = currentUser?.uid || '';
+    const token = ++storyFeedLoadToken;
+    let feedItems = [];
+    try {
+        feedItems = await fetchStoryFeed(viewerUid);
+    } catch (e) {
+        console.warn('Unable to fetch story feed', e?.message || e);
+    }
+    if (token !== storyFeedLoadToken) return;
+    const stories = feedItems.map(function (item) {
+        const ownerUid = item.ownerUid || item.id;
+        const cached = ownerUid ? (getCachedUser(ownerUid) || {}) : {};
+        const label = resolveDisplayName(cached) || cached.username || 'User';
+        return {
+            id: ownerUid,
+            ownerUid,
+            label
+        };
+    });
+    renderStoriesAndLiveBar(container, {
+        stories,
+        onStorySelect: function (story) {
+            const ownerUid = story.ownerUid || story.id;
+            if (!ownerUid) return;
+            openStoryViewer(ownerUid);
+        }
+    });
 }
 
 // Trending topics now come from the staff-populated "trendingCategories" collection.
@@ -9928,46 +10040,19 @@ function applyCallConversationIndicators(item, mapping, details, highlightData, 
     }
 }
 
-function renderConversationList() {
-    const listEl = document.getElementById('conversation-list');
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    const emptyEl = document.getElementById('conversation-list-empty');
-    const pinnedEl = document.getElementById('pinned-conversations');
+function getConversationMappingTimestampMs(mapping = {}) {
+    const tsSource = mapping.lastMessageAt || mapping.createdAt;
+    return tsSource?.toMillis ? tsSource.toMillis() : tsSource?.seconds ? tsSource.seconds * 1000 : 0;
+}
+
+function getConversationListRenderData() {
     const currentUid = currentUser?.uid || '';
-
-    if (conversationMappings.length === 0) {
-        const emptyText = conversationListFilter === 'requests'
-            ? 'No message requests yet.'
-            : 'Start a conversation';
-        if (emptyEl) {
-            emptyEl.textContent = emptyText;
-            emptyEl.style.display = 'block';
-        } else {
-            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
-        }
-        updateInboxNavBadge();
-        try {
-            const path = (location.pathname || '').toLowerCase();
-            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
-            if (!isHome) {
-                releaseInitialSplashOnce('inbox-initial-ready');
-            }
-        } catch (e) {}
-        return;
-    }
-    if (emptyEl) emptyEl.style.display = 'none';
-
     const orderedMappings = conversationMappings
         .slice()
         .sort(function (a, b) {
             if (!!a.archived !== !!b.archived) return a.archived ? 1 : -1;
             if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-            const aTsSource = a.lastMessageAt || a.createdAt;
-            const bTsSource = b.lastMessageAt || b.createdAt;
-            const aTs = aTsSource?.toMillis ? aTsSource.toMillis() : aTsSource?.seconds ? aTsSource.seconds * 1000 : 0;
-            const bTs = bTsSource?.toMillis ? bTsSource.toMillis() : bTsSource?.seconds ? bTsSource.seconds * 1000 : 0;
-            return bTs - aTs;
+            return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
         });
 
     const search = (conversationListSearchTerm || '').toLowerCase();
@@ -9994,119 +10079,232 @@ function renderConversationList() {
     const pinned = filtered.filter(function (mapping) { return mapping.pinned; });
     const unpinned = filtered.filter(function (mapping) { return !mapping.pinned; });
     const visible = unpinned.slice(0, conversationListVisibleCount);
-    uiDebugLog('conversation list', {
-        total: orderedMappings.length,
-        filtered: filtered.length,
-        filter: conversationListFilter,
-        searchActive: !!search
-    });
 
-    const highlightData = getActiveCallHighlightData();
-    const renderRow = function (mapping, targetEl) {
-        const details = conversationDetailsCache[mapping.id] || {};
-        const participants = details.participants || mapping.otherParticipantIds || [];
-        const meta = deriveOtherParticipantMeta(participants, currentUid, details);
-        const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
-        if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
-            resolveUserProfile(otherId).then(function () {
-                if (currentViewId === 'messages') renderConversationList();
-            });
-        }
-        const otherProfile = otherId ? getCachedUser(otherId) : null;
-        const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
-        const isGroup = (participants || []).length > 2 || details.type === 'group';
-        const mergedConvo = {
-            ...details,
-            participants,
-            participantNames: details.participantNames || details.participantUsernames || participantLabels,
-            participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
-            title: details.title || null
-        };
-        const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
-        const convoAvatar = getConversationAvatarUrl(details);
-        let avatarUser = {
-            uid: mapping.id || otherId || 'conversation',
-            username: name,
-            displayName: name,
-            photoURL: convoAvatar,
-            avatarColor: computeAvatarColor(name)
-        };
-        if (!isGroup && otherId) {
-            avatarUser = {
-                ...otherProfile,
-                uid: otherId,
-                username: otherProfile?.username || name,
-                displayName: resolveDisplayName(otherProfile) || name,
-                photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
-                avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
-            };
-        } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
-            avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
-        }
-        const avatarHtml = renderAvatar(avatarUser, { size: 42 });
-
-        const item = document.createElement('div');
-        item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
-        const unread = mapping.unreadCount || 0;
-        const muteState = resolveMuteState(mapping.id, mapping);
-        const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
-        updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
-        const unreadLabel = unread > 10 ? '10+' : `${unread}`;
-        const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
-        const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
-        const highlightData = getActiveCallHighlightData();
-        const activeCallEntry = getActiveCallForConversation(mapping.id);
-        const isCallHostConversation = !!activeCallEntry;
-        const previewMarkup = isCallHostConversation
-            ? `<span class="active-call-pill">Active Call</span>`
-            : previewText;
-        const tsSource = mapping.lastMessageAt || mapping.createdAt;
-        const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
-        item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
-            <div class="conversation-body">
-                <div class="conversation-title-row">
-                    <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
-                    ${flagHtml}
-                </div>
-                <div class="conversation-preview">${previewMarkup}</div>
-            </div>`;
-        applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
-        item.onclick = function () {
-            const convoId = mapping.id;
-            const wasActiveConversation = (activeConversationId === convoId);
-            const wasCallViewOpen = !!isCallViewOpen;
-
-            openConversation(convoId);
-
-            const hostCall = getActiveCallForConversation(convoId);
-            const isCurrentActiveCallThread = !!hostCall
-                && !!activeCallSession
-                && activeCallSession.status === 'active'
-                && activeCallSession.callId === hostCall.id
-                && activeCallSession.conversationId === convoId;
-
-            if (!isCurrentActiveCallThread) return;
-
-            if (!wasActiveConversation) {
-                openCallView();
-                return;
-            }
-
-            if (wasCallViewOpen) {
-                closeCallView();
-            } else {
-                openCallView();
-            }
-        };
-        targetEl.appendChild(item);
+    return {
+        currentUid,
+        orderedMappings,
+        filtered,
+        pinned,
+        unpinned,
+        visible,
+        search
     };
+}
+
+function getConversationListTopId(renderData) {
+    if (!renderData) return null;
+    if (renderData.pinned.length) return renderData.pinned[0].id;
+    if (renderData.visible.length) return renderData.visible[0].id;
+    return renderData.filtered[0]?.id || null;
+}
+
+function buildConversationRowElement(mapping, currentUid) {
+    const details = conversationDetailsCache[mapping.id] || {};
+    const participants = details.participants || mapping.otherParticipantIds || [];
+    const meta = deriveOtherParticipantMeta(participants, currentUid, details);
+    const otherId = meta.otherIds?.[0] || mapping.otherParticipantIds?.[0];
+    if (otherId && !getCachedUser(otherId, { allowStale: false }) && !userFetchPromises[otherId]) {
+        resolveUserProfile(otherId).then(function () {
+            if (currentViewId === 'messages') renderConversationList();
+        });
+    }
+    const otherProfile = otherId ? getCachedUser(otherId) : null;
+    const participantLabels = (details.participantNames || meta.names || details.participantUsernames || meta.usernames || []).filter(Boolean);
+    const isGroup = (participants || []).length > 2 || details.type === 'group';
+    const mergedConvo = {
+        ...details,
+        participants,
+        participantNames: details.participantNames || details.participantUsernames || participantLabels,
+        participantUsernames: details.participantUsernames || mapping.otherParticipantUsernames,
+        title: details.title || null
+    };
+    const name = computeConversationTitle(mergedConvo, currentUser?.uid) || 'Conversation';
+    const convoAvatar = getConversationAvatarUrl(details);
+    let avatarUser = {
+        uid: mapping.id || otherId || 'conversation',
+        username: name,
+        displayName: name,
+        photoURL: convoAvatar,
+        avatarColor: computeAvatarColor(name)
+    };
+    if (!isGroup && otherId) {
+        avatarUser = {
+            ...otherProfile,
+            uid: otherId,
+            username: otherProfile?.username || name,
+            displayName: resolveDisplayName(otherProfile) || name,
+            photoURL: normalizeImageUrl(otherProfile?.photoURL) || convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '',
+            avatarColor: otherProfile?.avatarColor || meta.colors?.[0] || computeAvatarColor(otherProfile?.username || otherId)
+        };
+    } else if (convoAvatar || mapping.otherParticipantAvatars?.length || meta.avatars?.length) {
+        avatarUser.photoURL = convoAvatar || normalizeImageUrl(mapping.otherParticipantAvatars?.[0]) || normalizeImageUrl(meta.avatars?.[0]) || '';
+    }
+    const avatarHtml = renderAvatar(avatarUser, { size: 42 });
+
+    const item = document.createElement('div');
+    item.className = 'conversation-item' + (activeConversationId === mapping.id ? ' active' : '');
+    item.dataset.conversationId = mapping.id;
+    const unread = mapping.unreadCount || 0;
+    const muteState = resolveMuteState(mapping.id, mapping);
+    const isMuted = muteState.active || (details.mutedBy || []).includes(currentUid);
+    updateConversationMappingState(mapping.id, { muted: isMuted, muteUntil: muteState.until || null });
+    const unreadLabel = unread > 10 ? '10+' : `${unread}`;
+    const flagHtml = unread > 0 ? `<div class="conversation-flags"><span class="badge">${unreadLabel}</span></div>` : '';
+    const previewText = escapeHtml(mapping.lastMessagePreview || details.lastMessagePreview || 'Start a chat');
+    const highlightData = getActiveCallHighlightData();
+    const activeCallEntry = getActiveCallForConversation(mapping.id);
+    const isCallHostConversation = !!activeCallEntry;
+    const previewMarkup = isCallHostConversation
+        ? `<span class="active-call-pill">Active Call</span>`
+        : previewText;
+    const titleBadge = (!isGroup && otherProfile) ? renderVerifiedBadge(otherProfile) : '';
+    item.innerHTML = `<div class="conversation-avatar-slot">${avatarHtml}</div>
+        <div class="conversation-body">
+            <div class="conversation-title-row">
+                <div class="conversation-title">${escapeHtml(name)}${titleBadge}</div>
+                ${flagHtml}
+            </div>
+            <div class="conversation-preview">${previewMarkup}</div>
+        </div>`;
+    applyCallConversationIndicators(item, mapping, details, highlightData, isCallHostConversation);
+    item.onclick = function () {
+        const convoId = mapping.id;
+        const wasActiveConversation = (activeConversationId === convoId);
+        const wasCallViewOpen = !!isCallViewOpen;
+
+        openConversation(convoId);
+
+        const hostCall = getActiveCallForConversation(convoId);
+        const isCurrentActiveCallThread = !!hostCall
+            && !!activeCallSession
+            && activeCallSession.status === 'active'
+            && activeCallSession.callId === hostCall.id
+            && activeCallSession.conversationId === convoId;
+
+        if (!isCurrentActiveCallThread) return;
+
+        if (!wasActiveConversation) {
+            openCallView();
+            return;
+        }
+
+        if (wasCallViewOpen) {
+            closeCallView();
+        } else {
+            openCallView();
+        }
+    };
+    return item;
+}
+
+function updateConversationListEmptyState(renderData, listEl, emptyEl) {
+    if (!listEl) return false;
+    if (conversationMappings.length === 0) {
+        const emptyText = conversationListFilter === 'requests'
+            ? 'No message requests yet.'
+            : 'Start a conversation';
+        if (emptyEl) {
+            emptyEl.textContent = emptyText;
+            emptyEl.style.display = 'block';
+        } else {
+            listEl.innerHTML = `<div class="empty-state">${emptyText}</div>`;
+        }
+        updateInboxNavBadge();
+        try {
+            const path = (location.pathname || '').toLowerCase();
+            const isHome = path === '/home' || path.endsWith('/home') || path.includes('/home');
+            if (!isHome) {
+                releaseInitialSplashOnce('inbox-initial-ready');
+            }
+        } catch (e) {}
+        return true;
+    }
+    if (emptyEl) emptyEl.style.display = 'none';
+    return false;
+}
+
+function updateConversationListItem(mapping, renderData) {
+    const listEl = document.getElementById('conversation-list');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    const emptyEl = document.getElementById('conversation-list-empty');
+    if (!listEl || !mapping?.id) return;
+
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) {
+        conversationListRenderState.count = conversationMappings.length;
+        conversationListRenderState.topId = null;
+        return;
+    }
+
+    const isPinned = renderData.pinned.some(function (item) { return item.id === mapping.id; });
+    const isVisible = renderData.visible.some(function (item) { return item.id === mapping.id; });
+    const pinnedRow = pinnedEl ? pinnedEl.querySelector(`[data-conversation-id="${mapping.id}"]`) : null;
+    const listRow = listEl.querySelector(`[data-conversation-id="${mapping.id}"]`);
+
+    if (!isPinned && !isVisible) {
+        if (pinnedRow) pinnedRow.remove();
+        if (listRow) listRow.remove();
+        if (pinnedEl && !renderData.pinned.length) {
+            pinnedEl.style.display = 'none';
+            pinnedEl.innerHTML = '';
+        }
+        return;
+    }
+
+    const currentUid = renderData.currentUid || currentUser?.uid || '';
+    const nextRow = buildConversationRowElement(mapping, currentUid);
+    if (isPinned) {
+        if (pinnedEl) {
+            if (!pinnedEl.querySelector('.inbox-section-label')) {
+                pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
+            }
+            if (pinnedRow) {
+                pinnedRow.replaceWith(nextRow);
+            } else {
+                pinnedEl.appendChild(nextRow);
+            }
+            pinnedEl.style.display = 'block';
+        }
+        if (listRow) listRow.remove();
+        return;
+    }
+
+    if (pinnedRow) pinnedRow.remove();
+    if (listRow) {
+        listRow.replaceWith(nextRow);
+    } else {
+        listEl.appendChild(nextRow);
+    }
+}
+
+function renderConversationList() {
+    const listEl = document.getElementById('conversation-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const emptyEl = document.getElementById('conversation-list-empty');
+    const pinnedEl = document.getElementById('pinned-conversations');
+    const renderData = getConversationListRenderData();
+    const currentUid = renderData.currentUid;
+
+    if (updateConversationListEmptyState(renderData, listEl, emptyEl)) return;
+
+    const pinned = renderData.pinned;
+    const unpinned = renderData.unpinned;
+    const visible = renderData.visible;
+    uiDebugLog('conversation list', {
+        total: renderData.orderedMappings.length,
+        filtered: renderData.filtered.length,
+        filter: conversationListFilter,
+        searchActive: !!renderData.search
+    });
 
     if (pinnedEl) {
         pinnedEl.innerHTML = '';
         if (pinned.length) {
             pinnedEl.style.display = 'block';
             pinnedEl.innerHTML = '<div class="inbox-section-label">Pinned</div>';
-            pinned.forEach(function (mapping) { renderRow(mapping, pinnedEl); });
+            pinned.forEach(function (mapping) {
+                pinnedEl.appendChild(buildConversationRowElement(mapping, currentUid));
+            });
         } else {
             pinnedEl.style.display = 'none';
         }
@@ -10130,7 +10328,9 @@ function renderConversationList() {
         return;
     }
 
-    visible.forEach(function (mapping) { renderRow(mapping, listEl); });
+    visible.forEach(function (mapping) {
+        listEl.appendChild(buildConversationRowElement(mapping, currentUid));
+    });
     if (listEl.dataset.scrollBound !== 'true') {
         listEl.addEventListener('scroll', function () {
             const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 24;
@@ -10141,6 +10341,8 @@ function renderConversationList() {
         });
         listEl.dataset.scrollBound = 'true';
     }
+    conversationListRenderState.count = conversationMappings.length;
+    conversationListRenderState.topId = getConversationListTopId(renderData);
     updateInboxNavBadge();
     try {
         const path = (location.pathname || '').toLowerCase();
@@ -12258,31 +12460,33 @@ function scheduleMessagesRerender(conversationId, convo) {
     }, 0);
 }
 
-function renderMessages(msgs = [], convo = {}) {
-    const body = document.getElementById('message-thread');
-    const scrollRegion = getMessageScrollContainer();
-    if (!body || !scrollRegion) return;
-    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
-    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
-    body.innerHTML = '';
+function getMessageRenderSeed(msgs = []) {
+    if (!Array.isArray(msgs) || msgs.length === 0) {
+        return { lastTimestamp: null, lastDateDivider: null, lastSenderId: null };
+    }
+    const lastMsg = msgs[msgs.length - 1];
+    const lastTimestamp = toDateSafe(lastMsg.createdAt) || new Date();
+    const lastSenderId = (lastMsg.isSystem || lastMsg.type === 'system') ? null : (lastMsg.senderId || null);
+    return { lastTimestamp, lastDateDivider: lastTimestamp, lastSenderId };
+}
 
-    let lastTimestamp = null;
-    let lastDateDivider = null;
-    let lastSenderId = null;
+function buildMessageFragment(msgs = [], convo = {}, options = {}) {
+    let lastTimestamp = options.lastTimestamp || null;
+    let lastDateDivider = options.lastDateDivider || null;
+    let lastSenderId = options.lastSenderId || null;
     let latestSelfMessage = null;
     const missingSenders = new Set();
     const missingMedia = new Set();
     const missingCallIds = new Set();
     const fragment = document.createDocumentFragment();
-    const searchTerm = (conversationSearchTerm || '').toLowerCase();
-    conversationSearchHits = [];
-    const conversationId = convo.id || activeConversationId || '';
-    const callInviteIds = new Set(msgs.map(function (message) {
+    const searchTerm = (options.searchTerm || '').toLowerCase();
+    const searchHits = [];
+    const conversationId = options.conversationId || convo.id || activeConversationId || '';
+    const callInviteIds = options.callInviteIds || new Set(msgs.map(function (message) {
         if (message?.type !== 'call_invite') return null;
         const normalized = normalizeCallMessageFields(message);
         return normalized.callId || null;
     }).filter(Boolean));
-    renderPinnedMessages(convo, msgs);
 
     msgs.forEach(function (msg, idx) {
         const createdDate = toDateSafe(msg.createdAt) || new Date();
@@ -12400,7 +12604,7 @@ function renderMessages(msgs = [], convo = {}) {
         const hasSearchMatch = searchTerm && baseTextRaw.toLowerCase().includes(searchTerm);
         let textMarkup = escapeHtml(baseTextRaw);
         if (hasSearchMatch) {
-            conversationSearchHits.push(msg.id);
+            searchHits.push(msg.id);
             const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')})`, 'ig');
             textMarkup = escapeHtml(baseTextRaw).replace(regex, '<mark>$1</mark>');
         }
@@ -12578,8 +12782,18 @@ function renderMessages(msgs = [], convo = {}) {
         }
     }
 
-    body.appendChild(fragment);
+    return {
+        fragment,
+        missingSenders,
+        missingMedia,
+        missingCallIds,
+        searchHits,
+        state: { lastTimestamp, lastDateDivider, lastSenderId }
+    };
+}
 
+function handleMessageRenderDependencies(convo = {}, msgs = [], missingCallIds = new Set(), missingSenders = new Set(), missingMedia = new Set()) {
+    const conversationId = convo.id || activeConversationId || '';
     if (missingCallIds.size && conversationId) {
         Promise.all(Array.from(missingCallIds).map(function (callId) {
             return ensureCallDocCached(callId);
@@ -12604,6 +12818,88 @@ function renderMessages(msgs = [], convo = {}) {
             }
         });
     }
+}
+
+function renderMessages(msgs = [], convo = {}, options = {}) {
+    const body = document.getElementById('message-thread');
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion) return;
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
+    const previousScrollTop = scrollRegion.scrollTop;
+    const previousScrollHeight = scrollRegion.scrollHeight;
+    body.innerHTML = '';
+
+    const searchTerm = (conversationSearchTerm || '').toLowerCase();
+    conversationSearchHits = [];
+    const conversationId = convo.id || activeConversationId || '';
+    const callInviteIds = new Set(msgs.map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
+    renderPinnedMessages(convo, msgs);
+
+    const fragmentData = buildMessageFragment(msgs, convo, {
+        searchTerm,
+        conversationId,
+        callInviteIds
+    });
+    conversationSearchHits = fragmentData.searchHits;
+    body.appendChild(fragmentData.fragment);
+    handleMessageRenderDependencies(convo, msgs, fragmentData.missingCallIds, fragmentData.missingSenders, fragmentData.missingMedia);
+
+    if (options.preserveScrollPosition) {
+        scrollRegion.scrollTop = previousScrollTop + (scrollRegion.scrollHeight - previousScrollHeight);
+    } else if (shouldStickToBottom) {
+        scrollMessagesToBottom();
+        const media = scrollRegion.querySelectorAll('img, video');
+        media.forEach(function (node) {
+            const handler = function () { scrollMessagesToBottom(); };
+            if (node.tagName === 'IMG') {
+                if (!node.complete) node.addEventListener('load', handler, { once: true });
+            } else {
+                node.addEventListener('loadedmetadata', handler, { once: true });
+            }
+        });
+    } else {
+        scrollRegion.scrollTop = Math.max(0, scrollRegion.scrollHeight - previousOffset);
+    }
+    if (forceConversationScroll) {
+        forceConversationScroll = false;
+    }
+}
+
+function appendMessagesToThread(convoId, newMessages = [], convo = {}, seedMessages = []) {
+    const body = document.getElementById('message-thread');
+    const scrollRegion = getMessageScrollContainer();
+    if (!body || !scrollRegion || !newMessages.length) return;
+    if (conversationSearchTerm) {
+        renderMessages(messageThreadCache[convoId] || [], convo);
+        return;
+    }
+    const shouldStickToBottom = forceConversationScroll || isNearBottom(scrollRegion);
+    const previousOffset = scrollRegion.scrollHeight - scrollRegion.scrollTop;
+    const conversationId = convo.id || convoId || activeConversationId || '';
+    const seedState = getMessageRenderSeed(seedMessages);
+    const callInviteIds = new Set((messageThreadCache[convoId] || []).map(function (message) {
+        if (message?.type !== 'call_invite') return null;
+        const normalized = normalizeCallMessageFields(message);
+        return normalized.callId || null;
+    }).filter(Boolean));
+
+    const fragmentData = buildMessageFragment(newMessages, convo, {
+        searchTerm: '',
+        conversationId,
+        callInviteIds,
+        lastTimestamp: seedState.lastTimestamp,
+        lastDateDivider: seedState.lastDateDivider,
+        lastSenderId: seedState.lastSenderId
+    });
+
+    body.appendChild(fragmentData.fragment);
+    handleMessageRenderDependencies(convo, messageThreadCache[convoId] || [], fragmentData.missingCallIds, fragmentData.missingSenders, fragmentData.missingMedia);
+
     if (shouldStickToBottom) {
         scrollMessagesToBottom();
         const media = scrollRegion.querySelectorAll('img, video');
@@ -13335,21 +13631,118 @@ async function fetchConversation(conversationId) {
     return null;
 }
 
-async function listenToMessages(convoId) {
+function insertMessageSorted(cache = [], msg = {}) {
+    const ts = getMessageTimestampMs(msg) || 0;
+    let insertIndex = cache.findIndex(function (item) { return (getMessageTimestampMs(item) || 0) > ts; });
+    if (insertIndex === -1) insertIndex = cache.length;
+    cache.splice(insertIndex, 0, msg);
+    return insertIndex;
+}
+
+function upsertMessageInCache(cache = [], msg = {}) {
+    const existingIndex = cache.findIndex(function (item) { return item.id === msg.id; });
+    if (existingIndex === -1) {
+        return { index: insertMessageSorted(cache, msg), type: 'added' };
+    }
+    const prev = cache[existingIndex];
+    const prevTs = getMessageTimestampMs(prev) || 0;
+    const nextTs = getMessageTimestampMs(msg) || prevTs;
+    cache[existingIndex] = { ...prev, ...msg };
+    if (nextTs !== prevTs) {
+        cache.splice(existingIndex, 1);
+        return { index: insertMessageSorted(cache, { ...prev, ...msg }), type: 'moved' };
+    }
+    return { index: existingIndex, type: 'modified' };
+}
+
+function removeMessageFromCache(cache = [], msgId) {
+    const index = cache.findIndex(function (item) { return item.id === msgId; });
+    if (index === -1) return null;
+    cache.splice(index, 1);
+    return index;
+}
+
+async function listenToLatestMessages(convoId, pageSize = 50) {
     if (messagesUnsubscribe) messagesUnsubscribe();
-    const msgRef = query(collection(db, 'conversations', convoId, 'messages'), orderBy('createdAt'));
+    const msgRef = query(
+        collection(db, 'conversations', convoId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        limitToLast(pageSize)
+    );
     messagesUnsubscribe = ListenerRegistry.register(`messages:thread:${convoId}`, onSnapshot(msgRef, function (snap) {
-        const msgs = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
-        messageThreadCache[convoId] = msgs;
+        const changes = snap.docChanges();
+        if (!changes.length) return;
+        const previousMessages = (messageThreadCache[convoId] || []).slice();
+        const nextMessages = messageThreadCache[convoId] || [];
+        const addedMessages = [];
+        let requiresFullRender = false;
+
+        changes.forEach(function (change) {
+            const msg = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added') {
+                if (nextMessages.find(function (item) { return item.id === msg.id; })) return;
+                const insertIndex = insertMessageSorted(nextMessages, msg);
+                addedMessages.push(msg);
+                // If the add lands in the middle, fall back to a full re-render.
+                if (insertIndex < previousMessages.length) {
+                    requiresFullRender = true;
+                }
+            } else if (change.type === 'modified') {
+                const result = upsertMessageInCache(nextMessages, msg);
+                requiresFullRender = true;
+                if (result.type === 'added') {
+                    addedMessages.push(msg);
+                }
+            } else if (change.type === 'removed') {
+                removeMessageFromCache(nextMessages, msg.id);
+                requiresFullRender = true;
+            }
+        });
+
+        messageThreadCache[convoId] = nextMessages;
         const details = conversationDetailsCache[convoId] || {};
-        renderMessages(msgs, details);
+        // Incrementally append only when new items arrive at the tail.
+        const sortedAdds = addedMessages.slice().sort(function (a, b) {
+            return (getMessageTimestampMs(a) || 0) - (getMessageTimestampMs(b) || 0);
+        });
+
+        const shouldAppend = !requiresFullRender
+            && sortedAdds.length > 0
+            && !conversationSearchTerm
+            && (previousMessages.length === 0
+                || (getMessageTimestampMs(sortedAdds[0]) || 0) >= (getMessageTimestampMs(previousMessages[previousMessages.length - 1]) || 0));
+
+        if (shouldAppend && previousMessages.length) {
+            appendMessagesToThread(convoId, sortedAdds, details, previousMessages);
+        } else {
+            renderMessages(nextMessages, details);
+        }
+
         renderTypingIndicator(details);
-        markMessagesDelivered(convoId, msgs);
-        markConversationAsRead(convoId);
+        if (addedMessages.length) {
+            markMessagesDelivered(convoId, sortedAdds);
+            const hasIncoming = sortedAdds.some(function (msg) { return msg.senderId && msg.senderId !== currentUser?.uid; });
+            if (hasIncoming) {
+                markConversationAsRead(convoId);
+            }
+        }
     }, function (err) {
         handleSnapshotError('Messages thread', err);
         handleConversationAccessLoss(convoId);
     }));
+}
+
+async function fetchOlderMessages(convoId, beforeCreatedAt, pageSize = 50) {
+    if (!beforeCreatedAt) return [];
+    const msgRef = query(
+        collection(db, 'conversations', convoId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        endBefore(beforeCreatedAt),
+        limitToLast(pageSize)
+    );
+    const snap = await getDocs(msgRef);
+    // Return older messages in ascending order for clean prepend logic.
+    return snap.docs.map(function (docSnap) { return ({ id: docSnap.id, ...docSnap.data() }); });
 }
 
 async function openConversation(conversationId) {
@@ -13376,6 +13769,13 @@ async function openConversation(conversationId) {
     const header = document.getElementById('message-header');
     if (header) header.textContent = 'Loading conversation...';
     forceConversationScroll = true;
+    messageThreadCache[conversationId] = [];
+    messageThreadPagingState[conversationId] = { loading: false, exhausted: false };
+    if (messageThreadScrollRegion && messageThreadScrollHandler) {
+        messageThreadScrollRegion.removeEventListener('scroll', messageThreadScrollHandler);
+        messageThreadScrollRegion = null;
+        messageThreadScrollHandler = null;
+    }
 
     let convo = null;
     try {
@@ -13406,7 +13806,42 @@ async function openConversation(conversationId) {
     listenToConversationDetails(conversationId);
     attachMessageInputHandlers(conversationId);
     setTypingState(conversationId, false);
-    await listenToMessages(conversationId);
+    await listenToLatestMessages(conversationId);
+    const scrollRegion = getMessageScrollContainer();
+    if (scrollRegion) {
+        messageThreadScrollRegion = scrollRegion;
+        messageThreadScrollHandler = function () {
+            if (activeConversationId !== conversationId) return;
+            if (scrollRegion.scrollTop > 120) return;
+            const paging = messageThreadPagingState[conversationId] || { loading: false, exhausted: false };
+            if (paging.loading || paging.exhausted) return;
+            const currentMessages = messageThreadCache[conversationId] || [];
+            const oldest = currentMessages[0];
+            if (!oldest || !oldest.createdAt) return;
+            paging.loading = true;
+            messageThreadPagingState[conversationId] = paging;
+            // Fetch older history when the user scrolls near the top, and preserve scroll offset.
+            fetchOlderMessages(conversationId, oldest.createdAt).then(function (olderMessages) {
+                if (!olderMessages.length) {
+                    paging.exhausted = true;
+                    return;
+                }
+                const existingIds = new Set(currentMessages.map(function (msg) { return msg.id; }));
+                const deduped = olderMessages.filter(function (msg) { return !existingIds.has(msg.id); });
+                if (!deduped.length) {
+                    paging.exhausted = true;
+                    return;
+                }
+                messageThreadCache[conversationId] = deduped.concat(currentMessages);
+                renderMessages(messageThreadCache[conversationId], conversationDetailsCache[conversationId] || {}, { preserveScrollPosition: true });
+            }).catch(function (err) {
+                console.warn('Unable to fetch older messages', err?.message || err);
+            }).finally(function () {
+                paging.loading = false;
+            });
+        };
+        scrollRegion.addEventListener('scroll', messageThreadScrollHandler, { passive: true });
+    }
     refreshInboxLayout();
     window.activeConversationId = activeConversationId;
     window.__nexeraDebug = window.__nexeraDebug || {};
@@ -13625,37 +14060,117 @@ function initCallInviteListener() {
 
 window.startDmCall = startDmCall;
 
+function queueConversationDetailsPrefetch(conversationIds = []) {
+    conversationIds.filter(Boolean).forEach(function (id) {
+        if (conversationDetailsCache[id]) return;
+        if (conversationDetailsPrefetchPending.has(id)) return;
+        conversationDetailsPrefetchPending.add(id);
+        conversationDetailsPrefetchQueue.push(id);
+    });
+    if (!conversationDetailsPrefetchActive) {
+        processConversationDetailsPrefetchQueue();
+    }
+}
+
+async function processConversationDetailsPrefetchQueue() {
+    if (conversationDetailsPrefetchActive) return;
+    conversationDetailsPrefetchActive = true;
+    while (conversationDetailsPrefetchQueue.length) {
+        const nextId = conversationDetailsPrefetchQueue.shift();
+        conversationDetailsPrefetchPending.delete(nextId);
+        if (!nextId || conversationDetailsCache[nextId]) continue;
+        try {
+            await fetchConversation(nextId);
+        } catch (e) {
+            console.warn('Unable to prefetch conversation', nextId, e?.message || e);
+        }
+    }
+    conversationDetailsPrefetchActive = false;
+}
+
 async function initConversations(autoOpen = true) {
     if (!requireAuth()) return;
     bindMobileMessageGestures();
     if (conversationsUnsubscribe) conversationsUnsubscribe();
     const convRef = query(collection(db, `users/${currentUser.uid}/conversations`), orderBy('lastMessageAt', 'desc'));
     conversationsUnsubscribe = ListenerRegistry.register('messages:list', onSnapshot(convRef, async function (snap) {
-        conversationMappings = snap.docs.map(function (d) { return ({ id: d.id, ...d.data() }); });
+        const changes = snap.docChanges();
+        if (!changes.length) return;
+        const previousRenderData = getConversationListRenderData();
+        const previousTopId = getConversationListTopId(previousRenderData);
+        const previousCount = conversationMappings.length;
+        const changedIds = new Set();
+        const mappingsToReconcile = [];
+        const userIdsToRefresh = new Set();
 
-        const missingDetails = conversationMappings
-            .map(function (m) { return m.id; })
-            .filter(function (id) { return !conversationDetailsCache[id]; });
+        changes.forEach(function (change) {
+            const mapping = { id: change.doc.id, ...change.doc.data() };
+            const existingIndex = conversationMappings.findIndex(function (item) { return item.id === mapping.id; });
+            const existing = existingIndex >= 0 ? conversationMappings[existingIndex] : null;
 
-        await Promise.all(missingDetails.map(async function (id) {
-            try { await fetchConversation(id); } catch (e) { console.warn('Unable to prefetch conversation', id, e?.message || e); }
-        }));
+            if (change.type === 'added') {
+                if (existing) {
+                    conversationMappings[existingIndex] = { ...existing, ...mapping };
+                } else {
+                    conversationMappings.push(mapping);
+                }
+                queueConversationDetailsPrefetch([mapping.id]);
+                mappingsToReconcile.push(mapping);
+                changedIds.add(mapping.id);
+            } else if (change.type === 'modified') {
+                if (existing) {
+                    conversationMappings[existingIndex] = { ...existing, ...mapping };
+                } else {
+                    conversationMappings.push(mapping);
+                    queueConversationDetailsPrefetch([mapping.id]);
+                }
+                mappingsToReconcile.push(conversationMappings[existingIndex] || mapping);
+                changedIds.add(mapping.id);
+            } else if (change.type === 'removed') {
+                if (existingIndex >= 0) {
+                    conversationMappings.splice(existingIndex, 1);
+                }
+                changedIds.add(mapping.id);
+            }
 
-        const userIds = new Set();
-        conversationMappings.forEach(function (mapping) {
-            const details = conversationDetailsCache[mapping.id] || {};
-            (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
-                const cached = getCachedUser(uid, { allowStale: true });
-                if (!cached || isUserCacheStale(cached)) userIds.add(uid);
-            });
+            if (change.type !== 'removed') {
+                const details = conversationDetailsCache[mapping.id] || {};
+                (details.participants || mapping.otherParticipantIds || []).forEach(function (uid) {
+                    const cached = getCachedUser(uid, { allowStale: true });
+                    if (!cached || isUserCacheStale(cached)) userIdsToRefresh.add(uid);
+                });
+            }
         });
-        await refreshUserProfiles(Array.from(userIds), { force: true });
 
-        await Promise.all(conversationMappings.map(function (mapping) {
+        conversationMappings.sort(function (a, b) {
+            return getConversationMappingTimestampMs(b) - getConversationMappingTimestampMs(a);
+        });
+
+        if (userIdsToRefresh.size) {
+            await refreshUserProfiles(Array.from(userIdsToRefresh), { force: false });
+        }
+
+        await Promise.all(mappingsToReconcile.map(function (mapping) {
             return reconcileConversationMapping(mapping).catch(function () { });
         }));
 
-        renderConversationList();
+        const nextRenderData = getConversationListRenderData();
+        const nextTopId = getConversationListTopId(nextRenderData);
+        const nextCount = conversationMappings.length;
+
+        if (nextCount !== previousCount || nextTopId !== previousTopId) {
+            renderConversationList();
+        } else {
+            Array.from(changedIds).forEach(function (id) {
+                const mapping = conversationMappings.find(function (item) { return item.id === id; });
+                if (mapping) {
+                    updateConversationListItem(mapping, nextRenderData);
+                }
+            });
+            conversationListRenderState.count = nextCount;
+            conversationListRenderState.topId = nextTopId;
+            updateInboxNavBadge();
+        }
 
         if (activeConversationId && !conversationMappings.some(function (m) { return m.id === activeConversationId; })) {
             handleConversationAccessLoss(activeConversationId, 'You no longer have access to this conversation.');
@@ -13782,8 +14297,13 @@ async function reconcileConversationMapping(mapping = {}) {
     const participants = details.participants || mapping.otherParticipantIds || [];
     const otherIds = participants.filter(function (uid) { return uid !== currentUser.uid; });
     if (!otherIds.length) return;
-
-    await refreshUserProfiles(otherIds, { force: true });
+    const staleIds = otherIds.filter(function (uid) {
+        const cached = getCachedUser(uid, { allowStale: true });
+        return !cached || isUserCacheStale(cached);
+    });
+    if (staleIds.length) {
+        await refreshUserProfiles(staleIds, { force: false });
+    }
 
     const names = otherIds.map(function (uid) {
         const cached = getCachedUser(uid) || {};
@@ -19670,18 +20190,32 @@ window.openLiveSession = function (sessionId) {
 };
 
 function listenLiveChat(sessionId) {
-    const chatRef = query(collection(db, 'liveStreams', sessionId, 'chat'), orderBy('createdAt'));
-    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, function (snap) {
+    const chatRef = query(
+        collection(db, 'liveStreams', sessionId, 'chat'),
+        orderBy('createdAt', 'asc'),
+        limitToLast(200)
+    );
+    const renderedIds = new Set();
+    ListenerRegistry.register(`live:chat:${sessionId}`, onSnapshot(chatRef, { includeMetadataChanges: false }, function (snap) {
         try {
             const chatEl = document.getElementById('live-chat');
             if (!chatEl) return;
-            chatEl.innerHTML = '';
-            snap.docs.forEach(function (docSnap) {
-                const data = docSnap.data();
+            const shouldStick = isNearBottom(chatEl);
+            snap.docChanges().forEach(function (change) {
+                if (change.type !== 'added') return;
+                if (renderedIds.has(change.doc.id)) return;
+                renderedIds.add(change.doc.id);
+                const data = change.doc.data();
+                const sender = data.senderId ? (getCachedUser(data.senderId) || {}) : {};
+                const senderLabel = resolveDisplayName(sender) || sender.username || 'user';
                 const row = document.createElement('div');
-                row.textContent = `${userCache[data.senderId]?.username || 'user'}: ${data.text}`;
+                row.dataset.chatId = change.doc.id;
+                row.textContent = `${senderLabel}: ${data.text || ''}`;
                 chatEl.appendChild(row);
             });
+            if (shouldStick) {
+                chatEl.scrollTop = chatEl.scrollHeight;
+            }
         } catch (e) {
             console.error('Live chat snapshot failed', e);
         }
@@ -19719,67 +20253,6 @@ function renderStaffConsole() {
     listenVerificationRequests();
     listenReports();
     listenAdminLogs();
-    bindTrendingCategoriesSync();
-}
-
-async function syncTrendingCategories() {
-    const categoriesSnap = await getDocs(collection(db, 'categories'));
-    const scores = [];
-
-    for (const docSnap of categoriesSnap.docs) {
-        const data = docSnap.data() || {};
-        const slug = data.slug || docSnap.id;
-        if (!slug) continue;
-        const memberCount = Number(data.memberCount || 0) || 0;
-        let postCount = 0;
-        let commentCount = 0;
-
-        const postsSnap = await getDocs(query(collection(db, 'posts'), where('categoryId', '==', slug)));
-        postsSnap.forEach(function (postDoc) {
-            postCount += 1;
-            const postData = postDoc.data() || {};
-            const postComments = Number(postData.comments || postData.commentCount || postData.stats?.comments || 0) || 0;
-            commentCount += postComments;
-        });
-
-        const popularity = Math.round((postCount * 5) + (memberCount * 2) + commentCount);
-        scores.push({ slug, popularity });
-    }
-
-    scores.sort(function (a, b) { return b.popularity - a.popularity; });
-    const topScores = scores.slice(0, 10);
-    const batch = writeBatch(db);
-    const now = serverTimestamp();
-
-    topScores.forEach(function (entry) {
-        const ref = doc(db, 'trendingCategories', entry.slug);
-        batch.set(ref, {
-            slug: entry.slug,
-            popularity: entry.popularity,
-            updatedAt: now
-        }, { merge: true });
-    });
-
-    await batch.commit();
-}
-
-// Staff-only sync helper to seed trendingCategories from categories.
-function bindTrendingCategoriesSync() {
-    const btn = document.getElementById('sync-trending-categories');
-    if (!btn || staffTrendingSyncBound) return;
-    staffTrendingSyncBound = true;
-    btn.addEventListener('click', async function () {
-        btn.disabled = true;
-        try {
-            await syncTrendingCategories();
-            alert('Trending categories synced successfully.');
-        } catch (err) {
-            console.error('Error syncing trending categories:', err);
-            alert('Failed to sync trending categories. Check console for details.');
-        } finally {
-            btn.disabled = false;
-        }
-    });
 }
 
 function listenVerificationRequests() {
@@ -19942,7 +20415,7 @@ function syncSidebarHomeState() {
     document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(currentViewId || 'feed'));
     if (isHome) {
         mountFeedTypeToggleBar();
-        renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
+        loadStoriesAndLiveBar();
     }
     uiDebugLog('sidebar home sync', { path, isHome });
 }
@@ -19966,7 +20439,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindVideoDestinationField();
     enhanceInboxLayout();
     syncInboxContentFilters();
-    renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
+    loadStoriesAndLiveBar();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
