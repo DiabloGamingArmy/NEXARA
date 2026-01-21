@@ -1978,8 +1978,12 @@ export class NexeraGoLiveController {
         if (!this.session?.sessionId) return;
 
         const settings = this.settingsPayload(overrides);
+        const roomName = this.session.roomName || `live_${this.session.sessionId}`;
+        const hostId = this.auth?.currentUser?.uid || null;
+        const status = this.session?.status || (this.session?.isLive ? "live" : "starting");
         const payload = {
-            uid: this.auth?.currentUser?.uid || null,
+            hostId,
+            roomName,
             playbackUrl: this.session.playbackUrl || null,
             visibility: settings.visibility,
             title: settings.title,
@@ -1988,12 +1992,14 @@ export class NexeraGoLiveController {
             channelArn: this.session.channelArn || null,
             ingestEndpoint: this.session.ingestEndpoint || null,
             rtmpsIngestUrl: this.session.rtmpsIngestUrl || null,
+            status,
+            egressMode: this.session.egressMode || "hls",
             settings,
             ui: { mode: this.uiMode, updatedAt: serverTimestamp() },
         };
 
         try {
-            await setDoc(doc(this.db, "liveStreams", this.session.sessionId), payload, { merge: true });
+            await setDoc(doc(this.db, "liveSessions", this.session.sessionId), payload, { merge: true });
         } catch (error) {
             console.error("[GoLive] failed to persist live settings", error);
             this.log(`Persist settings failed: ${error.message || error}`);
@@ -2008,7 +2014,7 @@ export class NexeraGoLiveController {
         if (!this.session?.sessionId) return;
         try {
             await setDoc(
-                doc(this.db, "liveStreams", this.session.sessionId),
+                doc(this.db, "liveSessions", this.session.sessionId),
                 { ui: { mode: this.uiMode, updatedAt: serverTimestamp() } },
                 { merge: true }
             );
@@ -2028,7 +2034,7 @@ export class NexeraGoLiveController {
             audio,
         };
         try {
-            await setDoc(doc(this.db, "liveStreams", this.session.sessionId), { studio }, { merge: true });
+            await setDoc(doc(this.db, "liveSessions", this.session.sessionId), { studio }, { merge: true });
         } catch (error) {
             console.error("[GoLive] failed to persist studio snapshot", error);
         }
@@ -2041,11 +2047,11 @@ export class NexeraGoLiveController {
         if ((this.formState.visibility || this.session.visibility) !== "private") return;
         try {
             await setDoc(
-                doc(this.db, "liveStreams", this.session.sessionId, "private", "keys"),
+                doc(this.db, "liveSessions", this.session.sessionId, "private", "keys"),
                 { uid, streamKey: this.session.streamKey, updatedAt: serverTimestamp() },
                 { merge: true }
             );
-            await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), { streamKey: deleteField() });
+            await updateDoc(doc(this.db, "liveSessions", this.session.sessionId), { streamKey: deleteField() });
         } catch (error) {
             console.warn("[GoLive] failed to persist private stream key", error);
             this.log(`Persist key failed (non-blocking): ${error.message || error}`);
@@ -2329,14 +2335,20 @@ export class NexeraGoLiveController {
         this.liveStartTime = this.liveStartTime || Date.now();
 
         try {
-            await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), {
-                isLive: true,
+            await updateDoc(doc(this.db, "liveSessions", this.session.sessionId), {
+                status: "live",
                 startedAt: serverTimestamp(),
                 endedAt: null,
             });
         } catch (error) {
             console.error("[GoLive] failed to mark session live", error);
             this.log(`Failed to mark live: ${error.message || error}`);
+        }
+        if (window.mintLiveSessionToken) {
+            const roomName = this.session.roomName || `live_${this.session.sessionId}`;
+            window.mintLiveSessionToken({ id: this.session.sessionId, roomName }, { canPublish: true }).catch((err) => {
+                console.warn("[GoLive] LiveKit token mint failed", err?.message || err);
+            });
         }
 
         this.setStatus("live");
@@ -2363,8 +2375,8 @@ export class NexeraGoLiveController {
 
         this.updateEncoderTab();
 
-        this.unsubscribeLiveDoc = onSnapshot(doc(this.db, "liveStreams", this.session.sessionId), (snap) => {
-            if (snap.exists() && snap.data().isLive) {
+        this.unsubscribeLiveDoc = onSnapshot(doc(this.db, "liveSessions", this.session.sessionId), (snap) => {
+            if (snap.exists() && snap.data().status === "live") {
                 this.setStatus("live");
             }
         });
@@ -2419,8 +2431,8 @@ export class NexeraGoLiveController {
 
         if (this.session) {
             try {
-                await updateDoc(doc(this.db, "liveStreams", this.session.sessionId), {
-                    isLive: false,
+                await updateDoc(doc(this.db, "liveSessions", this.session.sessionId), {
+                    status: "ended",
                     endedAt: serverTimestamp(),
                 });
             } catch (error) {

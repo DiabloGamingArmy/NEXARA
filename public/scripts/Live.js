@@ -76,7 +76,7 @@ export function initialize(streamId, currentUser) {
     const db = getFirestore();
 
     liveUnsubscribe = onSnapshot(
-        doc(db, "liveStreams", resolvedStreamId),
+        doc(db, "liveSessions", resolvedStreamId),
         async snap => {
             try {
                 if (!snap.exists()) {
@@ -96,7 +96,7 @@ export function initialize(streamId, currentUser) {
 
                 bindInteractionButtons(resolvedStreamId, activeHostId, currentUser);
 
-                if (!data.isLive) {
+                if (data.status !== "live") {
                     if (player) player.renderOffline();
                     toggleOfflineBanner(true);
                     playerLoaded = false;

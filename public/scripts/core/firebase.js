@@ -4,6 +4,7 @@ import { initializeFirestore, getFirestore } from "https://www.gstatic.com/fireb
 import { getStorage } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 import { getFunctions } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-functions.js";
 import { getPerformance } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-performance.js";
+import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app-check.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyDg9Duz3xicI3pvvOtLCrV1DJRWDI0NtYA",
@@ -24,3 +25,17 @@ export const db = isSafari
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
 export const perf = getPerformance(app);
+
+const appCheckKey = window?.NEXERA_APP_CHECK_KEY || window?.__NEXERA_APP_CHECK_KEY || "";
+if (appCheckKey) {
+    try {
+        initializeAppCheck(app, {
+            provider: new ReCaptchaV3Provider(appCheckKey),
+            isTokenAutoRefreshEnabled: true,
+        });
+    } catch (error) {
+        console.warn("App Check init failed", error);
+    }
+} else {
+    console.warn("App Check site key missing; set window.NEXERA_APP_CHECK_KEY to enable App Check.");
+}
