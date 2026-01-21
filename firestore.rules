@@ -173,6 +173,21 @@ service cloud.firestore {
       allow read, write: if isSignedIn() && request.auth.uid == userId;
     }
 
+    // -------------------------
+    // Stories
+    // -------------------------
+    match /stories/{storyId} {
+      allow read: if resource.data.visibility == 'public'
+        || (isSignedIn() && request.auth.uid == resource.data.ownerId);
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerId;
+      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.ownerId;
+    }
+
+    match /storyFeeds/{viewerUid}/items/{ownerUid} {
+      allow read: if isSignedIn() && request.auth.uid == viewerUid;
+      allow write: if false;
+    }
+
     // App-wide UI config (banner, etc.)
     match /app_config/{docId} {
       allow read: if true;

@@ -2303,6 +2303,112 @@ function resolveCategoryNameBySlug(slug) {
     return match?.name || formatSlugLabel(slug);
 }
 
+async function fetchStoryFeed(viewerUid) {
+    if (!viewerUid) return [];
+    const feedRef = query(
+        collection(db, 'storyFeeds', viewerUid, 'items'),
+        orderBy('latestStoryAt', 'desc'),
+        limit(20)
+    );
+    const snap = await getDocs(feedRef);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function fetchStoriesForOwner(ownerUid) {
+    if (!ownerUid) return [];
+    const now = Timestamp.now();
+    const storiesRef = query(
+        collection(db, 'stories'),
+        where('ownerId', '==', ownerUid),
+        where('expiresAt', '>', now),
+        orderBy('expiresAt', 'asc'),
+        orderBy('createdAt', 'asc'),
+        limit(50)
+    );
+    const snap = await getDocs(storiesRef);
+    return snap.docs.map(function (docSnap) {
+        return { id: docSnap.id, ...docSnap.data() };
+    });
+}
+
+async function createStoryDocument(payload = {}) {
+    if (!currentUser?.uid) return null;
+    const ownerId = payload.ownerId || currentUser.uid;
+    if (!payload.storagePath || !payload.mediaType) return null;
+    const expiresAt = Timestamp.fromMillis(Date.now() + 24 * 60 * 60 * 1000);
+    // Note: Firestore TTL should be configured on expiresAt to auto-delete story docs.
+    const data = {
+        ownerId,
+        mediaType: payload.mediaType,
+        storagePath: payload.storagePath,
+        createdAt: serverTimestamp(),
+        expiresAt,
+        visibility: payload.visibility || 'public',
+        caption: payload.caption || null
+    };
+    const ref = await addDoc(collection(db, 'stories'), data);
+    return ref.id;
+}
+
+async function resolveStoryMediaUrl(story = {}) {
+    if (!story?.storagePath) return null;
+    try {
+        const url = await getDownloadURL(ref(storage, story.storagePath));
+        return url;
+    } catch (e) {
+        console.warn('Unable to resolve story media url', e?.message || e);
+        return null;
+    }
+}
+
+async function openStoryViewer(ownerUid) {
+    const stories = await fetchStoriesForOwner(ownerUid);
+    if (!stories.length) {
+        toast('No active stories yet.', 'info');
+        return;
+    }
+    const first = stories[0];
+    const mediaUrl = await resolveStoryMediaUrl(first);
+    if (!mediaUrl) return;
+    const kind = (first.mediaType || '').includes('video') ? 'video' : 'image';
+    openFullscreenMedia(mediaUrl, kind);
+}
+
+let storyFeedLoadToken = 0;
+async function loadStoriesAndLiveBar() {
+    const container = document.getElementById('stories-live-bar-slot');
+    if (!container) return;
+    const viewerUid = currentUser?.uid || '';
+    const token = ++storyFeedLoadToken;
+    let feedItems = [];
+    try {
+        feedItems = await fetchStoryFeed(viewerUid);
+    } catch (e) {
+        console.warn('Unable to fetch story feed', e?.message || e);
+    }
+    if (token !== storyFeedLoadToken) return;
+    const stories = feedItems.map(function (item) {
+        const ownerUid = item.ownerUid || item.id;
+        const cached = ownerUid ? (getCachedUser(ownerUid) || {}) : {};
+        const label = resolveDisplayName(cached) || cached.username || 'User';
+        return {
+            id: ownerUid,
+            ownerUid,
+            label
+        };
+    });
+    renderStoriesAndLiveBar(container, {
+        stories,
+        onStorySelect: function (story) {
+            const ownerUid = story.ownerUid || story.id;
+            if (!ownerUid) return;
+            openStoryViewer(ownerUid);
+        }
+    });
+}
+
 // Trending topics now come from the staff-populated "trendingCategories" collection.
 async function fetchTrendingTopicsPage(range, startAfterDoc = null) {
     const items = [];
@@ -20309,7 +20415,7 @@ function syncSidebarHomeState() {
     document.body.classList.toggle('sidebar-wide', shouldShowRightSidebar(currentViewId || 'feed'));
     if (isHome) {
         mountFeedTypeToggleBar();
-        renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
+        loadStoriesAndLiveBar();
     }
     uiDebugLog('sidebar home sync', { path, isHome });
 }
@@ -20333,7 +20439,7 @@ document.addEventListener('DOMContentLoaded', function () {
     bindVideoDestinationField();
     enhanceInboxLayout();
     syncInboxContentFilters();
-    renderStoriesAndLiveBar(document.getElementById('stories-live-bar-slot'));
+    loadStoriesAndLiveBar();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (title) title.addEventListener('input', syncPostButtonState);
