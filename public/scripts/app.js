@@ -1229,6 +1229,25 @@ let postReactionCache = {};
 let postReactionPromises = {};
 let assetUrlCache = {};
 let assetUrlPromises = {};
+const SHARE_MODES = [
+    { id: 'thread', label: 'Thread', icon: 'ph-chat-circle-text', description: 'Text-first update' },
+    { id: 'media', label: 'Media Drop', icon: 'ph-images', description: 'Multi-file gallery' },
+    { id: 'document', label: 'Document', icon: 'ph-file-text', description: 'Share a file' },
+    { id: 'audio', label: 'Audio', icon: 'ph-music-notes', description: 'Upload audio' },
+    { id: 'link', label: 'Link Snapshot', icon: 'ph-link', description: 'Share a link' },
+    { id: 'capsule', label: 'Capsule', icon: 'ph-folder-open', description: 'Bundle files' },
+    { id: 'live', label: 'Live', icon: 'ph-broadcast', description: 'Go live' }
+];
+let activeShareMode = 'thread';
+let composerUploads = {
+    thread: [],
+    media: [],
+    document: null,
+    audio: null,
+    capsule: []
+};
+let linkSnapshotState = { status: 'idle', data: null };
+let liveComposerState = { sessionId: '', created: false };
 let newChatSelections = [];
 let chatSearchResults = [];
 let videosFeedLoaded = false;
@@ -3554,14 +3573,26 @@ function setComposerError(message = '') {
     syncPostButtonState();
 }
 
+function composerHasContent() {
+    const title = document.getElementById('postTitle');
+    const content = document.getElementById('postContent');
+    if (activeShareMode === 'thread') {
+        return (title && title.value.trim()) || (content && content.value.trim()) || composerUploads.thread.length;
+    }
+    if (activeShareMode === 'media') return composerUploads.media.length > 0;
+    if (activeShareMode === 'document') return !!composerUploads.document;
+    if (activeShareMode === 'audio') return !!composerUploads.audio;
+    if (activeShareMode === 'link') return !!document.getElementById('link-url-input')?.value.trim();
+    if (activeShareMode === 'capsule') return (title && title.value.trim()) && composerUploads.capsule.length > 0;
+    if (activeShareMode === 'live') return true;
+    return false;
+}
+
 function syncPostButtonState() {
     const btn = document.getElementById('publishBtn');
     const helper = document.getElementById('destination-helper');
-    const title = document.getElementById('postTitle');
-    const content = document.getElementById('postContent');
-    const fileInput = document.getElementById('postFile');
     if (!btn) return;
-    const hasContent = (title && title.value.trim()) || (content && content.value.trim()) || (fileInput && fileInput.files && fileInput.files[0]);
+    const hasContent = composerHasContent();
     btn.disabled = !!composerError || !hasContent;
     if (helper) {
         helper.style.display = composerError ? 'flex' : 'none';
@@ -4682,6 +4713,112 @@ function buildVideoPreviewShell({ thumbnailUrl = '', label = 'Play video', onCli
     `;
 }
 
+function getPostBlocks(post = {}) {
+    return Array.isArray(post.blocks) ? post.blocks.filter(Boolean) : [];
+}
+
+function resolveBlockAssetUrl(block, onResolved) {
+    if (!block || !block.assetId) return '';
+    return resolveAssetUrl(block.assetId, 'original', onResolved);
+}
+
+function renderAssetBlock(block = {}, options = {}) {
+    const presentation = (block.presentation || 'image').toLowerCase();
+    const resolvedUrl = resolveBlockAssetUrl(block, function (url) {
+        if (options?.onResolve) options.onResolve(url);
+    });
+    if (!resolvedUrl) return '';
+    const captionHtml = block.caption ? `<div class="post-block-caption">${escapeHtml(block.caption)}</div>` : '';
+    if (presentation === 'video') {
+        return `<div class="asset-block"><video src="${escapeHtml(resolvedUrl)}" class="post-media" controls></video>${captionHtml}</div>`;
+    }
+    if (presentation === 'audio') {
+        const chapters = block.chapters ? `<div class="audio-meta">Chapters: ${escapeHtml(block.chapters)}</div>` : '';
+        const lyrics = block.lyrics ? `<div class="audio-meta">Lyrics: ${escapeHtml(block.lyrics)}</div>` : '';
+        return `
+            <div class="audio-block asset-block">
+                <audio src="${escapeHtml(resolvedUrl)}" controls></audio>
+                ${chapters}
+                ${lyrics}
+                ${captionHtml}
+            </div>
+        `;
+    }
+    if (presentation === 'doc' || presentation === 'document') {
+        return `
+            <div class="doc-block asset-block">
+                <i class="ph ph-file-text"></i>
+                <a href="${escapeHtml(resolvedUrl)}" target="_blank" rel="noopener">Open document</a>
+                ${captionHtml}
+            </div>
+        `;
+    }
+    return `<div class="asset-block"><img src="${escapeHtml(resolvedUrl)}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${escapeHtml(resolvedUrl)}', 'image')">${captionHtml}</div>`;
+}
+
+function renderLinkBlock(block = {}, options = {}) {
+    const title = block.title ? escapeHtml(block.title) : 'Shared link';
+    const description = block.description ? escapeHtml(block.description) : '';
+    const rawImageUrl = block.imageAssetId
+        ? resolveAssetUrl(block.imageAssetId, 'original', options?.onResolve)
+        : (block.imageUrl || '');
+    const imageHtml = rawImageUrl ? `<img src="${escapeHtml(rawImageUrl)}" alt="${title}" class="link-preview-image">` : '';
+    return `
+        <a class="link-preview-card" href="${escapeHtml(block.url || '')}" target="_blank" rel="noopener">
+            ${imageHtml}
+            <div class="link-preview-body">
+                <div class="link-preview-title">${title}</div>
+                ${description ? `<div class="link-preview-desc">${description}</div>` : ''}
+                <div class="link-preview-url">${escapeHtml(block.url || '')}</div>
+            </div>
+        </a>
+    `;
+}
+
+function renderCapsuleBlock(block = {}) {
+    if (!block.capsuleId) return '';
+    return `
+        <div class="capsule-card">
+            <div class="capsule-card-title"><i class="ph ph-folder-open"></i> Capsule bundle</div>
+            <button class="capsule-open-btn" onclick="window.openCapsuleViewer('${block.capsuleId}')">Open capsule</button>
+        </div>
+    `;
+}
+
+function renderLiveBlock(block = {}) {
+    if (!block.sessionId) return '';
+    return `
+        <div class="live-block">
+            <div class="live-block-title"><i class="ph ph-broadcast"></i> Live session</div>
+            <button class="capsule-open-btn" onclick="window.openLiveSession('${block.sessionId}')">Watch live</button>
+        </div>
+    `;
+}
+
+function buildBlockRenderOutput(post = {}, options = {}) {
+    const blocks = getPostBlocks(post);
+    if (!blocks.length) return null;
+    const textBlock = blocks.find(function (block) { return block.type === 'text'; });
+    const formattedBody = textBlock ? formatContent(textBlock.text || '', post.tags, post.mentions) : '';
+    const mediaBlocks = blocks.filter(function (block) { return block.type !== 'text'; });
+    const primaryBlock = mediaBlocks[0];
+    const remainderBlocks = mediaBlocks.slice(1);
+    const renderBlock = function (block) {
+        if (!block) return '';
+        if (block.type === 'asset') return renderAssetBlock(block, options);
+        if (block.type === 'link') return renderLinkBlock(block, options);
+        if (block.type === 'capsule') return renderCapsuleBlock(block);
+        if (block.type === 'live') return renderLiveBlock(block);
+        return '';
+    };
+    return {
+        formattedBody,
+        mediaContent: primaryBlock ? renderBlock(primaryBlock) : '',
+        additionalBlocks: remainderBlocks.map(renderBlock).filter(Boolean).join(''),
+        primaryType: primaryBlock ? primaryBlock.type : ''
+    };
+}
+
 async function hydrateFollowingState(uid, profileData = {}) {
     if (followingUnsubscribe) {
         try { followingUnsubscribe(); } catch (err) { }
@@ -4746,8 +4883,13 @@ function getPostHTML(post, options = {}) {
             trustBadge = `<div style="font-size:0.75rem; color:#ff3d3d; display:flex; align-items:center; gap:4px; font-weight:600;"><i class="ph-fill ph-warning-circle"></i> Disputed</div>`;
         }
 
-        const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
-        const formattedBody = formatContent(postText, post.tags, post.mentions);
+        const blockRender = buildBlockRenderOutput(post, {
+            onResolve: function () {
+                if (currentViewId === 'feed') renderFeed();
+            }
+        });
+        const postText = blockRender ? '' : (typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || ''));
+        const formattedBody = blockRender ? blockRender.formattedBody : formatContent(postText, post.tags, post.mentions);
         const tagListHtml = renderTagList(post.tags || []);
         const pollBlock = renderPollBlock(post);
         const locationBadge = renderLocationBadge(post.location);
@@ -4756,21 +4898,27 @@ function getPostHTML(post, options = {}) {
         const verificationChip = verification ? `<span class="verification-chip ${verification.className}">${verification.label}</span>` : '';
 
         let mediaContent = '';
-        const resolvedMediaUrl = getPostMediaUrl(post);
-        if (resolvedMediaUrl) {
-            if (post.type === 'video') {
-                const thumbnailUrl = getThumbnailUrl(post);
-                mediaContent = buildVideoPreviewShell({
-                    thumbnailUrl,
-                    label: 'Play video',
-                    onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-                });
-            } else {
-                const safeUrl = escapeHtml(resolvedMediaUrl);
-                mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+        let blockStack = '';
+        if (blockRender) {
+            mediaContent = blockRender.mediaContent || '';
+            blockStack = blockRender.additionalBlocks || '';
+        } else {
+            const resolvedMediaUrl = getPostMediaUrl(post);
+            if (resolvedMediaUrl) {
+                if (post.type === 'video') {
+                    const thumbnailUrl = getThumbnailUrl(post);
+                    mediaContent = buildVideoPreviewShell({
+                        thumbnailUrl,
+                        label: 'Play video',
+                        onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+                    });
+                } else {
+                    const safeUrl = escapeHtml(resolvedMediaUrl);
+                    mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+                }
             }
         }
-        if (mediaContent) {
+        if (mediaContent && (!blockRender || blockRender.primaryType === 'asset')) {
             mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
                 ${mediaContent}
                 <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
@@ -4822,12 +4970,13 @@ function getPostHTML(post, options = {}) {
                     <div class="category-badge">${post.category}</div>
                     ${verificationChip}
                     <h3 class="post-title">${escapeHtml(cleanText(post.title))}</h3>
-                    <p class="post-body-text">${formattedBody}</p>
-                    ${tagListHtml}
-                    ${locationBadge}
-                    ${scheduledChip}
-                    ${pollBlock}
-                    ${mediaContent}
+                <p class="post-body-text">${formattedBody}</p>
+                ${tagListHtml}
+                ${locationBadge}
+                ${scheduledChip}
+                ${pollBlock}
+                ${mediaContent}
+                ${blockStack}
                     ${commentPreviewHtml}
                     ${savedTagHtml}
                 </div>
@@ -5210,7 +5359,12 @@ function getAssetKindForFile(file, fallback = 'document') {
     if (type.startsWith('image/')) return 'image';
     if (type.startsWith('video/')) return 'video';
     if (type.startsWith('audio/')) return 'audio';
-    if (type === 'application/pdf' || type === 'text/plain') return 'document';
+    if (type === 'application/pdf'
+        || type === 'text/plain'
+        || type === 'application/msword'
+        || type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        return 'document';
+    }
     return fallback;
 }
 
@@ -5236,6 +5390,147 @@ async function uploadFileToStorage(file, { kind, visibility = 'private', onProgr
         }, reject, resolve);
     });
     return { assetId: asset.assetId, storagePathOriginal: storagePath };
+}
+
+function setComposerMode(modeId = 'thread') {
+    const nextMode = SHARE_MODES.some(function (mode) { return mode.id === modeId; }) ? modeId : 'thread';
+    activeShareMode = nextMode;
+    document.querySelectorAll('.composer-rail-item').forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.mode === nextMode);
+    });
+    document.querySelectorAll('.composer-mode-panel').forEach(function (panel) {
+        panel.style.display = panel.dataset.mode === nextMode ? 'block' : 'none';
+    });
+    const headline = document.getElementById('composer-mode-headline');
+    const description = document.getElementById('composer-mode-description');
+    const modeData = SHARE_MODES.find(function (mode) { return mode.id === nextMode; });
+    if (headline) headline.textContent = modeData ? modeData.label : 'Thread';
+    if (description) description.textContent = modeData ? modeData.description : '';
+    syncPostButtonState();
+}
+
+function resetUniversalComposer() {
+    composerUploads = { thread: [], media: [], document: null, audio: null, capsule: [] };
+    linkSnapshotState = { status: 'idle', data: null };
+    liveComposerState = { sessionId: '', created: false };
+    const inputs = [
+        'thread-files',
+        'media-drop-files',
+        'document-file',
+        'audio-file',
+        'capsule-files'
+    ];
+    inputs.forEach(function (id) {
+        const input = document.getElementById(id);
+        if (input) input.value = '';
+    });
+    const textInputs = [
+        'media-notes',
+        'document-notes',
+        'audio-notes',
+        'audio-chapters',
+        'audio-lyrics',
+        'link-notes',
+        'capsule-notes',
+        'capsule-share-slug',
+        'live-notes',
+        'live-title-input',
+        'live-category-input',
+        'live-tags-input'
+    ];
+    textInputs.forEach(function (id) {
+        const input = document.getElementById(id);
+        if (input) input.value = '';
+    });
+    const shareToggle = document.getElementById('capsule-share-toggle');
+    if (shareToggle) shareToggle.checked = false;
+    const linkInput = document.getElementById('link-url-input');
+    if (linkInput) linkInput.value = '';
+    const linkPreview = document.getElementById('link-preview');
+    if (linkPreview) linkPreview.innerHTML = '';
+    const liveSessionDisplay = document.getElementById('live-session-status');
+    if (liveSessionDisplay) liveSessionDisplay.textContent = '';
+    setComposerMode('thread');
+    renderComposerFileList('thread-file-list', []);
+    renderComposerFileList('media-drop-list', []);
+    renderComposerFileList('capsule-file-list', []);
+    renderComposerFileList('document-file-list', []);
+    renderComposerFileList('audio-file-list', []);
+    syncPostButtonState();
+}
+
+function renderComposerFileList(containerId, files = []) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (!files || !files.length) {
+        container.innerHTML = '<div class="composer-empty">No files selected</div>';
+        return;
+    }
+    container.innerHTML = files.map(function (file) {
+        return `<div class="composer-file-row"><i class="ph ph-file"></i><div><div class="composer-file-name">${escapeHtml(file.name)}</div><div class="composer-file-meta">${formatBytes(file.size || 0)}</div></div></div>`;
+    }).join('');
+}
+
+function handleComposerFileChange(mode, inputEl) {
+    if (!inputEl || !inputEl.files) return;
+    const files = Array.from(inputEl.files || []);
+    if (mode === 'thread') {
+        composerUploads.thread = files;
+        renderComposerFileList('thread-file-list', files);
+    } else if (mode === 'media') {
+        composerUploads.media = files;
+        renderComposerFileList('media-drop-list', files);
+    } else if (mode === 'document') {
+        composerUploads.document = files[0] || null;
+        renderComposerFileList('document-file-list', composerUploads.document ? [composerUploads.document] : []);
+    } else if (mode === 'audio') {
+        composerUploads.audio = files[0] || null;
+        renderComposerFileList('audio-file-list', composerUploads.audio ? [composerUploads.audio] : []);
+    } else if (mode === 'capsule') {
+        composerUploads.capsule = files;
+        renderComposerFileList('capsule-file-list', files);
+    }
+    syncPostButtonState();
+}
+
+async function uploadAssetsForFiles(files = [], { visibility = 'public', fallbackKind = 'document' } = {}) {
+    const uploads = [];
+    for (const file of files) {
+        const upload = await uploadFileToStorage(file, {
+            kind: getAssetKindForFile(file, fallbackKind),
+            visibility
+        });
+        if (upload?.assetId) uploads.push({ assetId: upload.assetId, storagePathOriginal: upload.storagePathOriginal || '' });
+    }
+    return uploads;
+}
+
+async function fetchLinkSnapshot(url) {
+    if (!url) return null;
+    linkSnapshotState.status = 'loading';
+    const preview = document.getElementById('link-preview');
+    if (preview) preview.innerHTML = '<div class="composer-empty">Fetching preview...</div>';
+    try {
+        const data = await callSecureFunction('createLinkSnapshot', { url, downloadImage: true, visibility: 'public' });
+        linkSnapshotState = { status: 'ready', data };
+        if (preview) {
+            const title = data?.title ? escapeHtml(data.title) : 'Link preview';
+            const description = data?.description ? escapeHtml(data.description) : '';
+            preview.innerHTML = `
+                <div class="link-preview-card">
+                    <div class="link-preview-title">${title}</div>
+                    ${description ? `<div class="link-preview-desc">${description}</div>` : ''}
+                </div>
+            `;
+        }
+        syncPostButtonState();
+        return data;
+    } catch (err) {
+        linkSnapshotState = { status: 'error', data: null };
+        if (preview) preview.innerHTML = '<div class="composer-empty">Unable to load preview.</div>';
+        syncPostButtonState();
+        return null;
+    }
 }
 
 function normalizeTagValue(tag = '') {
@@ -5367,7 +5662,7 @@ function resetComposerState() {
     const content = document.getElementById('postContent');
     if (title) title.value = '';
     if (content) content.value = '';
-    const fileInput = document.getElementById('postFile');
+    const fileInput = document.getElementById('thread-files');
     if (fileInput) fileInput.value = '';
     clearPostImage();
     syncComposerMode();
@@ -5814,6 +6109,10 @@ window.toggleVideoMentionInput = function (show) {
 window.addVideoMention = addVideoMention;
 window.removeVideoMention = removeVideoMention;
 window.handleVideoMentionInput = handleVideoMentionInput;
+window.setComposerMode = setComposerMode;
+window.handleComposerFileChange = handleComposerFileChange;
+window.fetchLinkSnapshot = fetchLinkSnapshot;
+window.syncPostButtonState = syncPostButtonState;
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
@@ -5979,6 +6278,19 @@ function formatTimestampDisplay(ts) {
     return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatBytes(bytes = 0) {
+    const safe = Number(bytes) || 0;
+    if (safe < 1024) return `${safe} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let value = safe;
+    let unitIndex = -1;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
 function renderLocationBadge(location = '') {
     if (!location) return '';
     return `<div class="location-chip"><i class="ph ph-map-pin"></i> ${escapeHtml(location)}</div>`;
@@ -5986,34 +6298,34 @@ function renderLocationBadge(location = '') {
 
 window.createPost = async function () {
     if (!requireAuth()) return;
-    const title = document.getElementById('postTitle').value;
-    const content = document.getElementById('postContent').value;
+    const title = (document.getElementById('postTitle')?.value || '').trim();
+    const notesByMode = {
+        media: 'media-notes',
+        document: 'document-notes',
+        audio: 'audio-notes',
+        link: 'link-notes',
+        capsule: 'capsule-notes',
+        live: 'live-notes'
+    };
+    const modeNotesId = notesByMode[activeShareMode];
+    const content = activeShareMode === 'thread'
+        ? (document.getElementById('postContent')?.value || '').trim()
+        : (modeNotesId ? (document.getElementById(modeNotesId)?.value || '').trim() : '');
     const tagInput = document.getElementById('tag-input');
     const mentionInput = document.getElementById('mention-input');
     const normalizedTags = Array.from(new Set((composerTags || []).map(normalizeTagValue).filter(Boolean)));
     const tags = normalizedTags.map(function (tag) { return buildTagDisplayName(tag); });
     const mentions = normalizeMentionsField(composerMentions || []);
-    const fileInput = document.getElementById('postFile');
     const btn = document.getElementById('publishBtn');
     setComposerError('');
 
     const pollPayload = buildPollPayloadFromComposer();
     const scheduledFor = parseScheduleValue(composerScheduledFor);
     const locationValue = (composerLocation || '').trim();
-
-    let contentType = currentEditPost?.contentType || 'text';
-    if (fileInput.files[0]) {
-        const mime = fileInput.files[0].type;
-        if (mime.startsWith('video')) contentType = 'video';
-        else if (mime.startsWith('image')) contentType = 'image';
-    }
-
-    if (!title.trim() && !content.trim() && !fileInput.files[0]) {
-        return alert("Please add a title, content, or media.");
-    }
+    const visibility = (document.getElementById('composer-visibility')?.value || 'public').toLowerCase();
 
     btn.disabled = true;
-    btn.textContent = "Uploading...";
+    btn.textContent = "Sharing...";
 
     try {
         const targetCategoryId = currentEditPost ? currentEditPost.categoryId : selectedCategoryId;
@@ -6044,59 +6356,139 @@ window.createPost = async function () {
         });
         const mentionUserIds = Array.from(seenNotify);
 
-        let mediaAssetId = currentEditPost?.mediaAssetId || '';
-        let mediaPath = currentEditPost?.mediaPath || '';
-        if (fileInput.files[0]) {
-            const upload = await uploadFileToStorage(fileInput.files[0], {
-                kind: getAssetKindForFile(fileInput.files[0]),
-                visibility: 'public'
-            });
-            mediaAssetId = upload?.assetId || '';
-            mediaPath = upload?.storagePathOriginal || '';
+        let blocks = [];
+        let contentType = activeShareMode;
+
+        if (activeShareMode === 'thread') {
+            if (!title && !content && !composerUploads.thread.length) {
+                return alert("Please add a title, content, or attachment.");
+            }
+            if (content) blocks.push({ type: 'text', text: content });
+            if (composerUploads.thread.length) {
+                const uploads = await uploadAssetsForFiles(composerUploads.thread, { visibility: 'public', fallbackKind: 'image' });
+                uploads.forEach(function (upload, index) {
+                    blocks.push({ type: 'asset', assetId: upload.assetId, presentation: getAssetKindForFile(composerUploads.thread[index], 'image') });
+                });
+            }
+            contentType = composerUploads.thread.length ? getAssetKindForFile(composerUploads.thread[0], 'image') : 'text';
         }
 
-        const categoryDoc = (currentEditPost ? getCategorySnapshot(currentEditPost.categoryId) : getCategorySnapshot(selectedCategoryId)) || null;
-        const resolvedCategoryId = currentEditPost ? currentEditPost.categoryId : (selectedCategoryId || null);
-        const visibility = 'public';
+        if (activeShareMode === 'media') {
+            if (!composerUploads.media.length) return alert('Select at least one file.');
+            if (content) blocks.push({ type: 'text', text: content });
+            const uploads = await uploadAssetsForFiles(composerUploads.media, { visibility: 'public', fallbackKind: 'image' });
+            uploads.forEach(function (upload, index) {
+                blocks.push({ type: 'asset', assetId: upload.assetId, presentation: getAssetKindForFile(composerUploads.media[index], 'image') });
+            });
+        }
+
+        if (activeShareMode === 'document') {
+            if (!composerUploads.document) return alert('Select a document to upload.');
+            const uploads = await uploadAssetsForFiles([composerUploads.document], { visibility: 'public', fallbackKind: 'document' });
+            uploads.forEach(function (upload) {
+                blocks.push({ type: 'asset', assetId: upload.assetId, presentation: 'doc', caption: content });
+            });
+        }
+
+        if (activeShareMode === 'audio') {
+            if (!composerUploads.audio) return alert('Select an audio file to upload.');
+            const uploads = await uploadAssetsForFiles([composerUploads.audio], { visibility: 'public', fallbackKind: 'audio' });
+            uploads.forEach(function (upload) {
+                const chapters = (document.getElementById('audio-chapters')?.value || '').trim();
+                const lyrics = (document.getElementById('audio-lyrics')?.value || '').trim();
+                blocks.push({ type: 'asset', assetId: upload.assetId, presentation: 'audio', caption: content, chapters, lyrics });
+            });
+        }
+
+        if (activeShareMode === 'link') {
+            const linkUrl = (document.getElementById('link-url-input')?.value || '').trim();
+            if (!linkUrl) return alert('Paste a link to share.');
+            let snapshot = linkSnapshotState.data;
+            if (!snapshot || linkSnapshotState.status !== 'ready') {
+                snapshot = await fetchLinkSnapshot(linkUrl);
+            }
+            if (!snapshot) return alert('Unable to fetch link preview.');
+            blocks.push({
+                type: 'link',
+                url: snapshot.url || linkUrl,
+                title: snapshot.title || title,
+                description: snapshot.description || content,
+                imageAssetId: snapshot.imageAssetId || '',
+                imageUrl: snapshot.imageUrl || ''
+            });
+        }
+
+        if (activeShareMode === 'capsule') {
+            if (!title) return alert('Add a capsule title.');
+            if (!composerUploads.capsule.length) return alert('Attach files to your capsule.');
+            const uploads = await uploadAssetsForFiles(composerUploads.capsule, { visibility: 'public', fallbackKind: 'document' });
+            const assetIds = uploads.map(function (upload) { return upload.assetId; });
+            const capsuleResult = await callSecureFunction('createCapsule', {
+                title,
+                description: content,
+                assetIds,
+                visibility,
+                share: {
+                    enabled: document.getElementById('capsule-share-toggle')?.checked || false,
+                    slug: (document.getElementById('capsule-share-slug')?.value || '').trim()
+                }
+            });
+            if (capsuleResult?.postId && notificationTargets.length) {
+                await notifyMentionedUsers(notificationTargets, capsuleResult.postId, { title });
+            }
+            resetComposerState();
+            resetUniversalComposer();
+            window.toggleCreateModal(false);
+            renderFeed();
+            renderProfile();
+            return;
+        }
+
+        if (activeShareMode === 'live') {
+            const liveTitle = (document.getElementById('live-title-input')?.value || '').trim();
+            const liveCategory = (document.getElementById('live-category-input')?.value || '').trim();
+            const liveTags = (document.getElementById('live-tags-input')?.value || '').split(',').map(function (tag) { return tag.trim(); }).filter(Boolean);
+            const liveResult = await callSecureFunction('createLiveSession', {
+                title: liveTitle || title || 'Live session',
+                category: liveCategory,
+                tags: liveTags
+            });
+            if (!liveResult?.sessionId) throw new Error('Live session failed');
+            if (content) blocks.push({ type: 'text', text: content });
+            blocks.push({ type: 'live', sessionId: liveResult.sessionId });
+            liveComposerState = { sessionId: liveResult.sessionId, created: true };
+            const liveStatus = document.getElementById('live-session-status');
+            if (liveStatus) liveStatus.textContent = 'Live session created.';
+        }
+
         const postPayload = {
             title,
-            content,
-            categoryId: resolvedCategoryId,
-            categoryName: categoryDoc ? categoryDoc.name : null,
-            categorySlug: categoryDoc ? categoryDoc.slug : null,
-            categoryVerified: categoryDoc ? !!categoryDoc.verified : false,
-            categoryType: categoryDoc ? categoryDoc.type : null,
             visibility,
+            categoryId: targetCategoryId || null,
             contentType,
-            content: { text: content, mediaPath, linkUrl: null, profileUid: null, meta: { tags, mentions } },
-            mediaPath,
-            mediaAssetId,
-            author: userProfile.name,
-            userId: currentUser.uid,
+            blocks,
             tags,
             mentions,
             mentionUserIds,
             poll: pollPayload,
             scheduledFor,
-            location: locationValue,
-            likeCount: currentEditPost ? getPostLikeCount(currentEditPost) : 0,
-            dislikeCount: currentEditPost ? getPostDislikeCount(currentEditPost) : 0,
-            trustScore: currentEditPost ? currentEditPost.trustScore || 0 : 0,
-            timestamp: currentEditPost ? currentEditPost.timestamp || serverTimestamp() : serverTimestamp()
+            location: locationValue
         };
 
         if (currentEditPost) {
             await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
             currentEditPost = null;
         } else {
-            const postRef = await addDoc(collection(db, 'posts'), postPayload);
-            if (notificationTargets.length) {
-                await notifyMentionedUsers(notificationTargets, postRef.id, {
-                    title,
-                    thumbnailUrl: mediaUrl || ''
-                });
+            const result = await callSecureFunction('createPost', postPayload);
+            if (result?.postId && notificationTargets.length) {
+                await notifyMentionedUsers(notificationTargets, result.postId, { title });
             }
-            await incrementTagUses(normalizedTags);
+            if (result?.moderation?.status === 'blocked') {
+                toast('Your post is under review.', 'warning');
+            }
+            if (normalizedTags.length) {
+                await incrementTagUses(normalizedTags);
+            }
         }
 
         if (locationValue) {
@@ -6108,6 +6500,7 @@ window.createPost = async function () {
 
         // Reset Form
         resetComposerState();
+        resetUniversalComposer();
         if (tagInput) tagInput.value = "";
         if (mentionInput) mentionInput.value = "";
         window.toggleCreateModal(false);
@@ -6118,7 +6511,7 @@ window.createPost = async function () {
         setComposerError('Could not post right now. Please try again.');
     } finally {
         btn.disabled = false;
-        btn.textContent = "Post";
+        btn.textContent = "Share";
     }
 }
 
@@ -6172,6 +6565,8 @@ function syncThemeRadios(themeValue) {
 window.toggleCreateModal = function (show) {
     document.getElementById('create-modal').style.display = show ? 'flex' : 'none';
     if (show && currentUser) {
+        if (!currentEditPost) resetUniversalComposer();
+        setComposerMode(currentEditPost ? 'thread' : activeShareMode);
         const avatarEl = document.getElementById('modal-user-avatar');
         applyAvatarToElement(avatarEl, userProfile, { size: 42 });
         setComposerError('');
@@ -6190,6 +6585,49 @@ window.toggleCreateModal = function (show) {
         syncComposerMode();
     }
 }
+
+window.openCapsuleViewer = async function (capsuleId) {
+    if (!capsuleId) return;
+    const modal = document.getElementById('capsule-viewer-modal');
+    const body = document.getElementById('capsule-viewer-body');
+    const titleEl = document.getElementById('capsule-viewer-title');
+    if (!modal || !body) return;
+    body.innerHTML = '<div class="composer-empty">Loading capsule...</div>';
+    modal.style.display = 'flex';
+    try {
+        const snap = await getDoc(doc(db, 'capsules', capsuleId));
+        if (!snap.exists()) {
+            body.innerHTML = '<div class="composer-empty">Capsule not found.</div>';
+            return;
+        }
+        const capsule = snap.data() || {};
+        if (titleEl) titleEl.textContent = capsule.title || 'Capsule';
+        const assets = Array.isArray(capsule.assetIds) ? capsule.assetIds : [];
+        if (!assets.length) {
+            body.innerHTML = '<div class="composer-empty">No files in this capsule.</div>';
+            return;
+        }
+        body.innerHTML = `<div class="capsule-files">${assets.map(function (assetId) {
+            return `<div class="capsule-file" data-asset-id="${assetId}">
+                <div class="capsule-file-name">Asset ${escapeHtml(assetId)}</div>
+                <a class="capsule-file-link" href="#" target="_blank" rel="noopener">Download</a>
+            </div>`;
+        }).join('')}</div>`;
+        assets.forEach(function (assetId) {
+            resolveAssetUrl(assetId, 'original', function (url) {
+                const row = body.querySelector(`[data-asset-id="${assetId}"] .capsule-file-link`);
+                if (row) row.href = url;
+            });
+        });
+    } catch (err) {
+        body.innerHTML = '<div class="composer-empty">Unable to load capsule.</div>';
+    }
+};
+
+window.closeCapsuleViewer = function () {
+    const modal = document.getElementById('capsule-viewer-modal');
+    if (modal) modal.style.display = 'none';
+};
 
 window.toggleSettingsModal = function (show) {
     document.getElementById('settings-modal').style.display = show ? 'flex' : 'none';
@@ -7024,8 +7462,13 @@ function renderThreadMainPost(postId) {
     const avatarHtml = renderAvatar({ ...authorData, uid: post.userId }, { size: 48 });
 
     const verifiedBadge = renderVerifiedBadge(authorData);
-    const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
-    const formattedBody = formatContent(postText, post.tags, post.mentions);
+    const blockRender = buildBlockRenderOutput(post, {
+        onResolve: function () {
+            if (activePostId && activePostId === post.id) renderThreadMainPost(post.id);
+        }
+    });
+    const postText = blockRender ? '' : (typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || ''));
+    const formattedBody = blockRender ? blockRender.formattedBody : formatContent(postText, post.tags, post.mentions);
     const tagListHtml = renderTagList(post.tags || []);
     const pollBlock = renderPollBlock(post);
     const locationBadge = renderLocationBadge(post.location);
@@ -7038,21 +7481,27 @@ function renderThreadMainPost(postId) {
                                 <button class="follow-btn js-follow-topic-${topicClass} ${isFollowingTopic ? 'following' : ''}" data-topic="${escapeHtml(post.category)}" onclick="event.stopPropagation(); window.toggleFollow('${post.category}', event)" style="font-size:0.75rem; padding:6px 12px;">${isFollowingTopic ? 'Following' : '<i class="ph-bold ph-plus"></i> Topic'}</button>`;
 
     let mediaContent = '';
-    const resolvedMediaUrl = getPostMediaUrl(post);
-    if (resolvedMediaUrl) {
-        if (post.type === 'video') {
-            const thumbnailUrl = getThumbnailUrl(post);
-            mediaContent = buildVideoPreviewShell({
-                thumbnailUrl,
-                label: 'Play video',
-                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-            });
-        } else {
-            const safeUrl = escapeHtml(resolvedMediaUrl);
-            mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+    let blockStack = '';
+    if (blockRender) {
+        mediaContent = blockRender.mediaContent || '';
+        blockStack = blockRender.additionalBlocks || '';
+    } else {
+        const resolvedMediaUrl = getPostMediaUrl(post);
+        if (resolvedMediaUrl) {
+            if (post.type === 'video') {
+                const thumbnailUrl = getThumbnailUrl(post);
+                mediaContent = buildVideoPreviewShell({
+                    thumbnailUrl,
+                    label: 'Play video',
+                    onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+                });
+            } else {
+                const safeUrl = escapeHtml(resolvedMediaUrl);
+                mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+            }
         }
     }
-    if (mediaContent) {
+    if (mediaContent && (!blockRender || blockRender.primaryType === 'asset')) {
         mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
             ${mediaContent}
             <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
@@ -7101,6 +7550,7 @@ function renderThreadMainPost(postId) {
             ${scheduledChip}
             ${pollBlock}
             ${mediaContent}
+            ${blockStack}
             <div style="margin-top: 1rem; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">${date} • <span style="color:var(--text-main); font-weight:700;">${post.category}</span>${verificationChip}</div>
                         ${actionsHtml}
         </div>`;
@@ -8091,39 +8541,52 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
     const isSaved = userProfile.savedPosts && userProfile.savedPosts.includes(post.id);
     const myReview = window.myReviewCache ? window.myReviewCache[post.id] : null;
     const reviewDisplay = getReviewDisplay(myReview);
-    const postText = typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || '');
-    const formattedBody = compact ? escapeHtml(cleanText(postText)).slice(0, 160) + (postText.length > 160 ? '…' : '') : formatContent(postText, post.tags, post.mentions);
+    const blockRender = buildBlockRenderOutput(post, {
+        onResolve: function () {
+            if (currentViewId === 'profile') renderProfile();
+        }
+    });
+    const postText = blockRender ? '' : (typeof post.content === 'object' && post.content !== null ? (post.content.text || '') : (post.content || ''));
+    const formattedBody = blockRender
+        ? (compact ? escapeHtml(cleanText(blockRender.formattedBody || '')).slice(0, 160) : blockRender.formattedBody)
+        : (compact ? escapeHtml(cleanText(postText)).slice(0, 160) + (postText.length > 160 ? '…' : '') : formatContent(postText, post.tags, post.mentions));
     const tagListHtml = compact ? '' : renderTagList(post.tags || []);
     const pollBlock = compact ? '' : renderPollBlock(post);
     const locationBadge = renderLocationBadge(post.location);
     const scheduledChip = isPostScheduledInFuture(post) && currentUser && post.userId === currentUser.uid ? `<div class="scheduled-chip">Scheduled for ${formatTimestampDisplay(post.scheduledFor)}</div>` : '';
     let mediaContent = '';
-    const resolvedMediaUrl = getPostMediaUrl(post);
-    if (resolvedMediaUrl && compact) {
-        if (post.type === 'video') {
-            const thumbnailUrl = getThumbnailUrl(post);
-            mediaContent = buildVideoPreviewShell({
-                thumbnailUrl,
-                label: 'Play video',
-                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-            });
-        } else {
-            mediaContent = `<div class="profile-card-media"><img src="${escapeHtml(resolvedMediaUrl)}" alt="Post Content" loading="lazy" decoding="async"></div>`;
-        }
-    } else if (resolvedMediaUrl) {
-        if (post.type === 'video') {
-            const thumbnailUrl = getThumbnailUrl(post);
-            mediaContent = buildVideoPreviewShell({
-                thumbnailUrl,
-                label: 'Play video',
-                onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
-            });
-        } else {
-            const safeUrl = escapeHtml(resolvedMediaUrl);
-            mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+    if (blockRender && blockRender.mediaContent) {
+        mediaContent = compact
+            ? `<div class="profile-card-media">${blockRender.mediaContent}</div>`
+            : blockRender.mediaContent;
+    } else {
+        const resolvedMediaUrl = getPostMediaUrl(post);
+        if (resolvedMediaUrl && compact) {
+            if (post.type === 'video') {
+                const thumbnailUrl = getThumbnailUrl(post);
+                mediaContent = buildVideoPreviewShell({
+                    thumbnailUrl,
+                    label: 'Play video',
+                    onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+                });
+            } else {
+                mediaContent = `<div class="profile-card-media"><img src="${escapeHtml(resolvedMediaUrl)}" alt="Post Content" loading="lazy" decoding="async"></div>`;
+            }
+        } else if (resolvedMediaUrl) {
+            if (post.type === 'video') {
+                const thumbnailUrl = getThumbnailUrl(post);
+                mediaContent = buildVideoPreviewShell({
+                    thumbnailUrl,
+                    label: 'Play video',
+                    onClick: `event.stopPropagation(); window.openPostVideoModal('${post.id}')`
+                });
+            } else {
+                const safeUrl = escapeHtml(resolvedMediaUrl);
+                mediaContent = `<img src="${safeUrl}" class="post-media" alt="Post Content" onclick="window.openFullscreenMedia('${safeUrl}', 'image')">`;
+            }
         }
     }
-    if (mediaContent) {
+    if (mediaContent && (!blockRender || blockRender.primaryType === 'asset')) {
         mediaContent = `<div class="post-media-shell" data-post-id="${post.id}" ondblclick="window.handlePostDoubleTap('${post.id}', event)">
             ${mediaContent}
             <div class="post-like-burst" aria-hidden="true"><i class="ph-fill ph-heart"></i></div>
@@ -8154,6 +8617,7 @@ function renderProfilePostCard(post, context = 'profile', { compact = false, idP
                 ${scheduledChip}
                 ${pollBlock}
                 ${mediaContent}
+                ${blockRender && !compact ? blockRender.additionalBlocks : ''}
             </div>
             ${renderPostActions(post, { isLiked, isDisliked, isSaved, reviewDisplay, iconSize: compact ? '0.95rem' : '1rem', idPrefix, showCounts: !mobileView, showLabels: !mobileView })}
         </div>
@@ -9013,8 +9477,29 @@ window.handleFileSelect = function (input) {
         window.clearCommentAttachment();
     }
 }
-window.previewPostImage = function (input) { if (input.files && input.files[0]) { const reader = new FileReader(); reader.onload = function (e) { document.getElementById('img-preview-tag').src = e.target.result; document.getElementById('img-preview-container').style.display = 'block'; }; reader.readAsDataURL(input.files[0]); } }
-window.clearPostImage = function () { document.getElementById('postFile').value = ""; document.getElementById('img-preview-container').style.display = 'none'; document.getElementById('img-preview-tag').src = ""; }
+window.previewPostImage = function (input) {
+    if (input.files && input.files[0]) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const previewTag = document.getElementById('img-preview-tag');
+            const previewContainer = document.getElementById('img-preview-container');
+            if (previewTag) previewTag.src = e.target.result;
+            if (previewContainer) previewContainer.style.display = 'block';
+        };
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+window.clearPostImage = function () {
+    const fileInput = document.getElementById('thread-files');
+    if (fileInput) fileInput.value = "";
+    composerUploads.thread = [];
+    renderComposerFileList('thread-file-list', []);
+    const previewContainer = document.getElementById('img-preview-container');
+    const previewTag = document.getElementById('img-preview-tag');
+    if (previewContainer) previewContainer.style.display = 'none';
+    if (previewTag) previewTag.src = "";
+    syncPostButtonState();
+}
 window.togglePostOption = function (type) { const area = document.getElementById('extra-options-area'); const target = document.getElementById('post-opt-' + type);['poll', 'gif', 'schedule', 'location'].forEach(function (t) { if (t !== type) document.getElementById('post-opt-' + t).style.display = 'none'; }); if (target.style.display === 'none') { area.style.display = 'block'; target.style.display = 'block'; } else { target.style.display = 'none'; area.style.display = 'none'; } }
 window.closeReview = function () { return document.getElementById('review-modal').style.display = 'none'; };
 function closePostOptionsDropdown() {
@@ -9107,6 +9592,7 @@ window.beginEditPost = function () {
         }
     }
     syncComposerMode();
+    setComposerMode('thread');
     window.toggleCreateModal(true);
 };
 
@@ -20723,20 +21209,11 @@ window.createLiveSession = async function () {
     const tags = (document.getElementById('live-tags').value || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
     const streamEmbedURL = document.getElementById('live-url').value;
     try {
-        const roomName = `live_${currentUser.uid}_${Date.now()}`;
-        await addDoc(collection(db, 'liveSessions'), {
-            hostId: currentUser.uid,
-            roomName,
+        await callSecureFunction('createLiveSession', {
             title,
             category,
             tags,
-            visibility: 'public',
-            status: 'live',
-            startedAt: serverTimestamp(),
-            endedAt: null,
-            egressMode: 'hls',
-            playbackUrl: streamEmbedURL || null,
-            createdAt: serverTimestamp()
+            playbackUrl: streamEmbedURL || ''
         });
         toggleGoLiveModal(false);
     } catch (e) {

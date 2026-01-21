@@ -42,6 +42,19 @@ service cloud.firestore {
         );
     }
 
+    function canReadCapsule(capsuleId) {
+      let capsulePath = /databases/$(database)/documents/capsules/$(capsuleId);
+      return exists(capsulePath)
+        && (
+          get(capsulePath).data.visibility == 'public'
+          || (isSignedIn() && request.auth.uid == get(capsulePath).data.ownerId)
+          || (get(capsulePath).data.visibility == 'followers'
+              && isSignedIn()
+              && exists(/databases/$(database)/documents/users/$(get(capsulePath).data.ownerId)/followers/$(request.auth.uid)))
+          || isStaffAccount()
+        );
+    }
+
     // -------------------------
     // User roles
     // -------------------------
@@ -473,6 +486,12 @@ service cloud.firestore {
     match /assets/{assetId} {
       allow read: if canReadAsset(assetId);
       allow write: if false;
+    }
+
+    match /capsules/{capsuleId} {
+      allow read: if canReadCapsule(capsuleId);
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.ownerId;
     }
 
     // -------------------------
