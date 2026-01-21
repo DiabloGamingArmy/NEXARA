@@ -23,7 +23,7 @@ export const db = isSafari
     ? initializeFirestore(app, { experimentalForceLongPolling: true, useFetchStreams: false })
     : getFirestore(app);
 export const storage = getStorage(app);
-export const functions = getFunctions(app);
+export const functions = getFunctions(app, "us-central1");
 export const perf = getPerformance(app);
 
 const appCheckKey = window?.NEXERA_APP_CHECK_KEY || window?.__NEXERA_APP_CHECK_KEY || "";

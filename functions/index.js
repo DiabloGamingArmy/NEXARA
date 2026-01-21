@@ -126,6 +126,22 @@ function normalizeText(value = "", maxLen = 1000) {
   return trimmed.slice(0, maxLen);
 }
 
+function normalizeReviewRating(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "verified") return 5;
+  if (raw === "citation") return 3;
+  if (raw === "misleading") return 1;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
+
+function getReviewScoreDelta(ratingValue) {
+  if (!Number.isFinite(ratingValue)) return 0;
+  return ratingValue >= 4 ? 1 : -1;
+}
+
 function isStaffClaims(auth) {
   return auth?.token?.admin === true || auth?.token?.staff === true || auth?.token?.founder === true;
 }
@@ -1265,27 +1281,35 @@ exports.createReview = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDP
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
   const postId = String(data.postId || "").trim();
-  const rating = String(data.rating || "").trim();
+  const ratingValue = normalizeReviewRating(data.rating);
   const note = normalizeText(data.text || "", 1200);
-  if (!postId || !rating || !note) throw new HttpsError("invalid-argument", "postId, rating, and text are required.");
-  if (!["verified", "citation", "misleading"].includes(rating)) {
+  if (!postId || !note) throw new HttpsError("invalid-argument", "postId and text are required.");
+  if (!Number.isInteger(ratingValue) || ratingValue < 1 || ratingValue > 5) {
     throw new HttpsError("invalid-argument", "Invalid rating.");
   }
   await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
 
   const postRef = db.collection("posts").doc(postId);
-  const postSnap = await postRef.get();
-  if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
-
   const moderation = await moderateTextContent(note, "review");
-  const reviewRef = postRef.collection("reviews").doc();
   await db.runTransaction(async (tx) => {
-    const postSnap = await tx.get(postRef);
+    const reviewRef = postRef.collection("reviews").doc(auth.uid);
+    const [postSnap, reviewSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(reviewRef),
+    ]);
     if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const existingRatingValue = normalizeReviewRating(reviewSnap.exists ? reviewSnap.data()?.rating : null);
+    const previousScore = getReviewScoreDelta(existingRatingValue);
+    const nextScore = getReviewScoreDelta(ratingValue);
+    const scoreDelta = reviewSnap.exists ? (nextScore - previousScore) : nextScore;
+    const createdAt = reviewSnap.exists ? (reviewSnap.data()?.createdAt || FieldValue.serverTimestamp()) : FieldValue.serverTimestamp();
     tx.set(reviewRef, {
       userId: auth.uid,
-      rating,
+      rating: ratingValue,
       note,
+      text: note,
+      createdAt,
+      updatedAt: FieldValue.serverTimestamp(),
       timestamp: FieldValue.serverTimestamp(),
       moderation: {
         status: moderation.status,
@@ -1294,11 +1318,12 @@ exports.createReview = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDP
         modelVersion: moderation.modelVersion,
         reviewRequired: moderation.reviewRequired,
       },
-    });
-    const scoreChange = rating === "verified" ? 1 : -1;
-    tx.update(postRef, {trustScore: FieldValue.increment(scoreChange)});
+    }, {merge: true});
+    if (scoreDelta !== 0) {
+      tx.update(postRef, {trustScore: FieldValue.increment(scoreDelta)});
+    }
   });
-  return {ok: true, reviewId: reviewRef.id, moderation: moderation};
+  return {ok: true, reviewId: auth.uid, moderation};
 });
 
 exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
@@ -1311,19 +1336,20 @@ exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
   await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
 
   const postRef = db.collection("posts").doc(postId);
-  const reviewsRef = postRef.collection("reviews");
-  const snap = await reviewsRef.where("userId", "==", auth.uid).limit(1).get();
-  if (snap.empty) return {ok: true, removed: false};
-  const reviewDoc = snap.docs[0];
-  const rating = reviewDoc.data()?.rating || "";
+  let removed = false;
   await db.runTransaction(async (tx) => {
-    tx.delete(reviewsRef.doc(reviewDoc.id));
-    if (rating) {
-      const scoreChange = rating === "verified" ? -1 : 1;
-      tx.update(postRef, {trustScore: FieldValue.increment(scoreChange)});
+    const reviewRef = postRef.collection("reviews").doc(auth.uid);
+    const reviewSnap = await tx.get(reviewRef);
+    if (!reviewSnap.exists) return;
+    const ratingValue = normalizeReviewRating(reviewSnap.data()?.rating);
+    const scoreChange = getReviewScoreDelta(ratingValue);
+    tx.delete(reviewRef);
+    if (scoreChange !== 0) {
+      tx.update(postRef, {trustScore: FieldValue.increment(-scoreChange)});
     }
+    removed = true;
   });
-  return {ok: true, removed: true};
+  return {ok: true, removed};
 });
 
 exports.toggleLike = onCallV2({enforceAppCheck: true}, async (request) => {

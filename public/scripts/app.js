@@ -739,14 +739,34 @@ function startSplashFailsafeTimer() {
     logSplashEvent('failsafe-start', SPLASH_FAILSAFE_TIMEOUT);
 }
 
+function normalizeReviewRatingValue(reviewValue) {
+    if (reviewValue === null || reviewValue === undefined) return null;
+    if (typeof reviewValue === 'number' && Number.isFinite(reviewValue)) return Math.round(reviewValue);
+    const raw = String(reviewValue || '').trim().toLowerCase();
+    if (raw === 'verified') return 5;
+    if (raw === 'citation') return 3;
+    if (raw === 'misleading') return 1;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
+
+function getReviewCategory(reviewValue) {
+    const ratingValue = normalizeReviewRatingValue(reviewValue);
+    if (!ratingValue) return null;
+    if (ratingValue >= 4) return 'verified';
+    if (ratingValue <= 1) return 'misleading';
+    return 'citation';
+}
+
 function getReviewDisplay(reviewValue) {
-    if (reviewValue === 'verified') {
+    const category = getReviewCategory(reviewValue);
+    if (category === 'verified') {
         return { label: 'Verified', className: 'review-verified' };
     }
-    if (reviewValue === 'citation') {
+    if (category === 'citation') {
         return { label: 'Needs Citations', className: 'review-citation' };
     }
-    if (reviewValue === 'misleading') {
+    if (category === 'misleading') {
         return { label: 'Misleading/False', className: 'review-misleading' };
     }
     return { label: 'Audit', className: '' };
@@ -6887,13 +6907,14 @@ window.openPeerReview = function (postId) {
             }
             const rAuthor = userCache[data.userId] || { name: "Reviewer" };
             scores.total++;
-            if (data.rating === 'verified') scores.verified++;
-            if (data.rating === 'citation') scores.citation++;
-            if (data.rating === 'misleading') scores.misleading++;
+            const category = getReviewCategory(data.rating);
+            if (category === 'verified') scores.verified++;
+            if (category === 'citation') scores.citation++;
+            if (category === 'misleading') scores.misleading++;
 
-            let badge = data.rating === 'verified'
+            let badge = category === 'verified'
                 ? '<i class="ph-fill ph-check-circle" style="color:#00ff00;"></i> Verified'
-                : (data.rating === 'citation'
+                : (category === 'citation'
                     ? '<i class="ph-fill ph-warning-circle" style="color:#ffaa00;"></i> Citation Needed'
                     : '<i class="ph-fill ph-x-circle" style="color:#ff3d3d;"></i> Misleading');
 
@@ -6914,9 +6935,10 @@ window.openPeerReview = function (postId) {
             let myBadge = "";
             let myNote = "";
             if (myRatingData) {
-                myBadge = myRatingData.rating === 'verified'
+                const myCategory = getReviewCategory(myRatingData.rating);
+                myBadge = myCategory === 'verified'
                     ? '✅ Verified Accurate'
-                    : (myRatingData.rating === 'citation' ? '⚠️ Needs Citations' : '🚫 Misleading / False');
+                    : (myCategory === 'citation' ? '⚠️ Needs Citations' : '🚫 Misleading / False');
                 myNote = myRatingData.note || "(No explanation provided)";
             }
             document.getElementById('review-user-status').innerHTML = `
@@ -6954,9 +6976,10 @@ window.submitReview = async function () {
 
     if (!ratingEl || !noteEl) return;
 
-    const rating = ratingEl.value;
+    const rating = normalizeReviewRatingValue(ratingEl.value);
     const note = noteEl.value;
 
+    if (!Number.isFinite(rating)) return alert("Please select a rating.");
     if (!note.trim()) return alert("Please add a note explaining your review.");
 
     try {
