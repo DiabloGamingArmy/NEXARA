@@ -72,114 +72,201 @@
 
     <!-- Modals -->
     <!-- Create Post Modal -->
-    <div id="create-modal" class="modal-overlay" style="align-items: flex-start; padding-top: 5vh;">
-        <div class="x-modal-content">
-            <div class="x-modal-header">
-                <button onclick="window.toggleCreateModal(false)" class="x-close-btn">&times;</button>
-                <button class="destination-field" type="button" onclick="window.openDestinationPicker()"
-                    aria-label="Select posting destination">
-                    <div class="destination-field-label">Posting to</div>
-                    <div class="destination-field-value">
-                        <span id="destination-current-label">Select...</span>
-                        <span id="destination-current-verified" class="verified-badge" style="display:none;"></span>
-                    </div>
-                    <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
-                    <div id="destination-loading-spinner" class="inline-spinner" aria-hidden="true"></div>
-                </button>
+    <div id="create-modal" class="modal-overlay">
+        <div class="universal-composer">
+            <div class="composer-rail">
+                <button class="composer-rail-item active" data-mode="thread" onclick="window.setComposerMode('thread')"><i class="ph ph-chat-circle-text"></i><span>Thread</span></button>
+                <button class="composer-rail-item" data-mode="media" onclick="window.setComposerMode('media')"><i class="ph ph-images"></i><span>Media Drop</span></button>
+                <button class="composer-rail-item" data-mode="document" onclick="window.setComposerMode('document')"><i class="ph ph-file-text"></i><span>Document</span></button>
+                <button class="composer-rail-item" data-mode="audio" onclick="window.setComposerMode('audio')"><i class="ph ph-music-notes"></i><span>Audio</span></button>
+                <button class="composer-rail-item" data-mode="link" onclick="window.setComposerMode('link')"><i class="ph ph-link"></i><span>Link</span></button>
+                <button class="composer-rail-item" data-mode="capsule" onclick="window.setComposerMode('capsule')"><i class="ph ph-folder-open"></i><span>Capsule</span></button>
+                <button class="composer-rail-item" data-mode="live" onclick="window.setComposerMode('live')"><i class="ph ph-broadcast"></i><span>Live</span></button>
             </div>
-
-            <div id="destination-helper" class="category-helper" style="display:none; margin: 0 1rem;"></div>
-
-            <div class="x-body">
-                <div id="modal-user-avatar" class="x-avatar"></div>
-                <div class="x-inputs">
-                    <select id="postVisibility" class="x-pill-select">
-                        <option value="Everyone">Everyone can reply</option>
-                        <option value="Followers">Followers only</option>
-                        <option value="Mentions">Only people you mention</option>
+            <div class="composer-main">
+                <div class="composer-header">
+                    <div>
+                        <div id="composer-mode-headline">Thread</div>
+                        <div id="composer-mode-description">Text-first update</div>
+                    </div>
+                    <button onclick="window.toggleCreateModal(false)" class="x-close-btn">&times;</button>
+                </div>
+                <div class="composer-destination-row">
+                    <button class="destination-field" type="button" onclick="window.openDestinationPicker()"
+                        aria-label="Select posting destination">
+                        <div class="destination-field-label">Posting to</div>
+                        <div class="destination-field-value">
+                            <span id="destination-current-label">Select...</span>
+                            <span id="destination-current-verified" class="verified-badge" style="display:none;"></span>
+                        </div>
+                        <div class="destination-field-chevron"><i class="ph ph-caret-right"></i></div>
+                        <div id="destination-loading-spinner" class="inline-spinner" aria-hidden="true"></div>
+                    </button>
+                    <select id="composer-visibility" class="composer-visibility">
+                        <option value="public">Public</option>
+                        <option value="followers">Followers</option>
+                        <option value="private">Only me</option>
                     </select>
+                </div>
 
-                    <input type="text" id="postTitle" class="x-input-title" placeholder="Title (Optional)">
-                    <textarea id="postContent" class="x-input-content" placeholder="What is happening?!"
-                        rows="3"></textarea>
+                <div id="destination-helper" class="category-helper" style="display:none; margin: 0 1rem;"></div>
 
-                    <div class="composer-meta-controls">
-                        <button type="button" class="icon-pill" onclick="window.toggleTagInput()"><i
-                                class="ph ph-hash"></i> # Tags</button>
-                        <button type="button" class="icon-pill" onclick="window.toggleMentionInput()"><i
-                                class="ph ph-at"></i> @ Mentions</button>
-                    </div>
-                    <div id="tag-input-row" class="composer-inline" style="display:none;">
-                        <input type="text" id="tag-input" class="form-input" placeholder="Add a tag"
-                            onkeydown="window.handleTagInputKey(event)"
-                            oninput="window.filterTagSuggestions(this.value)">
-                        <div id="tag-suggestions" class="suggestion-row"></div>
-                    </div>
-                    <div id="tag-helper-text" class="tag-helper-text" style="display:none;"></div>
-                    <div id="tag-limit-note" class="tag-helper-text" style="display:none;">You can add up to 10 tags.</div>
-                    <div id="composer-tags-list" class="chip-row"></div>
-                    <div id="mention-input-row" class="composer-inline" style="display:none;">
-                        <input type="text" id="mention-input" class="form-input" placeholder="Search usernames"
-                            oninput="window.handleMentionInput(event)">
-                        <div id="mention-suggestions" class="mention-suggestions-list"></div>
-                    </div>
-                    <div id="composer-mentions-list" class="mention-row"></div>
+                <div class="composer-title-row">
+                    <input type="text" id="postTitle" class="composer-title-input" placeholder="Add a title (optional)" oninput="window.syncPostButtonState?.()">
+                </div>
 
-                    <div id="img-preview-container" class="attachment-preview">
-                        <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
-                        <img id="img-preview-tag" src="">
-                    </div>
+                <div class="composer-body">
+                    <div class="composer-mode-panel" data-mode="thread">
+                        <div class="x-body composer-thread-body">
+                            <div id="modal-user-avatar" class="x-avatar"></div>
+                            <div class="x-inputs">
+                                <textarea id="postContent" class="x-input-content" placeholder="Share your update" rows="4" oninput="window.syncPostButtonState?.()"></textarea>
 
-                    <div id="extra-options-area" class="extra-options-panel">
-                        <div id="post-opt-poll" style="display:none;">
-                            <div class="composer-subheader">Poll</div>
-                            <input type="text" id="poll-title-input" class="form-input" placeholder="Poll title"
-                                oninput="window.handlePollTitleChange(this.value)" style="margin-bottom:8px;">
-                            <div id="poll-options-container" class="poll-options"></div>
-                            <div class="poll-actions">
-                                <button type="button" class="icon-pill" onclick="window.addPollOption()"><i
-                                        class="ph ph-plus"></i> Add option</button>
-                                <span class="poll-helper">2–5 options</span>
+                                <div class="composer-meta-controls">
+                                    <button type="button" class="icon-pill" onclick="window.toggleTagInput()"><i class="ph ph-hash"></i> # Tags</button>
+                                    <button type="button" class="icon-pill" onclick="window.toggleMentionInput()"><i class="ph ph-at"></i> @ Mentions</button>
+                                </div>
+                                <div id="tag-input-row" class="composer-inline" style="display:none;">
+                                    <input type="text" id="tag-input" class="form-input" placeholder="Add a tag"
+                                        onkeydown="window.handleTagInputKey(event)"
+                                        oninput="window.filterTagSuggestions(this.value)">
+                                    <div id="tag-suggestions" class="suggestion-row"></div>
+                                </div>
+                                <div id="tag-helper-text" class="tag-helper-text" style="display:none;"></div>
+                                <div id="tag-limit-note" class="tag-helper-text" style="display:none;">You can add up to 10 tags.</div>
+                                <div id="composer-tags-list" class="chip-row"></div>
+                                <div id="mention-input-row" class="composer-inline" style="display:none;">
+                                    <input type="text" id="mention-input" class="form-input" placeholder="Search usernames"
+                                        oninput="window.handleMentionInput(event)">
+                                    <div id="mention-suggestions" class="mention-suggestions-list"></div>
+                                </div>
+                                <div id="composer-mentions-list" class="mention-row"></div>
+
+                                <div class="composer-file-control">
+                                    <input type="file" id="thread-files" style="display:none;" multiple accept="image/*,video/*,audio/*"
+                                        onchange="window.handleComposerFileChange('thread', this); window.previewPostImage(this); window.syncPostButtonState?.()">
+                                    <button type="button" class="icon-pill" onclick="document.getElementById('thread-files').click()"><i class="ph ph-paperclip"></i> Attach files</button>
+                                    <div id="thread-file-list" class="composer-file-list"></div>
+                                </div>
+
+                                <div class="composer-meta-controls">
+                                    <button type="button" class="icon-pill" onclick="window.togglePostOption('poll')"><i class="ph ph-chart-bar"></i> Poll</button>
+                                    <button type="button" class="icon-pill" onclick="window.togglePostOption('schedule')"><i class="ph ph-calendar"></i> Schedule</button>
+                                    <button type="button" class="icon-pill" onclick="window.togglePostOption('location')"><i class="ph ph-map-pin"></i> Location</button>
+                                </div>
+
+                                <div id="img-preview-container" class="attachment-preview">
+                                    <button onclick="window.clearPostImage()" class="remove-attachment">&times;</button>
+                                    <img id="img-preview-tag" src="">
+                                </div>
+
+                                <div id="extra-options-area" class="extra-options-panel">
+                                    <div id="post-opt-poll" style="display:none;">
+                                        <div class="composer-subheader">Poll</div>
+                                        <input type="text" id="poll-title-input" class="form-input" placeholder="Poll title"
+                                            oninput="window.handlePollTitleChange(this.value)" style="margin-bottom:8px;">
+                                        <div id="poll-options-container" class="poll-options"></div>
+                                        <div class="poll-actions">
+                                            <button type="button" class="icon-pill" onclick="window.addPollOption()"><i
+                                                    class="ph ph-plus"></i> Add option</button>
+                                            <span class="poll-helper">2–5 options</span>
+                                        </div>
+                                    </div>
+                                    <div id="post-opt-schedule" style="display:none;">
+                                        <div class="composer-subheader">Scheduled Post</div>
+                                        <input type="datetime-local" id="schedule-input" class="form-input" style="margin-bottom:0;"
+                                            onchange="window.handleScheduleChange(this.value)">
+                                    </div>
+                                    <div id="post-opt-location" style="display:none;">
+                                        <div class="composer-subheader">Location</div>
+                                        <input type="text" id="location-input" class="form-input" placeholder="Search locations"
+                                            style="margin-bottom:6px;" oninput="window.handleLocationInput(this.value)">
+                                        <div id="location-suggestions" class="suggestion-row"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                        <div id="post-opt-gif" style="display:none;">
-                            <input type="text" class="form-input" placeholder="Paste GIF URL..."
-                                style="margin-bottom:0;">
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="media" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Drop multiple files</div>
+                            <input type="file" id="media-drop-files" multiple accept="image/*,video/*" onchange="window.handleComposerFileChange('media', this); window.syncPostButtonState?.()">
+                            <div id="media-drop-list" class="composer-file-list"></div>
+                            <textarea id="media-notes" class="composer-notes" placeholder="Add a note (optional)" oninput="window.syncPostButtonState?.()"></textarea>
                         </div>
-                        <div id="post-opt-schedule" style="display:none;">
-                            <div class="composer-subheader">Scheduled Post</div>
-                            <input type="datetime-local" id="schedule-input" class="form-input" style="margin-bottom:0;"
-                                onchange="window.handleScheduleChange(this.value)">
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="document" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Upload a document</div>
+                            <input type="file" id="document-file" accept=".pdf,.doc,.docx,.txt" onchange="window.handleComposerFileChange('document', this); window.syncPostButtonState?.()">
+                            <div id="document-file-list" class="composer-file-list"></div>
+                            <textarea id="document-notes" class="composer-notes" placeholder="Add context or a summary" oninput="window.syncPostButtonState?.()"></textarea>
                         </div>
-                        <div id="post-opt-location" style="display:none;">
-                            <div class="composer-subheader">Location</div>
-                            <input type="text" id="location-input" class="form-input" placeholder="Search locations"
-                                style="margin-bottom:6px;" oninput="window.handleLocationInput(this.value)">
-                            <div id="location-suggestions" class="suggestion-row"></div>
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="audio" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Upload audio</div>
+                            <input type="file" id="audio-file" accept="audio/*" onchange="window.handleComposerFileChange('audio', this); window.syncPostButtonState?.()">
+                            <div id="audio-file-list" class="composer-file-list"></div>
+                            <textarea id="audio-notes" class="composer-notes" placeholder="Add notes or context" oninput="window.syncPostButtonState?.()"></textarea>
+                            <textarea id="audio-chapters" class="composer-notes" placeholder="Chapters (optional)" oninput="window.syncPostButtonState?.()"></textarea>
+                            <textarea id="audio-lyrics" class="composer-notes" placeholder="Lyrics (optional)" oninput="window.syncPostButtonState?.()"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="link" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Share a link snapshot</div>
+                            <input type="url" id="link-url-input" class="composer-link-input" placeholder="Paste a link"
+                                onblur="window.fetchLinkSnapshot(this.value)">
+                            <div id="link-preview" class="composer-preview"></div>
+                            <textarea id="link-notes" class="composer-notes" placeholder="Add context (optional)" oninput="window.syncPostButtonState?.()"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="capsule" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Capsule bundle</div>
+                            <input type="file" id="capsule-files" multiple onchange="window.handleComposerFileChange('capsule', this); window.syncPostButtonState?.()">
+                            <div id="capsule-file-list" class="composer-file-list"></div>
+                            <textarea id="capsule-notes" class="composer-notes" placeholder="Describe this capsule" oninput="window.syncPostButtonState?.()"></textarea>
+                            <label class="composer-toggle"><input type="checkbox" id="capsule-share-toggle"> Enable share link</label>
+                            <input type="text" id="capsule-share-slug" class="composer-link-input" placeholder="Custom share slug (optional)" oninput="window.syncPostButtonState?.()">
+                        </div>
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="live" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Go live</div>
+                            <input type="text" id="live-title-input" class="composer-link-input" placeholder="Live session title" oninput="window.syncPostButtonState?.()">
+                            <input type="text" id="live-category-input" class="composer-link-input" placeholder="Category (optional)" oninput="window.syncPostButtonState?.()">
+                            <input type="text" id="live-tags-input" class="composer-link-input" placeholder="Tags (comma separated)" oninput="window.syncPostButtonState?.()">
+                            <textarea id="live-notes" class="composer-notes" placeholder="Add a live description" oninput="window.syncPostButtonState?.()"></textarea>
+                            <div id="live-session-status" class="composer-empty"></div>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <div class="x-footer">
-                <div class="x-toolbar">
-                    <input type="file" id="postFile" style="display: none;" accept="image/*"
-                        onchange="window.previewPostImage(this)">
-                    <button class="x-tool-btn" onclick="document.getElementById('postFile').click()" title="Media"><i
-                            class="ph ph-camera"></i></button>
-                    <button class="x-tool-btn" onclick="window.togglePostOption('gif')" title="GIF"><i
-                            class="ph ph-gif"></i></button>
-                    <button class="x-tool-btn" onclick="window.togglePostOption('poll')" title="Poll"><i
-                            class="ph ph-chart-bar"></i></button>
-                    <button class="x-tool-btn" onclick="alert('Emoji picker coming soon!')" title="Emoji"><i
-                            class="ph ph-smiley"></i></button>
-                    <button class="x-tool-btn" onclick="window.togglePostOption('schedule')" title="Schedule"><i
-                            class="ph ph-calendar"></i></button>
-                    <button class="x-tool-btn" onclick="window.togglePostOption('location')" title="Location"><i
-                            class="ph ph-map-pin"></i></button>
+                <div class="composer-footer">
+                    <button id="publishBtn" onclick="window.createPost()" class="x-post-btn">Share</button>
                 </div>
-                <button id="publishBtn" onclick="window.createPost()" class="x-post-btn">Post</button>
             </div>
+        </div>
+    </div>
+
+    <div id="capsule-viewer-modal" class="modal-overlay">
+        <div class="modal-content capsule-viewer">
+            <div class="destination-picker-header">
+                <div>
+                    <div id="capsule-viewer-title" class="destination-picker-title">Capsule</div>
+                    <div class="destination-picker-subtitle">Files shared in this capsule</div>
+                </div>
+                <button onclick="window.closeCapsuleViewer()" class="x-close-btn" aria-label="Close capsule viewer">&times;</button>
+            </div>
+            <div id="capsule-viewer-body" class="capsule-viewer-body"></div>
         </div>
     </div>
 
@@ -603,9 +690,9 @@
             <div id="review-submit-section">
                 <h3 style="font-size:1rem; margin-bottom:10px;">Submit Audit</h3>
                 <select id="review-rating" class="form-select">
-                    <option value="verified">Verified Accurate</option>
-                    <option value="citation">Needs Citations</option>
-                    <option value="misleading">Misleading / False</option>
+                    <option value="5">Verified Accurate</option>
+                    <option value="3">Needs Citations</option>
+                    <option value="1">Misleading / False</option>
                 </select>
                 <textarea id="review-note" class="form-input" rows="2" placeholder="Explanation..."></textarea>
                 <button onclick="window.submitReview()" class="create-btn-sidebar" style="margin-top:0;">Submit
