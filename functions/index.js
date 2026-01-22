@@ -1164,7 +1164,7 @@ exports.createLiveSession = onCallV2({enforceAppCheck: true}, async (request) =>
   return {ok: true, sessionId: sessionRef.id, roomName};
 });
 
-exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createComment = onCallV2({enforceAppCheck: false, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1275,7 +1275,7 @@ exports.sendLiveChatMessage = onCallV2({enforceAppCheck: true, secrets: ["AI_LOG
   return {ok: true, chatId: chatRef.id, moderation: payload.moderation};
 });
 
-exports.createReview = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createReview = onCallV2({enforceAppCheck: false, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1352,7 +1352,7 @@ exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true, removed};
 });
 
-exports.toggleLike = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleLike = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1396,7 +1396,7 @@ exports.toggleLike = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true};
 });
 
-exports.toggleDislike = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleDislike = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1440,8 +1440,9 @@ exports.toggleDislike = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true};
 });
 
-exports.toggleLike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleLike_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
+  logger.info("[toggleLike_v2] appcheck", {hasApp: !!request.app, uid: request.auth?.uid});
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
@@ -1490,8 +1491,9 @@ exports.toggleLike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true, ...response};
 });
 
-exports.toggleDislike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleDislike_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
+  logger.info("[toggleDislike_v2] appcheck", {hasApp: !!request.app, uid: request.auth?.uid});
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
@@ -1540,8 +1542,9 @@ exports.toggleDislike_v2 = onCallV2({enforceAppCheck: true}, async (request) => 
   return {ok: true, ...response};
 });
 
-exports.createComment_v2 = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createComment_v2 = onCallV2({enforceAppCheck: false, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
   assertAppCheckV2(request);
+  logger.info("[createComment_v2] appcheck", {hasApp: !!request.app, uid: request.auth?.uid});
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
