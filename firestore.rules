@@ -314,7 +314,7 @@ service cloud.firestore {
             || (isSignedIn() && request.auth.uid == resource.data.userId)
             || isStaffAccount()
           );
-        allow create, update, delete: if isSignedIn() && isStaffAccount();
+        allow create, update, delete: if false;
       }
 
       match /likes/{uid} {
@@ -335,7 +335,7 @@ service cloud.firestore {
             || (isSignedIn() && request.auth.uid == resource.data.userId)
             || isStaffAccount()
           );
-        allow create, update, delete: if isSignedIn() && isStaffAccount();
+        allow create, update, delete: if false;
       }
     }
 
