@@ -6,6 +6,8 @@ import {
   collection,
   query,
   where,
+  orderBy,
+  limit,
   onSnapshot
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
@@ -16,9 +18,11 @@ export function initializeLiveDiscover() {
   const db = getFirestore();
 
   const q = query(
-    collection(db, "liveStreams"),
-    where("isLive", "==", true),
-    where("visibility", "==", "public")
+    collection(db, "liveSessions"),
+    where("status", "==", "live"),
+    where("visibility", "==", "public"),
+    orderBy("startedAt", "desc"),
+    limit(50)
   );
 
   onSnapshot(

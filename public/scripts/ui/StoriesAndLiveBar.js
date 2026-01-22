@@ -36,7 +36,13 @@ function buildAvatarItem(user, { showLive = false } = {}) {
 
     const avatar = document.createElement('div');
     avatar.className = `stories-live-avatar${user.isMe ? ' is-me' : ''}`;
-    avatar.textContent = getInitials(user.label || 'User');
+    if (user.avatarUrl) {
+        avatar.style.backgroundImage = `url('${user.avatarUrl}')`;
+        avatar.style.backgroundSize = 'cover';
+        avatar.style.backgroundPosition = 'center';
+    } else {
+        avatar.textContent = getInitials(user.label || 'User');
+    }
 
     if (user.isMe) {
         const badge = document.createElement('div');
@@ -58,6 +64,20 @@ function buildAvatarItem(user, { showLive = false } = {}) {
 
     item.appendChild(avatar);
     item.appendChild(label);
+
+    if (typeof user.onSelect === 'function' && !isPlaceholder) {
+        item.classList.add('is-clickable');
+        item.setAttribute('role', 'button');
+        item.setAttribute('tabindex', '0');
+        const handler = function () { user.onSelect(user); };
+        item.addEventListener('click', handler);
+        item.addEventListener('keypress', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                handler();
+            }
+        });
+    }
 
     return item;
 }
@@ -86,6 +106,7 @@ export function renderStoriesAndLiveBar(container, options = {}) {
     if (!container) return;
     const incomingStories = Array.isArray(options.stories) ? options.stories : DEFAULT_STORIES;
     const incomingLive = Array.isArray(options.liveUsers) ? options.liveUsers : DEFAULT_LIVE_USERS;
+    const onStorySelect = typeof options.onStorySelect === 'function' ? options.onStorySelect : null;
     const meItem = { id: 'me', label: 'Your Story', isMe: true };
     const stories = [meItem].concat(
         incomingStories.filter(function (item) { return item && item.id !== 'me'; })
@@ -101,7 +122,9 @@ export function renderStoriesAndLiveBar(container, options = {}) {
     const wrapper = document.createElement('section');
     wrapper.className = 'stories-live-bar';
 
-    wrapper.appendChild(buildRow('Stories', stories, { showLive: false }));
+    wrapper.appendChild(buildRow('Stories', stories.map(function (item) {
+        return { ...item, onSelect: onStorySelect };
+    }), { showLive: false }));
     wrapper.appendChild(buildRow('Live streams', liveUsers, { showLive: true }));
 
     container.appendChild(wrapper);
