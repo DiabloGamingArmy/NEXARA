@@ -16,8 +16,10 @@ const {onObjectFinalized} = require("firebase-functions/v2/storage");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const {AccessToken} = require("livekit-server-sdk");
-const AI_LOGIC_ENDPOINT = defineSecret("AI_LOGIC_ENDPOINT");
-const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
+// Secrets
+const LIVEKIT_API_KEY = defineSecret("LIVEKIT_API_KEY");
+const LIVEKIT_API_SECRET = defineSecret("LIVEKIT_API_SECRET");
+const LIVEKIT_URL = defineSecret("LIVEKIT_URL");
 
 // For cost control, you can set the maximum number of containers that can be
 // running at the same time. This helps mitigate the impact of unexpected
@@ -29,7 +31,7 @@ const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
 // functions should each use functions.runWith({ maxInstances: 10 }) instead.
 // In the v1 API, each function can only serve one request per container, so
 // this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+setGlobalOptions({ maxInstances: 10, region: "us-central1" });
 
 // Create and deploy your first functions
 // https://firebase.google.com/docs/functions/get-started
@@ -55,12 +57,6 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 const {FieldValue} = admin.firestore;
-const LIVEKIT_API_KEY = defineSecret("LIVEKIT_API_KEY");
-const LIVEKIT_API_SECRET = defineSecret("LIVEKIT_API_SECRET");
-const LIVEKIT_URL = defineSecret("LIVEKIT_URL");
-const AI_LOGIC_ENDPOINT = defineSecret("AI_LOGIC_ENDPOINT");
-const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
-
 const RATE_LIMITS = {
   liveChat: {limit: 5, windowMs: 10 * 1000},
   comments: {limit: 3, windowMs: 30 * 1000},
@@ -296,100 +292,29 @@ function normalizeBlocks(rawBlocks = []) {
 }
 
 async function moderateTextContent(text, contextLabel) {
-  const payload = {
-    input: text,
-    context: contextLabel,
-  };
   if (!text) {
-    return {status: "approved", labels: [], scoreMap: {}, modelVersion: "none", reviewRequired: false};
+    return {status: "approved", labels: ["unconfigured"], scoreMap: {}, modelVersion: "none", reviewRequired: false};
   }
-  try {
-    const endpoint = AI_LOGIC_ENDPOINT.value();
-    const apiKey = AI_LOGIC_API_KEY.value();
-    if (!endpoint || !apiKey) {
-      return {
-        status: "approved",
-        labels: ["unscored", "unconfigured"],
-        scoreMap: {},
-        modelVersion: "unconfigured",
-        reviewRequired: false,
-      };
-    }
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      logger.warn("AI Logic moderation failed", {status: response.status});
-      return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
-    }
-    const data = await response.json();
-    const labels = Array.isArray(data.labels) ? data.labels : [];
-    const scoreMap = data.scoreMap || {};
-    const blocked = data.blocked === true || labels.includes("blocked");
-    const pending = data.pending === true || labels.includes("review");
-    return {
-      status: blocked ? "blocked" : (pending ? "pending" : "approved"),
-      labels,
-      scoreMap,
-      modelVersion: data.modelVersion || "ai-logic",
-      reviewRequired: pending || blocked,
-    };
-  } catch (error) {
-    logger.warn("AI Logic moderation exception", {error: error?.message || error});
-    return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
-  }
+  return {
+    status: "approved",
+    labels: ["unconfigured"],
+    scoreMap: {},
+    modelVersion: "none",
+    reviewRequired: false,
+  };
 }
 
 async function moderateAssetContent(metadata) {
-  const payload = {
-    input: metadata,
-    context: "asset",
-  };
-  try {
-    const endpoint = AI_LOGIC_ENDPOINT.value();
-    const apiKey = AI_LOGIC_API_KEY.value();
-    if (!endpoint || !apiKey) {
-      return {
-        status: "approved",
-        labels: ["unscored", "unconfigured"],
-        scoreMap: {},
-        modelVersion: "unconfigured",
-        reviewRequired: false,
-      };
-    }
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      logger.warn("AI Logic asset moderation failed", {status: response.status});
-      return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
-    }
-    const data = await response.json();
-    const labels = Array.isArray(data.labels) ? data.labels : [];
-    const scoreMap = data.scoreMap || {};
-    const blocked = data.blocked === true || labels.includes("blocked");
-    const pending = data.pending === true || labels.includes("review");
-    return {
-      status: blocked ? "blocked" : (pending ? "pending" : "approved"),
-      labels,
-      scoreMap,
-      modelVersion: data.modelVersion || "ai-logic",
-      reviewRequired: pending || blocked,
-    };
-  } catch (error) {
-    logger.warn("AI Logic asset moderation exception", {error: error?.message || error});
-    return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+  if (!metadata) {
+    return {status: "approved", labels: ["unconfigured"], scoreMap: {}, modelVersion: "none", reviewRequired: false};
   }
+  return {
+    status: "approved",
+    labels: ["unconfigured"],
+    scoreMap: {},
+    modelVersion: "none",
+    reviewRequired: false,
+  };
 }
 
 async function resolveActorProfile(actorId) {
@@ -893,7 +818,7 @@ exports.getAssetDownloadUrl = onCallV2({enforceAppCheck: true}, async (request) 
   return {url, expiresAt};
 });
 
-exports.createPost = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1000,7 +925,7 @@ exports.createPost = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOI
   return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
 });
 
-exports.createLinkSnapshot = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createLinkSnapshot = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1068,7 +993,7 @@ exports.createLinkSnapshot = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGI
   };
 });
 
-exports.createCapsule = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1164,7 +1089,7 @@ exports.createLiveSession = onCallV2({enforceAppCheck: true}, async (request) =>
   return {ok: true, sessionId: sessionRef.id, roomName};
 });
 
-exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createComment = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1232,7 +1157,7 @@ exports.createComment = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_END
   return {ok: true, commentId: commentRef.id, moderation: payload.moderation};
 });
 
-exports.sendLiveChatMessage = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.sendLiveChatMessage = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1275,18 +1200,19 @@ exports.sendLiveChatMessage = onCallV2({enforceAppCheck: true, secrets: ["AI_LOG
   return {ok: true, chatId: chatRef.id, moderation: payload.moderation};
 });
 
-exports.createReview = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createReview = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
   const postId = String(data.postId || "").trim();
   const ratingValue = normalizeReviewRating(data.rating);
-  const note = normalizeText(data.text || "", 1200);
+  const note = normalizeText(data.text || "", 2000);
   if (!postId || !note) throw new HttpsError("invalid-argument", "postId and text are required.");
   if (!Number.isInteger(ratingValue) || ratingValue < 1 || ratingValue > 5) {
     throw new HttpsError("invalid-argument", "Invalid rating.");
   }
+  logger.info("[createReview]", {uid: auth.uid, hasApp: !!request.app, postId});
   await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
 
   const postRef = db.collection("posts").doc(postId);
@@ -1326,7 +1252,68 @@ exports.createReview = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDP
   return {ok: true, reviewId: auth.uid, moderation};
 });
 
-exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.createReview_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const ratingValue = normalizeReviewRating(data.rating);
+  const text = normalizeText(data.text || "", 2000);
+  if (!postId || !text) throw new HttpsError("invalid-argument", "postId and text are required.");
+  if (!Number.isInteger(ratingValue) || ratingValue < 1 || ratingValue > 5) {
+    throw new HttpsError("invalid-argument", "Invalid rating.");
+  }
+  logger.info("[createReview_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
+
+  const moderation = await moderateTextContent(text, "review");
+  const postRef = db.collection("posts").doc(postId);
+  let response = null;
+  await db.runTransaction(async (tx) => {
+    const reviewRef = postRef.collection("reviews").doc(auth.uid);
+    const [postSnap, reviewSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(reviewRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let reviewCount = Number.isFinite(postData.reviewCount) ? postData.reviewCount : 0;
+    let ratingSum = Number.isFinite(postData.ratingSum) ? postData.ratingSum : 0;
+    const previousRating = normalizeReviewRating(reviewSnap.exists ? reviewSnap.data()?.rating : null);
+    if (Number.isInteger(previousRating)) {
+      ratingSum -= previousRating;
+    }
+    ratingSum += ratingValue;
+    if (!reviewSnap.exists) reviewCount += 1;
+    const createdAt = reviewSnap.exists ? (reviewSnap.data()?.createdAt || FieldValue.serverTimestamp()) : FieldValue.serverTimestamp();
+    const displayName = auth.token?.name || auth.token?.displayName || "";
+    const photoURL = auth.token?.picture || auth.token?.photoURL || "";
+    tx.set(reviewRef, {
+      userId: auth.uid,
+      rating: ratingValue,
+      text,
+      note: text,
+      displayName,
+      photoURL,
+      createdAt,
+      updatedAt: FieldValue.serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+    }, {merge: true});
+    tx.update(postRef, {reviewCount, ratingSum});
+    response = {reviewCount, ratingSum};
+  });
+  return {ok: true, reviewId: auth.uid, moderation, ...response};
+});
+
+exports.removeReview = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1352,7 +1339,7 @@ exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true, removed};
 });
 
-exports.toggleLike = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleLike = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1396,7 +1383,7 @@ exports.toggleLike = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true};
 });
 
-exports.toggleDislike = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleDislike = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1440,7 +1427,7 @@ exports.toggleDislike = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true};
 });
 
-exports.toggleLike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleLike_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1490,7 +1477,7 @@ exports.toggleLike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true, ...response};
 });
 
-exports.toggleDislike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
+exports.toggleDislike_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
@@ -1540,13 +1527,15 @@ exports.toggleDislike_v2 = onCallV2({enforceAppCheck: true}, async (request) => 
   return {ok: true, ...response};
 });
 
-exports.createComment_v2 = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+exports.createComment_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
   if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
   const data = request.data || {};
   const postId = String(data.postId || "").trim();
-  const text = normalizeText(data.text || "", 1200);
+  const text = normalizeText(data.text || "", 2000);
+  const parentIdRaw = String(data.parentId || "").trim();
+  const parentId = parentIdRaw || null;
   const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 3) : [];
   if (!postId || !text) throw new HttpsError("invalid-argument", "postId and text are required.");
   logger.info("[createComment_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
@@ -1571,17 +1560,23 @@ exports.createComment_v2 = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_
     mediaPath = asset.storagePathOriginal || "";
   }
   const moderation = await moderateTextContent(text, "comment");
-  let authorName = "User";
+  let displayName = auth.token?.name || auth.token?.displayName || "";
+  let photoURL = auth.token?.picture || auth.token?.photoURL || "";
   try {
     const userSnap = await db.collection("users").doc(auth.uid).get();
     if (userSnap.exists) {
       const userData = userSnap.data() || {};
-      authorName = userData.name || userData.displayName || userData.username || authorName;
+      displayName = displayName || userData.name || userData.displayName || userData.username || "User";
+      photoURL = photoURL || userData.photoURL || "";
     }
   } catch (error) {}
+  if (!displayName) displayName = "User";
   const payload = {
     userId: auth.uid,
     text,
+    parentId,
+    displayName,
+    photoURL,
     mediaAssetId,
     mediaPath,
     assets: assetIds,
@@ -1596,16 +1591,23 @@ exports.createComment_v2 = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_
     },
   };
 
-  const commentRef = await postRef.collection("comments").add(payload);
-  if (moderation.status !== "blocked") {
-    await postRef.set({
-      previewComment: {
+  const commentRef = postRef.collection("comments").doc();
+  await db.runTransaction(async (tx) => {
+    const postSnap = await tx.get(postRef);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    tx.set(commentRef, payload);
+    const updatePayload = {
+      commentCount: FieldValue.increment(1),
+    };
+    if (moderation.status !== "blocked") {
+      updatePayload.previewComment = {
         text: text.substring(0, 80) + (text.length > 80 ? "..." : ""),
-        author: authorName,
+        author: displayName || "User",
         likes: 0,
-      },
-    }, {merge: true});
-  }
+      };
+    }
+    tx.set(postRef, updatePayload, {merge: true});
+  });
   return {ok: true, commentId: commentRef.id, createdAt: admin.firestore.Timestamp.now()};
 });
 
@@ -1692,9 +1694,7 @@ exports.adminSetUserDisabled = onCallV2({enforceAppCheck: true}, async (request)
   return {ok: true};
 });
 
-exports.onAssetFinalize = onObjectFinalized(
-  {secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]},
-  async (event) => {
+exports.onAssetFinalize = onObjectFinalized(async (event) => {
     const object = event.data;
     const filePath = object.name || "";
     if (!filePath) return;
