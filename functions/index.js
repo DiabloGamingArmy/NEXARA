@@ -196,7 +196,11 @@ function collectModerationText(title = "", blocks = []) {
 }
 
 function stripUndefined(value) {
-  if (Array.isArray(value)) return value.map(stripUndefined);
+  if (Array.isArray(value)) {
+    return value
+      .map(stripUndefined)
+      .filter((entry) => entry !== undefined);
+  }
   if (!value || typeof value !== "object") return value;
   const output = {};
   for (const [key, val] of Object.entries(value)) {
@@ -893,6 +897,28 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
     const legacyMediaAssetId = firstAssetBlock?.assetId || "";
     const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
 
+    const tags = Array.isArray(data.tags)
+      ? data.tags.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean).slice(0, 10)
+      : [];
+    const mentions = Array.isArray(data.mentions)
+      ? data.mentions
+          .map((mention) => {
+            if (!mention || typeof mention !== "object") return null;
+            const uid = typeof mention.uid === "string" ? mention.uid.trim() : "";
+            const username = typeof mention.username === "string" ? mention.username.trim() : "";
+            if (!uid && !username) return null;
+            return {
+              ...(uid ? {uid} : {}),
+              ...(username ? {username} : {}),
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 10)
+      : [];
+    const mentionUserIds = Array.isArray(data.mentionUserIds)
+      ? data.mentionUserIds.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean).slice(0, 10)
+      : [];
+
     const preview = buildComposerPostPreview(blocks, title);
     const postPayload = {
       ownerId: auth.uid,
@@ -904,9 +930,9 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
       blocks,
       ...categoryPayload,
       category: categoryPayload.categoryName || categoryPayload.categorySlug || "",
-      tags: Array.isArray(data.tags) ? data.tags.slice(0, 10) : [],
-      mentions: Array.isArray(data.mentions) ? data.mentions.slice(0, 10) : [],
-      mentionUserIds: Array.isArray(data.mentionUserIds) ? data.mentionUserIds.slice(0, 10) : [],
+      tags,
+      mentions,
+      mentionUserIds,
       poll: data.poll || null,
       scheduledFor: data.scheduledFor || null,
       location: data.location || "",
@@ -915,7 +941,7 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
         mediaPath: legacyMediaPath,
         linkUrl: null,
         profileUid: null,
-        meta: {tags: Array.isArray(data.tags) ? data.tags : [], mentions: Array.isArray(data.mentions) ? data.mentions : []},
+        meta: {tags, mentions},
       },
       mediaAssetId: legacyMediaAssetId,
       mediaPath: legacyMediaPath,
@@ -940,6 +966,14 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
     return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
   } catch (err) {
     if (err instanceof HttpsError) throw err;
+    logger.error("createPost payload snapshot", {
+      uid: request?.auth?.uid,
+      categoryId: request?.data?.categoryId,
+      blocksCount: Array.isArray(request?.data?.blocks) ? request.data.blocks.length : 0,
+      tagsType: typeof request?.data?.tags,
+      mentionsType: typeof request?.data?.mentions,
+      mentionUserIdsType: typeof request?.data?.mentionUserIds,
+    });
     logger.error("createPost failed", {uid: request?.auth?.uid, err: err?.message, stack: err?.stack});
     throw new HttpsError("internal", "Post creation failed.");
   }
