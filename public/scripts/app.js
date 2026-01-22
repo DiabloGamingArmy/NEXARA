@@ -27,13 +27,25 @@ function getCallable(name) {
     return httpsCallable(functions, name);
 }
 
-async function callSecureFunction(name, payload = {}) {
+async function callSecureFunction(name, payload = {}, options = {}) {
+    const fallbackName = options?.fallbackName;
     try {
         const callable = getCallable(name);
         const res = await callable(payload);
         return res?.data;
     } catch (error) {
-        const code = error?.code || '';
+        let code = error?.code || '';
+        if (code === 'not-found' && fallbackName) {
+            console.warn(`[Functions] ${name} not found, retrying ${fallbackName}`);
+            try {
+                const fallbackCallable = getCallable(fallbackName);
+                const res = await fallbackCallable(payload);
+                return res?.data;
+            } catch (fallbackError) {
+                error = fallbackError;
+                code = error?.code || '';
+            }
+        }
         if (code === 'failed-precondition') {
             toast('App Check verification failed. Refresh the page and try again.', 'error');
         } else if (code === 'resource-exhausted') {
@@ -5325,7 +5337,7 @@ window.toggleLike = async function (postId, event) {
 
     refreshSinglePostUI(postId);
     try {
-        await callSecureFunction('toggleLike', { postId, action: wasLiked ? 'unlike' : 'like' });
+        await callSecureFunction('toggleLike_v2', { postId, action: wasLiked ? 'unlike' : 'like' }, { fallbackName: 'toggleLike' });
     } catch (e) {
         console.error("Like error:", e);
         post.likeCount = previousLikeCount;
@@ -7655,11 +7667,11 @@ window.sendComment = async function () {
 
         payload.timestamp = serverTimestamp();
 
-        const result = await callSecureFunction('createComment', {
+        const result = await callSecureFunction('createComment_v2', {
             postId: activePostId,
             text,
             assetIds: mediaAssetId ? [mediaAssetId] : []
-        });
+        }, { fallbackName: 'createComment' });
         if (result?.moderation?.status === 'blocked') {
             toast('Your comment is under review.', 'warning');
         }
@@ -7962,7 +7974,7 @@ window.toggleDislike = async function (postId, event) {
 
     refreshSinglePostUI(postId);
     try {
-        await callSecureFunction('toggleDislike', { postId, action: wasDisliked ? 'undislike' : 'dislike' });
+        await callSecureFunction('toggleDislike_v2', { postId, action: wasDisliked ? 'undislike' : 'dislike' }, { fallbackName: 'toggleDislike' });
     } catch (e) {
         console.error('Dislike error:', e);
         post.likeCount = previousLikeCount;

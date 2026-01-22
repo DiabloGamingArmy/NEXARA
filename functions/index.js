@@ -1440,6 +1440,175 @@ exports.toggleDislike = onCallV2({enforceAppCheck: true}, async (request) => {
   return {ok: true};
 });
 
+exports.toggleLike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["like", "unlike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  logger.info("[toggleLike_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `like:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  let response = null;
+  await db.runTransaction(async (tx) => {
+    const [postSnap, likeSnap, dislikeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(likeRef),
+      tx.get(dislikeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+
+    let liked = likeSnap.exists;
+    let disliked = dislikeSnap.exists;
+    if (action === "like" && !liked) {
+      tx.set(likeRef, {createdAt: FieldValue.serverTimestamp()});
+      likeCount += 1;
+      liked = true;
+      if (disliked) {
+        tx.delete(dislikeRef);
+        dislikeCount = Math.max(0, dislikeCount - 1);
+        disliked = false;
+      }
+    } else if (action === "unlike" && liked) {
+      tx.delete(likeRef);
+      likeCount = Math.max(0, likeCount - 1);
+      liked = false;
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+    response = {liked, disliked, likeCount, dislikeCount};
+  });
+  return {ok: true, ...response};
+});
+
+exports.toggleDislike_v2 = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["dislike", "undislike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  logger.info("[toggleDislike_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `dislike:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  let response = null;
+  await db.runTransaction(async (tx) => {
+    const [postSnap, dislikeSnap, likeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(dislikeRef),
+      tx.get(likeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+    let disliked = dislikeSnap.exists;
+    let liked = likeSnap.exists;
+
+    if (action === "dislike" && !disliked) {
+      tx.set(dislikeRef, {createdAt: FieldValue.serverTimestamp()});
+      dislikeCount += 1;
+      disliked = true;
+      if (liked) {
+        tx.delete(likeRef);
+        likeCount = Math.max(0, likeCount - 1);
+        liked = false;
+      }
+    } else if (action === "undislike" && disliked) {
+      tx.delete(dislikeRef);
+      dislikeCount = Math.max(0, dislikeCount - 1);
+      disliked = false;
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+    response = {liked, disliked, likeCount, dislikeCount};
+  });
+  return {ok: true, ...response};
+});
+
+exports.createComment_v2 = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const text = normalizeText(data.text || "", 1200);
+  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 3) : [];
+  if (!postId || !text) throw new HttpsError("invalid-argument", "postId and text are required.");
+  logger.info("[createComment_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `comment:${postId}:30s`, RATE_LIMITS.comments);
+
+  const postRef = db.collection("posts").doc(postId);
+  const postSnap = await postRef.get();
+  if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+  const postData = postSnap.data() || {};
+  if (postData.visibility === "private" && postData.userId !== auth.uid) {
+    throw new HttpsError("permission-denied", "You cannot comment on this post.");
+  }
+
+  let mediaAssetId = "";
+  let mediaPath = "";
+  if (assetIds.length) {
+    const assetSnap = await db.collection("assets").doc(assetIds[0]).get();
+    if (!assetSnap.exists) throw new HttpsError("not-found", "Asset not found.");
+    const asset = assetSnap.data() || {};
+    if (asset.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Asset ownership mismatch.");
+    mediaAssetId = assetIds[0];
+    mediaPath = asset.storagePathOriginal || "";
+  }
+  const moderation = await moderateTextContent(text, "comment");
+  let authorName = "User";
+  try {
+    const userSnap = await db.collection("users").doc(auth.uid).get();
+    if (userSnap.exists) {
+      const userData = userSnap.data() || {};
+      authorName = userData.name || userData.displayName || userData.username || authorName;
+    }
+  } catch (error) {}
+  const payload = {
+    userId: auth.uid,
+    text,
+    mediaAssetId,
+    mediaPath,
+    assets: assetIds,
+    createdAt: FieldValue.serverTimestamp(),
+    timestamp: FieldValue.serverTimestamp(),
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+  };
+
+  const commentRef = await postRef.collection("comments").add(payload);
+  if (moderation.status !== "blocked") {
+    await postRef.set({
+      previewComment: {
+        text: text.substring(0, 80) + (text.length > 80 ? "..." : ""),
+        author: authorName,
+        likes: 0,
+      },
+    }, {merge: true});
+  }
+  return {ok: true, commentId: commentRef.id, createdAt: admin.firestore.Timestamp.now()};
+});
+
 exports.adminModerateContent = onCallV2({enforceAppCheck: true}, async (request) => {
   assertAppCheckV2(request);
   const auth = request.auth;
