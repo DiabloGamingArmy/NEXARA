@@ -7008,11 +7008,11 @@ window.submitReview = async function () {
         window.closeReview();
 
         // 4. Backend Update
-        await callSecureFunction('createReview', {
+        await callSecureFunction('createReview_v2', {
             postId: activePostId,
             rating,
             text: note
-        });
+        }, { fallbackName: 'createReview' });
 
     } catch (e) {
         console.error("Review failed", e);
