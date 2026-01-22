@@ -12,9 +12,12 @@ const {defineSecret} = require("firebase-functions/params");
 const {onCall: onCallV2, HttpsError} = require("firebase-functions/v2/https");
 const {onCall, onRequest} = require("firebase-functions/https");
 const {onDocumentCreated, onDocumentDeleted, onDocumentUpdated} = require("firebase-functions/v2/firestore");
+const {onObjectFinalized} = require("firebase-functions/v2/storage");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const {AccessToken} = require("livekit-server-sdk");
+const AI_LOGIC_ENDPOINT = defineSecret("AI_LOGIC_ENDPOINT");
+const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
 
 // For cost control, you can set the maximum number of containers that can be
 // running at the same time. This helps mitigate the impact of unexpected
@@ -55,6 +58,339 @@ const {FieldValue} = admin.firestore;
 const LIVEKIT_API_KEY = defineSecret("LIVEKIT_API_KEY");
 const LIVEKIT_API_SECRET = defineSecret("LIVEKIT_API_SECRET");
 const LIVEKIT_URL = defineSecret("LIVEKIT_URL");
+const AI_LOGIC_ENDPOINT = defineSecret("AI_LOGIC_ENDPOINT");
+const AI_LOGIC_API_KEY = defineSecret("AI_LOGIC_API_KEY");
+
+const RATE_LIMITS = {
+  liveChat: {limit: 5, windowMs: 10 * 1000},
+  comments: {limit: 3, windowMs: 30 * 1000},
+  reviews: {limit: 1, windowMs: 10 * 60 * 1000},
+  likes: {limit: 20, windowMs: 60 * 1000},
+  assets: {limit: 10, windowMs: 60 * 1000},
+};
+
+const ASSET_POLICIES = {
+  avatar: {maxBytes: 5 * 1024 * 1024, allowedPrefixes: ["image/"]},
+  image: {maxBytes: 25 * 1024 * 1024, allowedPrefixes: ["image/"]},
+  audio: {maxBytes: 200 * 1024 * 1024, allowedPrefixes: ["audio/"]},
+  document: {
+    maxBytes: 100 * 1024 * 1024,
+    allowedPrefixes: [
+      "application/pdf",
+      "text/plain",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ],
+  },
+  video: {maxBytes: 2 * 1024 * 1024 * 1024, allowedPrefixes: ["video/"]},
+};
+
+function assertAppCheckV2(request) {
+  if (!request.app) {
+    throw new HttpsError("failed-precondition", "Missing or invalid App Check token.");
+  }
+}
+
+function assertAppCheckV1(context) {
+  if (!context.app) {
+    throw new HttpsError("failed-precondition", "Missing or invalid App Check token.");
+  }
+}
+
+async function enforceRateLimit(uid, bucketKey, {limit, windowMs}) {
+  const now = Date.now();
+  const resetAt = now + windowMs;
+  const docId = `${uid}_${bucketKey}`;
+  const ref = db.collection("rateLimits").doc(docId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    let count = 0;
+    let windowResetAt = resetAt;
+    if (snap.exists) {
+      const data = snap.data() || {};
+      if (data.resetAt && data.resetAt > now) {
+        count = data.count || 0;
+        windowResetAt = data.resetAt;
+      }
+    }
+    if (count >= limit) {
+      throw new HttpsError("resource-exhausted", "Rate limit exceeded. Try again soon.");
+    }
+    tx.set(ref, {count: count + 1, resetAt: windowResetAt}, {merge: true});
+  });
+}
+
+function normalizeText(value = "", maxLen = 1000) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return trimmed.slice(0, maxLen);
+}
+
+function normalizeReviewRating(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "verified") return 5;
+  if (raw === "citation") return 3;
+  if (raw === "misleading") return 1;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
+
+function getReviewScoreDelta(ratingValue) {
+  if (!Number.isFinite(ratingValue)) return 0;
+  return ratingValue >= 4 ? 1 : -1;
+}
+
+function isStaffClaims(auth) {
+  return auth?.token?.admin === true || auth?.token?.staff === true || auth?.token?.founder === true;
+}
+
+function isAllowedContentType(kind, contentType) {
+  if (!kind || !contentType) return false;
+  const policy = ASSET_POLICIES[kind];
+  if (!policy) return false;
+  return policy.allowedPrefixes.some((prefix) => contentType.startsWith(prefix));
+}
+
+function validateAssetPolicy(kind, contentType, sizeBytes) {
+  const policy = ASSET_POLICIES[kind];
+  if (!policy) return {ok: false, reason: "unsupported-kind"};
+  if (!isAllowedContentType(kind, contentType)) return {ok: false, reason: "invalid-type"};
+  if (sizeBytes > policy.maxBytes) return {ok: false, reason: "oversize"};
+  return {ok: true};
+}
+
+function normalizeUrl(value = "") {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (!["http:", "https:"].includes(url.protocol)) return "";
+    return url.toString();
+  } catch (error) {
+    return "";
+  }
+}
+
+function extractMetaContent(html = "", matcher = "") {
+  if (!html || !matcher) return "";
+  const regex = new RegExp(`<meta[^>]+${matcher}[^>]+content=["']([^"']+)["']`, "i");
+  const match = html.match(regex);
+  return match ? match[1].trim() : "";
+}
+
+function extractTitleFromHtml(html = "") {
+  const match = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  return match ? match[1].trim() : "";
+}
+
+function collectModerationText(title = "", blocks = []) {
+  const lines = [];
+  if (title) lines.push(String(title));
+  (blocks || []).forEach((block) => {
+    if (!block || typeof block !== "object") return;
+    if (block.type === "text" && block.text) lines.push(String(block.text));
+    if (block.type === "asset" && block.caption) lines.push(String(block.caption));
+    if (block.type === "link") {
+      if (block.title) lines.push(String(block.title));
+      if (block.description) lines.push(String(block.description));
+      if (block.url) lines.push(String(block.url));
+    }
+  });
+  return lines.join("\n").trim();
+}
+
+async function assertAssetOwnership(assetIds = [], uid) {
+  const assets = {};
+  for (const assetId of assetIds) {
+    const snap = await db.collection("assets").doc(assetId).get();
+    if (!snap.exists) throw new HttpsError("not-found", "Asset not found.");
+    const asset = snap.data() || {};
+    if (asset.ownerId !== uid) throw new HttpsError("permission-denied", "Asset ownership mismatch.");
+    assets[assetId] = asset;
+  }
+  return assets;
+}
+
+function buildPostPreview(blocks = [], title = "") {
+  const preview = {
+    previewText: "",
+    previewAssetId: "",
+    previewType: "",
+    previewLink: "",
+  };
+  if (title) preview.previewText = String(title).slice(0, 140);
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") continue;
+    if (!preview.previewText && block.type === "text" && block.text) {
+      preview.previewText = String(block.text).slice(0, 140);
+    }
+    if (!preview.previewAssetId && block.type === "asset" && block.assetId) {
+      preview.previewAssetId = block.assetId;
+      preview.previewType = block.presentation || "asset";
+    }
+    if (!preview.previewLink && block.type === "link" && block.url) {
+      preview.previewLink = block.url;
+      preview.previewType = "link";
+    }
+  }
+  if (!preview.previewType) {
+    const fallbackBlock = blocks.find((block) => block && block.type);
+    preview.previewType = fallbackBlock ? fallbackBlock.type : "text";
+  }
+  return preview;
+}
+
+function normalizeBlocks(rawBlocks = []) {
+  if (!Array.isArray(rawBlocks)) return [];
+  return rawBlocks.map((block) => {
+    if (!block || typeof block !== "object") return null;
+    const type = String(block.type || "").trim().toLowerCase();
+    if (type === "text") {
+      const text = normalizeText(block.text || "", 5000);
+      if (!text) return null;
+      return {type: "text", text};
+    }
+    if (type === "asset") {
+      const assetId = String(block.assetId || "").trim();
+      if (!assetId) return null;
+      const presentation = String(block.presentation || "image").trim().toLowerCase();
+      const caption = normalizeText(block.caption || "", 500);
+      const blockPayload = {type: "asset", assetId, presentation};
+      if (caption) blockPayload.caption = caption;
+      if (presentation === "audio") {
+        const chapters = normalizeText(block.chapters || "", 1000);
+        const lyrics = normalizeText(block.lyrics || "", 3000);
+        if (chapters) blockPayload.chapters = chapters;
+        if (lyrics) blockPayload.lyrics = lyrics;
+      }
+      if (block.thumbnailAssetId) {
+        blockPayload.thumbnailAssetId = String(block.thumbnailAssetId || "").trim();
+      }
+      return blockPayload;
+    }
+    if (type === "link") {
+      const url = normalizeUrl(block.url || "");
+      if (!url) return null;
+      const linkBlock = {
+        type: "link",
+        url,
+        title: normalizeText(block.title || "", 200),
+        description: normalizeText(block.description || "", 500),
+      };
+      if (block.imageAssetId) linkBlock.imageAssetId = String(block.imageAssetId || "").trim();
+      if (block.imageUrl) linkBlock.imageUrl = normalizeUrl(block.imageUrl || "");
+      return linkBlock;
+    }
+    if (type === "capsule") {
+      const capsuleId = String(block.capsuleId || "").trim();
+      if (!capsuleId) return null;
+      return {type: "capsule", capsuleId};
+    }
+    if (type === "live") {
+      const sessionId = String(block.sessionId || "").trim();
+      if (!sessionId) return null;
+      return {type: "live", sessionId};
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+async function moderateTextContent(text, contextLabel) {
+  const payload = {
+    input: text,
+    context: contextLabel,
+  };
+  if (!text) {
+    return {status: "approved", labels: [], scoreMap: {}, modelVersion: "none", reviewRequired: false};
+  }
+  try {
+    const endpoint = AI_LOGIC_ENDPOINT.value();
+    const apiKey = AI_LOGIC_API_KEY.value();
+    if (!endpoint || !apiKey) {
+      return {
+        status: "approved",
+        labels: ["unscored", "unconfigured"],
+        scoreMap: {},
+        modelVersion: "unconfigured",
+        reviewRequired: false,
+      };
+    }
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      logger.warn("AI Logic moderation failed", {status: response.status});
+      return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+    }
+    const data = await response.json();
+    const labels = Array.isArray(data.labels) ? data.labels : [];
+    const scoreMap = data.scoreMap || {};
+    const blocked = data.blocked === true || labels.includes("blocked");
+    const pending = data.pending === true || labels.includes("review");
+    return {
+      status: blocked ? "blocked" : (pending ? "pending" : "approved"),
+      labels,
+      scoreMap,
+      modelVersion: data.modelVersion || "ai-logic",
+      reviewRequired: pending || blocked,
+    };
+  } catch (error) {
+    logger.warn("AI Logic moderation exception", {error: error?.message || error});
+    return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+  }
+}
+
+async function moderateAssetContent(metadata) {
+  const payload = {
+    input: metadata,
+    context: "asset",
+  };
+  try {
+    const endpoint = AI_LOGIC_ENDPOINT.value();
+    const apiKey = AI_LOGIC_API_KEY.value();
+    if (!endpoint || !apiKey) {
+      return {
+        status: "approved",
+        labels: ["unscored", "unconfigured"],
+        scoreMap: {},
+        modelVersion: "unconfigured",
+        reviewRequired: false,
+      };
+    }
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      logger.warn("AI Logic asset moderation failed", {status: response.status});
+      return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+    }
+    const data = await response.json();
+    const labels = Array.isArray(data.labels) ? data.labels : [];
+    const scoreMap = data.scoreMap || {};
+    const blocked = data.blocked === true || labels.includes("blocked");
+    const pending = data.pending === true || labels.includes("review");
+    return {
+      status: blocked ? "blocked" : (pending ? "pending" : "approved"),
+      labels,
+      scoreMap,
+      modelVersion: data.modelVersion || "ai-logic",
+      reviewRequired: pending || blocked,
+    };
+  } catch (error) {
+    logger.warn("AI Logic asset moderation exception", {error: error?.message || error});
+    return {status: "pending", labels: ["error"], scoreMap: {}, modelVersion: "unavailable", reviewRequired: true};
+  }
+}
 
 async function resolveActorProfile(actorId) {
   if (!actorId) return {actorName: "Someone", actorPhotoUrl: ""};
@@ -254,43 +590,40 @@ exports.onUserProfileUpdate = onDocumentUpdated("users/{userId}", async (event) 
   await Promise.all(notifications.map((notif) => notifRef.add(notif)));
 });
 
-exports.onPostReaction = onDocumentUpdated("posts/{postId}", async (event) => {
-  const before = event.data?.before?.data() || {};
-  const after = event.data?.after?.data() || {};
-  const ownerId = after.userId || before.userId;
-  if (!ownerId) return;
-
-  const beforeLiked = new Set(Array.isArray(before.likedBy) ? before.likedBy : []);
-  const afterLiked = new Set(Array.isArray(after.likedBy) ? after.likedBy : []);
-  const addedLikes = [...afterLiked].filter((uid) => !beforeLiked.has(uid));
-
-  const beforeDisliked = new Set(Array.isArray(before.dislikedBy) ? before.dislikedBy : []);
-  const afterDisliked = new Set(Array.isArray(after.dislikedBy) ? after.dislikedBy : []);
-  const addedDislikes = [...afterDisliked].filter((uid) => !beforeDisliked.has(uid));
-
-  if (!addedLikes.length && !addedDislikes.length) return;
-
-  const preview = buildPostPreview(after);
-  const tasks = [];
-  addedLikes.forEach((actorId) => tasks.push(createContentNotification({
+exports.onPostLike = onDocumentCreated("posts/{postId}/likes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
     actorId,
-    targetUserId: ownerId,
-    contentId: event.params.postId,
+    targetUserId: postData.userId,
+    contentId: postId,
     contentType: "post",
     actionType: "like",
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
-  })));
-  addedDislikes.forEach((actorId) => tasks.push(createContentNotification({
+  });
+});
+
+exports.onPostDislike = onDocumentCreated("posts/{postId}/dislikes/{uid}", async (event) => {
+  const actorId = event.params.uid;
+  const postId = event.params.postId;
+  const postSnap = await db.collection("posts").doc(postId).get();
+  const postData = postSnap.exists ? postSnap.data() : null;
+  if (!postData || !postData.userId) return;
+  const preview = buildPostPreview(postData);
+  await createContentNotification({
     actorId,
-    targetUserId: ownerId,
-    contentId: event.params.postId,
+    targetUserId: postData.userId,
+    contentId: postId,
     contentType: "post",
     actionType: "dislike",
     contentTitle: preview.title,
     contentThumbnailUrl: preview.thumbnail,
-  })));
-  await Promise.all(tasks);
+  });
 });
 
 exports.onPostCommentNotification = onDocumentCreated("posts/{postId}/comments/{commentId}", async (event) => {
@@ -479,8 +812,9 @@ exports.onConversationMessage = onDocumentCreated("conversations/{conversationId
 
 exports.createUploadSession = onCall((data, context) => {
   if (!context.auth) {
-    throw new Error("Unauthorized");
+    throw new HttpsError("unauthenticated", "Sign-in required.");
   }
+  assertAppCheckV1(context);
   const uploadId = `${Date.now()}`;
   const storagePath = `videos/${context.auth.uid}/${uploadId}`;
   return {
@@ -491,10 +825,952 @@ exports.createUploadSession = onCall((data, context) => {
   };
 });
 
-exports.notifyMention = onCallV2(async (request) => {
+exports.createAsset = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const kind = String(data.kind || "").trim().toLowerCase();
+  const visibility = String(data.visibility || "private").trim().toLowerCase();
+  if (!ASSET_POLICIES[kind]) throw new HttpsError("invalid-argument", "Unsupported asset kind.");
+  if (!["public", "followers", "private"].includes(visibility)) {
+    throw new HttpsError("invalid-argument", "Invalid visibility.");
+  }
+  await enforceRateLimit(auth.uid, `asset:create:${kind}:60s`, RATE_LIMITS.assets);
+  const assetRef = db.collection("assets").doc();
+  const storagePathOriginal = `uploads/${auth.uid}/${assetRef.id}/original`;
+  await assetRef.set({
+    ownerId: auth.uid,
+    createdAt: FieldValue.serverTimestamp(),
+    status: "uploading",
+    visibility,
+    kind,
+    storagePathOriginal,
+    contentType: data.contentType || "",
+    sizeBytes: Number(data.sizeBytes || 0) || 0,
+    variants: {},
+    moderation: {
+      status: "pending",
+      labels: [],
+      scoreMap: {},
+      modelVersion: "ai-logic",
+    },
+  }, {merge: true});
+  return {assetId: assetRef.id, storagePathOriginal};
+});
+
+exports.getAssetDownloadUrl = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const assetId = String(data.assetId || "").trim();
+  const variant = String(data.variant || "original").trim();
+  if (!assetId) throw new HttpsError("invalid-argument", "assetId is required.");
+  const assetSnap = await db.collection("assets").doc(assetId).get();
+  if (!assetSnap.exists) throw new HttpsError("not-found", "Asset not found.");
+  const asset = assetSnap.data() || {};
+  const isOwner = asset.ownerId === auth.uid;
+  const isStaff = isStaffClaims(auth);
+  if (asset.moderation?.status === "blocked" && !isOwner && !isStaff) {
+    throw new HttpsError("permission-denied", "Asset is blocked.");
+  }
+  const visibility = asset.visibility || "private";
+  if (visibility === "private" && !isOwner && !isStaff) {
+    throw new HttpsError("permission-denied", "Asset is private.");
+  }
+  if (visibility === "followers" && !isOwner && !isStaff) {
+    const followerSnap = await db.collection("users").doc(asset.ownerId).collection("followers").doc(auth.uid).get();
+    if (!followerSnap.exists) throw new HttpsError("permission-denied", "Asset is restricted.");
+  }
+  const path = variant === "original" ? asset.storagePathOriginal : asset.variants?.[variant];
+  if (!path) throw new HttpsError("not-found", "Asset variant unavailable.");
+  const expiresAt = Date.now() + 15 * 60 * 1000;
+  const [url] = await admin.storage().bucket().file(path).getSignedUrl({
+    action: "read",
+    expires: expiresAt,
+  });
+  return {url, expiresAt};
+});
+
+exports.createPost = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const title = normalizeText(data.title || "", 180);
+  const visibility = String(data.visibility || "public").trim().toLowerCase();
+  if (!["public", "followers", "private"].includes(visibility)) {
+    throw new HttpsError("invalid-argument", "Invalid visibility.");
+  }
+  const categoryId = String(data.categoryId || "").trim();
+  const contentType = String(data.contentType || "").trim().toLowerCase();
+  const blocks = normalizeBlocks(data.blocks || []);
+  if (!blocks.length) throw new HttpsError("invalid-argument", "Post must include at least one block.");
+  if (blocks.length > 20) throw new HttpsError("invalid-argument", "Too many blocks.");
+
+  const assetIds = blocks.flatMap((block) => {
+    if (block.type === "asset") return [block.assetId, block.thumbnailAssetId].filter(Boolean);
+    if (block.type === "link") return [block.imageAssetId].filter(Boolean);
+    return [];
+  });
+  const assetDetails = assetIds.length ? await assertAssetOwnership(assetIds, auth.uid) : {};
+
+  for (const block of blocks) {
+    if (block.type === "capsule") {
+      const capsuleSnap = await db.collection("capsules").doc(block.capsuleId).get();
+      if (!capsuleSnap.exists) throw new HttpsError("not-found", "Capsule not found.");
+      const capsule = capsuleSnap.data() || {};
+      if (capsule.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Capsule ownership mismatch.");
+    }
+    if (block.type === "live") {
+      const sessionSnap = await db.collection("liveSessions").doc(block.sessionId).get();
+      if (!sessionSnap.exists) throw new HttpsError("not-found", "Live session not found.");
+      const session = sessionSnap.data() || {};
+      if (session.hostId !== auth.uid) throw new HttpsError("permission-denied", "Live session ownership mismatch.");
+    }
+  }
+
+  let categoryPayload = {categoryId: null, categoryName: null, categorySlug: null, categoryType: null, categoryVerified: false};
+  if (categoryId) {
+    const categorySnap = await db.collection("categories").doc(categoryId).get();
+    if (categorySnap.exists) {
+      const category = categorySnap.data() || {};
+      categoryPayload = {
+        categoryId,
+        categoryName: category.name || null,
+        categorySlug: category.slug || null,
+        categoryType: category.type || null,
+        categoryVerified: !!category.verified,
+      };
+    }
+  }
+
+  const moderationText = collectModerationText(title, blocks);
+  const moderation = await moderateTextContent(moderationText, "post");
+  const authorName = await resolveActorProfile(auth.uid);
+
+  const firstTextBlock = blocks.find((block) => block.type === "text");
+  const firstAssetBlock = blocks.find((block) => block.type === "asset");
+  const legacyMediaAssetId = firstAssetBlock?.assetId || "";
+  const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
+
+  const preview = buildPostPreview(blocks, title);
+  const postPayload = {
+    ownerId: auth.uid,
+    userId: auth.uid,
+    author: authorName.actorName || "User",
+    title,
+    visibility,
+    contentType: contentType || (firstAssetBlock ? firstAssetBlock.presentation : "text"),
+    blocks,
+    ...categoryPayload,
+    category: categoryPayload.categoryName || categoryPayload.categorySlug || "",
+    tags: Array.isArray(data.tags) ? data.tags.slice(0, 10) : [],
+    mentions: Array.isArray(data.mentions) ? data.mentions.slice(0, 10) : [],
+    mentionUserIds: Array.isArray(data.mentionUserIds) ? data.mentionUserIds.slice(0, 10) : [],
+    poll: data.poll || null,
+    scheduledFor: data.scheduledFor || null,
+    location: data.location || "",
+    content: {
+      text: firstTextBlock?.text || "",
+      mediaPath: legacyMediaPath,
+      linkUrl: null,
+      profileUid: null,
+      meta: {tags: Array.isArray(data.tags) ? data.tags : [], mentions: Array.isArray(data.mentions) ? data.mentions : []},
+    },
+    mediaAssetId: legacyMediaAssetId,
+    mediaPath: legacyMediaPath,
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+    previewText: preview.previewText,
+    previewAssetId: preview.previewAssetId,
+    previewType: preview.previewType,
+    previewLink: preview.previewLink,
+    createdAt: FieldValue.serverTimestamp(),
+    timestamp: FieldValue.serverTimestamp(),
+  };
+
+  const postRef = await db.collection("posts").add(postPayload);
+  return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
+});
+
+exports.createLinkSnapshot = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const url = normalizeUrl(data.url || "");
+  if (!url) throw new HttpsError("invalid-argument", "Valid URL required.");
+  const shouldDownloadImage = data.downloadImage === true;
+  const visibility = String(data.visibility || "public").trim().toLowerCase();
+
+  const response = await fetch(url, {method: "GET"});
+  if (!response.ok) throw new HttpsError("failed-precondition", "Unable to fetch link metadata.");
+  const html = await response.text();
+
+  const title = extractMetaContent(html, 'property=["\']og:title["\']')
+    || extractMetaContent(html, 'name=["\']twitter:title["\']')
+    || extractTitleFromHtml(html);
+  const description = extractMetaContent(html, 'property=["\']og:description["\']')
+    || extractMetaContent(html, 'name=["\']description["\']')
+    || extractMetaContent(html, 'name=["\']twitter:description["\']');
+  const ogImage = extractMetaContent(html, 'property=["\']og:image["\']')
+    || extractMetaContent(html, 'name=["\']twitter:image["\']');
+
+  let imageAssetId = "";
+  let imageUrl = normalizeUrl(ogImage);
+  if (shouldDownloadImage && imageUrl) {
+    const imageResponse = await fetch(imageUrl);
+    if (imageResponse.ok) {
+      const contentType = imageResponse.headers.get("content-type") || "image/jpeg";
+      const buffer = Buffer.from(await imageResponse.arrayBuffer());
+      const sizeBytes = buffer.length;
+      const policyCheck = validateAssetPolicy("image", contentType, sizeBytes);
+      if (policyCheck.ok) {
+        const assetRef = db.collection("assets").doc();
+        const storagePathOriginal = `uploads/${auth.uid}/${assetRef.id}/original`;
+        await assetRef.set({
+          ownerId: auth.uid,
+          createdAt: FieldValue.serverTimestamp(),
+          status: "uploading",
+          visibility,
+          kind: "image",
+          storagePathOriginal,
+          contentType,
+          sizeBytes,
+          variants: {},
+          moderation: {
+            status: "pending",
+            labels: [],
+            scoreMap: {},
+            modelVersion: "ai-logic",
+          },
+        }, {merge: true});
+        await admin.storage().bucket().file(storagePathOriginal).save(buffer, {contentType});
+        imageAssetId = assetRef.id;
+        imageUrl = "";
+      }
+    }
+  }
+
+  return {
+    url,
+    title: title || "",
+    description: description || "",
+    imageAssetId,
+    imageUrl,
+  };
+});
+
+exports.createCapsule = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const title = normalizeText(data.title || "", 200);
+  const description = normalizeText(data.description || "", 2000);
+  const visibility = String(data.visibility || "public").trim().toLowerCase();
+  if (!["public", "followers", "private"].includes(visibility)) {
+    throw new HttpsError("invalid-argument", "Invalid visibility.");
+  }
+  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 100) : [];
+  await assertAssetOwnership(assetIds, auth.uid);
+
+  const capsuleRef = db.collection("capsules").doc();
+  const shareEnabled = data?.share?.enabled === true;
+  const slug = data?.share?.slug ? String(data.share.slug).trim() : capsuleRef.id.slice(0, 10);
+  const expiresAt = data?.share?.expiresAt || null;
+  await capsuleRef.set({
+    ownerId: auth.uid,
+    createdAt: FieldValue.serverTimestamp(),
+    visibility,
+    title,
+    description,
+    assetIds,
+    version: 1,
+    share: {
+      enabled: shareEnabled,
+      slug,
+      expiresAt,
+    },
+  }, {merge: true});
+
+  const blocks = [
+    ...(description ? [{type: "text", text: description}] : []),
+    {type: "capsule", capsuleId: capsuleRef.id},
+  ];
+  const moderationText = collectModerationText(title, blocks);
+  const moderation = await moderateTextContent(moderationText, "capsule");
+  const authorName = await resolveActorProfile(auth.uid);
+  const preview = buildPostPreview(blocks, title);
+
+  const postRef = await db.collection("posts").add({
+    ownerId: auth.uid,
+    userId: auth.uid,
+    author: authorName.actorName || "User",
+    title,
+    visibility,
+    contentType: "capsule",
+    blocks,
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+    previewText: preview.previewText,
+    previewAssetId: preview.previewAssetId,
+    previewType: preview.previewType,
+    previewLink: preview.previewLink,
+    createdAt: FieldValue.serverTimestamp(),
+    timestamp: FieldValue.serverTimestamp(),
+  });
+
+  return {ok: true, capsuleId: capsuleRef.id, postId: postRef.id, moderation};
+});
+
+exports.createLiveSession = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const title = normalizeText(data.title || "", 160);
+  const category = normalizeText(data.category || "", 80);
+  const tags = Array.isArray(data.tags) ? data.tags.slice(0, 20) : [];
+  const playbackUrl = normalizeUrl(data.playbackUrl || "");
+  const roomName = `live_${auth.uid}_${Date.now()}`;
+  const payload = {
+    hostId: auth.uid,
+    roomName,
+    title,
+    category,
+    tags,
+    visibility: "public",
+    status: "live",
+    startedAt: FieldValue.serverTimestamp(),
+    endedAt: null,
+    egressMode: "hls",
+    playbackUrl: playbackUrl || null,
+    createdAt: FieldValue.serverTimestamp(),
+  };
+  const sessionRef = await db.collection("liveSessions").add(payload);
+  return {ok: true, sessionId: sessionRef.id, roomName};
+});
+
+exports.createComment = onCallV2({enforceAppCheck: false, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const text = normalizeText(data.text || "", 1200);
+  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 3) : [];
+  if (!postId || !text) throw new HttpsError("invalid-argument", "postId and text are required.");
+  await enforceRateLimit(auth.uid, `comment:${postId}:30s`, RATE_LIMITS.comments);
+
+  const postRef = db.collection("posts").doc(postId);
+  const postSnap = await postRef.get();
+  if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+  const postData = postSnap.data() || {};
+  if (postData.visibility === "private" && postData.userId !== auth.uid) {
+    throw new HttpsError("permission-denied", "You cannot comment on this post.");
+  }
+
+  let mediaAssetId = "";
+  let mediaPath = "";
+  if (assetIds.length) {
+    const assetSnap = await db.collection("assets").doc(assetIds[0]).get();
+    if (!assetSnap.exists) throw new HttpsError("not-found", "Asset not found.");
+    const asset = assetSnap.data() || {};
+    if (asset.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Asset ownership mismatch.");
+    mediaAssetId = assetIds[0];
+    mediaPath = asset.storagePathOriginal || "";
+  }
+  const moderation = await moderateTextContent(text, "comment");
+  let authorName = "User";
+  try {
+    const userSnap = await db.collection("users").doc(auth.uid).get();
+    if (userSnap.exists) {
+      const userData = userSnap.data() || {};
+      authorName = userData.name || userData.displayName || userData.username || authorName;
+    }
+  } catch (error) {}
+  const payload = {
+    userId: auth.uid,
+    text,
+    mediaAssetId,
+    mediaPath,
+    assets: assetIds,
+    createdAt: FieldValue.serverTimestamp(),
+    timestamp: FieldValue.serverTimestamp(),
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+  };
+
+  const commentRef = await postRef.collection("comments").add(payload);
+  if (moderation.status !== "blocked") {
+    await postRef.set({
+      previewComment: {
+        text: text.substring(0, 80) + (text.length > 80 ? "..." : ""),
+        author: authorName,
+        likes: 0,
+      },
+    }, {merge: true});
+  }
+  return {ok: true, commentId: commentRef.id, moderation: payload.moderation};
+});
+
+exports.sendLiveChatMessage = onCallV2({enforceAppCheck: true, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const sessionId = String(data.sessionId || "").trim();
+  const text = normalizeText(data.text || "", 500);
+  if (!sessionId || !text) throw new HttpsError("invalid-argument", "sessionId and text are required.");
+  await enforceRateLimit(auth.uid, `livechat:${sessionId}:10s`, RATE_LIMITS.liveChat);
+
+  const sessionRef = db.collection("liveSessions").doc(sessionId);
+  const sessionSnap = await sessionRef.get();
+  if (!sessionSnap.exists) throw new HttpsError("not-found", "Session not found.");
+
+  const moderation = await moderateTextContent(text, "livechat");
+  let displayName = auth.token?.name || auth.token?.displayName || "";
+  if (!displayName) {
+    try {
+      const userSnap = await db.collection("users").doc(auth.uid).get();
+      const userData = userSnap.exists ? userSnap.data() : {};
+      displayName = userData?.displayName || userData?.name || userData?.username || auth.uid;
+    } catch (error) {
+      displayName = auth.uid;
+    }
+  }
+  const payload = {
+    senderId: auth.uid,
+    displayName,
+    text,
+    createdAt: FieldValue.serverTimestamp(),
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+  };
+
+  const chatRef = await sessionRef.collection("chat").add(payload);
+  return {ok: true, chatId: chatRef.id, moderation: payload.moderation};
+});
+
+exports.createReview = onCallV2({enforceAppCheck: false, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const ratingValue = normalizeReviewRating(data.rating);
+  const note = normalizeText(data.text || "", 1200);
+  if (!postId || !note) throw new HttpsError("invalid-argument", "postId and text are required.");
+  if (!Number.isInteger(ratingValue) || ratingValue < 1 || ratingValue > 5) {
+    throw new HttpsError("invalid-argument", "Invalid rating.");
+  }
+  await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
+
+  const postRef = db.collection("posts").doc(postId);
+  const moderation = await moderateTextContent(note, "review");
+  await db.runTransaction(async (tx) => {
+    const reviewRef = postRef.collection("reviews").doc(auth.uid);
+    const [postSnap, reviewSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(reviewRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const existingRatingValue = normalizeReviewRating(reviewSnap.exists ? reviewSnap.data()?.rating : null);
+    const previousScore = getReviewScoreDelta(existingRatingValue);
+    const nextScore = getReviewScoreDelta(ratingValue);
+    const scoreDelta = reviewSnap.exists ? (nextScore - previousScore) : nextScore;
+    const createdAt = reviewSnap.exists ? (reviewSnap.data()?.createdAt || FieldValue.serverTimestamp()) : FieldValue.serverTimestamp();
+    tx.set(reviewRef, {
+      userId: auth.uid,
+      rating: ratingValue,
+      note,
+      text: note,
+      createdAt,
+      updatedAt: FieldValue.serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+    }, {merge: true});
+    if (scoreDelta !== 0) {
+      tx.update(postRef, {trustScore: FieldValue.increment(scoreDelta)});
+    }
+  });
+  return {ok: true, reviewId: auth.uid, moderation};
+});
+
+exports.removeReview = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  if (!postId) throw new HttpsError("invalid-argument", "postId is required.");
+  await enforceRateLimit(auth.uid, `review:${postId}:10m`, RATE_LIMITS.reviews);
+
+  const postRef = db.collection("posts").doc(postId);
+  let removed = false;
+  await db.runTransaction(async (tx) => {
+    const reviewRef = postRef.collection("reviews").doc(auth.uid);
+    const reviewSnap = await tx.get(reviewRef);
+    if (!reviewSnap.exists) return;
+    const ratingValue = normalizeReviewRating(reviewSnap.data()?.rating);
+    const scoreChange = getReviewScoreDelta(ratingValue);
+    tx.delete(reviewRef);
+    if (scoreChange !== 0) {
+      tx.update(postRef, {trustScore: FieldValue.increment(-scoreChange)});
+    }
+    removed = true;
+  });
+  return {ok: true, removed};
+});
+
+exports.toggleLike = onCallV2({enforceAppCheck: false}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["like", "unlike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  await enforceRateLimit(auth.uid, `like:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  await db.runTransaction(async (tx) => {
+    const [postSnap, likeSnap, dislikeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(likeRef),
+      tx.get(dislikeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+
+    const hasLike = likeSnap.exists;
+    const hasDislike = dislikeSnap.exists;
+    if (action === "like" && !hasLike) {
+      tx.set(likeRef, {createdAt: FieldValue.serverTimestamp()});
+      likeCount += 1;
+      if (hasDislike) {
+        tx.delete(dislikeRef);
+        dislikeCount = Math.max(0, dislikeCount - 1);
+      }
+    } else if (action === "unlike" && hasLike) {
+      tx.delete(likeRef);
+      likeCount = Math.max(0, likeCount - 1);
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+  });
+  return {ok: true};
+});
+
+exports.toggleDislike = onCallV2({enforceAppCheck: false}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["dislike", "undislike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  await enforceRateLimit(auth.uid, `dislike:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  await db.runTransaction(async (tx) => {
+    const [postSnap, dislikeSnap, likeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(dislikeRef),
+      tx.get(likeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+    const hasDislike = dislikeSnap.exists;
+    const hasLike = likeSnap.exists;
+
+    if (action === "dislike" && !hasDislike) {
+      tx.set(dislikeRef, {createdAt: FieldValue.serverTimestamp()});
+      dislikeCount += 1;
+      if (hasLike) {
+        tx.delete(likeRef);
+        likeCount = Math.max(0, likeCount - 1);
+      }
+    } else if (action === "undislike" && hasDislike) {
+      tx.delete(dislikeRef);
+      dislikeCount = Math.max(0, dislikeCount - 1);
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+  });
+  return {ok: true};
+});
+
+exports.toggleLike_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
+  assertAppCheckV2(request);
+  logger.info("[toggleLike_v2] appcheck", {hasApp: !!request.app, uid: request.auth?.uid});
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["like", "unlike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  logger.info("[toggleLike_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `like:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  let response = null;
+  await db.runTransaction(async (tx) => {
+    const [postSnap, likeSnap, dislikeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(likeRef),
+      tx.get(dislikeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+
+    let liked = likeSnap.exists;
+    let disliked = dislikeSnap.exists;
+    if (action === "like" && !liked) {
+      tx.set(likeRef, {createdAt: FieldValue.serverTimestamp()});
+      likeCount += 1;
+      liked = true;
+      if (disliked) {
+        tx.delete(dislikeRef);
+        dislikeCount = Math.max(0, dislikeCount - 1);
+        disliked = false;
+      }
+    } else if (action === "unlike" && liked) {
+      tx.delete(likeRef);
+      likeCount = Math.max(0, likeCount - 1);
+      liked = false;
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+    response = {liked, disliked, likeCount, dislikeCount};
+  });
+  return {ok: true, ...response};
+});
+
+exports.toggleDislike_v2 = onCallV2({enforceAppCheck: false}, async (request) => {
+  assertAppCheckV2(request);
+  logger.info("[toggleDislike_v2] appcheck", {hasApp: !!request.app, uid: request.auth?.uid});
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const action = String(data.action || "").trim();
+  if (!postId || !["dislike", "undislike"].includes(action)) {
+    throw new HttpsError("invalid-argument", "Invalid action.");
+  }
+  logger.info("[toggleDislike_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `dislike:${postId}:60s`, RATE_LIMITS.likes);
+
+  const postRef = db.collection("posts").doc(postId);
+  const dislikeRef = postRef.collection("dislikes").doc(auth.uid);
+  const likeRef = postRef.collection("likes").doc(auth.uid);
+  let response = null;
+  await db.runTransaction(async (tx) => {
+    const [postSnap, dislikeSnap, likeSnap] = await Promise.all([
+      tx.get(postRef),
+      tx.get(dislikeRef),
+      tx.get(likeRef),
+    ]);
+    if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+    const postData = postSnap.data() || {};
+    let likeCount = Number.isFinite(postData.likeCount) ? postData.likeCount : (postData.likes || 0);
+    let dislikeCount = Number.isFinite(postData.dislikeCount) ? postData.dislikeCount : (postData.dislikes || 0);
+    let disliked = dislikeSnap.exists;
+    let liked = likeSnap.exists;
+
+    if (action === "dislike" && !disliked) {
+      tx.set(dislikeRef, {createdAt: FieldValue.serverTimestamp()});
+      dislikeCount += 1;
+      disliked = true;
+      if (liked) {
+        tx.delete(likeRef);
+        likeCount = Math.max(0, likeCount - 1);
+        liked = false;
+      }
+    } else if (action === "undislike" && disliked) {
+      tx.delete(dislikeRef);
+      dislikeCount = Math.max(0, dislikeCount - 1);
+      disliked = false;
+    }
+    tx.update(postRef, {likeCount, dislikeCount});
+    response = {liked, disliked, likeCount, dislikeCount};
+  });
+  return {ok: true, ...response};
+});
+
+exports.createComment_v2 = onCallV2({enforceAppCheck: false, secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]}, async (request) => {
+  assertAppCheckV2(request);
+  logger.info("[createComment_v2] appcheck", {hasApp: !!request.app, uid: request.auth?.uid});
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  const data = request.data || {};
+  const postId = String(data.postId || "").trim();
+  const text = normalizeText(data.text || "", 1200);
+  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 3) : [];
+  if (!postId || !text) throw new HttpsError("invalid-argument", "postId and text are required.");
+  logger.info("[createComment_v2]", {uid: auth.uid, hasApp: !!request.app, postId});
+  await enforceRateLimit(auth.uid, `comment:${postId}:30s`, RATE_LIMITS.comments);
+
+  const postRef = db.collection("posts").doc(postId);
+  const postSnap = await postRef.get();
+  if (!postSnap.exists) throw new HttpsError("not-found", "Post not found.");
+  const postData = postSnap.data() || {};
+  if (postData.visibility === "private" && postData.userId !== auth.uid) {
+    throw new HttpsError("permission-denied", "You cannot comment on this post.");
+  }
+
+  let mediaAssetId = "";
+  let mediaPath = "";
+  if (assetIds.length) {
+    const assetSnap = await db.collection("assets").doc(assetIds[0]).get();
+    if (!assetSnap.exists) throw new HttpsError("not-found", "Asset not found.");
+    const asset = assetSnap.data() || {};
+    if (asset.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Asset ownership mismatch.");
+    mediaAssetId = assetIds[0];
+    mediaPath = asset.storagePathOriginal || "";
+  }
+  const moderation = await moderateTextContent(text, "comment");
+  let authorName = "User";
+  try {
+    const userSnap = await db.collection("users").doc(auth.uid).get();
+    if (userSnap.exists) {
+      const userData = userSnap.data() || {};
+      authorName = userData.name || userData.displayName || userData.username || authorName;
+    }
+  } catch (error) {}
+  const payload = {
+    userId: auth.uid,
+    text,
+    mediaAssetId,
+    mediaPath,
+    assets: assetIds,
+    createdAt: FieldValue.serverTimestamp(),
+    timestamp: FieldValue.serverTimestamp(),
+    moderation: {
+      status: moderation.status,
+      labels: moderation.labels,
+      scoreMap: moderation.scoreMap,
+      modelVersion: moderation.modelVersion,
+      reviewRequired: moderation.reviewRequired,
+    },
+  };
+
+  const commentRef = await postRef.collection("comments").add(payload);
+  if (moderation.status !== "blocked") {
+    await postRef.set({
+      previewComment: {
+        text: text.substring(0, 80) + (text.length > 80 ? "..." : ""),
+        author: authorName,
+        likes: 0,
+      },
+    }, {merge: true});
+  }
+  return {ok: true, commentId: commentRef.id, createdAt: admin.firestore.Timestamp.now()};
+});
+
+exports.adminModerateContent = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  if (!isStaffClaims(auth)) throw new HttpsError("permission-denied", "Admin privileges required.");
+  const data = request.data || {};
+  const path = String(data.path || "").trim();
+  const status = String(data.status || "").trim();
+  if (!path || !["approved", "pending", "blocked"].includes(status)) {
+    throw new HttpsError("invalid-argument", "Invalid moderation request.");
+  }
+  const docRef = db.doc(path);
+  await docRef.set({
+    moderation: {
+      status,
+      reviewedBy: auth.uid,
+      reviewedAt: FieldValue.serverTimestamp(),
+    },
+  }, {merge: true});
+  return {ok: true};
+});
+
+exports.adminBackfillPendingPosts = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  if (!isStaffClaims(auth)) throw new HttpsError("permission-denied", "Admin privileges required.");
+  const data = request.data || {};
+  const days = Math.min(Math.max(Number(data.days) || 14, 1), 90);
+  const maxUpdates = Math.min(Math.max(Number(data.limit) || 200, 1), 500);
+  const since = admin.firestore.Timestamp.fromMillis(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const snapshot = await db.collection("posts")
+    .where("moderation.status", "==", "pending")
+    .where("createdAt", ">=", since)
+    .orderBy("createdAt", "desc")
+    .limit(maxUpdates)
+    .get();
+
+  if (snapshot.empty) return {ok: true, updated: 0};
+
+  const batch = db.batch();
+  let updated = 0;
+  snapshot.forEach((docSnap) => {
+    const postData = docSnap.data() || {};
+    const moderation = postData.moderation || {};
+    const labels = Array.isArray(moderation.labels) ? moderation.labels : [];
+    const nextLabels = Array.from(new Set([...labels, "backfilled"]));
+    batch.set(docSnap.ref, {
+      moderation: {
+        ...moderation,
+        status: "approved",
+        labels: nextLabels,
+        reviewRequired: false,
+        reviewedAt: FieldValue.serverTimestamp(),
+        reviewedBy: auth.uid,
+      },
+    }, {merge: true});
+    updated += 1;
+  });
+
+  await batch.commit();
+  return {ok: true, updated};
+});
+
+exports.adminSetUserDisabled = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
+  const auth = request.auth;
+  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+  if (!isStaffClaims(auth)) throw new HttpsError("permission-denied", "Admin privileges required.");
+  const data = request.data || {};
+  const targetUid = String(data.uid || "").trim();
+  const disabled = data.disabled === true;
+  if (!targetUid) throw new HttpsError("invalid-argument", "uid is required.");
+  await admin.auth().updateUser(targetUid, {disabled});
+  await db.collection("users").doc(targetUid).set({
+    disabled,
+    disabledAt: FieldValue.serverTimestamp(),
+    disabledBy: auth.uid,
+  }, {merge: true});
+  return {ok: true};
+});
+
+exports.onAssetFinalize = onObjectFinalized(
+  {secrets: ["AI_LOGIC_ENDPOINT", "AI_LOGIC_API_KEY"]},
+  async (event) => {
+    const object = event.data;
+    const filePath = object.name || "";
+    if (!filePath) return;
+    const match = filePath.match(/^uploads\/([^/]+)\/([^/]+)\/original$/);
+    if (!match) return;
+    const [, uid, assetId] = match;
+    const assetRef = db.collection("assets").doc(assetId);
+    const assetSnap = await assetRef.get();
+    if (!assetSnap.exists) {
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+    const asset = assetSnap.data() || {};
+    if (asset.ownerId !== uid) {
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+    const contentType = object.contentType || "";
+    const sizeBytes = object.size ? Number(object.size) : 0;
+    const kind = asset.kind || "document";
+    const policyCheck = validateAssetPolicy(kind, contentType, sizeBytes);
+    if (!policyCheck.ok) {
+      await assetRef.set({
+        status: "blocked",
+        contentType,
+        sizeBytes,
+        moderation: {
+          status: "blocked",
+          labels: [policyCheck.reason],
+          scoreMap: {},
+          modelVersion: "policy",
+          reviewRequired: true,
+        },
+      }, {merge: true});
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+
+    await assetRef.set({
+      status: "processing",
+      contentType,
+      sizeBytes,
+      storagePathOriginal: filePath,
+    }, {merge: true});
+
+    const moderation = await moderateAssetContent({
+      contentType,
+      sizeBytes,
+      path: filePath,
+      kind,
+    });
+    if (moderation.status === "blocked") {
+      await assetRef.set({
+        status: "blocked",
+        moderation,
+      }, {merge: true});
+      await admin.storage().bucket().file(filePath).delete().catch(() => {});
+      return;
+    }
+
+    await assetRef.set({
+      status: "ready",
+      moderation,
+      variants: asset.variants || {},
+    }, {merge: true});
+  }
+);
+
+exports.notifyMention = onCallV2({enforceAppCheck: true}, async (request) => {
+  assertAppCheckV2(request);
   const data = request.data || {};
   const auth = request.auth;
-  if (!auth || !auth.uid) throw new Error("unauthenticated");
+  if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
 
   const actorId = auth.uid;
   const targetUserId = (data.targetUserId || "").toString();
@@ -550,12 +1826,16 @@ exports.livekitCreateToken = onCallV2(
       "https://spike-streaming-service.web.app",
       "https://spike-streaming-service.firebaseapp.com",
     ],
+    enforceAppCheck: true,
   },
   async (request) => {
+    assertAppCheckV2(request);
     const auth = request.auth;
     if (!auth || !auth.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
     const data = request.data || {};
     const roomName = String(data?.roomName || "").trim();
+    const sessionId = String(data?.sessionId || "").trim();
+    const canPublish = data?.canPublish !== false;
     let conversationId = String(data?.conversationId || "").trim();
     if (!conversationId && data?.metadata) {
       try {
@@ -563,8 +1843,8 @@ exports.livekitCreateToken = onCallV2(
         conversationId = String(parsed?.conversationId || "").trim();
       } catch (error) {}
     }
-    if (!roomName || !conversationId) {
-      throw new HttpsError("invalid-argument", "conversationId and roomName are required.");
+    if (!roomName || (!conversationId && !sessionId)) {
+      throw new HttpsError("invalid-argument", "roomName and conversationId/sessionId are required.");
     }
 
     const apiKey = LIVEKIT_API_KEY.value();
@@ -585,13 +1865,14 @@ exports.livekitCreateToken = onCallV2(
       identity: auth.uid,
       name: displayName,
     });
-    token.addGrant({room: roomName, roomJoin: true, canPublish: true, canSubscribe: true});
+    token.addGrant({room: roomName, roomJoin: true, canPublish, canSubscribe: true});
 
     return {
       url: livekitUrl,
       token: await token.toJwt(),
       roomName,
-      conversationId,
+      conversationId: conversationId || null,
+      sessionId: sessionId || null,
     };
   },
 );
