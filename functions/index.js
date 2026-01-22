@@ -65,6 +65,8 @@ const RATE_LIMITS = {
   assets: {limit: 10, windowMs: 60 * 1000},
 };
 
+logger.info("Functions build marker", {build: "createPost-previewText-fix-v1"});
+
 const ASSET_POLICIES = {
   avatar: {maxBytes: 5 * 1024 * 1024, allowedPrefixes: ["image/"]},
   image: {maxBytes: 25 * 1024 * 1024, allowedPrefixes: ["image/"]},
@@ -952,10 +954,10 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
         modelVersion: moderation.modelVersion,
         reviewRequired: moderation.reviewRequired,
       },
-      previewText: preview.previewText ?? "",
-      previewAssetId: preview.previewAssetId ?? "",
-      previewType: preview.previewType ?? "text",
-      previewLink: preview.previewLink ?? "",
+      previewText: String(preview?.previewText ?? ""),
+      previewAssetId: String(preview?.previewAssetId ?? ""),
+      previewType: String(preview?.previewType ?? "text"),
+      previewLink: String(preview?.previewLink ?? ""),
       createdAt: FieldValue.serverTimestamp(),
       timestamp: FieldValue.serverTimestamp(),
     };
@@ -1107,10 +1109,10 @@ exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
         modelVersion: moderation.modelVersion,
         reviewRequired: moderation.reviewRequired,
       },
-      previewText: preview.previewText ?? "",
-      previewAssetId: preview.previewAssetId ?? "",
-      previewType: preview.previewType ?? "text",
-      previewLink: preview.previewLink ?? "",
+      previewText: String(preview?.previewText ?? ""),
+      previewAssetId: String(preview?.previewAssetId ?? ""),
+      previewType: String(preview?.previewType ?? "text"),
+      previewLink: String(preview?.previewLink ?? ""),
       createdAt: FieldValue.serverTimestamp(),
       timestamp: FieldValue.serverTimestamp(),
     };
