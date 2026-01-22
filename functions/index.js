@@ -65,6 +65,8 @@ const RATE_LIMITS = {
   assets: {limit: 10, windowMs: 60 * 1000},
 };
 
+logger.info("Functions build marker", {build: "createPost-previewText-fix-v1"});
+
 const ASSET_POLICIES = {
   avatar: {maxBytes: 5 * 1024 * 1024, allowedPrefixes: ["image/"]},
   image: {maxBytes: 25 * 1024 * 1024, allowedPrefixes: ["image/"]},
@@ -195,6 +197,21 @@ function collectModerationText(title = "", blocks = []) {
   return lines.join("\n").trim();
 }
 
+function stripUndefined(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(stripUndefined)
+      .filter((entry) => entry !== undefined);
+  }
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [key, val] of Object.entries(value)) {
+    if (val === undefined) continue;
+    output[key] = stripUndefined(val);
+  }
+  return output;
+}
+
 async function assertAssetOwnership(assetIds = [], uid) {
   const assets = {};
   for (const assetId of assetIds) {
@@ -207,11 +224,11 @@ async function assertAssetOwnership(assetIds = [], uid) {
   return assets;
 }
 
-function buildPostPreview(blocks = [], title = "") {
+function buildComposerPostPreview(blocks = [], title = "") {
   const preview = {
     previewText: "",
     previewAssetId: "",
-    previewType: "",
+    previewType: "text",
     previewLink: "",
   };
   if (title) preview.previewText = String(title).slice(0, 140);
@@ -331,12 +348,13 @@ async function resolveActorProfile(actorId) {
   }
 }
 
-function buildPostPreview(post = {}) {
-  const title = post.title || post.content || post.body || post.text || "";
-  const preview = typeof title === "string" ? title.slice(0, 80) : "";
+function buildNotificationPostPreview(post = {}) {
+  const titleCandidate = post.title || post.content || post.body || post.text || "";
+  const previewSource = typeof titleCandidate === "string" ? titleCandidate : String(titleCandidate || "");
+  const thumbnailCandidate = post.mediaUrl || post.thumbnailUrl || post.thumbnail || "";
   return {
-    title: preview,
-    thumbnail: post.mediaUrl || post.thumbnailUrl || post.thumbnail || "",
+    title: previewSource.slice(0, 80),
+    thumbnail: typeof thumbnailCandidate === "string" ? thumbnailCandidate : String(thumbnailCandidate || ""),
   };
 }
 
@@ -521,7 +539,7 @@ exports.onPostLike = onDocumentCreated("posts/{postId}/likes/{uid}", async (even
   const postSnap = await db.collection("posts").doc(postId).get();
   const postData = postSnap.exists ? postSnap.data() : null;
   if (!postData || !postData.userId) return;
-  const preview = buildPostPreview(postData);
+  const preview = buildNotificationPostPreview(postData);
   await createContentNotification({
     actorId,
     targetUserId: postData.userId,
@@ -539,7 +557,7 @@ exports.onPostDislike = onDocumentCreated("posts/{postId}/dislikes/{uid}", async
   const postSnap = await db.collection("posts").doc(postId).get();
   const postData = postSnap.exists ? postSnap.data() : null;
   if (!postData || !postData.userId) return;
-  const preview = buildPostPreview(postData);
+  const preview = buildNotificationPostPreview(postData);
   await createContentNotification({
     actorId,
     targetUserId: postData.userId,
@@ -559,7 +577,7 @@ exports.onPostCommentNotification = onDocumentCreated("posts/{postId}/comments/{
   const postSnap = await db.collection("posts").doc(postId).get();
   const postData = postSnap.exists ? postSnap.data() : null;
   if (!postData || !postData.userId) return;
-  const preview = buildPostPreview(postData);
+  const preview = buildNotificationPostPreview(postData);
   await createContentNotification({
     actorId,
     targetUserId: postData.userId,
@@ -819,110 +837,148 @@ exports.getAssetDownloadUrl = onCallV2({enforceAppCheck: true}, async (request) 
 });
 
 exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
-  assertAppCheckV2(request);
-  const auth = request.auth;
-  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const title = normalizeText(data.title || "", 180);
-  const visibility = String(data.visibility || "public").trim().toLowerCase();
-  if (!["public", "followers", "private"].includes(visibility)) {
-    throw new HttpsError("invalid-argument", "Invalid visibility.");
-  }
-  const categoryId = String(data.categoryId || "").trim();
-  const contentType = String(data.contentType || "").trim().toLowerCase();
-  const blocks = normalizeBlocks(data.blocks || []);
-  if (!blocks.length) throw new HttpsError("invalid-argument", "Post must include at least one block.");
-  if (blocks.length > 20) throw new HttpsError("invalid-argument", "Too many blocks.");
-
-  const assetIds = blocks.flatMap((block) => {
-    if (block.type === "asset") return [block.assetId, block.thumbnailAssetId].filter(Boolean);
-    if (block.type === "link") return [block.imageAssetId].filter(Boolean);
-    return [];
-  });
-  const assetDetails = assetIds.length ? await assertAssetOwnership(assetIds, auth.uid) : {};
-
-  for (const block of blocks) {
-    if (block.type === "capsule") {
-      const capsuleSnap = await db.collection("capsules").doc(block.capsuleId).get();
-      if (!capsuleSnap.exists) throw new HttpsError("not-found", "Capsule not found.");
-      const capsule = capsuleSnap.data() || {};
-      if (capsule.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Capsule ownership mismatch.");
+  try {
+    assertAppCheckV2(request);
+    const auth = request.auth;
+    if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+    const data = request.data || {};
+    const title = normalizeText(data.title || "", 180);
+    const visibility = String(data.visibility || "public").trim().toLowerCase();
+    if (!["public", "followers", "private"].includes(visibility)) {
+      throw new HttpsError("invalid-argument", "Invalid visibility.");
     }
-    if (block.type === "live") {
-      const sessionSnap = await db.collection("liveSessions").doc(block.sessionId).get();
-      if (!sessionSnap.exists) throw new HttpsError("not-found", "Live session not found.");
-      const session = sessionSnap.data() || {};
-      if (session.hostId !== auth.uid) throw new HttpsError("permission-denied", "Live session ownership mismatch.");
+    const categoryId = String(data.categoryId || "").trim();
+    const contentType = String(data.contentType || "").trim().toLowerCase();
+    const blocks = normalizeBlocks(data.blocks || []);
+    if (!blocks.length) throw new HttpsError("invalid-argument", "Post must include at least one block.");
+    if (blocks.length > 20) throw new HttpsError("invalid-argument", "Too many blocks.");
+
+    const assetIds = blocks.flatMap((block) => {
+      if (block.type === "asset") return [block.assetId, block.thumbnailAssetId].filter(Boolean);
+      if (block.type === "link") return [block.imageAssetId].filter(Boolean);
+      return [];
+    });
+    const assetDetails = assetIds.length ? await assertAssetOwnership(assetIds, auth.uid) : {};
+
+    for (const block of blocks) {
+      if (block.type === "capsule") {
+        const capsuleSnap = await db.collection("capsules").doc(block.capsuleId).get();
+        if (!capsuleSnap.exists) throw new HttpsError("not-found", "Capsule not found.");
+        const capsule = capsuleSnap.data() || {};
+        if (capsule.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Capsule ownership mismatch.");
+      }
+      if (block.type === "live") {
+        const sessionSnap = await db.collection("liveSessions").doc(block.sessionId).get();
+        if (!sessionSnap.exists) throw new HttpsError("not-found", "Live session not found.");
+        const session = sessionSnap.data() || {};
+        if (session.hostId !== auth.uid) throw new HttpsError("permission-denied", "Live session ownership mismatch.");
+      }
     }
-  }
 
-  let categoryPayload = {categoryId: null, categoryName: null, categorySlug: null, categoryType: null, categoryVerified: false};
-  if (categoryId) {
-    const categorySnap = await db.collection("categories").doc(categoryId).get();
-    if (categorySnap.exists) {
-      const category = categorySnap.data() || {};
-      categoryPayload = {
-        categoryId,
-        categoryName: category.name || null,
-        categorySlug: category.slug || null,
-        categoryType: category.type || null,
-        categoryVerified: !!category.verified,
-      };
+    let categoryPayload = {categoryId: null, categoryName: null, categorySlug: null, categoryType: null, categoryVerified: false};
+    if (categoryId) {
+      const categorySnap = await db.collection("categories").doc(categoryId).get();
+      if (categorySnap.exists) {
+        const category = categorySnap.data() || {};
+        categoryPayload = {
+          categoryId,
+          categoryName: category.name || null,
+          categorySlug: category.slug || null,
+          categoryType: category.type || null,
+          categoryVerified: !!category.verified,
+        };
+      }
     }
-  }
 
-  const moderationText = collectModerationText(title, blocks);
-  const moderation = await moderateTextContent(moderationText, "post");
-  const authorName = await resolveActorProfile(auth.uid);
+    const moderationText = collectModerationText(title, blocks);
+    const moderation = await moderateTextContent(moderationText, "post");
+    const authorName = await resolveActorProfile(auth.uid);
 
-  const firstTextBlock = blocks.find((block) => block.type === "text");
-  const firstAssetBlock = blocks.find((block) => block.type === "asset");
-  const legacyMediaAssetId = firstAssetBlock?.assetId || "";
-  const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
+    const firstTextBlock = blocks.find((block) => block.type === "text");
+    const firstAssetBlock = blocks.find((block) => block.type === "asset");
+    const legacyMediaAssetId = firstAssetBlock?.assetId || "";
+    const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
 
-  const preview = buildPostPreview(blocks, title);
-  const postPayload = {
-    ownerId: auth.uid,
-    userId: auth.uid,
-    author: authorName.actorName || "User",
-    title,
-    visibility,
-    contentType: contentType || (firstAssetBlock ? firstAssetBlock.presentation : "text"),
-    blocks,
-    ...categoryPayload,
-    category: categoryPayload.categoryName || categoryPayload.categorySlug || "",
-    tags: Array.isArray(data.tags) ? data.tags.slice(0, 10) : [],
-    mentions: Array.isArray(data.mentions) ? data.mentions.slice(0, 10) : [],
-    mentionUserIds: Array.isArray(data.mentionUserIds) ? data.mentionUserIds.slice(0, 10) : [],
-    poll: data.poll || null,
-    scheduledFor: data.scheduledFor || null,
-    location: data.location || "",
-    content: {
-      text: firstTextBlock?.text || "",
+    const tags = Array.isArray(data.tags)
+      ? data.tags.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean).slice(0, 10)
+      : [];
+    const mentions = Array.isArray(data.mentions)
+      ? data.mentions
+          .map((mention) => {
+            if (!mention || typeof mention !== "object") return null;
+            const uid = typeof mention.uid === "string" ? mention.uid.trim() : "";
+            const username = typeof mention.username === "string" ? mention.username.trim() : "";
+            if (!uid && !username) return null;
+            return {
+              ...(uid ? {uid} : {}),
+              ...(username ? {username} : {}),
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 10)
+      : [];
+    const mentionUserIds = Array.isArray(data.mentionUserIds)
+      ? data.mentionUserIds.map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean).slice(0, 10)
+      : [];
+
+    const preview = buildComposerPostPreview(blocks, title);
+    const postPayload = {
+      ownerId: auth.uid,
+      userId: auth.uid,
+      author: authorName.actorName || "User",
+      title: title ?? "",
+      visibility,
+      contentType: contentType || (firstAssetBlock ? firstAssetBlock.presentation : "text"),
+      blocks,
+      ...categoryPayload,
+      category: categoryPayload.categoryName || categoryPayload.categorySlug || "",
+      tags,
+      mentions,
+      mentionUserIds,
+      poll: data.poll || null,
+      scheduledFor: data.scheduledFor || null,
+      location: data.location || "",
+      content: {
+        text: firstTextBlock?.text || "",
+        mediaPath: legacyMediaPath,
+        linkUrl: null,
+        profileUid: null,
+        meta: {tags, mentions},
+      },
+      mediaAssetId: legacyMediaAssetId,
       mediaPath: legacyMediaPath,
-      linkUrl: null,
-      profileUid: null,
-      meta: {tags: Array.isArray(data.tags) ? data.tags : [], mentions: Array.isArray(data.mentions) ? data.mentions : []},
-    },
-    mediaAssetId: legacyMediaAssetId,
-    mediaPath: legacyMediaPath,
-    moderation: {
-      status: moderation.status,
-      labels: moderation.labels,
-      scoreMap: moderation.scoreMap,
-      modelVersion: moderation.modelVersion,
-      reviewRequired: moderation.reviewRequired,
-    },
-    previewText: preview.previewText,
-    previewAssetId: preview.previewAssetId,
-    previewType: preview.previewType,
-    previewLink: preview.previewLink,
-    createdAt: FieldValue.serverTimestamp(),
-    timestamp: FieldValue.serverTimestamp(),
-  };
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+      previewText: String(preview?.previewText ?? ""),
+      previewAssetId: String(preview?.previewAssetId ?? ""),
+      previewType: String(preview?.previewType ?? "text"),
+      previewLink: String(preview?.previewLink ?? ""),
+      createdAt: FieldValue.serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
+    };
 
-  const postRef = await db.collection("posts").add(postPayload);
-  return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
+    const sanitized = stripUndefined(postPayload);
+    const postRef = db.collection("posts").doc();
+    await postRef.set(sanitized);
+    return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    logger.error("createPost payload snapshot", {
+      uid: request?.auth?.uid,
+      categoryId: request?.data?.categoryId,
+      blocksCount: Array.isArray(request?.data?.blocks) ? request.data.blocks.length : 0,
+      tagsType: typeof request?.data?.tags,
+      mentionsType: typeof request?.data?.mentions,
+      mentionUserIdsType: typeof request?.data?.mentionUserIds,
+    });
+    logger.error("createPost failed", {uid: request?.auth?.uid, err: err?.message, stack: err?.stack});
+    throw new HttpsError("internal", "Post creation failed.");
+  }
 });
 
 exports.createLinkSnapshot = onCallV2({enforceAppCheck: true}, async (request) => {
@@ -994,71 +1050,82 @@ exports.createLinkSnapshot = onCallV2({enforceAppCheck: true}, async (request) =
 });
 
 exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
-  assertAppCheckV2(request);
-  const auth = request.auth;
-  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const title = normalizeText(data.title || "", 200);
-  const description = normalizeText(data.description || "", 2000);
-  const visibility = String(data.visibility || "public").trim().toLowerCase();
-  if (!["public", "followers", "private"].includes(visibility)) {
-    throw new HttpsError("invalid-argument", "Invalid visibility.");
+  try {
+    assertAppCheckV2(request);
+    const auth = request.auth;
+    if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+    const data = request.data || {};
+    const title = normalizeText(data.title || "", 200);
+    const description = normalizeText(data.description || "", 2000);
+    const visibility = String(data.visibility || "public").trim().toLowerCase();
+    if (!["public", "followers", "private"].includes(visibility)) {
+      throw new HttpsError("invalid-argument", "Invalid visibility.");
+    }
+    const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 100) : [];
+    await assertAssetOwnership(assetIds, auth.uid);
+
+    const capsuleRef = db.collection("capsules").doc();
+    const shareEnabled = data?.share?.enabled === true;
+    const requestedSlug = data?.share?.slug ? String(data.share.slug).trim() : "";
+    const slug = requestedSlug || capsuleRef.id.slice(0, 10);
+    const expiresAt = data?.share?.expiresAt || null;
+    const capsulePayload = {
+      ownerId: auth.uid,
+      createdAt: FieldValue.serverTimestamp(),
+      visibility,
+      title: title ?? "",
+      description: description ?? "",
+      assetIds,
+      version: 1,
+      share: {
+        enabled: shareEnabled,
+        slug,
+        expiresAt,
+      },
+    };
+    await capsuleRef.set(stripUndefined(capsulePayload), {merge: true});
+
+    const blocks = [
+      ...(description ? [{type: "text", text: description}] : []),
+      {type: "capsule", capsuleId: capsuleRef.id},
+    ];
+    const moderationText = collectModerationText(title, blocks);
+    const moderation = await moderateTextContent(moderationText, "capsule");
+    const authorName = await resolveActorProfile(auth.uid);
+    const preview = buildComposerPostPreview(blocks, title);
+
+    const postPayload = {
+      ownerId: auth.uid,
+      userId: auth.uid,
+      author: authorName.actorName || "User",
+      title: title ?? "",
+      visibility,
+      contentType: "capsule",
+      blocks,
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+      previewText: String(preview?.previewText ?? ""),
+      previewAssetId: String(preview?.previewAssetId ?? ""),
+      previewType: String(preview?.previewType ?? "text"),
+      previewLink: String(preview?.previewLink ?? ""),
+      createdAt: FieldValue.serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
+    };
+    const sanitized = stripUndefined(postPayload);
+    const postRef = db.collection("posts").doc();
+    await postRef.set(sanitized);
+
+    return {ok: true, capsuleId: capsuleRef.id, postId: postRef.id, moderation};
+  } catch (err) {
+    if (err instanceof HttpsError) throw err;
+    logger.error("createCapsule failed", {uid: request?.auth?.uid, err: err?.message, stack: err?.stack});
+    throw new HttpsError("internal", "Post creation failed.");
   }
-  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 100) : [];
-  await assertAssetOwnership(assetIds, auth.uid);
-
-  const capsuleRef = db.collection("capsules").doc();
-  const shareEnabled = data?.share?.enabled === true;
-  const slug = data?.share?.slug ? String(data.share.slug).trim() : capsuleRef.id.slice(0, 10);
-  const expiresAt = data?.share?.expiresAt || null;
-  await capsuleRef.set({
-    ownerId: auth.uid,
-    createdAt: FieldValue.serverTimestamp(),
-    visibility,
-    title,
-    description,
-    assetIds,
-    version: 1,
-    share: {
-      enabled: shareEnabled,
-      slug,
-      expiresAt,
-    },
-  }, {merge: true});
-
-  const blocks = [
-    ...(description ? [{type: "text", text: description}] : []),
-    {type: "capsule", capsuleId: capsuleRef.id},
-  ];
-  const moderationText = collectModerationText(title, blocks);
-  const moderation = await moderateTextContent(moderationText, "capsule");
-  const authorName = await resolveActorProfile(auth.uid);
-  const preview = buildPostPreview(blocks, title);
-
-  const postRef = await db.collection("posts").add({
-    ownerId: auth.uid,
-    userId: auth.uid,
-    author: authorName.actorName || "User",
-    title,
-    visibility,
-    contentType: "capsule",
-    blocks,
-    moderation: {
-      status: moderation.status,
-      labels: moderation.labels,
-      scoreMap: moderation.scoreMap,
-      modelVersion: moderation.modelVersion,
-      reviewRequired: moderation.reviewRequired,
-    },
-    previewText: preview.previewText,
-    previewAssetId: preview.previewAssetId,
-    previewType: preview.previewType,
-    previewLink: preview.previewLink,
-    createdAt: FieldValue.serverTimestamp(),
-    timestamp: FieldValue.serverTimestamp(),
-  });
-
-  return {ok: true, capsuleId: capsuleRef.id, postId: postRef.id, moderation};
 });
 
 exports.createLiveSession = onCallV2({enforceAppCheck: true}, async (request) => {
