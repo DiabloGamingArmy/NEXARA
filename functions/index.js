@@ -195,6 +195,17 @@ function collectModerationText(title = "", blocks = []) {
   return lines.join("\n").trim();
 }
 
+function stripUndefined(value) {
+  if (Array.isArray(value)) return value.map(stripUndefined);
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [key, val] of Object.entries(value)) {
+    if (val === undefined) continue;
+    output[key] = stripUndefined(val);
+  }
+  return output;
+}
+
 async function assertAssetOwnership(assetIds = [], uid) {
   const assets = {};
   for (const assetId of assetIds) {
@@ -332,11 +343,12 @@ async function resolveActorProfile(actorId) {
 }
 
 function buildNotificationPostPreview(post = {}) {
-  const title = post.title || post.content || post.body || post.text || "";
-  const preview = typeof title === "string" ? title.slice(0, 80) : "";
+  const titleCandidate = post.title || post.content || post.body || post.text || "";
+  const previewSource = typeof titleCandidate === "string" ? titleCandidate : String(titleCandidate || "");
+  const thumbnailCandidate = post.mediaUrl || post.thumbnailUrl || post.thumbnail || "";
   return {
-    title: preview,
-    thumbnail: post.mediaUrl || post.thumbnailUrl || post.thumbnail || "",
+    title: previewSource.slice(0, 80),
+    thumbnail: typeof thumbnailCandidate === "string" ? thumbnailCandidate : String(thumbnailCandidate || ""),
   };
 }
 
@@ -819,113 +831,116 @@ exports.getAssetDownloadUrl = onCallV2({enforceAppCheck: true}, async (request) 
 });
 
 exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
-  assertAppCheckV2(request);
-  const auth = request.auth;
-  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const title = normalizeText(data.title || "", 180);
-  const visibility = String(data.visibility || "public").trim().toLowerCase();
-  if (!["public", "followers", "private"].includes(visibility)) {
-    throw new HttpsError("invalid-argument", "Invalid visibility.");
-  }
-  const categoryId = String(data.categoryId || "").trim();
-  const contentType = String(data.contentType || "").trim().toLowerCase();
-  const blocks = normalizeBlocks(data.blocks || []);
-  if (!blocks.length) throw new HttpsError("invalid-argument", "Post must include at least one block.");
-  if (blocks.length > 20) throw new HttpsError("invalid-argument", "Too many blocks.");
-
-  const assetIds = blocks.flatMap((block) => {
-    if (block.type === "asset") return [block.assetId, block.thumbnailAssetId].filter(Boolean);
-    if (block.type === "link") return [block.imageAssetId].filter(Boolean);
-    return [];
-  });
-  const assetDetails = assetIds.length ? await assertAssetOwnership(assetIds, auth.uid) : {};
-
-  for (const block of blocks) {
-    if (block.type === "capsule") {
-      const capsuleSnap = await db.collection("capsules").doc(block.capsuleId).get();
-      if (!capsuleSnap.exists) throw new HttpsError("not-found", "Capsule not found.");
-      const capsule = capsuleSnap.data() || {};
-      if (capsule.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Capsule ownership mismatch.");
-    }
-    if (block.type === "live") {
-      const sessionSnap = await db.collection("liveSessions").doc(block.sessionId).get();
-      if (!sessionSnap.exists) throw new HttpsError("not-found", "Live session not found.");
-      const session = sessionSnap.data() || {};
-      if (session.hostId !== auth.uid) throw new HttpsError("permission-denied", "Live session ownership mismatch.");
-    }
-  }
-
-  let categoryPayload = {categoryId: null, categoryName: null, categorySlug: null, categoryType: null, categoryVerified: false};
-  if (categoryId) {
-    const categorySnap = await db.collection("categories").doc(categoryId).get();
-    if (categorySnap.exists) {
-      const category = categorySnap.data() || {};
-      categoryPayload = {
-        categoryId,
-        categoryName: category.name || null,
-        categorySlug: category.slug || null,
-        categoryType: category.type || null,
-        categoryVerified: !!category.verified,
-      };
-    }
-  }
-
-  const moderationText = collectModerationText(title, blocks);
-  const moderation = await moderateTextContent(moderationText, "post");
-  const authorName = await resolveActorProfile(auth.uid);
-
-  const firstTextBlock = blocks.find((block) => block.type === "text");
-  const firstAssetBlock = blocks.find((block) => block.type === "asset");
-  const legacyMediaAssetId = firstAssetBlock?.assetId || "";
-  const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
-
-  const preview = buildComposerPostPreview(blocks, title);
-  const postPayload = {
-    ownerId: auth.uid,
-    userId: auth.uid,
-    author: authorName.actorName || "User",
-    title,
-    visibility,
-    contentType: contentType || (firstAssetBlock ? firstAssetBlock.presentation : "text"),
-    blocks,
-    ...categoryPayload,
-    category: categoryPayload.categoryName || categoryPayload.categorySlug || "",
-    tags: Array.isArray(data.tags) ? data.tags.slice(0, 10) : [],
-    mentions: Array.isArray(data.mentions) ? data.mentions.slice(0, 10) : [],
-    mentionUserIds: Array.isArray(data.mentionUserIds) ? data.mentionUserIds.slice(0, 10) : [],
-    poll: data.poll || null,
-    scheduledFor: data.scheduledFor || null,
-    location: data.location || "",
-    content: {
-      text: firstTextBlock?.text || "",
-      mediaPath: legacyMediaPath,
-      linkUrl: null,
-      profileUid: null,
-      meta: {tags: Array.isArray(data.tags) ? data.tags : [], mentions: Array.isArray(data.mentions) ? data.mentions : []},
-    },
-    mediaAssetId: legacyMediaAssetId,
-    mediaPath: legacyMediaPath,
-    moderation: {
-      status: moderation.status,
-      labels: moderation.labels,
-      scoreMap: moderation.scoreMap,
-      modelVersion: moderation.modelVersion,
-      reviewRequired: moderation.reviewRequired,
-    },
-    previewText: preview.previewText ?? "",
-    previewAssetId: preview.previewAssetId ?? "",
-    previewType: preview.previewType ?? "text",
-    previewLink: preview.previewLink ?? "",
-    createdAt: FieldValue.serverTimestamp(),
-    timestamp: FieldValue.serverTimestamp(),
-  };
-
   try {
-    const postRef = await db.collection("posts").add(postPayload);
+    assertAppCheckV2(request);
+    const auth = request.auth;
+    if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+    const data = request.data || {};
+    const title = normalizeText(data.title || "", 180);
+    const visibility = String(data.visibility || "public").trim().toLowerCase();
+    if (!["public", "followers", "private"].includes(visibility)) {
+      throw new HttpsError("invalid-argument", "Invalid visibility.");
+    }
+    const categoryId = String(data.categoryId || "").trim();
+    const contentType = String(data.contentType || "").trim().toLowerCase();
+    const blocks = normalizeBlocks(data.blocks || []);
+    if (!blocks.length) throw new HttpsError("invalid-argument", "Post must include at least one block.");
+    if (blocks.length > 20) throw new HttpsError("invalid-argument", "Too many blocks.");
+
+    const assetIds = blocks.flatMap((block) => {
+      if (block.type === "asset") return [block.assetId, block.thumbnailAssetId].filter(Boolean);
+      if (block.type === "link") return [block.imageAssetId].filter(Boolean);
+      return [];
+    });
+    const assetDetails = assetIds.length ? await assertAssetOwnership(assetIds, auth.uid) : {};
+
+    for (const block of blocks) {
+      if (block.type === "capsule") {
+        const capsuleSnap = await db.collection("capsules").doc(block.capsuleId).get();
+        if (!capsuleSnap.exists) throw new HttpsError("not-found", "Capsule not found.");
+        const capsule = capsuleSnap.data() || {};
+        if (capsule.ownerId !== auth.uid) throw new HttpsError("permission-denied", "Capsule ownership mismatch.");
+      }
+      if (block.type === "live") {
+        const sessionSnap = await db.collection("liveSessions").doc(block.sessionId).get();
+        if (!sessionSnap.exists) throw new HttpsError("not-found", "Live session not found.");
+        const session = sessionSnap.data() || {};
+        if (session.hostId !== auth.uid) throw new HttpsError("permission-denied", "Live session ownership mismatch.");
+      }
+    }
+
+    let categoryPayload = {categoryId: null, categoryName: null, categorySlug: null, categoryType: null, categoryVerified: false};
+    if (categoryId) {
+      const categorySnap = await db.collection("categories").doc(categoryId).get();
+      if (categorySnap.exists) {
+        const category = categorySnap.data() || {};
+        categoryPayload = {
+          categoryId,
+          categoryName: category.name || null,
+          categorySlug: category.slug || null,
+          categoryType: category.type || null,
+          categoryVerified: !!category.verified,
+        };
+      }
+    }
+
+    const moderationText = collectModerationText(title, blocks);
+    const moderation = await moderateTextContent(moderationText, "post");
+    const authorName = await resolveActorProfile(auth.uid);
+
+    const firstTextBlock = blocks.find((block) => block.type === "text");
+    const firstAssetBlock = blocks.find((block) => block.type === "asset");
+    const legacyMediaAssetId = firstAssetBlock?.assetId || "";
+    const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
+
+    const preview = buildComposerPostPreview(blocks, title);
+    const postPayload = {
+      ownerId: auth.uid,
+      userId: auth.uid,
+      author: authorName.actorName || "User",
+      title: title ?? "",
+      visibility,
+      contentType: contentType || (firstAssetBlock ? firstAssetBlock.presentation : "text"),
+      blocks,
+      ...categoryPayload,
+      category: categoryPayload.categoryName || categoryPayload.categorySlug || "",
+      tags: Array.isArray(data.tags) ? data.tags.slice(0, 10) : [],
+      mentions: Array.isArray(data.mentions) ? data.mentions.slice(0, 10) : [],
+      mentionUserIds: Array.isArray(data.mentionUserIds) ? data.mentionUserIds.slice(0, 10) : [],
+      poll: data.poll || null,
+      scheduledFor: data.scheduledFor || null,
+      location: data.location || "",
+      content: {
+        text: firstTextBlock?.text || "",
+        mediaPath: legacyMediaPath,
+        linkUrl: null,
+        profileUid: null,
+        meta: {tags: Array.isArray(data.tags) ? data.tags : [], mentions: Array.isArray(data.mentions) ? data.mentions : []},
+      },
+      mediaAssetId: legacyMediaAssetId,
+      mediaPath: legacyMediaPath,
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+      previewText: preview.previewText ?? "",
+      previewAssetId: preview.previewAssetId ?? "",
+      previewType: preview.previewType ?? "text",
+      previewLink: preview.previewLink ?? "",
+      createdAt: FieldValue.serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
+    };
+
+    const sanitized = stripUndefined(postPayload);
+    const postRef = db.collection("posts").doc();
+    await postRef.set(sanitized);
     return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
   } catch (err) {
-    logger.error("createPost failed", {uid: auth.uid, err: err?.message, stack: err?.stack});
+    if (err instanceof HttpsError) throw err;
+    logger.error("createPost failed", {uid: request?.auth?.uid, err: err?.message, stack: err?.stack});
     throw new HttpsError("internal", "Post creation failed.");
   }
 });
@@ -999,31 +1014,31 @@ exports.createLinkSnapshot = onCallV2({enforceAppCheck: true}, async (request) =
 });
 
 exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
-  assertAppCheckV2(request);
-  const auth = request.auth;
-  if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
-  const data = request.data || {};
-  const title = normalizeText(data.title || "", 200);
-  const description = normalizeText(data.description || "", 2000);
-  const visibility = String(data.visibility || "public").trim().toLowerCase();
-  if (!["public", "followers", "private"].includes(visibility)) {
-    throw new HttpsError("invalid-argument", "Invalid visibility.");
-  }
-  const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 100) : [];
-  await assertAssetOwnership(assetIds, auth.uid);
-
-  const capsuleRef = db.collection("capsules").doc();
-  const shareEnabled = data?.share?.enabled === true;
-  const requestedSlug = data?.share?.slug ? String(data.share.slug).trim() : "";
-  const slug = requestedSlug || capsuleRef.id.slice(0, 10);
-  const expiresAt = data?.share?.expiresAt || null;
   try {
-    await capsuleRef.set({
+    assertAppCheckV2(request);
+    const auth = request.auth;
+    if (!auth?.uid) throw new HttpsError("unauthenticated", "Sign-in required.");
+    const data = request.data || {};
+    const title = normalizeText(data.title || "", 200);
+    const description = normalizeText(data.description || "", 2000);
+    const visibility = String(data.visibility || "public").trim().toLowerCase();
+    if (!["public", "followers", "private"].includes(visibility)) {
+      throw new HttpsError("invalid-argument", "Invalid visibility.");
+    }
+    const assetIds = Array.isArray(data.assetIds) ? data.assetIds.filter(Boolean).slice(0, 100) : [];
+    await assertAssetOwnership(assetIds, auth.uid);
+
+    const capsuleRef = db.collection("capsules").doc();
+    const shareEnabled = data?.share?.enabled === true;
+    const requestedSlug = data?.share?.slug ? String(data.share.slug).trim() : "";
+    const slug = requestedSlug || capsuleRef.id.slice(0, 10);
+    const expiresAt = data?.share?.expiresAt || null;
+    const capsulePayload = {
       ownerId: auth.uid,
       createdAt: FieldValue.serverTimestamp(),
       visibility,
-      title,
-      description,
+      title: title ?? "",
+      description: description ?? "",
       assetIds,
       version: 1,
       share: {
@@ -1031,27 +1046,23 @@ exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
         slug,
         expiresAt,
       },
-    }, {merge: true});
-  } catch (err) {
-    logger.error("createCapsule failed", {uid: auth.uid, err: err?.message, stack: err?.stack});
-    throw new HttpsError("internal", "Post creation failed.");
-  }
+    };
+    await capsuleRef.set(stripUndefined(capsulePayload), {merge: true});
 
-  const blocks = [
-    ...(description ? [{type: "text", text: description}] : []),
-    {type: "capsule", capsuleId: capsuleRef.id},
-  ];
-  const moderationText = collectModerationText(title, blocks);
-  const moderation = await moderateTextContent(moderationText, "capsule");
-  const authorName = await resolveActorProfile(auth.uid);
-  const preview = buildComposerPostPreview(blocks, title);
+    const blocks = [
+      ...(description ? [{type: "text", text: description}] : []),
+      {type: "capsule", capsuleId: capsuleRef.id},
+    ];
+    const moderationText = collectModerationText(title, blocks);
+    const moderation = await moderateTextContent(moderationText, "capsule");
+    const authorName = await resolveActorProfile(auth.uid);
+    const preview = buildComposerPostPreview(blocks, title);
 
-  try {
-    const postRef = await db.collection("posts").add({
+    const postPayload = {
       ownerId: auth.uid,
       userId: auth.uid,
       author: authorName.actorName || "User",
-      title,
+      title: title ?? "",
       visibility,
       contentType: "capsule",
       blocks,
@@ -1068,11 +1079,15 @@ exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
       previewLink: preview.previewLink ?? "",
       createdAt: FieldValue.serverTimestamp(),
       timestamp: FieldValue.serverTimestamp(),
-    });
+    };
+    const sanitized = stripUndefined(postPayload);
+    const postRef = db.collection("posts").doc();
+    await postRef.set(sanitized);
 
     return {ok: true, capsuleId: capsuleRef.id, postId: postRef.id, moderation};
   } catch (err) {
-    logger.error("createCapsule failed", {uid: auth.uid, err: err?.message, stack: err?.stack});
+    if (err instanceof HttpsError) throw err;
+    logger.error("createCapsule failed", {uid: request?.auth?.uid, err: err?.message, stack: err?.stack});
     throw new HttpsError("internal", "Post creation failed.");
   }
 });
