@@ -207,11 +207,11 @@ async function assertAssetOwnership(assetIds = [], uid) {
   return assets;
 }
 
-function buildPostPreview(blocks = [], title = "") {
+function buildComposerPostPreview(blocks = [], title = "") {
   const preview = {
     previewText: "",
     previewAssetId: "",
-    previewType: "",
+    previewType: "text",
     previewLink: "",
   };
   if (title) preview.previewText = String(title).slice(0, 140);
@@ -331,7 +331,7 @@ async function resolveActorProfile(actorId) {
   }
 }
 
-function buildPostPreview(post = {}) {
+function buildNotificationPostPreview(post = {}) {
   const title = post.title || post.content || post.body || post.text || "";
   const preview = typeof title === "string" ? title.slice(0, 80) : "";
   return {
@@ -521,7 +521,7 @@ exports.onPostLike = onDocumentCreated("posts/{postId}/likes/{uid}", async (even
   const postSnap = await db.collection("posts").doc(postId).get();
   const postData = postSnap.exists ? postSnap.data() : null;
   if (!postData || !postData.userId) return;
-  const preview = buildPostPreview(postData);
+  const preview = buildNotificationPostPreview(postData);
   await createContentNotification({
     actorId,
     targetUserId: postData.userId,
@@ -539,7 +539,7 @@ exports.onPostDislike = onDocumentCreated("posts/{postId}/dislikes/{uid}", async
   const postSnap = await db.collection("posts").doc(postId).get();
   const postData = postSnap.exists ? postSnap.data() : null;
   if (!postData || !postData.userId) return;
-  const preview = buildPostPreview(postData);
+  const preview = buildNotificationPostPreview(postData);
   await createContentNotification({
     actorId,
     targetUserId: postData.userId,
@@ -559,7 +559,7 @@ exports.onPostCommentNotification = onDocumentCreated("posts/{postId}/comments/{
   const postSnap = await db.collection("posts").doc(postId).get();
   const postData = postSnap.exists ? postSnap.data() : null;
   if (!postData || !postData.userId) return;
-  const preview = buildPostPreview(postData);
+  const preview = buildNotificationPostPreview(postData);
   await createContentNotification({
     actorId,
     targetUserId: postData.userId,
@@ -880,7 +880,7 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
   const legacyMediaAssetId = firstAssetBlock?.assetId || "";
   const legacyMediaPath = legacyMediaAssetId ? (assetDetails[legacyMediaAssetId]?.storagePathOriginal || "") : "";
 
-  const preview = buildPostPreview(blocks, title);
+  const preview = buildComposerPostPreview(blocks, title);
   const postPayload = {
     ownerId: auth.uid,
     userId: auth.uid,
@@ -913,16 +913,21 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
       modelVersion: moderation.modelVersion,
       reviewRequired: moderation.reviewRequired,
     },
-    previewText: preview.previewText,
-    previewAssetId: preview.previewAssetId,
-    previewType: preview.previewType,
-    previewLink: preview.previewLink,
+    previewText: preview.previewText ?? "",
+    previewAssetId: preview.previewAssetId ?? "",
+    previewType: preview.previewType ?? "text",
+    previewLink: preview.previewLink ?? "",
     createdAt: FieldValue.serverTimestamp(),
     timestamp: FieldValue.serverTimestamp(),
   };
 
-  const postRef = await db.collection("posts").add(postPayload);
-  return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
+  try {
+    const postRef = await db.collection("posts").add(postPayload);
+    return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
+  } catch (err) {
+    logger.error("createPost failed", {uid: auth.uid, err: err?.message, stack: err?.stack});
+    throw new HttpsError("internal", "Post creation failed.");
+  }
 });
 
 exports.createLinkSnapshot = onCallV2({enforceAppCheck: true}, async (request) => {
@@ -1009,22 +1014,28 @@ exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
 
   const capsuleRef = db.collection("capsules").doc();
   const shareEnabled = data?.share?.enabled === true;
-  const slug = data?.share?.slug ? String(data.share.slug).trim() : capsuleRef.id.slice(0, 10);
+  const requestedSlug = data?.share?.slug ? String(data.share.slug).trim() : "";
+  const slug = requestedSlug || capsuleRef.id.slice(0, 10);
   const expiresAt = data?.share?.expiresAt || null;
-  await capsuleRef.set({
-    ownerId: auth.uid,
-    createdAt: FieldValue.serverTimestamp(),
-    visibility,
-    title,
-    description,
-    assetIds,
-    version: 1,
-    share: {
-      enabled: shareEnabled,
-      slug,
-      expiresAt,
-    },
-  }, {merge: true});
+  try {
+    await capsuleRef.set({
+      ownerId: auth.uid,
+      createdAt: FieldValue.serverTimestamp(),
+      visibility,
+      title,
+      description,
+      assetIds,
+      version: 1,
+      share: {
+        enabled: shareEnabled,
+        slug,
+        expiresAt,
+      },
+    }, {merge: true});
+  } catch (err) {
+    logger.error("createCapsule failed", {uid: auth.uid, err: err?.message, stack: err?.stack});
+    throw new HttpsError("internal", "Post creation failed.");
+  }
 
   const blocks = [
     ...(description ? [{type: "text", text: description}] : []),
@@ -1033,32 +1044,37 @@ exports.createCapsule = onCallV2({enforceAppCheck: true}, async (request) => {
   const moderationText = collectModerationText(title, blocks);
   const moderation = await moderateTextContent(moderationText, "capsule");
   const authorName = await resolveActorProfile(auth.uid);
-  const preview = buildPostPreview(blocks, title);
+  const preview = buildComposerPostPreview(blocks, title);
 
-  const postRef = await db.collection("posts").add({
-    ownerId: auth.uid,
-    userId: auth.uid,
-    author: authorName.actorName || "User",
-    title,
-    visibility,
-    contentType: "capsule",
-    blocks,
-    moderation: {
-      status: moderation.status,
-      labels: moderation.labels,
-      scoreMap: moderation.scoreMap,
-      modelVersion: moderation.modelVersion,
-      reviewRequired: moderation.reviewRequired,
-    },
-    previewText: preview.previewText,
-    previewAssetId: preview.previewAssetId,
-    previewType: preview.previewType,
-    previewLink: preview.previewLink,
-    createdAt: FieldValue.serverTimestamp(),
-    timestamp: FieldValue.serverTimestamp(),
-  });
+  try {
+    const postRef = await db.collection("posts").add({
+      ownerId: auth.uid,
+      userId: auth.uid,
+      author: authorName.actorName || "User",
+      title,
+      visibility,
+      contentType: "capsule",
+      blocks,
+      moderation: {
+        status: moderation.status,
+        labels: moderation.labels,
+        scoreMap: moderation.scoreMap,
+        modelVersion: moderation.modelVersion,
+        reviewRequired: moderation.reviewRequired,
+      },
+      previewText: preview.previewText ?? "",
+      previewAssetId: preview.previewAssetId ?? "",
+      previewType: preview.previewType ?? "text",
+      previewLink: preview.previewLink ?? "",
+      createdAt: FieldValue.serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
+    });
 
-  return {ok: true, capsuleId: capsuleRef.id, postId: postRef.id, moderation};
+    return {ok: true, capsuleId: capsuleRef.id, postId: postRef.id, moderation};
+  } catch (err) {
+    logger.error("createCapsule failed", {uid: auth.uid, err: err?.message, stack: err?.stack});
+    throw new HttpsError("internal", "Post creation failed.");
+  }
 });
 
 exports.createLiveSession = onCallV2({enforceAppCheck: true}, async (request) => {
