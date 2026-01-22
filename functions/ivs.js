@@ -5,7 +5,7 @@
 console.log("IVS backend version:", "2025-12-14T04:00Z-force-redeploy");
 
 const { onRequest } = require("firebase-functions/v2/https");
-const { defineString, defineSecret } = require("firebase-functions/params");
+const { defineSecret } = require("firebase-functions/params");
 
 const admin = require("firebase-admin");
 
@@ -32,8 +32,7 @@ const FieldValue = admin.firestore.FieldValue;
 // -------------------------------------------------------------
 // PARAM DEFINITIONS
 // -------------------------------------------------------------
-const AWS_RECORDING_ARN = defineString("AWS_RECORDING_ARN");
-const AWS_PLAYBACK_KEY_ARN = defineString("AWS_PLAYBACK_KEY_ARN");
+const AWS_RECORDING_ARN = process.env.AWS_RECORDING_ARN || null;
 
 const AWS_KEY = defineSecret("AWS_KEY");
 const AWS_SECRET = defineSecret("AWS_SECRET");
@@ -132,7 +131,7 @@ exports.initializeUserChannel = onRequest(
             // Load params
             const accessKey = AWS_KEY.value();
             const secretKey = AWS_SECRET.value();
-            const recordingArn = AWS_RECORDING_ARN.value();
+            const recordingArn = AWS_RECORDING_ARN;
 
             const ivs = makeIVS(accessKey, secretKey);
 
@@ -148,12 +147,15 @@ exports.initializeUserChannel = onRequest(
 
             const channelName = `user_${uid}_persistent`;
 
-            const channelCmd = new CreateChannelCommand({
+            const channelParams = {
                 name: channelName,
                 type: "STANDARD",
                 latencyMode: "LOW",
-                recordingConfigurationArn: recordingArn,
-            });
+            };
+            if (recordingArn) {
+                channelParams.recordingConfigurationArn = recordingArn;
+            }
+            const channelCmd = new CreateChannelCommand(channelParams);
 
             const channelRes = await ivs.send(channelCmd);
             const { arn: channelArn, playbackUrl } = channelRes.channel;
@@ -168,6 +170,7 @@ exports.initializeUserChannel = onRequest(
                 channelArn,
                 streamKey: streamKeyValue,
                 playbackUrl,
+                recordingEnabled: !!recordingArn,
                 createdAt: FieldValue.serverTimestamp(),
             };
 
@@ -201,7 +204,7 @@ exports.createEphemeralChannel = onRequest(
             // Load params
             const accessKey = AWS_KEY.value();
             const secretKey = AWS_SECRET.value();
-            const recordingArn = AWS_RECORDING_ARN.value();
+            const recordingArn = AWS_RECORDING_ARN;
 
             const ivs = makeIVS(accessKey, secretKey);
 
@@ -214,11 +217,11 @@ exports.createEphemeralChannel = onRequest(
             const autoRecordRaw = req.body.autoRecord;
             const autoRecord = autoRecordRaw === true || autoRecordRaw === "true";
             if (autoRecord && !recordingArn) {
-                return respondWithError(
-                    res,
-                    500,
-                    "Auto-record requested but AWS_RECORDING_ARN is not configured."
-                );
+                return res.status(200).json({
+                    ok: false,
+                    recordingEnabled: false,
+                    message: "Recording is disabled or unconfigured.",
+                });
             }
 
             const sessionId = uuidv4();
@@ -332,4 +335,3 @@ exports.generatePlaybackToken = onRequest(
         }
     }
 );
-
