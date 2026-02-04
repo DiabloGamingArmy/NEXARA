@@ -3620,6 +3620,15 @@ function setComposerError(message = '') {
     syncPostButtonState();
 }
 
+function isValidLinkUrl(url = '') {
+    try {
+        const parsed = new URL(String(url || '').trim());
+        return ['http:', 'https:'].includes(parsed.protocol);
+    } catch (err) {
+        return false;
+    }
+}
+
 function composerHasContent() {
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
@@ -3628,7 +3637,7 @@ function composerHasContent() {
     }
     if (activeShareMode === 'media') return composerUploads.media.length > 0;
     if (activeShareMode === 'audio') return !!composerUploads.audio;
-    if (activeShareMode === 'link') return !!document.getElementById('link-url-input')?.value.trim();
+    if (activeShareMode === 'link') return isValidLinkUrl(document.getElementById('link-url-input')?.value || '');
     if (activeShareMode === 'interactable') return !!composerUploads.interactable;
     if (activeShareMode === 'capsule') return (title && title.value.trim()) && composerUploads.capsule.length > 0;
     if (activeShareMode === 'live') return true;
@@ -6778,7 +6787,14 @@ window.createPost = async function () {
 
         if (activeShareMode === 'link') {
             const linkUrl = (document.getElementById('link-url-input')?.value || '').trim();
-            if (!linkUrl) return alert('Paste a link to share.');
+            if (!linkUrl) {
+                toast('Paste a link to share.', 'error');
+                return;
+            }
+            if (!isValidLinkUrl(linkUrl)) {
+                toast('Enter a valid http(s) URL.', 'error');
+                return;
+            }
             let snapshot = linkSnapshotState.data;
             if (!snapshot || linkSnapshotState.status !== 'ready') {
                 snapshot = await fetchLinkSnapshot(linkUrl);

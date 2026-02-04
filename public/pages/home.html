@@ -75,13 +75,13 @@
     <div id="create-modal" class="modal-overlay">
         <div class="universal-composer">
             <div class="composer-rail">
-                <button class="composer-rail-item active" data-mode="thread" onclick="window.setComposerMode('thread')"><i class="ph ph-chat-circle-text"></i><span>Thread</span></button>
-                <button class="composer-rail-item" data-mode="media" onclick="window.setComposerMode('media')"><i class="ph ph-images"></i><span>File / Media</span></button>
-                <button class="composer-rail-item" data-mode="audio" onclick="window.setComposerMode('audio')"><i class="ph ph-music-notes"></i><span>Audio</span></button>
-                <button class="composer-rail-item" data-mode="link" onclick="window.setComposerMode('link')"><i class="ph ph-link"></i><span>Link</span></button>
-                <button class="composer-rail-item" data-mode="capsule" onclick="window.setComposerMode('capsule')"><i class="ph ph-folder-open"></i><span>Capsule</span></button>
-                <button class="composer-rail-item" data-mode="interactable" onclick="window.setComposerMode('interactable')"><i class="ph ph-code"></i><span>Interactable</span></button>
-                <button class="composer-rail-item" data-mode="live" onclick="window.openLiveFromComposer?.()"><i class="ph ph-broadcast"></i><span>Live</span></button>
+                <button class="composer-rail-item active" data-mode="thread" onclick="window.setComposerMode('thread')" title="Thread"><i class="ph ph-chat-circle-text"></i><span>Thread</span></button>
+                <button class="composer-rail-item" data-mode="media" onclick="window.setComposerMode('media')" title="File / Media"><i class="ph ph-images"></i><span>File / Media</span></button>
+                <button class="composer-rail-item" data-mode="audio" onclick="window.setComposerMode('audio')" title="Audio"><i class="ph ph-music-notes"></i><span>Audio</span></button>
+                <button class="composer-rail-item" data-mode="link" onclick="window.setComposerMode('link')" title="Link"><i class="ph ph-link"></i><span>Link</span></button>
+                <button class="composer-rail-item" data-mode="capsule" onclick="window.setComposerMode('capsule')" title="Capsule"><i class="ph ph-folder-open"></i><span>Capsule</span></button>
+                <button class="composer-rail-item" data-mode="interactable" onclick="window.setComposerMode('interactable')" title="Interactable"><i class="ph ph-code"></i><span>Interactable</span></button>
+                <button class="composer-rail-item" data-mode="live" onclick="window.openLiveFromComposer?.()" title="Live"><i class="ph ph-broadcast"></i><span>Live</span></button>
             </div>
             <div class="composer-main">
                 <div class="composer-header">
@@ -1028,7 +1028,7 @@
                                 style="display:none;">
                                 <i class="ph ph-arrow-left"></i> Back
                             </button>
-                            <div id="message-header" class="message-thread-header">Select a conversation</div>
+                            <div id="message-header" class="message-thread-header">Select a conversation or start a new one.</div>
                         </div>
                             <div class="message-header-tools">
                             <input id="conversation-search" class="form-input" placeholder="Search in conversation"
