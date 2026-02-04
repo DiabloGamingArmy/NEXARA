@@ -199,17 +199,54 @@ function collectModerationText(title = "", blocks = []) {
 
 function stripUndefined(value) {
   if (Array.isArray(value)) {
-    return value
-      .map(stripUndefined)
-      .filter((entry) => entry !== undefined);
+    return value.map(stripUndefined).filter((entry) => entry !== undefined);
   }
-  if (!value || typeof value !== "object") return value;
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "object") return value;
+
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    return value;
+  }
+
   const output = {};
   for (const [key, val] of Object.entries(value)) {
     if (val === undefined) continue;
     output[key] = stripUndefined(val);
   }
   return output;
+}
+
+function coerceTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof admin.firestore.Timestamp) return value;
+  if (typeof value === "object" && typeof value.seconds === "number") {
+    const seconds = value.seconds;
+    const nanos = typeof value.nanoseconds === "number" ? value.nanoseconds : 0;
+    return new admin.firestore.Timestamp(seconds, nanos);
+  }
+  return null;
+}
+
+function assertFirestoreSafe(value, path = "payload") {
+  if (value === undefined) return;
+  if (typeof value === "number" && (!Number.isFinite(value) || Number.isNaN(value))) {
+    throw new HttpsError("invalid-argument", `Invalid number at ${path}`);
+  }
+  if (typeof value === "function") {
+    throw new HttpsError("invalid-argument", `Invalid function at ${path}`);
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertFirestoreSafe(entry, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return;
+    for (const [key, entry] of Object.entries(value)) {
+      assertFirestoreSafe(entry, `${path}.${key}`);
+    }
+  }
 }
 
 async function assertAssetOwnership(assetIds = [], uid) {
@@ -936,7 +973,7 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
       mentions,
       mentionUserIds,
       poll: data.poll || null,
-      scheduledFor: data.scheduledFor || null,
+      scheduledFor: coerceTimestamp(data.scheduledFor),
       location: data.location || "",
       content: {
         text: firstTextBlock?.text || "",
@@ -964,10 +1001,12 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
 
     const sanitized = stripUndefined(postPayload);
     const postRef = db.collection("posts").doc();
+    assertFirestoreSafe(sanitized, "createPost");
     await postRef.set(sanitized);
     return {ok: true, postId: postRef.id, moderation: postPayload.moderation};
   } catch (err) {
     if (err instanceof HttpsError) throw err;
+    const msg = String(err?.message || "");
     logger.error("createPost payload snapshot", {
       uid: request?.auth?.uid,
       categoryId: request?.data?.categoryId,
@@ -977,6 +1016,11 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
       mentionUserIdsType: typeof request?.data?.mentionUserIds,
     });
     logger.error("createPost failed", {uid: request?.auth?.uid, err: err?.message, stack: err?.stack});
+    if (msg.includes("Unsupported field value")
+      || msg.includes("invalid Firestore value")
+      || msg.includes("not a valid Firestore value")) {
+      throw new HttpsError("invalid-argument", msg);
+    }
     throw new HttpsError("internal", "Post creation failed.");
   }
 });

@@ -3621,7 +3621,7 @@ function composerHasContent() {
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (activeShareMode === 'thread') {
-        return (title && title.value.trim()) || (content && content.value.trim()) || composerUploads.thread.length;
+        return (content && content.value.trim()) || composerUploads.thread.length;
     }
     if (activeShareMode === 'media') return composerUploads.media.length > 0;
     if (activeShareMode === 'document') return !!composerUploads.document;
@@ -6406,8 +6406,8 @@ window.createPost = async function () {
         let contentType = activeShareMode;
 
         if (activeShareMode === 'thread') {
-            if (!title && !content && !composerUploads.thread.length) {
-                return alert("Please add a title, content, or attachment.");
+            if (!content && !composerUploads.thread.length) {
+                return alert("Please add post text or an attachment.");
             }
             if (content) blocks.push({ type: 'text', text: content });
             if (composerUploads.thread.length) {
@@ -6525,6 +6525,14 @@ window.createPost = async function () {
             await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
             currentEditPost = null;
         } else {
+            // lightweight debugging
+            console.debug('[createPost] payload', {
+                title,
+                visibility,
+                categoryId: targetCategoryId || null,
+                contentType,
+                blocksCount: blocks.length
+            });
             const result = await callSecureFunction('createPost', postPayload);
             if (result?.postId && notificationTargets.length) {
                 await notifyMentionedUsers(notificationTargets, result.postId, { title });
@@ -6554,7 +6562,14 @@ window.createPost = async function () {
 
     } catch (e) {
         console.error('Post/auto-join failed:', e);
-        setComposerError('Could not post right now. Please try again.');
+        const code = e?.code || e?.name || '';
+        const msg = e?.message || 'Could not post right now.';
+        const details = e?.details?.message || '';
+
+        const userMsg = details || (code ? `${msg} (${code})` : msg);
+
+        setComposerError(userMsg);
+        try { toast(userMsg, 'error'); } catch (_) {}
     } finally {
         btn.disabled = false;
         btn.textContent = "Share";
