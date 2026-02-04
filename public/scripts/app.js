@@ -6525,6 +6525,14 @@ window.createPost = async function () {
             await updateDoc(doc(db, 'posts', currentEditPost.id), postPayload);
             currentEditPost = null;
         } else {
+            // lightweight debugging
+            console.debug('[createPost] payload', {
+                title,
+                visibility,
+                categoryId: targetCategoryId || null,
+                contentType,
+                blocksCount: blocks.length
+            });
             const result = await callSecureFunction('createPost', postPayload);
             if (result?.postId && notificationTargets.length) {
                 await notifyMentionedUsers(notificationTargets, result.postId, { title });
@@ -6554,7 +6562,14 @@ window.createPost = async function () {
 
     } catch (e) {
         console.error('Post/auto-join failed:', e);
-        setComposerError('Could not post right now. Please try again.');
+        const code = e?.code || e?.name || '';
+        const msg = e?.message || 'Could not post right now.';
+        const details = e?.details?.message || '';
+
+        const userMsg = details || (code ? `${msg} (${code})` : msg);
+
+        setComposerError(userMsg);
+        try { toast(userMsg, 'error'); } catch (_) {}
     } finally {
         btn.disabled = false;
         btn.textContent = "Share";
