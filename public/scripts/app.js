@@ -3621,7 +3621,7 @@ function composerHasContent() {
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
     if (activeShareMode === 'thread') {
-        return (title && title.value.trim()) || (content && content.value.trim()) || composerUploads.thread.length;
+        return (content && content.value.trim()) || composerUploads.thread.length;
     }
     if (activeShareMode === 'media') return composerUploads.media.length > 0;
     if (activeShareMode === 'document') return !!composerUploads.document;
@@ -6406,8 +6406,8 @@ window.createPost = async function () {
         let contentType = activeShareMode;
 
         if (activeShareMode === 'thread') {
-            if (!title && !content && !composerUploads.thread.length) {
-                return alert("Please add a title, content, or attachment.");
+            if (!content && !composerUploads.thread.length) {
+                return alert("Please add post text or an attachment.");
             }
             if (content) blocks.push({ type: 'text', text: content });
             if (composerUploads.thread.length) {
