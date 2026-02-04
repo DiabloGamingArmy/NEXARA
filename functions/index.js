@@ -75,6 +75,7 @@ const ASSET_POLICIES = {
     maxBytes: 100 * 1024 * 1024,
     allowedPrefixes: [
       "application/pdf",
+      "text/html",
       "text/plain",
       "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -340,6 +341,19 @@ function normalizeBlocks(rawBlocks = []) {
       const sessionId = String(block.sessionId || "").trim();
       if (!sessionId) return null;
       return {type: "live", sessionId};
+    }
+    if (type === "interactable") {
+      const assetId = String(block.assetId || "").trim();
+      const htmlUrl = normalizeUrl(block.htmlUrl || "");
+      if (!assetId && !htmlUrl) return null;
+      const fileName = normalizeText(block.fileName || "", 200);
+      const size = Number(block.size || 0) || 0;
+      const payload = {type: "interactable"};
+      if (assetId) payload.assetId = assetId;
+      if (htmlUrl) payload.htmlUrl = htmlUrl;
+      if (fileName) payload.fileName = fileName;
+      if (size) payload.size = size;
+      return payload;
     }
     return null;
   }).filter(Boolean);
@@ -893,6 +907,7 @@ exports.createPost = onCallV2({enforceAppCheck: true}, async (request) => {
     const assetIds = blocks.flatMap((block) => {
       if (block.type === "asset") return [block.assetId, block.thumbnailAssetId].filter(Boolean);
       if (block.type === "link") return [block.imageAssetId].filter(Boolean);
+      if (block.type === "interactable") return [block.assetId].filter(Boolean);
       return [];
     });
     const assetDetails = assetIds.length ? await assertAssetOwnership(assetIds, auth.uid) : {};

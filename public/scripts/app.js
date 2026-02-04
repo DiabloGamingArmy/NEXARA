@@ -1266,10 +1266,10 @@ let assetUrlCache = {};
 let assetUrlPromises = {};
 const SHARE_MODES = [
     { id: 'thread', label: 'Thread', icon: 'ph-chat-circle-text', description: 'Text-first update' },
-    { id: 'media', label: 'Media Drop', icon: 'ph-images', description: 'Multi-file gallery' },
-    { id: 'document', label: 'Document', icon: 'ph-file-text', description: 'Share a file' },
+    { id: 'media', label: 'File / Media', icon: 'ph-images', description: 'Multi-file gallery' },
     { id: 'audio', label: 'Audio', icon: 'ph-music-notes', description: 'Upload audio' },
     { id: 'link', label: 'Link Snapshot', icon: 'ph-link', description: 'Share a link' },
+    { id: 'interactable', label: 'Interactable', icon: 'ph-code', description: 'Upload an HTML interactable post (sandboxed).' },
     { id: 'capsule', label: 'Capsule', icon: 'ph-folder-open', description: 'Bundle files' },
     { id: 'live', label: 'Live', icon: 'ph-broadcast', description: 'Go live' }
 ];
@@ -1277,9 +1277,9 @@ let activeShareMode = 'thread';
 let composerUploads = {
     thread: [],
     media: [],
-    document: null,
     audio: null,
-    capsule: []
+    capsule: [],
+    interactable: null
 };
 let linkSnapshotState = { status: 'idle', data: null };
 let liveComposerState = { sessionId: '', created: false };
@@ -3627,9 +3627,9 @@ function composerHasContent() {
         return (content && content.value.trim()) || composerUploads.thread.length;
     }
     if (activeShareMode === 'media') return composerUploads.media.length > 0;
-    if (activeShareMode === 'document') return !!composerUploads.document;
     if (activeShareMode === 'audio') return !!composerUploads.audio;
     if (activeShareMode === 'link') return !!document.getElementById('link-url-input')?.value.trim();
+    if (activeShareMode === 'interactable') return !!composerUploads.interactable;
     if (activeShareMode === 'capsule') return (title && title.value.trim()) && composerUploads.capsule.length > 0;
     if (activeShareMode === 'live') return true;
     return false;
@@ -4842,6 +4842,21 @@ function renderLiveBlock(block = {}) {
     `;
 }
 
+function renderInteractableBlock(block = {}) {
+    const url = block.htmlUrl
+        || resolveAssetUrl(block.assetId, 'original', function (resolved) {
+            block.htmlUrl = resolved;
+            if (currentViewId === 'feed') renderFeed();
+            if (activePostId) renderThreadMainPost(activePostId);
+        });
+    if (!url) return '';
+    return `
+        <div class="interactable-block">
+            <iframe class="interactable-frame" sandbox="allow-scripts allow-forms" src="${escapeHtml(url)}"></iframe>
+        </div>
+    `;
+}
+
 function buildBlockRenderOutput(post = {}, options = {}) {
     const blocks = getPostBlocks(post);
     if (!blocks.length) return null;
@@ -4856,6 +4871,7 @@ function buildBlockRenderOutput(post = {}, options = {}) {
         if (block.type === 'link') return renderLinkBlock(block, options);
         if (block.type === 'capsule') return renderCapsuleBlock(block);
         if (block.type === 'live') return renderLiveBlock(block);
+        if (block.type === 'interactable') return renderInteractableBlock(block);
         return '';
     };
     return {
@@ -5459,15 +5475,15 @@ function setComposerMode(modeId = 'thread') {
 }
 
 function resetUniversalComposer() {
-    composerUploads = { thread: [], media: [], document: null, audio: null, capsule: [] };
+    composerUploads = { thread: [], media: [], audio: null, capsule: [], interactable: null };
     linkSnapshotState = { status: 'idle', data: null };
     liveComposerState = { sessionId: '', created: false };
     const inputs = [
         'thread-files',
         'media-drop-files',
-        'document-file',
         'audio-file',
-        'capsule-files'
+        'capsule-files',
+        'interactable-file'
     ];
     inputs.forEach(function (id) {
         const input = document.getElementById(id);
@@ -5475,7 +5491,6 @@ function resetUniversalComposer() {
     });
     const textInputs = [
         'media-notes',
-        'document-notes',
         'audio-notes',
         'audio-chapters',
         'audio-lyrics',
@@ -5503,8 +5518,8 @@ function resetUniversalComposer() {
     renderComposerFileList('thread-file-list', []);
     renderComposerFileList('media-drop-list', []);
     renderComposerFileList('capsule-file-list', []);
-    renderComposerFileList('document-file-list', []);
     renderComposerFileList('audio-file-list', []);
+    renderComposerFileList('interactable-file-list', []);
     syncPostButtonState();
 }
 
@@ -5529,9 +5544,6 @@ function handleComposerFileChange(mode, inputEl) {
     } else if (mode === 'media') {
         composerUploads.media = files;
         renderComposerFileList('media-drop-list', files);
-    } else if (mode === 'document') {
-        composerUploads.document = files[0] || null;
-        renderComposerFileList('document-file-list', composerUploads.document ? [composerUploads.document] : []);
     } else if (mode === 'audio') {
         composerUploads.audio = files[0] || null;
         renderComposerFileList('audio-file-list', composerUploads.audio ? [composerUploads.audio] : []);
@@ -5539,6 +5551,15 @@ function handleComposerFileChange(mode, inputEl) {
         composerUploads.capsule = files;
         renderComposerFileList('capsule-file-list', files);
     }
+    syncPostButtonState();
+}
+
+function handleInteractableFileChange(event) {
+    const input = event?.target;
+    if (!input || !input.files) return;
+    const file = input.files[0] || null;
+    composerUploads.interactable = file;
+    renderComposerFileList('interactable-file-list', file ? [file] : []);
     syncPostButtonState();
 }
 
@@ -6424,6 +6445,7 @@ window.removeVideoMention = removeVideoMention;
 window.handleVideoMentionInput = handleVideoMentionInput;
 window.setComposerMode = setComposerMode;
 window.handleComposerFileChange = handleComposerFileChange;
+window.handleInteractableFileChange = handleInteractableFileChange;
 window.fetchLinkSnapshot = fetchLinkSnapshot;
 window.syncPostButtonState = syncPostButtonState;
 window.openLiveFromComposer = function () {
@@ -6649,7 +6671,6 @@ window.createPost = async function () {
     const title = (document.getElementById('postTitle')?.value || '').trim();
     const notesByMode = {
         media: 'media-notes',
-        document: 'document-notes',
         audio: 'audio-notes',
         link: 'link-notes',
         capsule: 'capsule-notes',
@@ -6730,14 +6751,6 @@ window.createPost = async function () {
             });
         }
 
-        if (activeShareMode === 'document') {
-            if (!composerUploads.document) return alert('Select a document to upload.');
-            const uploads = await uploadAssetsForFiles([composerUploads.document], { visibility: 'public', fallbackKind: 'document' });
-            uploads.forEach(function (upload) {
-                blocks.push({ type: 'asset', assetId: upload.assetId, presentation: 'doc', caption: content });
-            });
-        }
-
         if (activeShareMode === 'audio') {
             if (!composerUploads.audio) return alert('Select an audio file to upload.');
             const uploads = await uploadAssetsForFiles([composerUploads.audio], { visibility: 'public', fallbackKind: 'audio' });
@@ -6746,6 +6759,21 @@ window.createPost = async function () {
                 const lyrics = (document.getElementById('audio-lyrics')?.value || '').trim();
                 blocks.push({ type: 'asset', assetId: upload.assetId, presentation: 'audio', caption: content, chapters, lyrics });
             });
+        }
+
+        if (activeShareMode === 'interactable') {
+            const file = composerUploads.interactable;
+            if (!file) return alert('Select an HTML file to upload.');
+            const upload = await uploadFileToStorage(file, { kind: getAssetKindForFile(file, 'document'), visibility: 'public' });
+            const htmlUrl = upload?.assetId ? await fetchAssetUrl(upload.assetId, 'original') : '';
+            blocks.push({
+                type: 'interactable',
+                assetId: upload?.assetId || '',
+                htmlUrl: htmlUrl || '',
+                fileName: file.name || '',
+                size: file.size || 0
+            });
+            contentType = 'interactable';
         }
 
         if (activeShareMode === 'link') {

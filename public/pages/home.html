@@ -76,11 +76,11 @@
         <div class="universal-composer">
             <div class="composer-rail">
                 <button class="composer-rail-item active" data-mode="thread" onclick="window.setComposerMode('thread')"><i class="ph ph-chat-circle-text"></i><span>Thread</span></button>
-                <button class="composer-rail-item" data-mode="media" onclick="window.setComposerMode('media')"><i class="ph ph-images"></i><span>Media Drop</span></button>
-                <button class="composer-rail-item" data-mode="document" onclick="window.setComposerMode('document')"><i class="ph ph-file-text"></i><span>Document</span></button>
+                <button class="composer-rail-item" data-mode="media" onclick="window.setComposerMode('media')"><i class="ph ph-images"></i><span>File / Media</span></button>
                 <button class="composer-rail-item" data-mode="audio" onclick="window.setComposerMode('audio')"><i class="ph ph-music-notes"></i><span>Audio</span></button>
                 <button class="composer-rail-item" data-mode="link" onclick="window.setComposerMode('link')"><i class="ph ph-link"></i><span>Link</span></button>
                 <button class="composer-rail-item" data-mode="capsule" onclick="window.setComposerMode('capsule')"><i class="ph ph-folder-open"></i><span>Capsule</span></button>
+                <button class="composer-rail-item" data-mode="interactable" onclick="window.setComposerMode('interactable')"><i class="ph ph-code"></i><span>Interactable</span></button>
                 <button class="composer-rail-item" data-mode="live" onclick="window.openLiveFromComposer?.()"><i class="ph ph-broadcast"></i><span>Live</span></button>
             </div>
             <div class="composer-main">
@@ -178,15 +178,6 @@
                         </div>
                     </div>
 
-                    <div class="composer-mode-panel" data-mode="document" style="display:none;">
-                        <div class="composer-panel-section">
-                            <div class="composer-section-title">Upload a document</div>
-                            <input type="file" id="document-file" accept=".pdf,.doc,.docx,.txt" onchange="window.handleComposerFileChange('document', this); window.syncPostButtonState?.()">
-                            <div id="document-file-list" class="composer-file-list"></div>
-                            <textarea id="document-notes" class="composer-notes" placeholder="Add context or a summary" oninput="window.syncPostButtonState?.()"></textarea>
-                        </div>
-                    </div>
-
                     <div class="composer-mode-panel" data-mode="audio" style="display:none;">
                         <div class="composer-panel-section">
                             <div class="composer-section-title">Upload audio</div>
@@ -205,6 +196,15 @@
                                 onblur="window.fetchLinkSnapshot(this.value)">
                             <div id="link-preview" class="composer-preview"></div>
                             <textarea id="link-notes" class="composer-notes" placeholder="Add context (optional)" oninput="window.syncPostButtonState?.()"></textarea>
+                        </div>
+                    </div>
+
+                    <div class="composer-mode-panel" data-mode="interactable" style="display:none;">
+                        <div class="composer-panel-section">
+                            <div class="composer-section-title">Upload an HTML interactable</div>
+                            <input type="file" id="interactable-file" accept=".html,text/html" onchange="window.handleInteractableFileChange(event)">
+                            <div id="interactable-file-list" class="composer-file-list"></div>
+                            <div class="composer-helper-text">Runs in a sandboxed iframe. No external network by default (future option).</div>
                         </div>
                     </div>
 
