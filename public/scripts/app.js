@@ -6159,6 +6159,41 @@ window.setComposerMode = setComposerMode;
 window.handleComposerFileChange = handleComposerFileChange;
 window.fetchLinkSnapshot = fetchLinkSnapshot;
 window.syncPostButtonState = syncPostButtonState;
+window.openLiveFromComposer = function () {
+    try {
+        window.toggleCreateModal?.(false);
+    } catch (_) {}
+
+    try {
+        window.currentEditPost = null;
+        if (typeof resetUniversalComposer === "function") resetUniversalComposer();
+    } catch (_) {}
+
+    try {
+        if (typeof window.navigateTo === "function") {
+            window.navigateTo("live", true);
+        } else {
+            window.location.assign("/live");
+            return;
+        }
+    } catch (_) {
+        window.location.assign("/live");
+        return;
+    }
+
+    setTimeout(function () {
+        try {
+            if (typeof window.toggleGoLiveModal === "function") {
+                window.toggleGoLiveModal(true);
+                return;
+            }
+            const btn = document.querySelector('[data-action="open-go-live"]')
+                || document.getElementById("open-go-live")
+                || document.getElementById("go-live-button");
+            btn?.click?.();
+        } catch (_) {}
+    }, 50);
+};
 
 function escapeRegex(str = '') {
     return (str || '').replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
