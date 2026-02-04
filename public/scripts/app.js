@@ -514,6 +514,9 @@ let mentionSuggestionState = {
     results: [],
     visibleCount: 5
 };
+let composerInlineSuggestEl = null;
+let composerInlineSuggestState = { token: null, type: '', query: '', requestId: 0 };
+const composerInlineMentionMap = new Map();
 const MENTION_SUGGESTION_PAGE_SIZE = 30;
 let currentThreadComments = [];
 let liveSessionsCache = [];
@@ -5691,6 +5694,7 @@ function resetComposerState() {
     composerTags = [];
     composerCreatedTags = new Set();
     composerMentions = [];
+    composerInlineMentionMap.clear();
     composerPoll = { title: '', options: ['', ''] };
     composerScheduledFor = '';
     composerLocation = '';
@@ -5706,8 +5710,10 @@ function resetComposerState() {
     setComposerLocation('');
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
+    const contentRich = document.getElementById('postContentRich');
     if (title) title.value = '';
     if (content) content.value = '';
+    if (contentRich) contentRich.textContent = '';
     const fileInput = document.getElementById('thread-files');
     if (fileInput) fileInput.value = '';
     clearPostImage();
@@ -6029,25 +6035,18 @@ function renderMentionSuggestionsList(listEl) {
     }).join('');
 }
 
-async function searchMentionSuggestions(term = '') {
-    const listEl = document.getElementById('mention-suggestions');
-    if (!listEl) return;
-    listEl.classList.add('mention-suggestions-list');
-    listEl.classList.remove('suggestion-row');
+async function fetchMentionCandidates(term = '') {
     const raw = (term || '').trim();
-    if (!raw.startsWith('@') || raw.length <= 1) {
-        mentionSuggestionState = { query: '', lastDoc: null, hasMore: false, loading: false, results: [], visibleCount: 5 };
-        listEl.innerHTML = '';
-        listEl.style.display = 'none';
-        return;
-    }
     const cleaned = raw.replace(/^@/, '').toLowerCase();
+    if (!cleaned) {
+        mentionSuggestionState = { query: '', lastDoc: null, hasMore: false, loading: false, results: [], visibleCount: 5 };
+        return [];
+    }
     const isNewQuery = cleaned !== mentionSuggestionState.query;
     if (isNewQuery) {
         mentionSuggestionState = { query: cleaned, lastDoc: null, hasMore: true, loading: false, results: [], visibleCount: 5 };
     }
-    if (mentionSuggestionState.loading) return;
-    if (!mentionSuggestionState.hasMore) return;
+    if (mentionSuggestionState.loading || !mentionSuggestionState.hasMore) return mentionSuggestionState.results;
     mentionSuggestionState.loading = true;
     try {
         const buildQuery = function (field) {
@@ -6080,36 +6079,304 @@ async function searchMentionSuggestions(term = '') {
         mentionSuggestionState.results = merged.sort(function (a, b) {
             return (b.followersCount || 0) - (a.followersCount || 0);
         });
-        renderMentionSuggestionsList(listEl);
-        if (!listEl.dataset.scrollBound) {
-            listEl.addEventListener('scroll', function () {
-                const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 12;
-                if (nearBottom) {
-                    if (mentionSuggestionState.visibleCount < mentionSuggestionState.results.length) {
-                        mentionSuggestionState.visibleCount = Math.min(mentionSuggestionState.visibleCount + 5, mentionSuggestionState.results.length);
-                        renderMentionSuggestionsList(listEl);
-                    } else {
-                        searchMentionSuggestions(`@${mentionSuggestionState.query}`);
-                    }
-                }
-            });
-            listEl.dataset.scrollBound = 'true';
-        }
-        const input = document.getElementById('mention-input');
-        if (input) input.focus({ preventScroll: true });
+        return mentionSuggestionState.results;
     } catch (err) {
         console.warn('Mention search failed', err);
-        listEl.innerHTML = '';
-        listEl.style.display = 'none';
+        mentionSuggestionState = { query: cleaned, lastDoc: null, hasMore: false, loading: false, results: [], visibleCount: 5 };
+        return [];
     } finally {
         mentionSuggestionState.loading = false;
     }
+}
+
+async function searchMentionSuggestions(term = '') {
+    const listEl = document.getElementById('mention-suggestions');
+    if (!listEl) return;
+    listEl.classList.add('mention-suggestions-list');
+    listEl.classList.remove('suggestion-row');
+    const raw = (term || '').trim();
+    if (!raw.startsWith('@') || raw.length <= 1) {
+        mentionSuggestionState = { query: '', lastDoc: null, hasMore: false, loading: false, results: [], visibleCount: 5 };
+        listEl.innerHTML = '';
+        listEl.style.display = 'none';
+        return;
+    }
+    await fetchMentionCandidates(raw);
+    renderMentionSuggestionsList(listEl);
+    if (!listEl.dataset.scrollBound) {
+        listEl.addEventListener('scroll', function () {
+            const nearBottom = listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 12;
+            if (nearBottom) {
+                if (mentionSuggestionState.visibleCount < mentionSuggestionState.results.length) {
+                    mentionSuggestionState.visibleCount = Math.min(mentionSuggestionState.visibleCount + 5, mentionSuggestionState.results.length);
+                    renderMentionSuggestionsList(listEl);
+                } else {
+                    searchMentionSuggestions(`@${mentionSuggestionState.query}`);
+                }
+            }
+        });
+        listEl.dataset.scrollBound = 'true';
+    }
+    const input = document.getElementById('mention-input');
+    if (input) input.focus({ preventScroll: true });
 }
 
 function handleMentionInput(event) {
     const value = event.target.value;
     if (mentionSearchTimer) clearTimeout(mentionSearchTimer);
     mentionSearchTimer = setTimeout(function () { searchMentionSuggestions(value); }, 200);
+}
+
+function getPlainTextFromRich(el) {
+    return (el?.innerText || '').replace(/\u00A0/g, ' ');
+}
+
+function updateComposerInlineMeta(text = '') {
+    const tags = [];
+    const tagRegex = /(^|\s)#([\w-]+)/g;
+    let match = null;
+    while ((match = tagRegex.exec(text))) {
+        const normalized = normalizeTagValue(match[2]);
+        if (normalized) tags.push(normalized);
+    }
+    composerTags = Array.from(new Set(tags)).slice(0, 10);
+    const handles = [];
+    const mentionRegex = /(^|\s)@([\w-]+)/g;
+    while ((match = mentionRegex.exec(text))) {
+        const handle = (match[2] || '').toLowerCase();
+        if (handle) handles.push(handle);
+    }
+    const uniqueHandles = Array.from(new Set(handles));
+    composerMentions = uniqueHandles.map(function (handle) {
+        return composerInlineMentionMap.get(handle) || handle;
+    });
+    renderComposerTags();
+    renderComposerMentions();
+}
+
+function syncComposerRichInput() {
+    const rich = document.getElementById('postContentRich');
+    const hidden = document.getElementById('postContent');
+    if (!rich || !hidden) return;
+    const text = getPlainTextFromRich(rich);
+    hidden.value = text;
+    updateComposerInlineMeta(text);
+    if (typeof window.syncPostButtonState === 'function') window.syncPostButtonState();
+}
+
+function syncRichInputFromHidden() {
+    const rich = document.getElementById('postContentRich');
+    const hidden = document.getElementById('postContent');
+    if (!rich || !hidden) return;
+    const text = hidden.value || '';
+    if (getPlainTextFromRich(rich) !== text) {
+        rich.textContent = text;
+    }
+    updateComposerInlineMeta(text);
+}
+
+function getTextBeforeCaret(el) {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return '';
+    const range = selection.getRangeAt(0);
+    if (!el.contains(range.startContainer)) return '';
+    const preRange = range.cloneRange();
+    preRange.selectNodeContents(el);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    return preRange.toString();
+}
+
+function getCaretCharOffset(el) {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return 0;
+    const range = selection.getRangeAt(0);
+    if (!el.contains(range.startContainer)) return 0;
+    const preRange = range.cloneRange();
+    preRange.selectNodeContents(el);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    return preRange.toString().length;
+}
+
+function createRangeFromOffsets(el, start, end) {
+    const range = document.createRange();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    let node = walker.nextNode();
+    let offset = 0;
+    let foundStart = false;
+    while (node) {
+        const nextOffset = offset + node.textContent.length;
+        if (!foundStart && start <= nextOffset) {
+            range.setStart(node, Math.max(0, start - offset));
+            foundStart = true;
+        }
+        if (foundStart && end <= nextOffset) {
+            range.setEnd(node, Math.max(0, end - offset));
+            return range;
+        }
+        offset = nextOffset;
+        node = walker.nextNode();
+    }
+    range.setStart(el, el.childNodes.length);
+    range.setEnd(el, el.childNodes.length);
+    return range;
+}
+
+function getCaretRectForContentEditable(el) {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return null;
+    const range = selection.getRangeAt(0).cloneRange();
+    if (!el.contains(range.startContainer)) return null;
+    range.collapse(true);
+    const rects = range.getClientRects();
+    return rects.length ? rects[0] : range.getBoundingClientRect();
+}
+
+function getActiveToken(textBeforeCaret = '') {
+    const match = textBeforeCaret.match(/(?:^|\s)([@#][\w-]+)$/);
+    if (!match) return null;
+    const token = match[1] || '';
+    const type = token.startsWith('#') ? 'tag' : token.startsWith('@') ? 'mention' : null;
+    const query = token.slice(1);
+    if (!type || !query) return null;
+    const endIndex = textBeforeCaret.length;
+    const startIndex = endIndex - token.length;
+    return { type, query, token, startIndex, endIndex };
+}
+
+function ensureComposerInlineSuggest() {
+    if (composerInlineSuggestEl) return composerInlineSuggestEl;
+    const el = document.createElement('div');
+    el.className = 'composer-inline-suggest';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    composerInlineSuggestEl = el;
+    return el;
+}
+
+function hideComposerInlineSuggest() {
+    if (!composerInlineSuggestEl) return;
+    composerInlineSuggestEl.style.display = 'none';
+    composerInlineSuggestEl.innerHTML = '';
+    composerInlineSuggestState = { token: null, type: '', query: '', requestId: composerInlineSuggestState.requestId };
+}
+
+function positionComposerInlineSuggest(rect) {
+    if (!composerInlineSuggestEl || !rect) return;
+    const left = Math.max(12, rect.left + window.scrollX);
+    const top = rect.bottom + window.scrollY + 8;
+    composerInlineSuggestEl.style.left = `${left}px`;
+    composerInlineSuggestEl.style.top = `${top}px`;
+}
+
+function insertTokenAtCaret(rich, tokenInfo, label, className) {
+    const end = getCaretCharOffset(rich);
+    const start = Math.max(0, end - tokenInfo.token.length);
+    const range = createRangeFromOffsets(rich, start, end);
+    range.deleteContents();
+    const span = document.createElement('span');
+    span.className = className;
+    span.textContent = label;
+    const space = document.createTextNode(' ');
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(span);
+    fragment.appendChild(space);
+    range.insertNode(fragment);
+    const selection = window.getSelection();
+    if (selection) {
+        const newRange = document.createRange();
+        newRange.setStartAfter(space);
+        newRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+    }
+}
+
+function renderComposerInlineSuggestions(type, items) {
+    const el = ensureComposerInlineSuggest();
+    el.innerHTML = '';
+    if (!items.length) {
+        el.style.display = 'none';
+        return;
+    }
+    items.forEach(function (item) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.addEventListener('mousedown', function (event) { event.preventDefault(); });
+        if (type === 'tag') {
+            const label = `#${buildTagDisplayName(item)}`;
+            btn.innerHTML = `<span class="token-tag">${escapeHtml(label)}</span>`;
+            btn.addEventListener('click', function () {
+                const rich = document.getElementById('postContentRich');
+                if (!rich || !composerInlineSuggestState.token) return;
+                insertTokenAtCaret(rich, composerInlineSuggestState.token, label, 'token-tag');
+                hideComposerInlineSuggest();
+                syncComposerRichInput();
+                rich.focus();
+            });
+        } else {
+            const handle = (item.username || item.handle || '').toLowerCase();
+            const displayName = item.name || item.nickname || item.displayName || handle;
+            const avatar = renderAvatar({ ...item, uid: item.id || item.uid, name: displayName }, { size: 28 });
+            btn.innerHTML = `${avatar}<div><div>${escapeHtml(displayName)}</div><div class="meta">@${escapeHtml(handle)}</div></div>`;
+            btn.addEventListener('click', function () {
+                const rich = document.getElementById('postContentRich');
+                if (!rich || !composerInlineSuggestState.token) return;
+                const label = `@${handle}`;
+                composerInlineMentionMap.set(handle, {
+                    uid: item.id || item.uid || null,
+                    username: handle,
+                    displayName: displayName,
+                    accountRoles: item.accountRoles || [],
+                    photoURL: item.photoURL || '',
+                    avatarColor: item.avatarColor || ''
+                });
+                insertTokenAtCaret(rich, composerInlineSuggestState.token, label, 'token-mention');
+                hideComposerInlineSuggest();
+                syncComposerRichInput();
+                rich.focus();
+            });
+        }
+        el.appendChild(btn);
+    });
+    el.style.display = 'block';
+}
+
+async function updateComposerInlineSuggestions() {
+    const rich = document.getElementById('postContentRich');
+    if (!rich) return;
+    const textBefore = getTextBeforeCaret(rich);
+    const tokenInfo = getActiveToken(textBefore);
+    if (!tokenInfo) {
+        hideComposerInlineSuggest();
+        return;
+    }
+    const rect = getCaretRectForContentEditable(rich);
+    positionComposerInlineSuggest(rect);
+    composerInlineSuggestState.token = tokenInfo;
+    composerInlineSuggestState.type = tokenInfo.type;
+    composerInlineSuggestState.query = tokenInfo.query;
+    const requestId = ++composerInlineSuggestState.requestId;
+    if (tokenInfo.type === 'tag') {
+        const known = getKnownTags();
+        const matches = rankTagSuggestions(known, tokenInfo.query, composerTags);
+        if (requestId !== composerInlineSuggestState.requestId) return;
+        renderComposerInlineSuggestions('tag', matches);
+        return;
+    }
+    const results = await fetchMentionCandidates(tokenInfo.query);
+    if (requestId !== composerInlineSuggestState.requestId) return;
+    renderComposerInlineSuggestions('mention', results.slice(0, 6));
+}
+
+function handleRichComposerInput() {
+    syncComposerRichInput();
+    updateComposerInlineSuggestions();
+}
+
+function handleRichComposerKeydown(event) {
+    if (event.key === 'Escape') {
+        hideComposerInlineSuggest();
+    }
 }
 
 window.toggleTagInput = toggleTagInput;
@@ -6673,6 +6940,7 @@ window.toggleCreateModal = function (show) {
         const scheduleInput = document.getElementById('schedule-input');
         if (scheduleInput) scheduleInput.value = composerScheduledFor || '';
         setComposerLocation(composerLocation || '');
+        syncRichInputFromHidden();
         syncComposerMode();
         syncPostButtonState();
     } else if (!show) {
@@ -9664,10 +9932,17 @@ window.beginEditPost = function () {
     currentEditPost = post;
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
+    const contentRich = document.getElementById('postContentRich');
     if (title) title.value = post.title || '';
     if (content) content.value = typeof post.content === 'object' ? (post.content.text || '') : (post.content || '');
+    if (contentRich) contentRich.textContent = content?.value || '';
     composerTags = Array.isArray(post.tags) ? post.tags.map(normalizeTagValue).filter(Boolean) : [];
     composerMentions = normalizeMentionsField(post.mentions || []);
+    composerInlineMentionMap.clear();
+    composerMentions.forEach(function (mention) {
+        if (!mention?.username) return;
+        composerInlineMentionMap.set(mention.username, mention);
+    });
     composerPoll = post.poll ? { title: post.poll.title || '', options: (post.poll.options || ['', '']).slice(0, 5) } : { title: '', options: ['', ''] };
     composerScheduledFor = formatTimestampForInput(post.scheduledFor);
     composerLocation = post.location || '';
@@ -9682,6 +9957,7 @@ window.beginEditPost = function () {
     if (tagInput) tagInput.value = '';
     const mentionInput = document.getElementById('mention-input');
     if (mentionInput) mentionInput.value = '';
+    syncComposerRichInput();
     const resolvedMediaUrl = getPostMediaUrl(post);
     if (resolvedMediaUrl) {
         const preview = document.getElementById('img-preview-tag');
@@ -21630,8 +21906,34 @@ document.addEventListener('DOMContentLoaded', function () {
     loadStoriesAndLiveBar();
     const title = document.getElementById('postTitle');
     const content = document.getElementById('postContent');
+    const richContent = document.getElementById('postContentRich');
     if (title) title.addEventListener('input', syncPostButtonState);
     if (content) content.addEventListener('input', syncPostButtonState);
+    if (richContent) {
+        richContent.addEventListener('input', handleRichComposerInput);
+        richContent.addEventListener('keyup', updateComposerInlineSuggestions);
+        richContent.addEventListener('click', updateComposerInlineSuggestions);
+        richContent.addEventListener('keydown', handleRichComposerKeydown);
+        richContent.addEventListener('paste', function (event) {
+            event.preventDefault();
+            const text = (event.clipboardData || window.clipboardData).getData('text') || '';
+            const selection = window.getSelection();
+            if (!selection || !selection.rangeCount) return;
+            const range = selection.getRangeAt(0);
+            range.deleteContents();
+            range.insertNode(document.createTextNode(text));
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            syncComposerRichInput();
+        });
+    }
+    document.addEventListener('click', function (event) {
+        if (!composerInlineSuggestEl) return;
+        if (composerInlineSuggestEl.contains(event.target)) return;
+        if (richContent && richContent.contains(event.target)) return;
+        hideComposerInlineSuggest();
+    });
     syncSidebarHomeState();
     updateTimeCapsule();
     initializeNexeraApp();
