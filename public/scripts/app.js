@@ -1266,17 +1266,16 @@ let assetUrlCache = {};
 let assetUrlPromises = {};
 const SHARE_MODES = [
     { id: 'thread', label: 'Thread', icon: 'ph-chat-circle-text', description: 'Text-first update' },
-    { id: 'media', label: 'File / Media', icon: 'ph-images', description: 'Multi-file gallery' },
+    { id: 'document', label: 'Documents/Files', icon: 'ph-file', description: 'Upload files' },
     { id: 'audio', label: 'Audio', icon: 'ph-music-notes', description: 'Upload audio' },
     { id: 'link', label: 'Link Snapshot', icon: 'ph-link', description: 'Share a link' },
     { id: 'interactable', label: 'Interactable', icon: 'ph-code', description: 'Upload an HTML interactable post (sandboxed).' },
-    { id: 'capsule', label: 'Capsule', icon: 'ph-folder-open', description: 'Bundle files' },
-    { id: 'live', label: 'Live', icon: 'ph-broadcast', description: 'Go live' }
+    { id: 'capsule', label: 'Capsule', icon: 'ph-folder-open', description: 'Bundle files' }
 ];
 let activeShareMode = 'thread';
 let composerUploads = {
     thread: [],
-    media: [],
+    document: [],
     audio: null,
     capsule: [],
     interactable: null
@@ -3635,12 +3634,11 @@ function composerHasContent() {
     if (activeShareMode === 'thread') {
         return (content && content.value.trim()) || composerUploads.thread.length;
     }
-    if (activeShareMode === 'media') return composerUploads.media.length > 0;
+    if (activeShareMode === 'document') return composerUploads.document.length > 0;
     if (activeShareMode === 'audio') return !!composerUploads.audio;
     if (activeShareMode === 'link') return isValidLinkUrl(document.getElementById('link-url-input')?.value || '');
     if (activeShareMode === 'interactable') return !!composerUploads.interactable;
     if (activeShareMode === 'capsule') return (title && title.value.trim()) && composerUploads.capsule.length > 0;
-    if (activeShareMode === 'live') return true;
     return false;
 }
 
@@ -5484,12 +5482,12 @@ function setComposerMode(modeId = 'thread') {
 }
 
 function resetUniversalComposer() {
-    composerUploads = { thread: [], media: [], audio: null, capsule: [], interactable: null };
+    composerUploads = { thread: [], document: [], audio: null, capsule: [], interactable: null };
     linkSnapshotState = { status: 'idle', data: null };
     liveComposerState = { sessionId: '', created: false };
     const inputs = [
         'thread-files',
-        'media-drop-files',
+        'document-files',
         'audio-file',
         'capsule-files',
         'interactable-file'
@@ -5499,17 +5497,13 @@ function resetUniversalComposer() {
         if (input) input.value = '';
     });
     const textInputs = [
-        'media-notes',
+        'document-notes',
         'audio-notes',
         'audio-chapters',
         'audio-lyrics',
         'link-notes',
         'capsule-notes',
-        'capsule-share-slug',
-        'live-notes',
-        'live-title-input',
-        'live-category-input',
-        'live-tags-input'
+        'capsule-share-slug'
     ];
     textInputs.forEach(function (id) {
         const input = document.getElementById(id);
@@ -5521,11 +5515,9 @@ function resetUniversalComposer() {
     if (linkInput) linkInput.value = '';
     const linkPreview = document.getElementById('link-preview');
     if (linkPreview) linkPreview.innerHTML = '';
-    const liveSessionDisplay = document.getElementById('live-session-status');
-    if (liveSessionDisplay) liveSessionDisplay.textContent = '';
     setComposerMode('thread');
     renderComposerFileList('thread-file-list', []);
-    renderComposerFileList('media-drop-list', []);
+    renderComposerFileList('document-file-list', []);
     renderComposerFileList('capsule-file-list', []);
     renderComposerFileList('audio-file-list', []);
     renderComposerFileList('interactable-file-list', []);
@@ -5550,9 +5542,9 @@ function handleComposerFileChange(mode, inputEl) {
     if (mode === 'thread') {
         composerUploads.thread = files;
         renderComposerFileList('thread-file-list', files);
-    } else if (mode === 'media') {
-        composerUploads.media = files;
-        renderComposerFileList('media-drop-list', files);
+    } else if (mode === 'document') {
+        composerUploads.document = files;
+        renderComposerFileList('document-file-list', files);
     } else if (mode === 'audio') {
         composerUploads.audio = files[0] || null;
         renderComposerFileList('audio-file-list', composerUploads.audio ? [composerUploads.audio] : []);
@@ -6679,11 +6671,10 @@ window.createPost = async function () {
     if (!requireAuth()) return;
     const title = (document.getElementById('postTitle')?.value || '').trim();
     const notesByMode = {
-        media: 'media-notes',
+        document: 'document-notes',
         audio: 'audio-notes',
         link: 'link-notes',
-        capsule: 'capsule-notes',
-        live: 'live-notes'
+        capsule: 'capsule-notes'
     };
     const modeNotesId = notesByMode[activeShareMode];
     const content = activeShareMode === 'thread'
@@ -6751,12 +6742,15 @@ window.createPost = async function () {
             contentType = composerUploads.thread.length ? getAssetKindForFile(composerUploads.thread[0], 'image') : 'text';
         }
 
-        if (activeShareMode === 'media') {
-            if (!composerUploads.media.length) return alert('Select at least one file.');
+        if (activeShareMode === 'document') {
+            if (!composerUploads.document.length) return alert('Select at least one file.');
             if (content) blocks.push({ type: 'text', text: content });
-            const uploads = await uploadAssetsForFiles(composerUploads.media, { visibility: 'public', fallbackKind: 'image' });
+            const uploads = await uploadAssetsForFiles(composerUploads.document, { visibility: 'public', fallbackKind: 'document' });
             uploads.forEach(function (upload, index) {
-                blocks.push({ type: 'asset', assetId: upload.assetId, presentation: getAssetKindForFile(composerUploads.media[index], 'image') });
+                const file = composerUploads.document[index];
+                const detectedKind = getAssetKindForFile(file, 'document');
+                const presentation = ['image', 'video', 'audio'].includes(detectedKind) ? detectedKind : 'document';
+                blocks.push({ type: 'asset', assetId: upload.assetId, presentation });
             });
         }
 
@@ -6834,23 +6828,6 @@ window.createPost = async function () {
             renderFeed();
             renderProfile();
             return;
-        }
-
-        if (activeShareMode === 'live') {
-            const liveTitle = (document.getElementById('live-title-input')?.value || '').trim();
-            const liveCategory = (document.getElementById('live-category-input')?.value || '').trim();
-            const liveTags = (document.getElementById('live-tags-input')?.value || '').split(',').map(function (tag) { return tag.trim(); }).filter(Boolean);
-            const liveResult = await callSecureFunction('createLiveSession', {
-                title: liveTitle || title || 'Live session',
-                category: liveCategory,
-                tags: liveTags
-            });
-            if (!liveResult?.sessionId) throw new Error('Live session failed');
-            if (content) blocks.push({ type: 'text', text: content });
-            blocks.push({ type: 'live', sessionId: liveResult.sessionId });
-            liveComposerState = { sessionId: liveResult.sessionId, created: true };
-            const liveStatus = document.getElementById('live-session-status');
-            if (liveStatus) liveStatus.textContent = 'Live session created.';
         }
 
         const postPayload = {
